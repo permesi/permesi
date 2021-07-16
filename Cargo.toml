@@ -2,6 +2,15 @@
 name = "permesi"
 version = "0.1.0"
 edition = "2018"
+authors = ["Nicolas Embriz <nbari@tequila.io>"]
+description = "Identity and Access Management"
+documentation = "https://github.com/permesi/permesi/blob/main/README.md"
+homepage = "https://permesi.dev"
+repository = "https://github.com/permesi/permesi"
+readme = "README.md"
+keywords = ["password", "security", "iam", "identity", "access"]
+categories = ["web-programming::http-server"]
+license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
