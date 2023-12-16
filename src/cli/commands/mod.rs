@@ -54,18 +54,17 @@ mod tests {
     }
 
     #[test]
-    fn test_check_port() {
+    fn test_check_port_and_dsn() {
         let command = new();
-        let matches = command.get_matches_from(vec!["permesi", "--port", "8080"]);
+        let matches = command.get_matches_from(vec![
+            "permesi",
+            "--port",
+            "8080",
+            "--dsn",
+            "sqlite::memory:",
+        ]);
 
         assert_eq!(matches.get_one::<u16>("port").map(|s| *s), Some(8080));
-    }
-
-    #[test]
-    fn test_check_dsn() {
-        let command = new();
-        let matches = command.get_matches_from(vec!["permesi", "--dsn", "sqlite::memory:"]);
-
         assert_eq!(
             matches.get_one::<String>("dsn").map(|s| s.to_string()),
             Some("sqlite::memory:".to_string())
