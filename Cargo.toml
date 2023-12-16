@@ -20,4 +20,5 @@ axum = { version = "0.7.2", features = ["tracing"] }
 clap = { version = "4", features = ["env"] }
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
 secrecy = "0.8"
+temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
