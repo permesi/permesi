@@ -1,6 +1,6 @@
 [package]
 name = "permesi"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2018"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "Identity and Access Management"
@@ -15,3 +15,9 @@ license-file = "LICENSE"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1"
+axum = { version = "0.7.2", features = ["tracing"] }
+clap = { version = "4", features = ["env"] }
+openssl = { version = "0.10", optional = true, features = ["vendored"] }
+secrecy = "0.8"
+tokio = { version = "1", features = ["full"] }
