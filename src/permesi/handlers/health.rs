@@ -1,13 +1,15 @@
+use crate::permesi::GIT_COMMIT_HASH;
 use axum::{
     http::HeaderMap,
     response::{IntoResponse, Json},
 };
 use serde_json::json;
-
-use crate::permesi::GIT_COMMIT_HASH;
+use tracing::{debug, info};
 
 // axum handler for health
 pub async fn health() -> impl IntoResponse {
+    info!("health check");
+
     let body = Json(json!({
         "name": env!("CARGO_PKG_NAME"),
         "version": env!("CARGO_PKG_VERSION"),
@@ -20,7 +22,10 @@ pub async fn health() -> impl IntoResponse {
         ""
     };
 
+    debug!("short hash: {}", short_hash);
+
     let mut headers = HeaderMap::new();
+
     headers.insert(
         "X-App",
         format!(

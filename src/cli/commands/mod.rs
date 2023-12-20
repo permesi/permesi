@@ -32,6 +32,14 @@ pub fn new() -> Command {
                 .env("PERMESI_DSN")
                 .required(true),
         )
+        .arg(
+            Arg::new("verbosity")
+                .short('v')
+                .long("verbose")
+                .help("Verbosity level")
+                .global(true)
+                .action(clap::ArgAction::Count),
+        )
 }
 
 #[cfg(test)]
