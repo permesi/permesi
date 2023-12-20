@@ -11,14 +11,22 @@ readme = "README.md"
 keywords = ["password", "security", "iam", "identity", "access"]
 categories = ["web-programming::http-server"]
 license-file = "LICENSE"
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1"
 axum = { version = "0.7.2", features = ["tracing"] }
+built = { version = "0.7", features = ["git2"] }
 clap = { version = "4", features = ["env"] }
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
 secrecy = "0.8"
+serde_json = "1.0"
 temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[build-dependencies]
+built = "0.7"
