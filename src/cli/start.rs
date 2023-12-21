@@ -12,10 +12,16 @@ pub fn start() -> Result<Action> {
         _ => tracing::Level::DEBUG,
     };
 
-    tracing_subscriber::fmt()
+    let subscriber = tracing_subscriber::fmt()
+        .compact()
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
         .with_max_level(verbosity_level)
         .with_target(false)
-        .init();
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)?;
 
     let action = handler(&matches)?;
 

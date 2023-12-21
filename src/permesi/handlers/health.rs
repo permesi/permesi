@@ -4,9 +4,10 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use serde_json::json;
-use tracing::{debug, info};
+use tracing::{debug, info, instrument, Level};
 
 // axum handler for health
+#[instrument]
 pub async fn health() -> impl IntoResponse {
     info!("health check");
 
