@@ -1,8 +1,16 @@
 use anyhow::{Context, Result};
-use axum::{routing::get, Extension, Router};
+use axum::{
+    http::{HeaderName, HeaderValue},
+    routing::get,
+    Extension, Router,
+};
+use mac_address::get_mac_address;
 use sqlx::{postgres::PgPoolOptions, Connection};
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tower_http::{
+    propagate_header::PropagateHeaderLayer, set_header::SetRequestHeaderLayer, trace::TraceLayer,
+};
 use tracing::info;
 
 mod handlers;
@@ -42,11 +50,35 @@ pub async fn new(port: u16, dsn: String) -> Result<()> {
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/", get(|| async { "Hello, World!" }))
-        .layer(Extension(pool));
+        .layer(PropagateHeaderLayer::new(HeaderName::from_static(
+            "x-request-id",
+        )))
+        .layer(SetRequestHeaderLayer::if_not_present(
+            HeaderName::from_static("x-request-id"),
+            |_req: &_| {
+                let node_id: [u8; 6] = node_id();
+                let uuid = uuid::Uuid::now_v1(&node_id);
+                HeaderValue::from_str(uuid.to_string().as_str()).ok()
+            },
+        ))
+        .layer(Extension(pool))
+        .layer(TraceLayer::new_for_http());
 
     info!("Listening on [::]:{}", port);
 
     axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
+}
+
+#[must_use]
+pub fn node_id() -> [u8; 6] {
+    get_mac_address().map_or([0; 6], |mac| {
+        mac.map_or([0; 6], |mac| {
+            let bytes = mac.bytes();
+            let mut node_id = [0; 6];
+            node_id.copy_from_slice(&bytes);
+            node_id
+        })
+    })
 }
