@@ -1,7 +1,7 @@
 use crate::permesi::GIT_COMMIT_HASH;
 use axum::{
     extract::Extension,
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json},
 };
 use serde_json::json;
@@ -10,12 +10,18 @@ use tracing::{debug, error, instrument};
 
 // axum handler for health
 #[instrument]
-pub async fn health(pool: Extension<PgPool>) -> impl IntoResponse {
-    let body = Json(json!({
-        "name": env!("CARGO_PKG_NAME"),
-        "version": env!("CARGO_PKG_VERSION"),
-        "build": GIT_COMMIT_HASH,
-    }));
+pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoResponse {
+    debug!(method = ?method, "HTTP request method: {}", method);
+
+    let body = if method == Method::GET {
+        Json(json!({
+            "name": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+            "build": GIT_COMMIT_HASH,
+        }))
+    } else {
+        Json(json!({}))
+    };
 
     let short_hash = if GIT_COMMIT_HASH.len() > 7 {
         &GIT_COMMIT_HASH[0..7]

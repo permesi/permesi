@@ -8,6 +8,7 @@ use mac_address::get_mac_address;
 use sqlx::{postgres::PgPoolOptions, Connection};
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tower::ServiceBuilder;
 use tower_http::{
     propagate_header::PropagateHeaderLayer, set_header::SetRequestHeaderLayer, trace::TraceLayer,
 };
@@ -48,21 +49,24 @@ pub async fn new(port: u16, dsn: String) -> Result<()> {
     let listener = TcpListener::bind(format!("::0:{port}")).await?;
 
     let app = Router::new()
-        .route("/health", get(handlers::health))
+        .route("/health", get(handlers::health).options(handlers::health))
         .route("/", get(|| async { "Hello, World!" }))
-        .layer(PropagateHeaderLayer::new(HeaderName::from_static(
-            "x-request-id",
-        )))
-        .layer(SetRequestHeaderLayer::if_not_present(
-            HeaderName::from_static("x-request-id"),
-            |_req: &_| {
-                let node_id: [u8; 6] = node_id();
-                let uuid = uuid::Uuid::now_v1(&node_id);
-                HeaderValue::from_str(uuid.to_string().as_str()).ok()
-            },
-        ))
-        .layer(Extension(pool))
-        .layer(TraceLayer::new_for_http());
+        .layer(
+            ServiceBuilder::new()
+                .layer(Extension(pool))
+                .layer(PropagateHeaderLayer::new(HeaderName::from_static(
+                    "x-request-id",
+                )))
+                .layer(SetRequestHeaderLayer::if_not_present(
+                    HeaderName::from_static("x-request-id"),
+                    |_req: &_| {
+                        let node_id: [u8; 6] = node_id();
+                        let uuid = uuid::Uuid::now_v1(&node_id);
+                        HeaderValue::from_str(uuid.to_string().as_str()).ok()
+                    },
+                ))
+                .layer(TraceLayer::new_for_http()),
+        );
 
     info!("Listening on [::]:{}", port);
 
