@@ -26,7 +26,9 @@ opentelemetry = "0.21"
 opentelemetry-otlp = { version = "0.14", features = ["tls-roots", "tls"] }
 opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
 rand = "0.8.5"
+reqwest = { version = "0.11", features = ["json"] }
 secrecy = "0.8"
+serde = "1.0"
 serde_json = "1.0"
 sqlx = { version = "0.7.3", features = [
     "runtime-tokio",
@@ -35,13 +37,20 @@ sqlx = { version = "0.7.3", features = [
 ] }
 temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
-tonic = "0.10.2"
-tower = "0.4.13"
-tower-http = { version = "0.5.0", features = ["trace", "propagate-header", "set-header"] }
+tonic = "0.10"
+tower = "0.4"
+tower-http = { version = "0.5", features = [
+    "trace",
+    "propagate-header",
+    "set-header",
+] }
 tracing = "0.1"
 tracing-opentelemetry = "0.22"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-uuid = { version = "1.6.1", features = ["v1", "v4"] }
+url = "2.5"
+utoipa = { version = "4", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "5", features = ["axum"] }
+uuid = { version = "1.6", features = ["v1", "v4"] }
 
 [build-dependencies]
 built = "0.7"

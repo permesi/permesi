@@ -56,6 +56,33 @@ pub fn new() -> Command {
                 .required(true),
         )
         .arg(
+            Arg::new("vault-url")
+                .long("vault-url")
+                .help("Vault approle login URL, example: https://vault.tld:8200/v1/auth/<approle>/login")
+                .env("PERMESI_VAULT_URL")
+                .required(true),
+        )
+        .arg(
+            Arg::new("vault-role-id")
+                .long("vault-role-id")
+                .help("Vault role id")
+                .env("PERMESI_VAULT_ROLE_ID")
+                .required(true),
+        )
+        .arg(
+            Arg::new("vault-secret-id")
+                .long("vault-secret-id")
+                .help("Vault secret id")
+                .env("PERMESI_VAULT_SECRET_ID")
+                .required_unless_present("vault-wrapped-token")
+        )
+        .arg(
+            Arg::new("vault-wrapped-token")
+                .long("vault-wrapped-token")
+                .help("Vault wrapped token")
+                .env("PERMESI_VAULT_WRAPPED_TOKEN")
+        )
+        .arg(
             Arg::new("verbosity")
                 .short('v')
                 .long("verbose")
@@ -94,13 +121,37 @@ mod tests {
             "--port",
             "8080",
             "--dsn",
-            "postgres://localhost",
+            "postgres://user:password@localhost:5432/permesi",
+            "--vault-url",
+            "https://vault.tld:8200",
+            "--vault-role-id",
+            "role-id",
+            "--vault-secret-id",
+            "secret-id",
         ]);
 
         assert_eq!(matches.get_one::<u16>("port").map(|s| *s), Some(8080));
         assert_eq!(
             matches.get_one::<String>("dsn").map(|s| s.to_string()),
-            Some("postgres://localhost".to_string())
+            Some("postgres://user:password@localhost:5432/permesi".to_string())
+        );
+        assert_eq!(
+            matches
+                .get_one::<String>("vault-url")
+                .map(|s| s.to_string()),
+            Some("https://vault.tld:8200".to_string())
+        );
+        assert_eq!(
+            matches
+                .get_one::<String>("vault-role-id")
+                .map(|s| s.to_string()),
+            Some("role-id".to_string())
+        );
+        assert_eq!(
+            matches
+                .get_one::<String>("vault-secret-id")
+                .map(|s| s.to_string()),
+            Some("secret-id".to_string())
         );
     }
 
@@ -108,8 +159,14 @@ mod tests {
     fn test_check_env() {
         temp_env::with_vars(
             [
-                ("PERMESI_DSN", Some("postgres://localhost")),
+                ("PERMESI_VAULT_URL", Some("https://vault.tld:8200")),
+                ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
+                ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
                 ("PERMESI_PORT", Some("443")),
+                (
+                    "PERMESI_DSN",
+                    Some("postgres://user:password@localhost:5432/permesi"),
+                ),
                 ("PERMESI_LOG_LEVEL", Some("info")),
             ],
             || {
@@ -118,7 +175,13 @@ mod tests {
                 assert_eq!(matches.get_one::<u16>("port").map(|s| *s), Some(443));
                 assert_eq!(
                     matches.get_one::<String>("dsn").map(|s| s.to_string()),
-                    Some("postgres://localhost".to_string())
+                    Some("postgres://user:password@localhost:5432/permesi".to_string())
+                );
+                assert_eq!(
+                    matches
+                        .get_one::<String>("vault-url")
+                        .map(|s| s.to_string()),
+                    Some("https://vault.tld:8200".to_string())
                 );
                 assert_eq!(matches.get_one::<u8>("verbosity").map(|s| *s), Some(2));
             },
@@ -133,7 +196,13 @@ mod tests {
             temp_env::with_vars(
                 [
                     ("PERMESI_LOG_LEVEL", Some(level)),
-                    ("PERMESI_DSN", Some("postgres://localhost")),
+                    ("PERMESI_VAULT_URL", Some("http://vault.tld:8200")),
+                    ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
+                    ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
+                    (
+                        "PERMESI_DSN",
+                        Some("postgres://user:password@localhost:5432/permesi"),
+                    ),
                 ],
                 || {
                     let command = new();
@@ -156,7 +225,13 @@ mod tests {
                 let mut args = vec![
                     "permesi".to_string(),
                     "--dsn".to_string(),
-                    "postgres://localhost".to_string(),
+                    "postgres://user:password@localhost:5432/permesi".to_string(),
+                    "--vault-url".to_string(),
+                    "https://vault.tld:8200".to_string(),
+                    "--vault-role-id".to_string(),
+                    "role_id".to_string(),
+                    "--vault-secret-id".to_string(),
+                    "secret_id".to_string(),
                 ];
 
                 // Add the appropriate number of "-v" flags based on the index

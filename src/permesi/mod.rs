@@ -1,3 +1,4 @@
+use crate::permesi::handlers::{health, health::__path_health};
 use anyhow::{Context, Result};
 use axum::{
     http::{HeaderName, HeaderValue},
@@ -13,6 +14,8 @@ use tower_http::{
     propagate_header::PropagateHeaderLayer, set_header::SetRequestHeaderLayer, trace::TraceLayer,
 };
 use tracing::info;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 mod handlers;
 
@@ -25,6 +28,10 @@ pub const GIT_COMMIT_HASH: &str = if let Some(hash) = built_info::GIT_COMMIT_HAS
 } else {
     ":-("
 };
+
+#[derive(OpenApi)]
+#[openapi(paths(health), components(schemas(health::Health)))]
+struct ApiDoc;
 
 pub async fn new(port: u16, dsn: String) -> Result<()> {
     let pool = PgPoolOptions::new()
@@ -46,11 +53,10 @@ pub async fn new(port: u16, dsn: String) -> Result<()> {
         .await
         .context("Failed to connect to database")?;
 
-    let listener = TcpListener::bind(format!("::0:{port}")).await?;
-
     let app = Router::new()
         .route("/health", get(handlers::health).options(handlers::health))
         .route("/", get(|| async { "Hello, World!" }))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", ApiDoc::openapi()))
         .layer(
             ServiceBuilder::new()
                 .layer(Extension(pool))
@@ -67,6 +73,8 @@ pub async fn new(port: u16, dsn: String) -> Result<()> {
                 ))
                 .layer(TraceLayer::new_for_http()),
         );
+
+    let listener = TcpListener::bind(format!("::0:{port}")).await?;
 
     info!("Listening on [::]:{}", port);
 
