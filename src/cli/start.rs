@@ -45,7 +45,7 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
     global_args.set_token(vault_token);
 
     // refresh vault token
-    vault::refresh_token(&global_args, lease_duration).await?;
+    vault::renew::try_renew(&global_args, lease_duration).await?;
 
     // get database username and password from Vault
     vault::database::database_creds(&mut global_args).await?;

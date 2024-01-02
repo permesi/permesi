@@ -1,13 +1,12 @@
 pub mod database;
+pub mod renew;
 
 use crate::cli::globals::GlobalArgs;
 use anyhow::{anyhow, Result};
-use rand::Rng;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::env;
-use tokio::time::{interval, Duration};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use url::Url;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
@@ -117,60 +116,4 @@ pub async fn approle_login(globals: &GlobalArgs, sid: &str, rid: &str) -> Result
         .unwrap_or(1800);
 
     Ok((token.to_string(), lease_duration))
-}
-
-/// Renew a Vault token
-#[instrument]
-pub async fn renew(globals: &GlobalArgs) -> Result<u64> {
-    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
-
-    // Parse the URL
-    let renew_url = endpoint_url(globals, "/v1/auth/token/renew-self")?;
-
-    let response = client
-        .post(&renew_url)
-        .header("X-Vault-Token", &globals.vault_token)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let json_response: Value = response.json().await?;
-
-        return Err(anyhow!(
-            "{} - {}, {}",
-            renew_url,
-            status,
-            json_response["errors"][0].as_str().unwrap_or("")
-        ));
-    }
-
-    let json_response: Value = response.json().await?;
-
-    json_response["auth"]["lease_duration"]
-        .as_u64()
-        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
-}
-
-/// Refresh a Vault token
-pub async fn refresh_token(globals: &GlobalArgs, lease_duration: u64) -> Result<()> {
-    let mut rng = rand::thread_rng();
-    let jitter_factor = 0.1;
-    let jittered_lease_duration =
-        (lease_duration as f64 * rng.gen_range(1.0 - jitter_factor..1.0)) as u64;
-    let mut renew_token_interval = interval(Duration::from_secs(jittered_lease_duration));
-
-    let loop_globals = globals.clone();
-    tokio::spawn(async move {
-        loop {
-            renew_token_interval.tick().await;
-
-            // todo use lease_duration returned from vault::renew
-            let _ = renew(&loop_globals).await;
-
-            debug!("Will renew token in {} seconds", jittered_lease_duration);
-        }
-    });
-
-    Ok(())
 }
