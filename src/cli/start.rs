@@ -44,13 +44,11 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
 
     global_args.set_token(vault_token);
 
-    // refresh vault token
-    vault::renew::try_renew(&global_args, lease_duration).await?;
-
     // get database username and password from Vault
     vault::database::database_creds(&mut global_args).await?;
 
-    // todo refresh database lease-id
+    // refresh vault token
+    vault::renew::try_renew(&global_args, lease_duration).await?;
 
     let verbosity_level = match matches.get_one::<u8>("verbosity").map_or(0, |&v| v) {
         0 => tracing::Level::ERROR,
