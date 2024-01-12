@@ -12,7 +12,7 @@ pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
         .build()?;
 
     // Parse the URL
-    let db_creds = vault::endpoint_url(globals, "/v1/database/creds/permesi")?;
+    let db_creds = vault::endpoint_url(&globals.vault_url, "/v1/database/creds/permesi")?;
 
     let response = client
         .get(db_creds.as_str())

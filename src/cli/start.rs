@@ -31,7 +31,7 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
 
     // if vault wrapped token try to unwrap
     if let Some(wrapped_token) = matches.get_one::<String>("vault-wrapped-token") {
-        let vsid = vault::unwrap(&global_args, wrapped_token).await?;
+        let vsid = vault::unwrap(&global_args.vault_url, wrapped_token).await?;
         (vault_token, lease_duration) = vault::approle_login(&global_args, &vsid, &vrid).await?;
     } else {
         let vsid = matches

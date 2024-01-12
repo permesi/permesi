@@ -12,9 +12,9 @@ use utoipa::ToSchema;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct Health {
+    commit: String,
     name: String,
     version: String,
-    build: String,
 }
 
 #[utoipa::path(
@@ -32,9 +32,9 @@ pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoRespons
 
     // Create a health struct
     let health = Health {
+        commit: GIT_COMMIT_HASH.to_string(),
         name: env!("CARGO_PKG_NAME").to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        build: GIT_COMMIT_HASH.to_string(),
     };
 
     let body = if method == Method::GET {
@@ -43,8 +43,8 @@ pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoRespons
         Body::empty().into_response()
     };
 
-    let short_hash = if health.build.len() > 7 {
-        &health.build[0..7]
+    let short_hash = if health.commit.len() > 7 {
+        &health.commit[0..7]
     } else {
         ""
     };

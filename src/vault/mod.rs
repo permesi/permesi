@@ -12,8 +12,8 @@ use url::Url;
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[instrument]
-pub fn endpoint_url(globals: &GlobalArgs, endpoint: &str) -> Result<String> {
-    let url = Url::parse(&globals.vault_url)?;
+pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
+    let url = Url::parse(url)?;
 
     let scheme = url.scheme();
 
@@ -31,9 +31,9 @@ pub fn endpoint_url(globals: &GlobalArgs, endpoint: &str) -> Result<String> {
         },
     };
 
-    let endpoint_url = format!("{scheme}://{host}:{port}{}", endpoint);
+    let endpoint_url = format!("{scheme}://{host}:{port}{path}");
 
-    debug!("endpoint URL: {}", endpoint);
+    debug!("endpoint URL: {}", path);
 
     Ok(endpoint_url)
 }
@@ -42,10 +42,10 @@ pub fn endpoint_url(globals: &GlobalArgs, endpoint: &str) -> Result<String> {
 /// Create wrapped token with:
 /// vault write -wrap-ttl=300s -f auth/approle/role/permesi/secret-id
 #[instrument]
-pub async fn unwrap(globals: &GlobalArgs, token: &str) -> Result<String> {
+pub async fn unwrap(url: &str, token: &str) -> Result<String> {
     let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
-    let unwrap_url = endpoint_url(globals, "/v1/sys/wrapping/unwrap")?;
+    let unwrap_url = endpoint_url(url, "/v1/sys/wrapping/unwrap")?;
 
     let response = client
         .post(&unwrap_url)
