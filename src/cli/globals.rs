@@ -1,12 +1,13 @@
-// Define the global arguments
-#[derive(Debug, Clone, Default)]
+use secrecy::Secret;
+
+#[derive(Debug, Clone)]
 pub struct GlobalArgs {
     pub vault_url: String,
-    pub vault_token: String,
+    pub vault_token: Secret<String>,
     pub vault_db_lease_id: String,
     pub vault_db_lease_duration: u64,
     pub vault_db_username: String,
-    pub vault_db_password: String,
+    pub vault_db_password: Secret<String>,
 }
 
 impl GlobalArgs {
@@ -14,11 +15,15 @@ impl GlobalArgs {
     pub fn new(vurl: String) -> Self {
         Self {
             vault_url: vurl,
-            ..Default::default()
+            vault_token: Secret::new("".to_string()),
+            vault_db_lease_id: "".to_string(),
+            vault_db_lease_duration: 0,
+            vault_db_username: "".to_string(),
+            vault_db_password: Secret::new("".to_string()),
         }
     }
 
-    pub fn set_token(&mut self, token: String) {
+    pub fn set_token(&mut self, token: Secret<String>) {
         self.vault_token = token;
     }
 }
@@ -26,12 +31,13 @@ impl GlobalArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
 
     #[test]
     fn test_global_args() {
         let vurl = "https://localhost:8200".to_string();
         let args = GlobalArgs::new(vurl);
         assert_eq!(args.vault_url, "https://localhost:8200");
-        assert_eq!(args.vault_token, "");
+        assert_eq!(args.vault_token.expose_secret(), "");
     }
 }

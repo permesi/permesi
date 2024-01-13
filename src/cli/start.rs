@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{runtime::Tokio, trace, Resource};
+use secrecy::Secret;
 use std::time::Duration;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
@@ -42,7 +43,7 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
         (vault_token, lease_duration) = vault::approle_login(&global_args, &vsid, &vrid).await?;
     }
 
-    global_args.set_token(vault_token);
+    global_args.set_token(Secret::new(vault_token));
 
     // get database username and password from Vault
     vault::database::database_creds(&mut global_args).await?;

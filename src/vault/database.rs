@@ -1,6 +1,7 @@
 use crate::{cli::globals::GlobalArgs, vault};
 use anyhow::{anyhow, Result};
 use reqwest::Client;
+use secrecy::{ExposeSecret, Secret};
 use serde_json::Value;
 use tracing::instrument;
 
@@ -16,7 +17,7 @@ pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
 
     let response = client
         .get(db_creds.as_str())
-        .header("X-Vault-Token", globals.vault_token.as_str())
+        .header("X-Vault-Token", globals.vault_token.expose_secret())
         .send()
         .await?;
 
@@ -52,7 +53,7 @@ pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
     let password = json_response["data"]["password"]
         .as_str()
         .ok_or_else(|| anyhow!("Error parsing JSON response: no password found"))?;
-    globals.vault_db_password = password.to_string();
+    globals.vault_db_password = Secret::new(password.to_string());
 
     Ok(())
 }
