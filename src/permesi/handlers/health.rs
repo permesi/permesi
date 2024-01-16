@@ -15,6 +15,7 @@ pub struct Health {
     commit: String,
     name: String,
     version: String,
+    database: String,
 }
 
 #[utoipa::path(
@@ -30,11 +31,31 @@ pub struct Health {
 pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoResponse {
     debug!(method = ?method, "HTTP request method: {}", method);
 
+    let result = match pool.0.acquire().await {
+        Ok(mut conn) => match conn.ping().await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                error!("Failed to ping database: {}", error);
+                Err(StatusCode::SERVICE_UNAVAILABLE)
+            }
+        },
+
+        Err(error) => {
+            error!("Failed to acquire database connection: {}", error);
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    };
+
     // Create a health struct
     let health = Health {
         commit: GIT_COMMIT_HASH.to_string(),
         name: env!("CARGO_PKG_NAME").to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        database: if result.is_ok() {
+            "ok".to_string()
+        } else {
+            "error".to_string()
+        },
     };
 
     let body = if method == Method::GET {
@@ -67,21 +88,6 @@ pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoRespons
 
     // Unwrap the headers or provide a default value (empty headers) in case of an error
     let headers = headers.unwrap_or_else(|()| HeaderMap::new());
-
-    let result = match pool.0.acquire().await {
-        Ok(mut conn) => match conn.ping().await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                error!("Failed to ping database: {}", error);
-                Err(StatusCode::SERVICE_UNAVAILABLE)
-            }
-        },
-
-        Err(error) => {
-            error!("Failed to acquire database connection: {}", error);
-            Err(StatusCode::SERVICE_UNAVAILABLE)
-        }
-    };
 
     match result {
         Ok(()) => {
