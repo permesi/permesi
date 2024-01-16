@@ -33,7 +33,7 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
 
     let endpoint_url = format!("{scheme}://{host}:{port}{path}");
 
-    debug!("endpoint URL: {}", path);
+    debug!("endpoint URL: {}", endpoint_url);
 
     Ok(endpoint_url)
 }

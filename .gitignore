@@ -3,3 +3,4 @@
 .envrc
 .postgres-volume
 .otel-collector-config.yml
+fly.toml

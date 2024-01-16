@@ -15,11 +15,11 @@ impl GlobalArgs {
     pub fn new(vurl: String) -> Self {
         Self {
             vault_url: vurl,
-            vault_token: Secret::new("".to_string()),
-            vault_db_lease_id: "".to_string(),
+            vault_token: Secret::new(String::new()),
+            vault_db_lease_id: String::new(),
             vault_db_lease_duration: 0,
-            vault_db_username: "".to_string(),
-            vault_db_password: Secret::new("".to_string()),
+            vault_db_username: String::new(),
+            vault_db_password: Secret::new(String::new()),
         }
     }
 
