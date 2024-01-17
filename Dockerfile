@@ -1,7 +1,7 @@
 FROM messense/rust-musl-cross:x86_64-musl as builder
 
 RUN apt-get update && \
-    apt-get install -y git libssl-dev  pkg-config && \
+    apt-get install -y git libssl-dev pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -13,6 +13,9 @@ RUN cargo build --release --locked --features "openssl/vendored" && \
 
 # Runtime image
 FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates && \
+    rm -rf /var/cache/apk/*
 
 # Create a non-root user
 RUN adduser -D app

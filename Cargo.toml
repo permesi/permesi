@@ -50,7 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 url = "2.5"
 utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "6", features = ["axum"] }
-uuid = { version = "1.6", features = ["v1", "v4"] }
+uuid = { version = "1.7", features = ["v1", "v4"] }
 
 [build-dependencies]
 built = "0.7"
