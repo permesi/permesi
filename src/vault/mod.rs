@@ -1,7 +1,6 @@
 pub mod database;
 pub mod renew;
 
-use crate::cli::globals::GlobalArgs;
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -77,7 +76,7 @@ pub async fn unwrap(url: &str, token: &str) -> Result<String> {
 /// Create a secret ID with:
 /// vault write -f auth/approle/role/permesi/secret-id
 #[instrument]
-pub async fn approle_login(globals: &GlobalArgs, sid: &str, rid: &str) -> Result<(String, u64)> {
+pub async fn approle_login(url: &str, sid: &str, rid: &str) -> Result<(String, u64)> {
     let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
     // Create a JSON payload for AppRole login
@@ -86,13 +85,9 @@ pub async fn approle_login(globals: &GlobalArgs, sid: &str, rid: &str) -> Result
         "secret_id": sid
     });
 
-    debug!("login URL: {}, role ID: {}", globals.vault_url, rid);
+    debug!("login URL: {}, role ID: {}", url, rid);
 
-    let response = client
-        .post(&globals.vault_url)
-        .json(&login_payload)
-        .send()
-        .await?;
+    let response = client.post(url).json(&login_payload).send().await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -100,7 +95,7 @@ pub async fn approle_login(globals: &GlobalArgs, sid: &str, rid: &str) -> Result
 
         return Err(anyhow!(
             "{} - {}, {}",
-            globals.vault_url,
+            url,
             status,
             json_response["errors"][0].as_str().unwrap_or("")
         ));

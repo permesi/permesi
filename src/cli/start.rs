@@ -1,6 +1,6 @@
 use crate::cli::{actions::Action, commands, dispatch::handler, globals::GlobalArgs};
 use crate::vault;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{runtime::Tokio, trace, Resource};
@@ -33,23 +33,29 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
     // if vault wrapped token try to unwrap
     if let Some(wrapped_token) = matches.get_one::<String>("vault-wrapped-token") {
         let vsid = vault::unwrap(&global_args.vault_url, wrapped_token).await?;
-        (vault_token, lease_duration) = vault::approle_login(&global_args, &vsid, &vrid).await?;
+        (vault_token, lease_duration) =
+            vault::approle_login(&global_args.vault_url, &vsid, &vrid).await?;
     } else {
         let vsid = matches
             .get_one::<String>("vault-secret-id")
             .map(|s: &String| s.to_string())
             .ok_or_else(|| anyhow!("Vault secret-id is required"))?;
 
-        (vault_token, lease_duration) = vault::approle_login(&global_args, &vsid, &vrid).await?;
+        (vault_token, lease_duration) =
+            vault::approle_login(&global_args.vault_url, &vsid, &vrid).await?;
     }
 
     global_args.set_token(Secret::new(vault_token));
 
     // get database username and password from Vault
-    vault::database::database_creds(&mut global_args).await?;
+    vault::database::database_creds(&mut global_args)
+        .await
+        .context("Could not get database username and password")?;
 
     // refresh vault token
-    vault::renew::try_renew(&global_args, lease_duration).await?;
+    vault::renew::try_renew(&global_args, lease_duration)
+        .await
+        .context("Could not renew tokens")?;
 
     let verbosity_level = match matches.get_one::<u8>("verbosity").map_or(0, |&v| v) {
         0 => tracing::Level::ERROR,
