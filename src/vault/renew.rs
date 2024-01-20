@@ -4,7 +4,10 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use reqwest::Client;
 use secrecy::{ExposeSecret, Secret};
 use serde_json::{json, Value};
-use tokio::time::{sleep, Duration};
+use tokio::{
+    sync::mpsc,
+    time::{sleep, Duration},
+};
 use tracing::{debug, error, instrument, warn};
 
 /// Renew a Vault token
@@ -94,7 +97,7 @@ async fn renew_db_token(
 
 /// Refresh a Vault token
 #[instrument]
-pub async fn try_renew(globals: &GlobalArgs, lease_duration: u64) -> Result<()> {
+pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::Sender<()>) -> Result<()> {
     // renew the token
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
@@ -102,6 +105,7 @@ pub async fn try_renew(globals: &GlobalArgs, lease_duration: u64) -> Result<()> 
 
         let url = globals.vault_url.clone();
         let token = globals.vault_token.clone();
+        let tx = tx.clone();
 
         async move {
             loop {
@@ -127,6 +131,7 @@ pub async fn try_renew(globals: &GlobalArgs, lease_duration: u64) -> Result<()> 
 
                             if attempt == 3 {
                                 error!("Failed to renew token after 3 attempts: {}", e);
+                                let _ = tx.send(()).await;
                                 return;
                             }
 
@@ -179,6 +184,7 @@ pub async fn try_renew(globals: &GlobalArgs, lease_duration: u64) -> Result<()> 
 
                             if attempt == 3 {
                                 error!("Failed to renew DB lease after 3 attempts: {}", e);
+                                let _ = tx.send(()).await;
                                 return;
                             }
 

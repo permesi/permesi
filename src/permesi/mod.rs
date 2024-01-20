@@ -1,4 +1,8 @@
-use crate::permesi::handlers::{health, health::__path_health};
+use crate::{
+    cli::globals::GlobalArgs,
+    permesi::handlers::{health, health::__path_health},
+    vault,
+};
 use anyhow::{Context, Result};
 use axum::{
     http::{HeaderName, HeaderValue},
@@ -8,7 +12,7 @@ use axum::{
 use mac_address::get_mac_address;
 use sqlx::{postgres::PgPoolOptions, Connection};
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
     propagate_header::PropagateHeaderLayer, set_header::SetRequestHeaderLayer, trace::TraceLayer,
@@ -33,7 +37,13 @@ pub const GIT_COMMIT_HASH: &str = if let Some(hash) = built_info::GIT_COMMIT_HAS
 #[openapi(paths(health), components(schemas(health::Health)))]
 struct ApiDoc;
 
-pub async fn new(port: u16, dsn: String) -> Result<()> {
+pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
+    // Renew vault token, gracefully shutdown if failed
+    let (tx, mut rx) = mpsc::channel::<()>(1);
+
+    vault::renew::try_renew(globals, tx).await?;
+
+    // Connect to database
     let pool = PgPoolOptions::new()
         .min_connections(1)
         .max_connections(5)
@@ -78,7 +88,11 @@ pub async fn new(port: u16, dsn: String) -> Result<()> {
 
     info!("Listening on [::]:{}", port);
 
-    axum::serve(listener, app.into_make_service()).await?;
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(async move {
+            rx.recv().await;
+        })
+        .await?;
 
     Ok(())
 }

@@ -17,7 +17,7 @@ pub async fn handle(action: Action, globals: &GlobalArgs) -> Result<()> {
             dsn.set_password(Some(globals.vault_db_password.expose_secret()))
                 .map_err(|()| anyhow!("Error setting password"))?;
 
-            new(port, dsn.to_string()).await?;
+            new(port, dsn.to_string(), globals).await?;
         }
     }
 
