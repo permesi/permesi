@@ -7,7 +7,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, PgPool};
-use tokio::sync::mpsc;
 use tracing::{debug, error, instrument};
 use utoipa::ToSchema;
 
@@ -29,11 +28,7 @@ pub struct Health {
 )]
 // axum handler for health
 #[instrument]
-pub async fn health(
-    method: Method,
-    pool: Extension<PgPool>,
-    tx: Extension<mpsc::UnboundedSender<()>>,
-) -> impl IntoResponse {
+pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoResponse {
     debug!(method = ?method, "HTTP request method: {}", method);
 
     let result = match pool.0.acquire().await {
@@ -102,7 +97,6 @@ pub async fn health(
 
         Err(status_code) => {
             debug!("Database connection is unhealthy");
-            let _ = tx.send(());
             (status_code, headers, body)
         }
     }
