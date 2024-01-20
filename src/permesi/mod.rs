@@ -40,7 +40,6 @@ struct ApiDoc;
 pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let tx_handler = tx.clone();
 
     vault::renew::try_renew(globals, tx).await?;
 
@@ -73,7 +72,6 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .layer(
             ServiceBuilder::new()
                 .layer(Extension(pool))
-                .layer(Extension(tx_handler))
                 .layer(PropagateHeaderLayer::new(HeaderName::from_static(
                     "x-request-id",
                 )))
