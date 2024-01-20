@@ -101,7 +101,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
     // renew the token
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
-        let mut jittered_lease_duration: Duration = Default::default();
+        let mut jittered_lease_duration: Duration = Duration::default();
 
         let url = globals.vault_url.clone();
         let token = globals.vault_token.clone();
@@ -153,7 +153,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
     // renew the DB lease_id
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
-        let mut jittered_lease_duration: Duration = Default::default();
+        let mut jittered_lease_duration: Duration = Duration::default();
 
         let url = globals.vault_url.clone();
         let token = globals.vault_token.clone();
