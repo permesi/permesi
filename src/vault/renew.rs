@@ -97,7 +97,7 @@ async fn renew_db_token(
 
 /// Refresh a Vault token
 #[instrument]
-pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::Sender<()>) -> Result<()> {
+pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> Result<()> {
     // renew the token
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
@@ -131,7 +131,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::Sender<()>) -> Result<()>
 
                             if attempt == 3 {
                                 error!("Failed to renew token after 3 attempts: {}", e);
-                                let _ = tx.send(()).await;
+                                let _ = tx.send(());
                                 return;
                             }
 
@@ -159,6 +159,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::Sender<()>) -> Result<()>
         let token = globals.vault_token.clone();
         let db_lease_id = globals.vault_db_lease_id.clone();
         let db_lease_duration = globals.vault_db_lease_duration;
+        let tx = tx.clone();
 
         async move {
             loop {
@@ -184,7 +185,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::Sender<()>) -> Result<()>
 
                             if attempt == 3 {
                                 error!("Failed to renew DB lease after 3 attempts: {}", e);
-                                let _ = tx.send(()).await;
+                                let _ = tx.send(());
                                 return;
                             }
 

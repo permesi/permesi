@@ -39,7 +39,7 @@ struct ApiDoc;
 
 pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
-    let (tx, mut rx) = mpsc::channel::<()>(1);
+    let (tx, mut rx) = mpsc::unbounded_channel();
 
     vault::renew::try_renew(globals, tx).await?;
 
