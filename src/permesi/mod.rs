@@ -17,7 +17,7 @@ use tower::ServiceBuilder;
 use tower_http::{
     propagate_header::PropagateHeaderLayer, set_header::SetRequestHeaderLayer, trace::TraceLayer,
 };
-use tracing::info;
+use tracing::{error, info};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -40,6 +40,7 @@ struct ApiDoc;
 pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let tx_handler = tx.clone();
 
     vault::renew::try_renew(globals, tx).await?;
 
@@ -51,9 +52,11 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .test_before_acquire(false)
         .before_acquire(|conn, meta| {
             Box::pin(async move {
-                // One minute
                 if meta.idle_for.as_secs() > 60 {
-                    conn.ping().await?;
+                    if let Err(e) = conn.ping().await {
+                        error!("Failed to ping database: {}", e);
+                        return Ok(false);
+                    }
                 }
 
                 Ok(true)
@@ -70,6 +73,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .layer(
             ServiceBuilder::new()
                 .layer(Extension(pool))
+                .layer(Extension(tx_handler))
                 .layer(PropagateHeaderLayer::new(HeaderName::from_static(
                     "x-request-id",
                 )))
@@ -91,6 +95,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
             rx.recv().await;
+            info!("Gracefully shutdown");
         })
         .await?;
 
