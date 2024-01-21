@@ -8,8 +8,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN cargo build --release --locked --features "openssl/vendored" && \
-    strip target/x86_64-unknown-linux-musl/release/permesi
+RUN cargo build --release --locked --features "openssl/vendored"
 
 # Runtime image
 FROM alpine:latest
