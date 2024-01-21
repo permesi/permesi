@@ -58,16 +58,34 @@ jobs:
           cargo build --release --locked --target ${{ matrix.target }}
         if: matrix.build != 'linux'
 
-  publish:
-    name: Publish
+  packages:
+    name: package
     needs: build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and publish a Docker image for ${{ github.repository }}
-        uses: macbre/push-to-ghcr@master
+      - name: Extract branch name
+        id: branch
+        run: echo "::set-output name=BRANCH_NAME::${GITHUB_REF##*/}"
+
+      - name: Check if branch is main
+        run: |
+          if [ "${{ steps.branch.outputs.BRANCH_NAME }}" == "main" ]; then
+            echo "The branch is main, stopping the workflow."
+            exit 0
+          fi
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
         with:
-          image_name: ${{ github.repository }}
-          github_token: ${{ secrets.GH_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Build and push Docker image
+        run: |-
+          docker buildx create --use
+          docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/${{ github.repository }}/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:latest .
+          docker push ghcr.io/${{ github.repository }}/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:latest

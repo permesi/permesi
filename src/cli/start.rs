@@ -50,11 +50,6 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
         .await
         .context("Could not get database username and password")?;
 
-    // refresh vault token
-    // vault::renew::try_renew(&global_args)
-    //     .await
-    //     .context("Could not renew tokens")?;
-
     let verbosity_level = match matches.get_one::<u8>("verbosity").map_or(0, |&v| v) {
         0 => tracing::Level::ERROR,
         1 => tracing::Level::WARN,
