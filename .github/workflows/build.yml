@@ -89,7 +89,7 @@ jobs:
           IMAGE_TAG=${{ github.sha }}
 
           docker build \
-          -t ghcr.io/${{ github.repository }}/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:latest \
-          -t ghcr.io/${{ github.repository }}/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:$IMAGE_TAG .
-          docker push ghcr.io/${{ github.repository }}/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:latest
-          docker push ghcr.io/${{ github.repository }}/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:$IMAGE_TAG
+          -t ghcr.io/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:latest \
+          -t ghcr.io/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:$IMAGE_TAG .
+          docker push ghcr.io/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:latest
+          docker push ghcr.io/${{ github.repository }}-${{ steps.branch.outputs.BRANCH_NAME }}:$IMAGE_TAG

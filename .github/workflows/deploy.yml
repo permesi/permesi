@@ -108,9 +108,8 @@ jobs:
         run: |-
           IMAGE_TAG=${{ github.sha }}
 
-          docker buildx create --use
-          docker buildx build --platform linux/amd66 --progress plain \
-          -t ghcr.io/${{ github.repository }}/${{ github.repository }}:latest \
-          -t ghcr.io/${{ github.repository }}/${{ github.repository }}:$IMAGE_TAG .
-          docker push ghcr.io/${{ github.repository }}/${{ github.repository }}:latest
-          docker push ghcr.io/${{ github.repository }}/${{ github.repository }}:$IMAGE_TAG
+          docker build \
+          -t ghcr.io/${{ github.repository }}:latest \
+          -t ghcr.io/${{ github.repository }}:$IMAGE_TAG .
+          docker push ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:$IMAGE_TAG
