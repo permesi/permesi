@@ -1,7 +1,7 @@
 [package]
 name = "permesi"
 version = "0.1.2"
-edition = "2018"
+edition = "2021"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "Identity and Access Management"
 documentation = "https://github.com/permesi/permesi/blob/main/README.md"
@@ -53,4 +53,4 @@ utoipa-swagger-ui = { version = "6", features = ["axum"] }
 uuid = { version = "1.7", features = ["v1", "v4"] }
 
 [build-dependencies]
-built = "0.7"
+built = { version = "0.7", features = ["git2"] }
