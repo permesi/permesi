@@ -65,10 +65,12 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .await
         .context("Failed to connect to database")?;
 
+    let swagger = SwaggerUi::new("/ui/api-docs").url("/api-docs/openapi.json", ApiDoc::openapi());
+
     let app = Router::new()
         .route("/health", get(handlers::health).options(handlers::health))
         .route("/", get(|| async { "Hello, World!" }))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", ApiDoc::openapi()))
+        .merge(swagger)
         .layer(
             ServiceBuilder::new()
                 .layer(Extension(pool))

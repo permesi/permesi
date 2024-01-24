@@ -2,7 +2,7 @@
 name = "permesi"
 version = "0.1.2"
 edition = "2021"
-authors = ["Nicolas Embriz <nbari@tequila.io>"]
+authors = ["Team Permesi <team@permesi.dev>"]
 description = "Identity and Access Management"
 documentation = "https://github.com/permesi/permesi/blob/main/README.md"
 homepage = "https://permesi.dev"
