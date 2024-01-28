@@ -34,7 +34,13 @@ pub const GIT_COMMIT_HASH: &str = if let Some(hash) = built_info::GIT_COMMIT_HAS
 };
 
 #[derive(OpenApi)]
-#[openapi(paths(health), components(schemas(health::Health)))]
+#[openapi(
+    paths(health),
+    components(schemas(health::Health)),
+    tags(
+        (name = "permesi", description = "Identity and access management API")
+    )
+)]
 struct ApiDoc;
 
 pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
@@ -68,8 +74,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     let swagger = SwaggerUi::new("/ui/api-docs").url("/api-docs/openapi.json", ApiDoc::openapi());
 
     let app = Router::new()
+        .route("/", get(|| async { "🌱" }))
         .route("/health", get(handlers::health).options(handlers::health))
-        .route("/", get(|| async { "Hello, World!" }))
         .merge(swagger)
         .layer(
             ServiceBuilder::new()

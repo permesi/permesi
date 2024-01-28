@@ -24,7 +24,8 @@ pub struct Health {
     responses (
         (status = 200, description = "Database connection is healthy", body = [Health]),
         (status = 503, description = "Database connection is unhealthy", body = [Health])
-    )
+    ),
+    tag= "health"
 )]
 // axum handler for health
 #[instrument]
