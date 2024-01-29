@@ -1,12 +1,12 @@
 use crate::{
     cli::globals::GlobalArgs,
-    permesi::handlers::{health, health::__path_health},
+    permesi::handlers::{health, health::__path_health, register, register::__path_register},
     vault,
 };
 use anyhow::{Context, Result};
 use axum::{
     http::{HeaderName, HeaderValue},
-    routing::get,
+    routing::{get, post},
     Extension, Router,
 };
 use mac_address::get_mac_address;
@@ -35,8 +35,8 @@ pub const GIT_COMMIT_HASH: &str = if let Some(hash) = built_info::GIT_COMMIT_HAS
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(health),
-    components(schemas(health::Health)),
+    paths(health, register),
+    components(schemas(health::Health, register::User)),
     tags(
         (name = "permesi", description = "Identity and access management API")
     )
@@ -76,6 +76,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     let app = Router::new()
         .route("/", get(|| async { "🌱" }))
         .route("/health", get(handlers::health).options(handlers::health))
+        .route("/register", post(handlers::register))
         .merge(swagger)
         .layer(
             ServiceBuilder::new()
