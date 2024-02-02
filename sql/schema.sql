@@ -3,7 +3,7 @@
 -- https://github.com/pksunkara/pgx_ulid
 -- CREATE EXTENSION ulid;
 
--- Create the table for clients
+-- Create the table for users
 DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
     id ulid NOT NULL DEFAULT gen_ulid() PRIMARY KEY,
@@ -12,8 +12,8 @@ CREATE TABLE users (
 );
 
 -- Create the table to prevent using same password
-DROP TABLE IF EXISTS password_history;
-CREATE TABLE password_history (
+DROP TABLE IF EXISTS users_password_history;
+CREATE TABLE users_password_history (
     id ulid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     password VARCHAR(64) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -21,7 +21,7 @@ CREATE TABLE password_history (
 );
 
 -- Create the table for the metadata
-DROP TABLE IF EXISTS user_metadata;
-CREATE TABLE user_metadata (
+DROP TABLE IF EXISTS users_metadata;
+CREATE TABLE users_metadata (
     id ulid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
 );

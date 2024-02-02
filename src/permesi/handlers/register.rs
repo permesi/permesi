@@ -53,23 +53,14 @@ pub async fn register(pool: Extension<PgPool>, payload: Option<Json<User>>) -> i
 }
 
 fn valid_email(email: &str) -> bool {
-    match Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$") {
-        Ok(re) => re.is_match(email),
-        Err(_) => false,
-    }
+    Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").map_or(false, |re| re.is_match(email))
 }
 
 fn valid_password(password: &str) -> bool {
     // length must be between 64 hex characters
-    match Regex::new(r"^[0-9a-fA-F]{64}$") {
-        Ok(re) => re.is_match(password),
-        Err(_) => false,
-    }
+    Regex::new(r"^[0-9a-fA-F]{64}$").map_or(false, |re| re.is_match(password))
 }
 
-fn valid_token(token: &str) -> bool {
-    match Ulid::from_string(token) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+const fn valid_token(token: &str) -> bool {
+    Ulid::from_string(token).is_ok()
 }
