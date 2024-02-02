@@ -119,9 +119,10 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
 
                     match renew_token(&url, &token, None).await {
                         Ok(lease_duration) => {
-                            jittered_lease_duration = Duration::from_secs(
-                                (lease_duration as f64 * rng.gen_range(0.7..0.9)) as u64,
-                            );
+                            let factor = rng.gen_range(70..90);
+
+                            jittered_lease_duration =
+                                Duration::from_secs(lease_duration * factor / 100);
 
                             break;
                         }
@@ -173,9 +174,10 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
 
                     match renew_db_token(&url, &token, &db_lease_id, db_lease_duration).await {
                         Ok(lease_duration) => {
-                            jittered_lease_duration = Duration::from_secs(
-                                (lease_duration as f64 * rng.gen_range(0.7..0.9)) as u64,
-                            );
+                            let factor = rng.gen_range(70..90);
+
+                            jittered_lease_duration =
+                                Duration::from_secs(lease_duration * factor / 100);
 
                             break;
                         }

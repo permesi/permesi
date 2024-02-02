@@ -80,6 +80,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .merge(swagger)
         .layer(
             ServiceBuilder::new()
+                .layer(Extension(globals.clone()))
                 .layer(Extension(pool))
                 .layer(PropagateHeaderLayer::new(HeaderName::from_static(
                     "x-request-id",
