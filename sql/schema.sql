@@ -8,14 +8,14 @@ DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
     id ulid NOT NULL DEFAULT gen_ulid() PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password TEXT NOT NULL
+    password VARCHAR(255) NOT NULL
 );
 
 -- Create the table to prevent using same password
 DROP TABLE IF EXISTS users_password_history;
 CREATE TABLE users_password_history (
     id ulid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    password TEXT NOT NULL,
+    password VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (id, password)
 );

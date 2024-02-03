@@ -1,6 +1,9 @@
 use crate::{
     cli::globals::GlobalArgs,
-    permesi::handlers::{health, health::__path_health, register, register::__path_register},
+    permesi::handlers::{
+        health, health::__path_health, user_login, user_login::__path_login, user_register,
+        user_register::__path_register,
+    },
     vault,
 };
 use anyhow::{Context, Result};
@@ -11,6 +14,7 @@ use axum::{
 };
 use mac_address::get_mac_address;
 use sqlx::{postgres::PgPoolOptions, Connection};
+use std::env;
 use std::time::Duration;
 use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
@@ -33,10 +37,12 @@ pub const GIT_COMMIT_HASH: &str = if let Some(hash) = built_info::GIT_COMMIT_HAS
     ":-("
 };
 
+pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+
 #[derive(OpenApi)]
 #[openapi(
-    paths(health, register),
-    components(schemas(health::Health, register::User)),
+    paths(health, register, login),
+    components(schemas(health::Health, user_register::UserRegister, user_login::UserLogin)),
     tags(
         (name = "permesi", description = "Identity and access management API")
     )
@@ -76,7 +82,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     let app = Router::new()
         .route("/", get(|| async { "🌱" }))
         .route("/health", get(handlers::health).options(handlers::health))
-        .route("/register", post(handlers::register))
+        .route("/user/register", post(handlers::register))
+        .route("/user/login", post(handlers::login))
         .merge(swagger)
         .layer(
             ServiceBuilder::new()

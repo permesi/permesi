@@ -56,6 +56,13 @@ pub fn new() -> Command {
                 .required(true),
         )
         .arg(
+            Arg::new("token-url")
+                .long("token-url")
+                .help("Token URL provider, example: https://genesis.tld")
+                .env("PERMESI_TOKEN_URL")
+                .required(true),
+        )
+        .arg(
             Arg::new("vault-url")
                 .long("vault-url")
                 .help("Vault approle login URL, example: https://vault.tld:8200/v1/auth/<approle>/login")
@@ -122,6 +129,8 @@ mod tests {
             "8080",
             "--dsn",
             "postgres://user:password@localhost:5432/permesi",
+            "--token-url",
+            "https://genesis.permesi.dev",
             "--vault-url",
             "https://vault.tld:8200",
             "--vault-role-id",
@@ -159,6 +168,7 @@ mod tests {
     fn test_check_env() {
         temp_env::with_vars(
             [
+                ("PERMESI_TOKEN_URL", Some("https://genesis.permesi.dev")),
                 ("PERMESI_VAULT_URL", Some("https://vault.tld:8200")),
                 ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
                 ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
@@ -196,6 +206,7 @@ mod tests {
             temp_env::with_vars(
                 [
                     ("PERMESI_LOG_LEVEL", Some(level)),
+                    ("PERMESI_TOKEN_URL", Some("http://genesis.permesi.dev")),
                     ("PERMESI_VAULT_URL", Some("http://vault.tld:8200")),
                     ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
                     ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
@@ -226,6 +237,8 @@ mod tests {
                     "permesi".to_string(),
                     "--dsn".to_string(),
                     "postgres://user:password@localhost:5432/permesi".to_string(),
+                    "--token-url".to_string(),
+                    "https://genesis.permesi.dev".to_string(),
                     "--vault-url".to_string(),
                     "https://vault.tld:8200".to_string(),
                     "--vault-role-id".to_string(),

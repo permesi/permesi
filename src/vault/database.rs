@@ -1,4 +1,4 @@
-use crate::{cli::globals::GlobalArgs, vault};
+use crate::{cli::globals::GlobalArgs, permesi, vault};
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use secrecy::{ExposeSecret, Secret};
@@ -9,7 +9,7 @@ use tracing::instrument;
 #[instrument]
 pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
     let client = Client::builder()
-        .user_agent(vault::APP_USER_AGENT)
+        .user_agent(permesi::APP_USER_AGENT)
         .build()?;
 
     // Parse the URL

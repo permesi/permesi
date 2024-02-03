@@ -1,14 +1,16 @@
-use crate::{cli::globals::GlobalArgs, vault::transit::encrypt};
+use crate::{
+    cli::globals::GlobalArgs,
+    permesi::handlers::{valid_email, valid_password, verify_token},
+    vault::transit::encrypt,
+};
 use axum::{extract::Extension, http::StatusCode, response::IntoResponse, Json};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use tracing::{debug, error, instrument};
-use ulid::Ulid;
 use utoipa::ToSchema;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
-pub struct User {
+pub struct UserRegister {
     email: String,
     password: String,
     token: String,
@@ -17,7 +19,7 @@ pub struct User {
 
 #[utoipa::path(
     post,
-    path= "/register",
+    path= "/user/register",
     responses (
         (status = 201, description = "Registration successful", body = [User], content_type = "application/json"),
         (status = 409, description = "User with the specified username or email already exists", body = [User]),
@@ -29,9 +31,9 @@ pub struct User {
 pub async fn register(
     pool: Extension<PgPool>,
     globals: Extension<GlobalArgs>,
-    payload: Option<Json<User>>,
+    payload: Option<Json<UserRegister>>,
 ) -> impl IntoResponse {
-    let user: User = match payload {
+    let user: UserRegister = match payload {
         Some(Json(payload)) => payload,
         None => return (StatusCode::BAD_REQUEST, "Missing payload".to_string()),
     };
@@ -47,7 +49,7 @@ pub async fn register(
         return (StatusCode::BAD_REQUEST, "Invalid password".to_string());
     }
 
-    if !valid_token(&user.token) {
+    if !(verify_token(&user.token).await) {
         return (StatusCode::BAD_REQUEST, "Invalid token".to_string());
     }
 
@@ -95,19 +97,6 @@ pub async fn register(
             );
         }
     }
-}
-
-fn valid_email(email: &str) -> bool {
-    Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").map_or(false, |re| re.is_match(email))
-}
-
-fn valid_password(password: &str) -> bool {
-    // length must be between 64 hex characters
-    Regex::new(r"^[0-9a-fA-F]{64}$").map_or(false, |re| re.is_match(password))
-}
-
-const fn valid_token(token: &str) -> bool {
-    Ulid::from_string(token).is_ok()
 }
 
 async fn user_exists(pool: &PgPool, email: &str) -> Result<bool, sqlx::Error> {

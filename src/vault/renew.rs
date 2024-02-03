@@ -1,4 +1,4 @@
-use crate::{cli::globals::GlobalArgs, vault};
+use crate::{cli::globals::GlobalArgs, permesi, vault};
 use anyhow::{anyhow, Result};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use reqwest::Client;
@@ -14,7 +14,7 @@ use tracing::{debug, error, instrument, warn};
 #[instrument]
 async fn renew_token(url: &str, token: &Secret<String>, increment: Option<u64>) -> Result<u64> {
     let client = Client::builder()
-        .user_agent(vault::APP_USER_AGENT)
+        .user_agent(permesi::APP_USER_AGENT)
         .build()?;
 
     let payload = json!({
@@ -58,7 +58,7 @@ async fn renew_db_token(
     increment: u64,
 ) -> Result<u64> {
     let client = Client::builder()
-        .user_agent(vault::APP_USER_AGENT)
+        .user_agent(permesi::APP_USER_AGENT)
         .build()?;
 
     let payload = json!({

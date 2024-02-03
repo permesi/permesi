@@ -2,14 +2,12 @@ pub mod database;
 pub mod renew;
 pub mod transit;
 
+use crate::permesi::APP_USER_AGENT;
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::env;
 use tracing::{debug, instrument, warn};
 use url::Url;
-
-static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[instrument]
 pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
