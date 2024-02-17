@@ -8,7 +8,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use axum::{
-    http::{HeaderName, HeaderValue, Method},
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        HeaderName, HeaderValue, Method,
+    },
     routing::{get, post},
     Extension, Router,
 };
@@ -83,9 +86,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     let swagger = SwaggerUi::new("/ui/api-docs").url("/api-docs/openapi.json", ApiDoc::openapi());
 
     let cors = CorsLayer::new()
-        // allow `GET` and `POST` when accessing the resource
+        .allow_headers([CONTENT_TYPE, AUTHORIZATION])
         .allow_methods([Method::GET, Method::POST])
-        // allow requests from any origin
         .allow_origin(Any);
 
     let app = Router::new()

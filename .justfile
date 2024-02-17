@@ -1,3 +1,19 @@
+set shell := ["zsh", "-uc"]
+
+branch := if `git rev-parse --abbrev-ref HEAD` == "main" { "latest" } else { `git rev-parse --abbrev-ref HEAD` }
+
+build: test
+  # echo <token> | docker login ghcr.io -u <user> --password-stdin
+  docker build -t permesi .
+  docker tag permesi ghcr.io/permesi/permesi:{{ branch }}
+  docker push ghcr.io/permesi/permesi:{{ branch }}
+
+test: clippy
+  cargo test
+
+clippy:
+  cargo clippy --all -- -W clippy::all -W clippy::nursery -D warnings
+
 run:
   podman run --rm --name postgres \
   -e POSTGRES_USER=permesi \
@@ -8,9 +24,6 @@ run:
 
 postgres_stop:
     podman stop postrgres
-
-clippy:
-    cargo clippy --all -- -W clippy::all -W clippy::nursery -D warnings
 
 jaeger:
   podman run --rm --name jaeger \
@@ -28,12 +41,12 @@ jaeger:
   jaegertracing/all-in-one:latest &
 
 jaeger_stop:
-    podman stop jaeger
+  podman stop jaeger
 
 otel:
-    podman run --rm --name otel-collector \
-    -p 4317:4317 \
-    -p 4318:4318 \
-    -p 8888:8888 \
-    -v $PWD/.otel-collector-config.yml:/etc/otelcol-contrib/config.yaml \
-    otel/opentelemetry-collector-contrib:latest &
+  podman run --rm --name otel-collector \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -p 8888:8888 \
+  -v $PWD/.otel-collector-config.yml:/etc/otelcol-contrib/config.yaml \
+  otel/opentelemetry-collector-contrib:latest &

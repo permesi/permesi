@@ -30,8 +30,6 @@ pub struct Health {
 // axum handler for health
 #[instrument]
 pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoResponse {
-    debug!(method = ?method, "HTTP request method: {}", method);
-
     let result = match pool.0.acquire().await {
         Ok(mut conn) => match conn.ping().await {
             Ok(()) => Ok(()),
@@ -93,11 +91,13 @@ pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoRespons
     match result {
         Ok(()) => {
             debug!("Database connection is healthy");
+
             (StatusCode::OK, headers, body)
         }
 
         Err(status_code) => {
             debug!("Database connection is unhealthy");
+
             (status_code, headers, body)
         }
     }
