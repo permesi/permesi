@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use axum::{
-    http::{HeaderName, HeaderValue},
+    http::{HeaderName, HeaderValue, Method},
     routing::{get, post},
     Extension, Router,
 };
@@ -19,7 +19,10 @@ use std::time::Duration;
 use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
-    propagate_header::PropagateHeaderLayer, set_header::SetRequestHeaderLayer, trace::TraceLayer,
+    cors::{Any, CorsLayer},
+    propagate_header::PropagateHeaderLayer,
+    set_header::SetRequestHeaderLayer,
+    trace::TraceLayer,
 };
 use tracing::{error, info};
 use utoipa::OpenApi;
@@ -79,6 +82,12 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
 
     let swagger = SwaggerUi::new("/ui/api-docs").url("/api-docs/openapi.json", ApiDoc::openapi());
 
+    let cors = CorsLayer::new()
+        // allow `GET` and `POST` when accessing the resource
+        .allow_methods([Method::GET, Method::POST])
+        // allow requests from any origin
+        .allow_origin(Any);
+
     let app = Router::new()
         .route("/", get(|| async { "🌱" }))
         .route("/health", get(handlers::health).options(handlers::health))
@@ -100,7 +109,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
                         HeaderValue::from_str(uuid.to_string().as_str()).ok()
                     },
                 ))
-                .layer(TraceLayer::new_for_http()),
+                .layer(TraceLayer::new_for_http())
+                .layer(cors),
         );
 
     let listener = TcpListener::bind(format!("::0:{port}")).await?;
