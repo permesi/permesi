@@ -63,12 +63,26 @@ pub async fn login(
             .await
             .map_err(|e| {
                 error!("Error decrypting password: {:?}", e);
+
                 StatusCode::INTERNAL_SERVER_ERROR
             }),
-        Err(e) => {
-            error!("Error getting password from database: {:?}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+
+        Err(e) => match e {
+            sqlx::Error::RowNotFound => {
+                debug!("User not found");
+
+                return (StatusCode::UNAUTHORIZED, String::from("Unauthorized"));
+            }
+
+            _ => {
+                error!("Error getting password from database: {:?}", e);
+
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Error getting password".to_string(),
+                );
+            }
+        },
     };
 
     // compare decrypted password with user password
@@ -84,8 +98,10 @@ pub async fn login(
                 (StatusCode::UNAUTHORIZED, String::from("Unauthorized"))
             }
         }
+
         Err(e) => {
             error!("Error getting password: {:?}", e);
+
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Error getting password".to_string(),

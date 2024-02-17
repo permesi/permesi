@@ -4,8 +4,8 @@ name: Coverage
 on:
   push:
     branches-ignore:
-      - 'develop'
-      - 'main'
+      - develop
+      - main
 
 jobs:
   coverage:
