@@ -58,20 +58,17 @@ pub async fn login(
     }
 
     // get password from database and decrypt it using vault transit
-    let stored_password = if let Ok(ciphertext) = get_password(&pool, &user.email).await {
-        decrypt(&globals, &ciphertext, &user.email)
+    let stored_password = match get_password(&pool, &user.email).await {
+        Ok(ciphertext) => decrypt(&globals, &ciphertext, &user.email)
             .await
             .map_err(|e| {
                 error!("Error decrypting password: {:?}", e);
                 StatusCode::INTERNAL_SERVER_ERROR
-            })
-    } else {
-        error!("Error getting password from database");
-
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Error with database".to_string(),
-        );
+            }),
+        Err(e) => {
+            error!("Error getting password from database: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     };
 
     // compare decrypted password with user password
