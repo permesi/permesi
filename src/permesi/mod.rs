@@ -16,7 +16,7 @@ use axum::{
     Extension, Router,
 };
 use mac_address::get_mac_address;
-use sqlx::{postgres::PgPoolOptions, Connection};
+use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::time::Duration;
 use tokio::{net::TcpListener, sync::mpsc};
@@ -27,7 +27,7 @@ use tower_http::{
     set_header::SetRequestHeaderLayer,
     trace::TraceLayer,
 };
-use tracing::{error, info};
+use tracing::info;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -66,19 +66,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .min_connections(1)
         .max_connections(5)
         .max_lifetime(Duration::from_secs(60 * 2))
-        .test_before_acquire(false)
-        .before_acquire(|conn, meta| {
-            Box::pin(async move {
-                if meta.idle_for.as_secs() > 60 {
-                    if let Err(e) = conn.ping().await {
-                        error!("Failed to ping database: {}", e);
-                        return Ok(false);
-                    }
-                }
-
-                Ok(true)
-            })
-        })
+        .test_before_acquire(true)
         .connect(&dsn)
         .await
         .context("Failed to connect to database")?;
