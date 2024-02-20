@@ -80,10 +80,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
 
     let app = Router::new()
         .route("/", get(|| async { "🌱" }))
-        .route("/health", get(handlers::health).options(handlers::health))
         .route("/user/register", post(handlers::register))
         .route("/user/login", post(handlers::login))
-        .merge(swagger)
         .layer(
             ServiceBuilder::new()
                 .layer(Extension(globals.clone()))
@@ -101,7 +99,9 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
                 ))
                 .layer(TraceLayer::new_for_http())
                 .layer(cors),
-        );
+        )
+        .route("/health", get(handlers::health).options(handlers::health))
+        .merge(swagger);
 
     let listener = TcpListener::bind(format!("::0:{port}")).await?;
 
