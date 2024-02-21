@@ -21,7 +21,6 @@ axum = { version = "0.7", features = ["tracing"] }
 base64ct = { version = "1.6.0", features = ["alloc"] }
 built = { version = "0.7", features = ["git2"] }
 clap = { version = "4", features = ["env"] }
-mac_address = "1.1.5"
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
 opentelemetry = "0.21"
 opentelemetry-otlp = { version = "0.14", features = ["tls-roots", "tls"] }
@@ -48,6 +47,7 @@ tower-http = { version = "0.5", features = [
     "propagate-header",
     "set-header",
     "cors",
+    "request-id",
 ] }
 tracing = "0.1"
 tracing-opentelemetry = "0.22"

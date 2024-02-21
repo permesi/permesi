@@ -15,7 +15,6 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use mac_address::get_mac_address;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::time::Duration;
@@ -23,11 +22,12 @@ use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
-    propagate_header::PropagateHeaderLayer,
+    request_id::PropagateRequestIdLayer,
     set_header::SetRequestHeaderLayer,
     trace::TraceLayer,
 };
 use tracing::info;
+use ulid::Ulid;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -55,6 +55,9 @@ pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CAR
 )]
 struct ApiDoc;
 
+/// Start the server
+/// # Errors
+/// Return error if failed to start the server
 pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -84,23 +87,20 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .route("/user/login", post(handlers::login))
         .layer(
             ServiceBuilder::new()
-                .layer(Extension(globals.clone()))
-                .layer(Extension(pool))
-                .layer(PropagateHeaderLayer::new(HeaderName::from_static(
-                    "x-request-id",
-                )))
                 .layer(SetRequestHeaderLayer::if_not_present(
                     HeaderName::from_static("x-request-id"),
-                    |_req: &_| {
-                        let node_id: [u8; 6] = node_id();
-                        let uuid = uuid::Uuid::now_v1(&node_id);
-                        HeaderValue::from_str(uuid.to_string().as_str()).ok()
-                    },
+                    |_req: &_| HeaderValue::from_str(Ulid::new().to_string().as_str()).ok(),
                 ))
+                .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
+                    "x-request-id",
+                )))
                 .layer(TraceLayer::new_for_http())
-                .layer(cors),
+                .layer(cors)
+                .layer(Extension(globals.clone()))
+                .layer(Extension(pool.clone())),
         )
         .route("/health", get(handlers::health).options(handlers::health))
+        .layer(Extension(pool))
         .merge(swagger);
 
     let listener = TcpListener::bind(format!("::0:{port}")).await?;
@@ -115,16 +115,4 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .await?;
 
     Ok(())
-}
-
-#[must_use]
-pub fn node_id() -> [u8; 6] {
-    get_mac_address().map_or([0; 6], |mac| {
-        mac.map_or([0; 6], |mac| {
-            let bytes = mac.bytes();
-            let mut node_id = [0; 6];
-            node_id.copy_from_slice(&bytes);
-            node_id
-        })
-    })
 }

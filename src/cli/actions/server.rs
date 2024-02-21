@@ -5,6 +5,8 @@ use secrecy::ExposeSecret;
 use url::Url;
 
 /// Handle the create action
+/// # Errors
+/// Will return an error if the DSN is invalid
 pub async fn handle(action: Action, globals: &GlobalArgs) -> Result<()> {
     match action {
         Action::Server { port, dsn } => {

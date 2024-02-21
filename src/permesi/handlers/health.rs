@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, PgPool};
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 use utoipa::ToSchema;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
@@ -28,19 +28,20 @@ pub struct Health {
     tag= "health"
 )]
 // axum handler for health
-#[instrument]
 pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoResponse {
     let result = match pool.0.acquire().await {
         Ok(mut conn) => match conn.ping().await {
             Ok(()) => Ok(()),
             Err(error) => {
                 error!("Failed to ping database: {}", error);
+
                 Err(StatusCode::SERVICE_UNAVAILABLE)
             }
         },
 
         Err(error) => {
             error!("Failed to acquire database connection: {}", error);
+
             Err(StatusCode::SERVICE_UNAVAILABLE)
         }
     };
