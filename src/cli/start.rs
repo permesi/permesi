@@ -8,11 +8,7 @@ use secrecy::Secret;
 use std::time::Duration;
 use tracing::debug;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{
-    filter, fmt,
-    layer::{Layer, SubscriberExt},
-    EnvFilter, Registry,
-};
+use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
 
 /// Start the CLI
 /// # Errors
@@ -94,22 +90,9 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
         .with_default_directive(verbosity_level.into())
         .from_env_lossy();
 
-    // Filter out /health requests (no spans will be created)
-    let health_filter = filter::filter_fn(|metadata| {
-        metadata
-            .fields()
-            .field("path")
-            .as_ref()
-            .map(std::convert::AsRef::as_ref)
-            .map_or(
-                true,               // If there is no uri attr, pass through
-                |s| s != "/health", // If has uri + is not /health, pass through
-            )
-    });
-
     let subscriber = Registry::default()
         .with(fmt_layer)
-        .with(telemetry.with_filter(health_filter))
+        .with(telemetry)
         .with(env_filter);
 
     tracing::subscriber::set_global_default(subscriber)?;
