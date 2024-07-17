@@ -20,9 +20,9 @@ base64ct = { version = "1.6.0", features = ["alloc"] }
 built = { version = "0.7", features = ["git2"] }
 clap = { version = "4", features = ["env"] }
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
-opentelemetry = "0.24"
-opentelemetry-otlp = { version = "0.17", features = ["tls-roots", "tls"] }
-opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry = "0.23"
+opentelemetry-otlp = { version = "0.16", features = ["tls-roots", "tls"] }
+opentelemetry_sdk = { version = "0.23", features = ["rt-tokio"] }
 rand = "0.8"
 regex = "1.10"
 reqwest = { version = "0.12", features = ["json"] }
