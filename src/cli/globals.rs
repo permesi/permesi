@@ -1,13 +1,13 @@
-use secrecy::Secret;
+use secrecy::SecretString;
 
 #[derive(Debug, Clone)]
 pub struct GlobalArgs {
     pub vault_url: String,
-    pub vault_token: Secret<String>,
+    pub vault_token: SecretString,
     pub vault_db_lease_id: String,
     pub vault_db_lease_duration: u64,
     pub vault_db_username: String,
-    pub vault_db_password: Secret<String>,
+    pub vault_db_password: SecretString,
 }
 
 impl GlobalArgs {
@@ -15,15 +15,15 @@ impl GlobalArgs {
     pub fn new(vurl: String) -> Self {
         Self {
             vault_url: vurl,
-            vault_token: Secret::new(String::new()),
+            vault_token: SecretString::default(),
             vault_db_lease_id: String::new(),
             vault_db_lease_duration: 0,
             vault_db_username: String::new(),
-            vault_db_password: Secret::new(String::new()),
+            vault_db_password: SecretString::default(),
         }
     }
 
-    pub fn set_token(&mut self, token: Secret<String>) {
+    pub fn set_token(&mut self, token: SecretString) {
         self.vault_token = token;
     }
 }

@@ -1,14 +1,8 @@
-use crate::cli::{actions::Action, commands, dispatch::handler, globals::GlobalArgs};
+use crate::cli::{actions::Action, commands, dispatch::handler, globals::GlobalArgs, telemetry};
 use crate::vault;
 use anyhow::{anyhow, Context, Result};
-use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime::Tokio, trace, Resource};
-use secrecy::Secret;
-use std::time::Duration;
+use secrecy::SecretString;
 use tracing::debug;
-use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
 
 /// Start the CLI
 /// # Errors
@@ -47,7 +41,7 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
             vault::approle_login(&global_args.vault_url, &vault_session_id, &vault_role_id).await?;
     }
 
-    global_args.set_token(Secret::new(vault_token));
+    global_args.set_token(SecretString::from(vault_token));
 
     // get database username and password from Vault
     vault::database::database_creds(&mut global_args)
@@ -62,40 +56,7 @@ pub async fn start() -> Result<(Action, GlobalArgs)> {
         _ => tracing::Level::TRACE,
     };
 
-    let otlp_exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
-        .with_timeout(Duration::from_secs(3));
-
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(otlp_exporter)
-        .with_trace_config(trace::config().with_resource(Resource::new(vec![
-            KeyValue::new("service.name", env!("CARGO_PKG_NAME")),
-            KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-        ])))
-        .install_batch(Tokio)?;
-
-    let telemetry = OpenTelemetryLayer::new(tracer);
-
-    let fmt_layer = fmt::layer()
-        .with_file(true)
-        .with_line_number(true)
-        .with_thread_ids(false)
-        .with_thread_names(false)
-        .with_target(false)
-        .pretty();
-
-    // RUST_LOG=
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(verbosity_level.into())
-        .from_env_lossy();
-
-    let subscriber = Registry::default()
-        .with(fmt_layer)
-        .with(telemetry)
-        .with(env_filter);
-
-    tracing::subscriber::set_global_default(subscriber)?;
+    telemetry::init(verbosity_level)?;
 
     let action = handler(&matches)?;
 

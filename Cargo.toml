@@ -1,6 +1,6 @@
 [package]
 name = "permesi"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["Team Permesi <team@permesi.dev>"]
 description = "Identity and Access Management"
@@ -20,16 +20,16 @@ base64ct = { version = "1.6.0", features = ["alloc"] }
 built = { version = "0.7", features = ["git2"] }
 clap = { version = "4", features = ["env"] }
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
-opentelemetry = "0.23"
-opentelemetry-otlp = { version = "0.16", features = ["tls-roots", "tls"] }
-opentelemetry_sdk = { version = "0.23", features = ["rt-tokio"] }
-rand = "0.8"
+opentelemetry = "0.27"
+opentelemetry-otlp = { version = "0.27", features = ["tls-roots", "tls"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+rand = "0.8.5"
 regex = "1.10"
 reqwest = { version = "0.12", features = ["json"] }
-secrecy = "0.8"
+secrecy = "0.10.3"
 serde = "1.0"
 serde_json = "1.0"
-sqlx = { version = "0.7", features = [
+sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
@@ -39,8 +39,8 @@ sqlx = { version = "0.7", features = [
 temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
-tower = "0.4"
-tower-http = { version = "0.5", features = [
+tower = "0.5"
+tower-http = { version = "0.6", features = [
     "trace",
     "propagate-header",
     "set-header",
@@ -48,13 +48,13 @@ tower-http = { version = "0.5", features = [
     "request-id",
 ] }
 tracing = "0.1"
-tracing-opentelemetry = "0.24"
+tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 ulid = "1.1"
 url = "2.5"
-utoipa = { version = "4", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "7", features = ["axum"] }
-uuid = { version = "1.7", features = ["v1", "v4"] }
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+uuid = { version = "1.11", features = ["v1", "v4", "v7"] }
 
 [build-dependencies]
 built = { version = "0.7", features = ["git2"] }

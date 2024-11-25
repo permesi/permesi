@@ -2,7 +2,7 @@ use crate::{cli::globals::GlobalArgs, permesi, vault};
 use anyhow::{anyhow, Result};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use reqwest::Client;
-use secrecy::{ExposeSecret, Secret};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 use tokio::{
     sync::mpsc,
@@ -12,7 +12,7 @@ use tracing::{debug, error, instrument, warn};
 
 /// Renew a Vault token
 #[instrument]
-async fn renew_token(url: &str, token: &Secret<String>, increment: Option<u64>) -> Result<u64> {
+async fn renew_token(url: &str, token: &SecretString, increment: Option<u64>) -> Result<u64> {
     let client = Client::builder()
         .user_agent(permesi::APP_USER_AGENT)
         .build()?;
@@ -53,7 +53,7 @@ async fn renew_token(url: &str, token: &Secret<String>, increment: Option<u64>) 
 #[instrument]
 async fn renew_db_token(
     url: &str,
-    token: &Secret<String>,
+    token: &SecretString,
     lease_id: &str,
     increment: u64,
 ) -> Result<u64> {
