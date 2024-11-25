@@ -14,6 +14,10 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
+  coverage:
+    uses: ./.github/workflows/coverage.yml
+    secrets: inherit
+
   build:
     name: Build
     runs-on: ${{ matrix.os }}
@@ -25,7 +29,6 @@ jobs:
           - build: linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,17 +64,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Extract branch name
-        id: branch
-        run: echo "::set-output name=BRANCH_NAME::${GITHUB_REF##*/}"
-
-      - name: Check if branch is main
-        run: |
-          if [ "${{ steps.branch.outputs.BRANCH_NAME }}" == "main" ]; then
-            echo "The branch is main, stopping the workflow."
-            exit 0
-          fi
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3

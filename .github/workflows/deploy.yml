@@ -104,7 +104,7 @@ jobs:
         id: docker_meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/permesi/permesi
+          images: ghcr.io/permesi/genesis
 
       - name: Docker Setup Buildx
         uses: docker/setup-buildx-action@v3.0.0
