@@ -1,6 +1,16 @@
 /target/
 **/*.rs.bk
 .envrc
-.postgres-volume
 .otel-collector-config.yml
 fly.toml
+db/data
+db/log
+
+# Editor/IDE artifacts
+flycheck_*
+flycheck*.rs
+.flycheck_*
+
+# test artifacts
+/tests/tmp/
+*.db

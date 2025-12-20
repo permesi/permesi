@@ -1,0 +1,61 @@
+[package]
+name = "genesis"
+version = "0.1.14"
+edition = "2024"
+authors = ["Team Permesi <team@permesi.dev>"]
+description = "Token Zero generator for permesi"
+documentation = "https://github.com/permesi/genesis/blob/main/README.md"
+homepage = "https://github.com/permesi/genesis"
+repository = "https://github.com/permesi/genesis"
+readme = "../../README.md"
+keywords = ["password", "security", "token"]
+categories = ["web-programming::http-server"]
+license = "BSD-3-Clause"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+admission_token = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+once_cell = { workspace = true }
+axum = { workspace = true, features = ["tracing"] }
+chrono = "0.4"
+clap = { workspace = true, features = ["env"] }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls"] }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+rand = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-native-roots"] }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "ipnetwork",
+    "uuid",
+] }
+temp-env = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true }
+tower-http = { workspace = true, features = [
+    "trace",
+    "cors",
+    "request-id",
+    "set-header",
+] }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+tonic = { workspace = true, features = ["tls-native-roots"] }
+ulid = { workspace = true }
+url = { workspace = true }
+utoipa = { workspace = true, features = ["axum_extras"] }
+uuid = { workspace = true, features = ["v1", "v4", "v7"] }
+
+[build-dependencies]
+built = { workspace = true, features = ["git2"] }

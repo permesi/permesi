@@ -1,0 +1,9 @@
+---
+branch: true
+ignore-not-existing: true
+output-type: lcov
+output-path: ./lcov.info
+source-dir: .
+ignore:
+  - /*
+  - ../*

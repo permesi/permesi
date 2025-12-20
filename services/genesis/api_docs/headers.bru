@@ -1,0 +1,15 @@
+meta {
+  name: headers
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{URL}}/headers
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

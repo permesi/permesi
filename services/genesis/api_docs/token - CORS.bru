@@ -1,0 +1,15 @@
+meta {
+  name: token - CORS
+  type: http
+  seq: 5
+}
+
+options {
+  url: {{URL}}/token
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

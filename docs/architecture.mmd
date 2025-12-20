@@ -1,0 +1,32 @@
+```mermaid
+flowchart LR
+  subgraph Internet["Untrusted: Internet"]
+    U[User / Client]
+  end
+
+  subgraph Edge["Trust Boundary: Edge"]
+    G[genesis<br/>edge admission token mint]
+    JWKS[(JWKS<br/>GET /jwks.json)]
+  end
+
+  subgraph Core["Trust Boundary: Core IAM"]
+    P[permesi<br/>core IAM / OIDC authority]
+  end
+
+  subgraph Data["Optional: Data Plane"]
+    DB[(Audit / Revocation DB)]
+  end
+
+  U -->|1. Request admission| G
+  G -->|2. Signed Admission Token (JWT)| U
+
+  G -->|Publishes public keys| JWKS
+  P -->|Loads JWKS at deploy/startup| JWKS
+
+  U -->|3. Credentials + Admission Token| P
+  P -->|4. Offline verify: sig + exp + aud + iss| P
+
+  G -.->|Optional audit write (jti)| DB
+  P -.->|Optional revocation check (jti)| DB
+```
+

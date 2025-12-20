@@ -1,0 +1,15 @@
+meta {
+  name: token 405
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{URL}}/token?client_id={{CLIENT_ID}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("check status code", function() { expect(res.status).to.equal(405); });
+}
