@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   test:
@@ -69,22 +70,27 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y podman
 
       - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GH_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Compute image tags
         id: meta
         shell: bash
         run: |
-          echo "IMAGE=ghcr.io/permesi/permesi" >> $GITHUB_OUTPUT
-          echo "TAG_REF=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "TAG_REF=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
           echo "TAG_SHA=${GITHUB_SHA}" >> $GITHUB_OUTPUT
 
-      - name: Build & Push image (podman)
+      - name: Build & Push images (podman)
+        shell: bash
         run: |
-          podman build \
-            -f services/permesi/Dockerfile \
-            -t "${{ steps.meta.outputs.IMAGE }}:${{ steps.meta.outputs.TAG_REF }}" \
-            -t "${{ steps.meta.outputs.IMAGE }}:${{ steps.meta.outputs.TAG_SHA }}" \
-            .
-          podman push "${{ steps.meta.outputs.IMAGE }}:${{ steps.meta.outputs.TAG_REF }}"
-          podman push "${{ steps.meta.outputs.IMAGE }}:${{ steps.meta.outputs.TAG_SHA }}"
+          set -euo pipefail
+          for service in permesi genesis; do
+            image="ghcr.io/permesi/${service}"
+            dockerfile="services/${service}/Dockerfile"
+            podman build \
+              -f "${dockerfile}" \
+              -t "${image}:${{ steps.meta.outputs.TAG_REF }}" \
+              -t "${image}:${{ steps.meta.outputs.TAG_SHA }}" \
+              .
+            podman push "${image}:${{ steps.meta.outputs.TAG_REF }}"
+            podman push "${image}:${{ steps.meta.outputs.TAG_SHA }}"
+          done
