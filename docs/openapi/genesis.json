@@ -63,15 +63,15 @@
         }
       }
     },
-    "/jwks.json": {
+    "/paserk.json": {
       "get": {
         "tags": [
-          "jwks"
+          "paserk"
         ],
-        "operationId": "jwks",
+        "operationId": "paserk",
         "responses": {
           "200": {
-            "description": "JWKS public keys",
+            "description": "PASERK public keys",
             "content": {
               "application/json": {
                 "schema": {
@@ -105,16 +105,30 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Token"
-                  }
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid client ID",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
           },
           "500": {
-            "description": "Error creating the token"
+            "description": "Error creating the token",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
@@ -148,14 +162,9 @@
       "Token": {
         "type": "object",
         "required": [
-          "token",
-          "expires"
+          "token"
         ],
         "properties": {
-          "expires": {
-            "type": "integer",
-            "format": "int64"
-          },
           "token": {
             "type": "string"
           }

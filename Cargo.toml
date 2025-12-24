@@ -6,13 +6,19 @@ members = [
   "services/permesi",
   "services/genesis",
   "crates/admission_token",
+  "crates/vault_client",
 ]
 
 [workspace.dependencies]
 admission_token = { path = "crates/admission_token" }
+vault_client = { path = "crates/vault_client" }
 anyhow = "1"
 axum = { version = "0.8", features = ["tracing"] }
 base64 = "0.22"
+base64ct = { version = "1.6.0", features = ["alloc"] }
+blake2 = "0.10"
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
+pasetors = "0.7"
 once_cell = "1.21"
 clap = { version = "4", features = ["env"] }
 opentelemetry = "0.31"
@@ -23,6 +29,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 secrecy = "0.10.3"
 serde = "1.0"
 serde_json = "1.0"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing"] }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "tls-rustls",

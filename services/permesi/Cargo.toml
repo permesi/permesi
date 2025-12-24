@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 admission_token = { workspace = true }
+vault_client = { workspace = true }
 anyhow = { workspace = true }
 axum = { version = "0.8", features = ["tracing"] }
 base64 = { workspace = true }
@@ -58,6 +59,9 @@ ulid = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }

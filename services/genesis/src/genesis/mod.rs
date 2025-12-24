@@ -4,8 +4,8 @@
 use crate::{
     cli::globals::GlobalArgs,
     genesis::handlers::{
-        headers::__path_headers, health, health::__path_health, jwks, jwks::__path_jwks, token,
-        token::__path_token,
+        headers::__path_headers, health, health::__path_health, paserk, paserk::__path_paserk,
+        token, token::__path_token,
     },
     vault,
 };
@@ -14,9 +14,10 @@ use axum::{
     Extension, Router,
     body::Body,
     http::{HeaderName, HeaderValue, Method, Request},
-    routing::{get, post},
+    routing::get,
 };
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
@@ -45,7 +46,7 @@ pub const GIT_COMMIT_HASH: &str = match built_info::GIT_COMMIT_HASH {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(health, headers, token, jwks),
+    paths(health, headers, token, paserk),
     components(
         schemas(health::Health, token::Token)
     ),
@@ -80,6 +81,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .await
         .context("Failed to connect to database")?;
 
+    let admission = Arc::new(admission::AdmissionSigner::new(globals).await?);
+
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
@@ -89,8 +92,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     let app = Router::new()
         .route("/headers", get(handlers::headers))
         .route("/token", get(handlers::token))
-        .route("/verify", post(handlers::verify))
-        .route("/jwks.json", get(handlers::jwks))
+        .route("/paserk.json", get(handlers::paserk))
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestHeaderLayer::if_not_present(
@@ -102,6 +104,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
                 )))
                 .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
+                .layer(Extension(admission.clone()))
                 .layer(Extension(pool.clone())),
         )
         .route("/health", get(handlers::health).options(handlers::health))

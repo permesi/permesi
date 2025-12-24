@@ -12,3 +12,6 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'genesis')\gexec
 SELECT format('CREATE DATABASE %I', 'permesi')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'permesi')\gexec
 
+-- Bootstrap genesis schema (idempotent, safe to re-run).
+\connect genesis
+\ir /db/sql/01_genesis.sql

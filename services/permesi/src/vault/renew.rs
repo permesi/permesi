@@ -1,63 +1,17 @@
-use crate::{cli::globals::GlobalArgs, permesi, vault};
-use anyhow::{Result, anyhow};
+use crate::{cli::globals::GlobalArgs, permesi};
+use anyhow::Result;
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use reqwest::Client;
-use secrecy::{ExposeSecret, SecretString};
-use serde_json::{Value, json};
+use secrecy::SecretString;
 use tokio::{
     sync::mpsc,
     time::{Duration, sleep},
 };
 use tracing::{debug, error, instrument, warn};
 
-fn vault_error_message(json_response: &Value) -> &str {
-    json_response
-        .get("errors")
-        .and_then(|v| v.get(0))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-}
-
 /// Renew a Vault token
 #[instrument]
 async fn renew_token(url: &str, token: &SecretString, increment: Option<u64>) -> Result<u64> {
-    let client = Client::builder()
-        .user_agent(permesi::APP_USER_AGENT)
-        .build()?;
-
-    let payload = json!({
-        "increment": increment.map_or(0, |increment| increment)
-    });
-
-    // Parse the URL
-    let renew_url = vault::endpoint_url(url, "/v1/auth/token/renew-self")?;
-
-    let response = client
-        .post(&renew_url)
-        .json(&payload)
-        .header("X-Vault-Token", token.expose_secret())
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let json_response: Value = response.json().await?;
-
-        return Err(anyhow!(
-            "{} - {}, {}",
-            renew_url,
-            status,
-            vault_error_message(&json_response)
-        ));
-    }
-
-    let json_response: Value = response.json().await?;
-
-    json_response
-        .get("auth")
-        .and_then(|v| v.get("lease_duration"))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
+    vault_client::renew_token(permesi::APP_USER_AGENT, url, token, increment).await
 }
 
 #[instrument]
@@ -67,43 +21,7 @@ async fn renew_db_token(
     lease_id: &str,
     increment: u64,
 ) -> Result<u64> {
-    let client = Client::builder()
-        .user_agent(permesi::APP_USER_AGENT)
-        .build()?;
-
-    let payload = json!({
-        "increment": increment,
-        "lease_id": lease_id
-    });
-
-    // Parse the URL
-    let renew_url = vault::endpoint_url(url, "/v1/sys/leases/renew")?;
-
-    let response = client
-        .post(&renew_url)
-        .json(&payload)
-        .header("X-Vault-Token", token.expose_secret())
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let json_response: Value = response.json().await?;
-
-        return Err(anyhow!(
-            "{} - {}, {}",
-            renew_url,
-            status,
-            vault_error_message(&json_response)
-        ));
-    }
-
-    let json_response: Value = response.json().await?;
-
-    json_response
-        .get("lease_duration")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
+    vault_client::renew_db_token(permesi::APP_USER_AGENT, url, token, lease_id, increment).await
 }
 
 /// Refresh a Vault token

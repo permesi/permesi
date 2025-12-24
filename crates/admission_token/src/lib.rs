@@ -1,7 +1,10 @@
-mod jwks;
-mod jwt;
+mod error;
+mod paserk;
+mod paseto;
 
-pub use jwks::{Jwk, Jwks};
-pub use jwt::{
-    AdmissionTokenClaims, AdmissionTokenHeader, Error, TOKEN_VERSION, sign_rs256, verify_rs256,
+pub use error::Error;
+pub use paserk::{PaserkKey, PaserkKeySet};
+pub use paseto::{
+    AdmissionTokenClaims, AdmissionTokenFooter, SigningInput, VerificationOptions, build_token,
+    encode_signing_input, rfc3339_from_unix, unix_from_rfc3339, verify_v4_public,
 };

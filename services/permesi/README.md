@@ -15,6 +15,8 @@ TL;DR:
 
 `--vault-url` must point to the AppRole login endpoint.
 The DSN can omit username/password because Vault injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).
+Admission PASERK keyset can be provided via a local file/string or fetched from a URL.
+Admission tokens use RFC3339 `iat` / `exp` claims.
 
 AppRole CLI example (direct secret_id):
 
@@ -22,7 +24,7 @@ AppRole CLI example (direct secret_id):
 cargo run -p permesi --bin permesi -- \
   --port 8080 \
   --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-jwks-path "./jwks.json" \
+  --admission-paserk-url "http://genesis:8080/paserk.json" \
   --vault-url "http://vault:8200/v1/auth/approle/login" \
   --vault-role-id "$PERMESI_ROLE_ID" \
   --vault-secret-id "$PERMESI_SECRET_ID"
@@ -34,8 +36,17 @@ AppRole CLI example (wrapped token):
 cargo run -p permesi --bin permesi -- \
   --port 8080 \
   --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-jwks-path "./jwks.json" \
+  --admission-paserk-url "http://genesis:8080/paserk.json" \
   --vault-url "http://vault:8200/v1/auth/approle/login" \
   --vault-role-id "$PERMESI_ROLE_ID" \
   --vault-wrapped-token "$PERMESI_WRAPPED_TOKEN"
 ```
+
+## Admission Token Verification
+
+- `permesi` verifies Admission Tokens offline using the PASERK keyset (file/string/URL).
+- There is no online revocation check today; `jti` is not looked up in a database.
+
+## Missing / Planned
+
+- Optional revocation mode (DB lookup or cached revocation list) for stricter enforcement.

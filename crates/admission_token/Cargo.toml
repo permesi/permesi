@@ -8,12 +8,13 @@ license = "BSD-3-Clause"
 workspace = true
 
 [dependencies]
-base64ct = { version = "1.6.0", features = ["alloc"] }
-rsa = "0.9.6"
-sha2 = { version = "0.10.8", features = ["oid"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2"
+base64ct = { workspace = true }
+pasetors = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
 
 [dev-dependencies]
-temp-env = "0.3.6"
+ed25519-dalek = { workspace = true }
+temp-env = { workspace = true }

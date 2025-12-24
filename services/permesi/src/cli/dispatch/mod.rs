@@ -26,11 +26,17 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         anyhow::bail!("missing required argument: --vault-secret-id or --vault-wrapped-token");
     }
 
-    let admission_jwks_path = matches.get_one::<String>("admission-jwks-path").cloned();
-    let admission_jwks = matches.get_one::<String>("admission-jwks").cloned();
+    let admission_paserk_path = matches.get_one::<String>("admission-paserk-path").cloned();
+    let admission_paserk = matches.get_one::<String>("admission-paserk").cloned();
+    let admission_paserk_url = matches.get_one::<String>("admission-paserk-url").cloned();
 
-    if admission_jwks_path.is_none() && admission_jwks.is_none() {
-        anyhow::bail!("missing required argument: --admission-jwks-path or --admission-jwks");
+    if admission_paserk_path.is_none()
+        && admission_paserk.is_none()
+        && admission_paserk_url.is_none()
+    {
+        anyhow::bail!(
+            "missing required argument: --admission-paserk-path, --admission-paserk, or --admission-paserk-url"
+        );
     }
 
     let admission_issuer = matches.get_one::<String>("admission-issuer").cloned();
@@ -43,8 +49,9 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_role_id,
         vault_secret_id,
         vault_wrapped_token,
-        admission_jwks,
-        admission_jwks_path,
+        admission_paserk,
+        admission_paserk_path,
+        admission_paserk_url,
         admission_issuer,
         admission_audience,
     }))

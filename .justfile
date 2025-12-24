@@ -22,6 +22,9 @@ clippy:
 test:
   cargo test --workspace
 
+coverage:
+  cargo llvm-cov --all-features --workspace
+
 build:
   cargo build --workspace
 
@@ -30,6 +33,12 @@ build-permesi:
 
 build-genesis:
   cargo build -p genesis
+
+genesis:
+  cargo watch -x 'run -p genesis --bin genesis -- -vvv'
+
+permesi:
+  cargo watch -x 'run -p permesi --bin permesi -- -vvv'
 
 # ----------------------
 # OpenAPI spec generation
@@ -46,6 +55,88 @@ openapi-permesi:
 openapi-genesis:
   mkdir -p docs/openapi
   cargo run -p genesis --bin openapi > docs/openapi/genesis.json
+
+# ----------------------
+# API helpers
+# ----------------------
+
+genesis-token:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  token="$(
+    xh '0:8080/token?client_id=00000000-0000-0000-0000-000000000000' \
+      | jq -er '.token'
+  )"
+  python3 - "$token" <<'PY'
+  import base64
+  import json
+  import sys
+
+  token = sys.argv[1] if len(sys.argv) > 1 else ""
+  if not token:
+      raise SystemExit("missing token")
+
+  parts = token.split(".")
+  if len(parts) < 3 or parts[0] != "v4" or parts[1] != "public":
+      raise SystemExit("unexpected token format")
+
+  def b64url_decode(value: str) -> bytes:
+      padding = "=" * (-len(value) % 4)
+      return base64.urlsafe_b64decode(value + padding)
+
+  body = b64url_decode(parts[2])
+  if len(body) < 64:
+      raise SystemExit("token body too short")
+
+  payload = body[:-64]
+  claims = json.loads(payload)
+
+  output = {"claims": claims, "token": token}
+
+  if len(parts) > 3:
+      footer = json.loads(b64url_decode(parts[3]))
+      output["footer"] = footer
+
+  print(json.dumps(output, indent=2, sort_keys=True))
+  PY
+
+genesis-it: dev-start
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  needs_env() {
+    [[ -z "${GENESIS_TEST_DSN:-}" && -z "${GENESIS_DSN:-}" ]] \
+      || [[ -z "${GENESIS_TEST_VAULT_URL:-}" && -z "${GENESIS_VAULT_URL:-}" ]] \
+      || [[ -z "${GENESIS_TEST_VAULT_ROLE_ID:-}" && -z "${GENESIS_VAULT_ROLE_ID:-}" ]] \
+      || [[ -z "${GENESIS_TEST_VAULT_SECRET_ID:-}" && -z "${GENESIS_VAULT_SECRET_ID:-}" ]]
+  }
+  # Wait for Vault to emit env vars, then source the .envrc for this shell.
+  for _ in {1..20}; do
+    if ! needs_env; then
+      break
+    fi
+    just --quiet vault-envrc || true
+    if [[ -f .envrc ]]; then
+      source .envrc
+    fi
+    sleep 0.5
+  done
+  if [[ -z "${GENESIS_TEST_DSN:-}" && -z "${GENESIS_DSN:-}" ]]; then
+    echo "Set GENESIS_TEST_DSN or GENESIS_DSN to run integration tests." >&2
+    exit 1
+  fi
+  if [[ -z "${GENESIS_TEST_VAULT_URL:-}" && -z "${GENESIS_VAULT_URL:-}" ]]; then
+    echo "Set GENESIS_TEST_VAULT_URL or GENESIS_VAULT_URL to run integration tests." >&2
+    exit 1
+  fi
+  if [[ -z "${GENESIS_TEST_VAULT_ROLE_ID:-}" && -z "${GENESIS_VAULT_ROLE_ID:-}" ]]; then
+    echo "Set GENESIS_TEST_VAULT_ROLE_ID or GENESIS_VAULT_ROLE_ID to run integration tests." >&2
+    exit 1
+  fi
+  if [[ -z "${GENESIS_TEST_VAULT_SECRET_ID:-}" && -z "${GENESIS_VAULT_SECRET_ID:-}" ]]; then
+    echo "Set GENESIS_TEST_VAULT_SECRET_ID or GENESIS_VAULT_SECRET_ID to run integration tests." >&2
+    exit 1
+  fi
+  cargo test -p genesis --test integration_token -- --ignored
 
 # ----------------------
 # Container images (podman)
@@ -67,22 +158,39 @@ image-vault:
   podman build -f vault.Dockerfile -t permesi-vault:{{ branch }} .
 
 vault: image-vault
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
+    echo "vault already running"
+    exit 0
+  fi
   podman run --replace --rm --name vault \
-  --cap-add=IPC_LOCK \
-  -p 8200:8200 \
-  -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
-  -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
-  permesi-vault:{{ branch }} &
+    --cap-add=IPC_LOCK \
+    -p 8200:8200 \
+    -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
+    -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
+    permesi-vault:{{ branch }} &
 
 vault-env:
   #!/usr/bin/env zsh
   set -e
-  logs="$(podman logs vault)"
-  login_url="$(printf '%s\n' "$logs" | rg "Login URL:" | tail -n 1 | sed -E 's/.*Login URL:[[:space:]]*//')"
-  permesi_role_id="$(printf '%s\n' "$logs" | rg "permesi RoleID:" | tail -n 1 | sed -E 's/.*permesi RoleID:[[:space:]]*//')"
-  permesi_secret_id="$(printf '%s\n' "$logs" | rg "permesi SecretID:" | tail -n 1 | sed -E 's/.*permesi SecretID:[[:space:]]*//')"
-  genesis_role_id="$(printf '%s\n' "$logs" | rg "genesis RoleID:" | tail -n 1 | sed -E 's/.*genesis RoleID:[[:space:]]*//')"
-  genesis_secret_id="$(printf '%s\n' "$logs" | rg "genesis SecretID:" | tail -n 1 | sed -E 's/.*genesis SecretID:[[:space:]]*//')"
+  login_url=""
+  permesi_role_id=""
+  permesi_secret_id=""
+  genesis_role_id=""
+  genesis_secret_id=""
+  for _ in {1..20}; do
+    logs="$(podman logs vault 2>/dev/null || true)"
+    login_url="$(printf '%s\n' "$logs" | rg "Login URL:" | tail -n 1 | sed -E 's/.*Login URL:[[:space:]]*//')"
+    permesi_role_id="$(printf '%s\n' "$logs" | rg "permesi RoleID:" | tail -n 1 | sed -E 's/.*permesi RoleID:[[:space:]]*//')"
+    permesi_secret_id="$(printf '%s\n' "$logs" | rg "permesi SecretID:" | tail -n 1 | sed -E 's/.*permesi SecretID:[[:space:]]*//')"
+    genesis_role_id="$(printf '%s\n' "$logs" | rg "genesis RoleID:" | tail -n 1 | sed -E 's/.*genesis RoleID:[[:space:]]*//')"
+    genesis_secret_id="$(printf '%s\n' "$logs" | rg "genesis SecretID:" | tail -n 1 | sed -E 's/.*genesis SecretID:[[:space:]]*//')"
+    if [[ -n "$login_url" && -n "$permesi_role_id" && -n "$permesi_secret_id" && -n "$genesis_role_id" && -n "$genesis_secret_id" ]]; then
+      break
+    fi
+    sleep 0.5
+  done
 
   if [[ -z "$login_url" || -z "$permesi_role_id" || -z "$permesi_secret_id" || -z "$genesis_role_id" || -z "$genesis_secret_id" ]]; then
     echo "Missing values in vault logs. Run: just vault" >&2
@@ -108,26 +216,35 @@ vault-env:
 vault-envrc:
   #!/usr/bin/env zsh
   set -e
-  just --quiet vault-env > .envrc
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+  just --quiet vault-env > "$tmp"
+  mv "$tmp" .envrc
   echo "Wrote .envrc from Vault logs."
 
 vault_stop:
   podman stop vault || true
 
-postgres version="latest":
+postgres version="18":
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
+    echo "postgres-permesi already running"
+    exit 0
+  fi
   mkdir -p db/log/postgres
   podman run --replace --rm -d --name postgres-permesi \
-    -e POSTGRES_USER=postgres \
-    -e POSTGRES_HOST_AUTH_METHOD=trust \
-    -e PGDATA=/db/data/{{ version }} \
-    -p 5432:5432 \
-    -v {{root}}/db:/db \
-    -v {{root}}/db/config/postgres:/etc/postgresql/config \
-    -v {{root}}/db/sql/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
-    --userns keep-id:uid={{ uid }},gid={{ gid }} \
-    --user {{ uid }}:{{ gid }} \
-    postgres:{{ version }} \
-    postgres -c config_file=/etc/postgresql/config/postgresql.conf
+      -e POSTGRES_USER=postgres \
+      -e POSTGRES_HOST_AUTH_METHOD=trust \
+      -e PGDATA=/db/data/{{ version }} \
+      -p 5432:5432 \
+      -v {{root}}/db:/db \
+      -v {{root}}/db/config/postgres:/etc/postgresql/config \
+      -v {{root}}/db/sql/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
+      --userns keep-id:uid={{ uid }},gid={{ gid }} \
+      --user {{ uid }}:{{ gid }} \
+      postgres:{{ version }} \
+      postgres -c config_file=/etc/postgresql/config/postgresql.conf
   until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do sleep 0.2; done
   podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/00_init.sql
 
@@ -135,34 +252,29 @@ postgres_stop:
   podman stop postgres-permesi || true
 
 jaeger:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -n "$(podman ps -q --filter 'name=^jaeger$')" ]]; then
+    echo "jaeger already running"
+    exit 0
+  fi
   podman run --replace --rm --name jaeger \
-  -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
-  -p 6831:6831/udp \
-  -p 6832:6832/udp \
-  -p 5778:5778 \
-  -p 16686:16686 \
-  -p 4317:4317 \
-  -p 4318:4318 \
-  -p 14250:14250 \
-  -p 14268:14268 \
-  -p 14269:14269 \
+    -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
+    -p 6831:6831/udp \
+    -p 6832:6832/udp \
+    -p 5778:5778 \
+    -p 16686:16686 \
+    -p 4317:4317 \
+    -p 4318:4318 \
+    -p 14250:14250 \
+    -p 14268:14268 \
+    -p 14269:14269 \
   -p 9411:9411 \
-  jaegertracing/all-in-one:latest &
+  jaegertracing/jaeger:latest &
 
 jaeger_stop:
   podman stop jaeger || true
 
-otel:
-  podman run --replace --rm --name otel-collector \
-  -p 4317:4317 \
-  -p 4318:4318 \
-  -p 8888:8888 \
-  -v $PWD/.otel-collector-config.yml:/etc/otelcol-contrib/config.yaml \
-  otel/opentelemetry-collector-contrib:latest &
+dev-start: postgres vault jaeger
 
-otel_stop:
-  podman stop otel-collector || true
-
-dev-start: postgres vault jaeger otel
-
-dev-stop: vault_stop postgres_stop jaeger_stop otel_stop
+dev-stop: vault_stop postgres_stop jaeger_stop

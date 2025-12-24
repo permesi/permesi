@@ -7,6 +7,9 @@ VAULT_LISTEN_ADDRESS="${VAULT_LISTEN_ADDRESS:-0.0.0.0:8200}"
 VAULT_APPROLE_MOUNT="${VAULT_APPROLE_MOUNT:-approle}"
 VAULT_TRANSIT_MOUNT="${VAULT_TRANSIT_MOUNT:-transit/permesi}"
 VAULT_TRANSIT_KEY="${VAULT_TRANSIT_KEY:-users}"
+VAULT_GENESIS_TRANSIT_MOUNT="${VAULT_GENESIS_TRANSIT_MOUNT:-transit/genesis}"
+VAULT_GENESIS_TRANSIT_KEY="${VAULT_GENESIS_TRANSIT_KEY:-genesis-signing}"
+VAULT_TRANSIT_AUTO_ROTATE_PERIOD="${VAULT_TRANSIT_AUTO_ROTATE_PERIOD:-30d}"
 VAULT_DATABASE_MOUNT="${VAULT_DATABASE_MOUNT:-database}"
 VAULT_POSTGRES_HOST="${VAULT_POSTGRES_HOST:-host.containers.internal}"
 VAULT_POSTGRES_PORT="${VAULT_POSTGRES_PORT:-5432}"
@@ -32,7 +35,17 @@ vault login "$VAULT_DEV_ROOT_TOKEN_ID" >/dev/null
 
 # Transit engine + key used by permesi (see `services/permesi/src/vault/transit.rs`).
 vault secrets enable -path="$VAULT_TRANSIT_MOUNT" transit >/dev/null 2>&1 || true
-vault write -f "${VAULT_TRANSIT_MOUNT}/keys/${VAULT_TRANSIT_KEY}" >/dev/null
+vault write "${VAULT_TRANSIT_MOUNT}/keys/${VAULT_TRANSIT_KEY}" \
+    type=chacha20-poly1305 >/dev/null
+vault write "${VAULT_TRANSIT_MOUNT}/keys/${VAULT_TRANSIT_KEY}/config" \
+    auto_rotate_period="$VAULT_TRANSIT_AUTO_ROTATE_PERIOD" >/dev/null
+
+# Transit engine + key used by genesis admission signing (Ed25519).
+vault secrets enable -path="$VAULT_GENESIS_TRANSIT_MOUNT" transit >/dev/null 2>&1 || true
+vault write "${VAULT_GENESIS_TRANSIT_MOUNT}/keys/${VAULT_GENESIS_TRANSIT_KEY}" \
+    type=ed25519 >/dev/null
+vault write "${VAULT_GENESIS_TRANSIT_MOUNT}/keys/${VAULT_GENESIS_TRANSIT_KEY}/config" \
+    auto_rotate_period="$VAULT_TRANSIT_AUTO_ROTATE_PERIOD" >/dev/null
 
 # AppRole auth for both services (mounted at `auth/<mount>/`).
 vault auth enable -path="$VAULT_APPROLE_MOUNT" approle >/dev/null 2>&1 || true
@@ -147,6 +160,8 @@ EOF
 
 vault policy write genesis - <<EOF
 path "${VAULT_DATABASE_MOUNT}/creds/genesis" { capabilities = ["read"] }
+path "${VAULT_GENESIS_TRANSIT_MOUNT}/sign/${VAULT_GENESIS_TRANSIT_KEY}" { capabilities = ["update"] }
+path "${VAULT_GENESIS_TRANSIT_MOUNT}/keys/${VAULT_GENESIS_TRANSIT_KEY}" { capabilities = ["read"] }
 
 path "auth/token/renew-self" { capabilities = ["update"] }
 path "sys/leases/renew"      { capabilities = ["update"] }

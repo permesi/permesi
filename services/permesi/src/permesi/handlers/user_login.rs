@@ -55,7 +55,7 @@ pub async fn login(
         return (StatusCode::BAD_REQUEST, "Invalid password".to_string());
     }
 
-    if !verify_token(&admission, &user.token) {
+    if !verify_token(&admission, &user.token).await {
         return (StatusCode::BAD_REQUEST, "Invalid token".to_string());
     }
 

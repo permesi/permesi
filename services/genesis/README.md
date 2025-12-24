@@ -12,8 +12,8 @@ Token Zero generator (edge admission token mint).
 
 `genesis` is an HTTP service that:
 
-- Issues short-lived **Admission Tokens** (RS256-signed JWTs)
-- Publishes its public keys as **JWKS** at `GET /jwks.json` so `permesi` can verify tokens offline
+- Issues short-lived **Admission Tokens** (PASETO v4.public signed via Vault Transit)
+- Publishes its public keys as a **PASERK keyset** at `GET /paserk.json` so `permesi` can verify tokens offline
 - Persists minted token IDs (`jti`) and request metadata in Postgres for short-term validation/auditing
 - Uses Vault (AppRole) to obtain DB credentials and keeps Vault leases renewed at runtime
 
@@ -29,9 +29,9 @@ TL;DR:
 In the workspace “Split-Trust” flow:
 
 1. Client requests admission from `genesis`
-2. `genesis` returns a signed Admission Token (short-lived JWT)
+2. `genesis` returns a signed Admission Token (short-lived PASETO)
 3. Client presents that token to `permesi`
-4. `permesi` verifies it offline (`sig` + `exp` + `aud` + `iss`) using the JWKS
+4. `permesi` verifies it offline (`sig` + `exp` + `aud` + `iss`) using the PASERK keyset
 
 ## HTTP API
 
@@ -40,13 +40,15 @@ Implemented routes (see `services/genesis/src/genesis/mod.rs`):
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/token?client_id=<uuid>` | Mints an Admission Token and stores `jti` + metadata in Postgres |
-| `GET` | `/jwks.json` | JWKS derived from the configured signing key |
+| `GET` | `/paserk.json` | PASERK keyset derived from the configured signing key |
 | `GET` | `/health` | Checks Postgres connectivity; returns build info; sets `X-App` header |
 | `OPTIONS` | `/health` | Health preflight |
 | `GET` | `/headers` | Debug: echoes request headers |
-| `POST` | `/verify` | Validates JWT + checks `jti` exists in Postgres within TTL |
 
-Note: `POST /verify` is implemented, but is not currently included in the generated OpenAPI spec.
+Note: there is no public token introspection endpoint. `jti` + metadata are persisted for audit
+and potential future revocation tooling.
+The `/token` response includes `Cache-Control: no-store` to discourage intermediaries from caching
+admission tokens.
 
 ## Configuration
 
@@ -95,77 +97,108 @@ Startup behavior:
 
 Signing key configuration (required):
 
-- `GENESIS_ADMISSION_PRIVATE_KEY_PEM` (required if no path is provided)
-- `GENESIS_ADMISSION_PRIVATE_KEY_PATH` (required if no inline PEM is provided)
+- Vault Transit key `genesis-signing` (type `ed25519`) under the `transit/genesis` mount by default.
+- Private keys never leave Vault; `genesis` calls `/v1/transit/genesis/sign/genesis-signing` per token mint (mount configurable).
 
 Claim defaults (optional):
 
-- `GENESIS_ADMISSION_ISS` (default: `https://genesis.permesi.dev`) — JWT `iss` (“issuer”): the identity/URL that `permesi` expects minted the token.
-- `GENESIS_ADMISSION_AUD` (default: `permesi`) — JWT `aud` (“audience”): who the token is intended for (usually the service name); `permesi` must match this.
-- `GENESIS_ADMISSION_KID` (default: `genesis-1`) — JWT header `kid` (“key id”): selects which JWKS key verifies the signature (useful for key rotation).
+- `GENESIS_ADMISSION_ISS` (default: `https://genesis.permesi.dev`) — `iss` (“issuer”): the identity/URL that `permesi` expects minted the token.
+- `GENESIS_ADMISSION_AUD` (default: `permesi`) — `aud` (“audience”): who the token is intended for (usually the service name); `permesi` must match this.
+- `iat` / `exp` are RFC3339 timestamps in the PASETO payload.
+- `kid` format: PASERK public key ID (`k4.pid...`), embedded in the PASETO footer.
+- `GENESIS_TRANSIT_MOUNT` (default: `transit/genesis`) — Vault Transit mount used for signing/PASERK.
 
 ### Header Capture
 
 `GET /token` captures request metadata (IP/country/UA). Header selection is currently controlled via:
 
-- `GENESIS_COUNTRY_HEADER` (used to select headers; defaults to Cloudflare `CF-Connecting-IP` / `CF-IPCountry`)
+- `GENESIS_IP_HEADER` (defaults to Cloudflare `CF-Connecting-IP`)
+- `GENESIS_COUNTRY_HEADER` (defaults to Cloudflare `CF-IPCountry`)
 
 ## Database & Retention
 
 Schema lives in `services/genesis/sql/schema.sql`:
 
-- `clients(id, name, uuid)` maps a stable client UUID to a small integer id
-- `tokens(id ulid, client_id)` stores minted token IDs (`jti`) as ULIDs
-- `metadata(id ulid, ip_address, country, user_agent)` stores request metadata per token
+- `clients(id, name, uuid, is_reserved)` maps a stable client UUID to a small integer id; by default
+  clients are reserved and must be explicitly marked non-reserved for production use
+- `tokens(id uuidv7, client_id, created_at, ip_address, country, user_agent, metadata)` stores minted token IDs plus request metadata; `metadata` is JSONB for dynamic fields
+The default schema seeds a `__test_only__` client marked non-reserved for local testing; remove or
+flip it to reserved in production deployments.
 
 `TOKEN_EXPIRATION` is currently 120 seconds.
 
-### Why ULID?
+Production bootstrap:
 
-Helps find(group) tokens for the same period of time but still unique.
+- Apply `services/genesis/sql/schema.sql` (idempotent base schema).
+- Apply `services/genesis/sql/partitioning.sql` if you want pg_cron-managed partitions.
 
-```sql
-> select id, id::timestamp from tokens;
-+----------------------------+-------------------------+
-| id                         | id                      |
-|----------------------------+-------------------------|
-| 01HQAS6A6SGD3Z1V7VF86Q0B6P | 2024-02-23 10:46:47.769 |
-| 01HQAS6A6SV2A93NMKH0S03CD1 | 2024-02-23 10:46:47.769 |
-| 01HQAS6A6S8ZRMC0RZP8DEQ1Q5 | 2024-02-23 10:46:47.769 |
-| 01HQAS6A6S1Q8TT1E8XE1J7JS8 | 2024-02-23 10:46:47.769 |
-+----------------------------+-------------------------+
+`db/sql/` is used for local dev containers and is not intended as a production schema source.
 
+### Why UUIDv7?
+
+UUIDv7 is time-ordered like ULID but native in PostgreSQL 18 (`uuidv7()`), so we avoid a custom extension.
+
+Tokens include a `created_at` column and are range-partitioned by time. For long-term retention,
+drop whole partitions instead of deleting rows to avoid bloat.
+
+`services/genesis/sql/partitioning.sql` provides a pg_cron-based maintenance function that:
+
+- Creates daily partitions ahead of time
+- Drops partitions older than the retention window
+
+Once that job is running in production, remove the `tokens_default` partition so all rows land in
+date partitions and retention is enforced by dropping old partitions.
+
+You can also run the maintenance manually (for system cron or ad-hoc runs):
+
+```sh
+psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -c "SELECT genesis_tokens_rollover(7, 2);"
 ```
 
-Expire tokens by time using `pg_cron`
+`7` is the retention window in days (drop partitions older than 7 days), and `2` is how many
+future daily partitions to pre-create.
+
+This function is safe to call from system cron: it is idempotent and guarded by an advisory lock.
+
+Why this approach:
+
+- Dropping whole partitions avoids table/index bloat that comes from large `DELETE` operations.
+- A small retention window keeps the token store lightweight while still supporting audit/forensics.
+- `tokens_default` is a bootstrap safety net for missing partitions; remove it once rollover is in place
+  so missing partitions fail fast and retention works as intended.
+
+pg_cron setup (one-time):
+
+- Ensure `pg_cron` is installed and add it to `shared_preload_libraries`, then restart Postgres.
+- Run `services/genesis/sql/partitioning.sql` in the `genesis` database.
+- Verify the job exists: `SELECT * FROM cron.job WHERE jobname = 'genesis_tokens_rollover';`
+
+Production checklist:
+
+- Apply `services/genesis/sql/schema.sql`.
+- Apply `services/genesis/sql/partitioning.sql`.
+- Verify partitions exist: `\dt tokens_*` (psql) or query `pg_inherits`.
+- Drop the default partition once rollover is active:
+  `DROP TABLE IF EXISTS tokens_default;`
+
+Quick audit query (shows partition names):
 
 ```sql
-SELECT cron.schedule('*/30 * * * *', $$DELETE
-FROM tokens
-WHERE id::timestamp < NOW() - INTERVAL '120 seconds'$$);
+SELECT c.relname AS partition
+FROM pg_class c
+JOIN pg_inherits i ON c.oid = i.inhrelid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'tokens'
+ORDER BY 1;
 ```
 
-Update the database of the cron job with the following SQL command:
+Newcomer notes:
 
-```sql
-UPDATE cron.job SET database='genesis' WHERE jobid=5;
-```
-
-Check the cron.job table with the following SQL command:
-
-```sql
-SELECT * FROM cron.job;
-+-------+--------------+------------------------------------------------------+-----------+----------+----------+----------+--------+---------+
-| jobid | schedule     | command                                              | nodename  | nodeport | database | username | active | jobname |
-|-------+--------------+------------------------------------------------------+-----------+----------+----------+----------+--------+---------|
-| 2     | 0 0 * * *    | DELETE                                               | localhost | 5432     | postgres | postgres | True   | <null>  |
-|       |              |     FROM cron.job_run_details                        |           |          |          |          |        |         |
-|       |              |     WHERE end_time < now() - interval '7 days'       |           |          |          |          |        |         |
-| 5     | */30 * * * * | DELETE                                               | localhost | 5432     | genesis  | postgres | True   | <null>  |
-|       |              | FROM tokens                                          |           |          |          |          |        |         |
-|       |              | WHERE id::timestamp < NOW() - INTERVAL '120 seconds' |           |          |          |          |        |         |
-+-------+--------------+------------------------------------------------------+-----------+----------+----------+----------+--------+---------+
-```
+- `tokens_default` is only a bootstrap safety net; remove it once rollover is creating partitions.
+  If left in place, rows can accumulate there and will not be pruned by retention.
+- Retention is enforced by dropping partitions, not by per-row deletes.
+- `genesis_tokens_rollover(7, 2)` means "keep 7 days, precreate 2 days ahead"; adjust for your workload.
+- If `pg_cron` is not enabled, run the rollover function from system cron or manually.
 
 Check the status of the cron job with the following SQL command:
 
@@ -181,6 +214,6 @@ either not implemented yet in this service or need hardening:
 - Add strict rate limiting (per IP / per `client_id`) and configurable policies
 - Add PoW (proof-of-work) challenge flow for abuse prevention
 - Improve issuance semantics (explicit allow/deny for unknown `client_id`, avoid silent fallbacks)
-- Include `POST /verify` in OpenAPI
+- Optional internal-only token introspection/revocation tooling (auth + rate limits)
 - Split header configuration (separate env vars for IP header vs country header selection)
 - Add structured audit logging around issuance/validation and optionally export metrics

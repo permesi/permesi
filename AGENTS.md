@@ -24,7 +24,7 @@ These notes keep contributors aligned on how this Rust workspace is organized an
 ## Testing Guidelines
 - Tests live alongside code via `#[cfg(test)]` modules; mirror the public API shape.
 - Name tests `<unit>_<behavior>` (e.g., `admission_token_rejects_expired()`).
-- Cover edge cases around token validation (`exp`, `aud`, `iss`), JWKS loading, and rate/risk controls.
+- Cover edge cases around token validation (`exp`, `aud`, `iss`), PASERK keyset loading, and rate/risk controls.
 - Run `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features`, and `cargo test --workspace` before PRs; add regression tests with every bug fix.
 
 ## Vault AppRole CLI Usage
@@ -40,7 +40,7 @@ These notes keep contributors aligned on how this Rust workspace is organized an
 - Keep diffs minimal; update docs when behavior or endpoints change.
 
 ## Security & Configuration Tips
-- Never commit secrets or tokens; keep JWKS/telemetry credentials in env vars or your secret manager.
+- Never commit secrets or tokens; keep PASERK/telemetry credentials in env vars or your secret manager.
 - Prefer `rustls` defaults; avoid disabling TLS verification.
 - Admission token verification is offline—do not add cross-service calls on the hot path without discussion.
 - Container runtime policy: use `podman`, not `docker`, for local images/containers.

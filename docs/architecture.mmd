@@ -6,7 +6,7 @@ flowchart LR
 
   subgraph Edge["Trust Boundary: Edge"]
     G[genesis<br/>edge admission token mint]
-    JWKS[(JWKS<br/>GET /jwks.json)]
+    PASERK[(PASERK<br/>GET /paserk.json)]
   end
 
   subgraph Core["Trust Boundary: Core IAM"]
@@ -18,10 +18,10 @@ flowchart LR
   end
 
   U -->|1. Request admission| G
-  G -->|2. Signed Admission Token (JWT)| U
+  G -->|2. Signed Admission Token (PASETO)| U
 
-  G -->|Publishes public keys| JWKS
-  P -->|Loads JWKS at deploy/startup| JWKS
+  G -->|Publishes public keys| PASERK
+  P -->|Loads PASERK keyset at deploy/startup| PASERK
 
   U -->|3. Credentials + Admission Token| P
   P -->|4. Offline verify: sig + exp + aud + iss| P
@@ -29,4 +29,3 @@ flowchart LR
   G -.->|Optional audit write (jti)| DB
   P -.->|Optional revocation check (jti)| DB
 ```
-

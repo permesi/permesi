@@ -35,7 +35,7 @@ pub fn new() -> Command {
         .literal(AnsiColor::Blue.on_default() | Effects::BOLD)
         .placeholder(AnsiColor::Green.on_default());
 
-    Command::new("permesi")
+    let command = Command::new("permesi")
         .about("Identity and Access Management")
         .version(env!("CARGO_PKG_VERSION"))
         .color(ColorChoice::Auto)
@@ -59,20 +59,50 @@ pub fn new() -> Command {
                 )
                 .env("PERMESI_DSN")
                 .required(true),
+        );
+
+    let command = with_admission_args(command);
+    let command = with_vault_args(command);
+    with_logging_args(command)
+}
+
+fn with_admission_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("admission-paserk-path")
+                .long("admission-paserk-path")
+                .help("Path to a PASERK keyset JSON file used to verify Admission Tokens offline")
+                .long_help(
+                    "Path to a local PASERK keyset JSON file used to verify Admission Tokens offline.\n\
+Use this for fully offline operation (no network fetches). The keyset must include the active key\n\
+and any previous keys needed during rotation.",
+                )
+                .env("PERMESI_ADMISSION_PASERK_PATH")
+                .required_unless_present_any(["admission-paserk", "admission-paserk-url"]),
         )
         .arg(
-            Arg::new("admission-jwks-path")
-                .long("admission-jwks-path")
-                .help("Path to a JWKS JSON file used to verify Admission Tokens offline")
-                .env("PERMESI_ADMISSION_JWKS_PATH")
-                .required_unless_present("admission-jwks"),
+            Arg::new("admission-paserk")
+                .long("admission-paserk")
+                .help("PASERK keyset JSON string used to verify Admission Tokens offline")
+                .long_help(
+                    "PASERK keyset JSON string used to verify Admission Tokens offline.\n\
+Use this for fully offline operation (no network fetches). The token footer `kid` selects the key\n\
+from this keyset for signature verification.",
+                )
+                .env("PERMESI_ADMISSION_PASERK")
+                .required_unless_present_any(["admission-paserk-path", "admission-paserk-url"]),
         )
         .arg(
-            Arg::new("admission-jwks")
-                .long("admission-jwks")
-                .help("JWKS JSON string used to verify Admission Tokens offline")
-                .env("PERMESI_ADMISSION_JWKS")
-                .required_unless_present("admission-jwks-path"),
+            Arg::new("admission-paserk-url")
+                .long("admission-paserk-url")
+                .help("PASERK keyset URL used to verify Admission Tokens offline")
+                .long_help(
+                    "PASERK keyset URL (typically genesis `/paserk.json`) used to verify Admission Tokens offline.\n\
+The keyset is cached (TTL ~5 minutes) and refreshed on unknown `kid` with a cooldown. Verification\n\
+itself is local and does not call genesis per request.",
+                )
+                .env("PERMESI_ADMISSION_PASERK_URL")
+                .required_unless_present_any(["admission-paserk", "admission-paserk-path"]),
         )
         .arg(
             Arg::new("admission-issuer")
@@ -86,6 +116,10 @@ pub fn new() -> Command {
                 .help("Expected Admission Token audience (aud)")
                 .env("PERMESI_ADMISSION_AUD"),
         )
+}
+
+fn with_vault_args(command: Command) -> Command {
+    command
         .arg(
             Arg::new("vault-url")
                 .long("vault-url")
@@ -105,24 +139,27 @@ pub fn new() -> Command {
                 .long("vault-secret-id")
                 .help("Vault secret id")
                 .env("PERMESI_VAULT_SECRET_ID")
-                .required_unless_present("vault-wrapped-token")
+                .required_unless_present("vault-wrapped-token"),
         )
         .arg(
             Arg::new("vault-wrapped-token")
                 .long("vault-wrapped-token")
                 .help("Vault wrapped token")
-                .env("PERMESI_VAULT_WRAPPED_TOKEN")
+                .env("PERMESI_VAULT_WRAPPED_TOKEN"),
         )
-        .arg(
-            Arg::new("verbosity")
-                .short('v')
-                .long("verbose")
-                .help("Verbosity level: ERROR, WARN, INFO, DEBUG, TRACE (default: ERROR)")
-                .env("PERMESI_LOG_LEVEL")
-                .global(true)
-                .action(clap::ArgAction::Count)
-                .value_parser(validator_log_level()),
-        )
+}
+
+fn with_logging_args(command: Command) -> Command {
+    command.arg(
+        Arg::new("verbosity")
+            .short('v')
+            .long("verbose")
+            .help("Verbosity level: ERROR, WARN, INFO, DEBUG, TRACE (default: ERROR)")
+            .env("PERMESI_LOG_LEVEL")
+            .global(true)
+            .action(clap::ArgAction::Count)
+            .value_parser(validator_log_level()),
+    )
 }
 
 #[cfg(test)]
@@ -153,8 +190,8 @@ mod tests {
             "8080",
             "--dsn",
             "postgres://user:password@localhost:5432/permesi",
-            "--admission-jwks",
-            "{\"keys\":[]}",
+            "--admission-paserk",
+            "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}",
             "--vault-url",
             "https://vault.tld:8200",
             "--vault-role-id",
@@ -186,7 +223,12 @@ mod tests {
     fn test_check_env() {
         temp_env::with_vars(
             [
-                ("PERMESI_ADMISSION_JWKS", Some("{\"keys\":[]}")),
+                (
+                    "PERMESI_ADMISSION_PASERK",
+                    Some(
+                        "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}",
+                    ),
+                ),
                 ("PERMESI_VAULT_URL", Some("https://vault.tld:8200")),
                 ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
                 ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
@@ -222,7 +264,12 @@ mod tests {
             temp_env::with_vars(
                 [
                     ("PERMESI_LOG_LEVEL", Some(level)),
-                    ("PERMESI_ADMISSION_JWKS", Some("{\"keys\":[]}")),
+                    (
+                        "PERMESI_ADMISSION_PASERK",
+                        Some(
+                            "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}",
+                        ),
+                    ),
                     ("PERMESI_VAULT_URL", Some("http://vault.tld:8200")),
                     ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
                     ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
@@ -253,8 +300,8 @@ mod tests {
                     "permesi".to_string(),
                     "--dsn".to_string(),
                     "postgres://user:password@localhost:5432/permesi".to_string(),
-                    "--admission-jwks".to_string(),
-                    "{\"keys\":[]}".to_string(),
+                    "--admission-paserk".to_string(),
+                    "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}".to_string(),
                     "--vault-url".to_string(),
                     "https://vault.tld:8200".to_string(),
                     "--vault-role-id".to_string(),

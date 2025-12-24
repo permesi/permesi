@@ -21,8 +21,10 @@ podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID
 - **AppRole auth**: mounted at `auth/${VAULT_APPROLE_MOUNT}` (default `auth/approle`)
   - Roles: `permesi`, `genesis`
   - Policies: `permesi`, `genesis`
-- **Transit**: mounted at `${VAULT_TRANSIT_MOUNT}` (default `transit/permesi`)
-  - Key: `${VAULT_TRANSIT_KEY}` (default `users`)
+- **Transit (permesi)**: mounted at `${VAULT_TRANSIT_MOUNT}` (default `transit/permesi`)
+  - Key: `${VAULT_TRANSIT_KEY}` (default `users`, type `chacha20-poly1305`)
+- **Transit (genesis)**: mounted at `${VAULT_GENESIS_TRANSIT_MOUNT}` (default `transit/genesis`)
+  - Key: `${VAULT_GENESIS_TRANSIT_KEY}` (default `genesis-signing`)
 - **Database creds (Postgres)**: mounted at `${VAULT_DATABASE_MOUNT}` (default `database`)
   - Connections: `genesis` (DB `${VAULT_POSTGRES_DATABASE_GENESIS}`), `permesi` (DB `${VAULT_POSTGRES_DATABASE_PERMESI}`)
   - Roles (Vault database roles): `genesis`, `permesi`
@@ -37,6 +39,29 @@ Note: Postgres roles/users are created **on-demand** when credentials are reques
 - Fetch DB creds: `vault read database/creds/genesis`
 - Print dev exports from Vault logs: `just vault-env`
 - Write dev exports into `.envrc` (overwrites it): `just vault-envrc`
+
+## Transit key retention (optional)
+
+To keep only the latest two versions for a transit key (for example, the genesis signing key),
+run the pruning script on a schedule (cron/systemd timer):
+
+> see current versions: `vault read -format=json transit/genesis/keys/genesis-signing | jq -r '.data.keys | keys[]' | sort -n`
+
+
+```sh
+VAULT_ADDR=http://127.0.0.1:8200 \
+VAULT_TOKEN=dev-root \
+VAULT_TRANSIT_MOUNT=transit/genesis \
+VAULT_TRANSIT_KEY=genesis-signing \
+VAULT_TRANSIT_KEEP_VERSIONS=2 \
+./vault/prune_transit_versions.sh
+```
+
+Note: Vault requires `deletion_allowed=true` on the key config for version deletes:
+
+```sh
+vault write transit/genesis/keys/genesis-signing/config deletion_allowed=true
+```
 
 ## Getting `role_id` and `secret_id`
 
@@ -69,7 +94,7 @@ Then pass that wrapping token to the service via `*_VAULT_WRAPPED_TOKEN`.
 
 The most useful env vars (all have defaults in `vault.Dockerfile` and/or `vault/bootstrap.sh`):
 
-- `VAULT_APPROLE_MOUNT`, `VAULT_TRANSIT_MOUNT`, `VAULT_TRANSIT_KEY`, `VAULT_DATABASE_MOUNT`
+- `VAULT_APPROLE_MOUNT`, `VAULT_TRANSIT_MOUNT`, `VAULT_TRANSIT_KEY`, `VAULT_GENESIS_TRANSIT_MOUNT`, `VAULT_GENESIS_TRANSIT_KEY`, `VAULT_TRANSIT_AUTO_ROTATE_PERIOD`, `VAULT_DATABASE_MOUNT`
 - `VAULT_POSTGRES_HOST`, `VAULT_POSTGRES_PORT`, `VAULT_POSTGRES_USERNAME`, `VAULT_POSTGRES_PASSWORD`
 - `VAULT_POSTGRES_DATABASE_GENESIS`, `VAULT_POSTGRES_DATABASE_PERMESI`, `VAULT_POSTGRES_SSLMODE`
 - `VAULT_POSTGRES_REASSIGN_OWNER` (role used for `REASSIGN OWNED BY ... TO ...` during revocation)
@@ -80,6 +105,7 @@ If the Vault container can’t reach Postgres, adjust `VAULT_POSTGRES_HOST` (the
 ## Vault requirement
 
 Vault is required in production for AppRole auth, dynamic DB creds, and transit encryption. Running without Vault is not supported.
+Rotation in production is typically operator-driven; the dev bootstrap defaults to a 30d auto-rotate period.
 
 Production readiness checklist:
 - HA cluster with tested failover.

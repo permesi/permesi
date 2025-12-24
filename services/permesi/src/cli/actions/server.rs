@@ -1,5 +1,5 @@
 use crate::{cli::globals::GlobalArgs, permesi, vault};
-use admission_token::Jwks;
+use admission_token::PaserkKeySet;
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
 use std::{fs, sync::Arc};
@@ -14,8 +14,9 @@ pub struct Args {
     pub vault_role_id: String,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
-    pub admission_jwks: Option<String>,
-    pub admission_jwks_path: Option<String>,
+    pub admission_paserk: Option<String>,
+    pub admission_paserk_path: Option<String>,
+    pub admission_paserk_url: Option<String>,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
 }
@@ -31,18 +32,29 @@ pub async fn execute(args: Args) -> Result<()> {
         .admission_audience
         .unwrap_or_else(|| "permesi".to_string());
 
-    let jwks_json = if let Some(path) = &args.admission_jwks_path {
-        fs::read_to_string(path).with_context(|| format!("Failed to read JWKS file: {path}"))?
-    } else if let Some(jwks) = &args.admission_jwks {
-        jwks.clone()
+    let admission_verifier = if let Some(url) = &args.admission_paserk_url {
+        Arc::new(
+            permesi::handlers::AdmissionVerifier::new_remote(url.clone(), issuer, audience).await?,
+        )
     } else {
-        return Err(anyhow!("Admission JWKS is required"));
-    };
+        let keyset_json = if let Some(path) = &args.admission_paserk_path {
+            fs::read_to_string(path)
+                .with_context(|| format!("Failed to read PASERK file: {path}"))?
+        } else if let Some(keyset) = &args.admission_paserk {
+            keyset.clone()
+        } else {
+            return Err(anyhow!("Admission PASERK keyset is required"));
+        };
 
-    let jwks = Jwks::from_json(&jwks_json).context("Invalid admission JWKS JSON")?;
-    let admission_verifier = Arc::new(permesi::handlers::AdmissionVerifier::new(
-        jwks, issuer, audience,
-    ));
+        let keyset =
+            PaserkKeySet::from_json(&keyset_json).context("Invalid admission PASERK JSON")?;
+        keyset
+            .validate()
+            .context("Invalid admission PASERK keyset")?;
+        Arc::new(permesi::handlers::AdmissionVerifier::new(
+            keyset, issuer, audience,
+        ))
+    };
 
     let mut globals = GlobalArgs::new(args.vault_url);
 

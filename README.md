@@ -27,7 +27,7 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 * **Responsibility:** Handles raw TCP/HTTP connections, enforces strict rate limits, performs PoW (Proof of Work) challenges for abuse prevention, and sanitizes inputs.
 * **Output:** Issues a short-lived, cryptographically signed **Admission Token**.
 * **State:** Stateless / Ephemeral.
-* **Key Publication:** Publishes a JWKS at `GET /jwks.json`.
+* **Key Publication:** Publishes a PASERK keyset at `GET /paserk.json`.
 
 #### 2. `permesi` (The Core / "The Authority")
 * **Role:** The OIDC Authority.
@@ -41,6 +41,28 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 ---
 
+## Cryptography
+
+- **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.
+- **permesi encryption:** Vault Transit key type `chacha20-poly1305` (default `transit/permesi` / key `users`) for encrypt/decrypt operations.
+
+## Admission Token Verification (Offline)
+
+Admission token verification never calls `genesis` on the hot path. The flow is:
+
+1. `genesis` signs a PASETO v4.public token with Vault Transit and puts the PASERK ID (`k4.pid...`) in the token footer as `kid`.
+2. `permesi` parses the footer `kid`, looks up the matching `k4.public...` key in the PASERK keyset, and verifies the signature.
+3. `permesi` validates claims (`iss`, `aud`, `action`, `iat/exp`, TTL). If any check fails, the request is rejected.
+
+Keyset behavior:
+
+- `active_kid` is only used by `genesis` to choose the signing key. Verification always uses the token's footer `kid`.
+- When configured with a PASERK URL, `permesi` caches `/paserk.json` (default TTL 5 minutes) and refreshes it on unknown `kid` with a cooldown. No per-request calls are made.
+- When configured with a local file or JSON string, verification is fully offline (no network fetches).
+
+Missing / planned:
+- Optional revocation mode (DB lookup or cached revocation list). There is no public token introspection endpoint.
+
 ## Trust Boundaries
 
 ```mermaid
@@ -50,29 +72,29 @@ flowchart LR
   end
 
   subgraph Edge["Trust Boundary: Edge"]
-    G[genesis<br/>edge admission token mint]
-    JWKS[(JWKS<br/>GET /jwks.json)]
+    G["genesis<br/>edge admission token mint"]
+    PASERK[("PASERK<br/>GET /paserk.json")]
   end
 
   subgraph Core["Trust Boundary: Core IAM"]
-    P[permesi<br/>core IAM / OIDC authority]
+    P["permesi<br/>core IAM / OIDC authority"]
   end
 
   subgraph Data["Optional: Data Plane"]
-    DB[(Audit / Revocation DB)]
+    DB[("Audit / Revocation DB")]
   end
 
   U -->|1. Request admission| G
-  G -->|2. Signed Admission Token (JWT)| U
+  G -->|"2. Signed Admission Token (PASETO)"| U
 
-  G -->|Publishes public keys| JWKS
-  P -->|Loads JWKS at deploy/startup| JWKS
+  G -->|Publishes public keys| PASERK
+  P -->|Loads PASERK keyset at deploy/startup| PASERK
 
   U -->|3. Credentials + Admission Token| P
-  P -->|4. Offline verify: sig + exp + aud + iss| P
+  P -->|"4. Offline verify: sig + exp + aud + iss"| P
 
-  G -.->|Optional audit write (jti)| DB
-  P -.->|Optional revocation check (jti)| DB
+  G -.->|"Optional audit write (jti)"| DB
+  P -.->|"Optional revocation check (jti)"| DB
 ```
 
 ## The Authentication Flow
@@ -133,6 +155,16 @@ Regenerate them from code:
 
 - `podman build -f services/permesi/Dockerfile -t permesi:dev .`
 - `podman build -f services/genesis/Dockerfile -t genesis:dev .`
+
+## Local Tracing (Jaeger)
+
+Send OTLP traces directly to the local Jaeger collector:
+
+```sh
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+Open the Jaeger UI at http://localhost:16686 to inspect traces.
 
 ## CI Commands
 
