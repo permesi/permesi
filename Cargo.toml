@@ -7,11 +7,13 @@ members = [
   "services/genesis",
   "crates/admission_token",
   "crates/vault_client",
+  "crates/test_support",
 ]
 
 [workspace.dependencies]
 admission_token = { path = "crates/admission_token" }
 vault_client = { path = "crates/vault_client" }
+test_support = { path = "crates/test_support" }
 anyhow = "1"
 axum = { version = "0.8", features = ["tracing"] }
 base64 = "0.22"
@@ -25,7 +27,7 @@ opentelemetry = "0.31"
 opentelemetry-otlp = { version = "0.31", features = ["tls-roots", "tls", "grpc-tonic", "gzip-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 rand = "0.8.5"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 secrecy = "0.10.3"
 serde = "1.0"
 serde_json = "1.0"

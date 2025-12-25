@@ -39,7 +39,7 @@ jobs:
         run: cargo check --workspace
 
   test:
-    name: Test
+    name: Unit Tests
     strategy:
       matrix:
         os:
@@ -56,4 +56,41 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: test
-        run: cargo test --workspace
+        run: cargo test --workspace --lib --bins
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs:
+      - format
+      - lint
+      - check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure container runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -S /var/run/docker.sock ]]; then
+            echo "Docker socket found; using Docker."
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y podman
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          mkdir -p "${XDG_RUNTIME_DIR}/podman"
+          podman system service --time=0 "unix://${XDG_RUNTIME_DIR}/podman/podman.sock" &
+          echo "DOCKER_HOST=unix://${XDG_RUNTIME_DIR}/podman/podman.sock" >> "${GITHUB_ENV}"
+          for _ in {1..25}; do
+            if [[ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]]; then
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo "Podman socket did not become ready." >&2
+          exit 1
+
+      - name: integration
+        run: cargo test --workspace --tests

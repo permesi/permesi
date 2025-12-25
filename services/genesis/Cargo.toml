@@ -29,7 +29,7 @@ opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls"] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 rand = { workspace = true }
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -60,3 +60,6 @@ uuid = { workspace = true, features = ["v1", "v4", "v7"] }
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }
+
+[dev-dependencies]
+test_support = { workspace = true }

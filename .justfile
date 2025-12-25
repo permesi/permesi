@@ -3,15 +3,16 @@ set shell := ["zsh", "-uc"]
 uid := `id -u`
 gid := `id -g`
 root := justfile_directory()
+net := "permesi-net"
+subnet := "172.31.20.0/24"
 
 branch := if `git rev-parse --abbrev-ref HEAD` == "main" { "latest" } else { `git rev-parse --abbrev-ref HEAD` }
 
 default: fmt clippy test
   @just --list
 
-# ----------------------
-# Rust workspace commands
-# ----------------------
+setup-network:
+  podman network inspect {{net}} >/dev/null 2>&1 || podman network create --subnet {{subnet}} {{net}}
 
 fmt:
   cargo fmt --all -- --check
@@ -165,6 +166,7 @@ vault: image-vault
     exit 0
   fi
   podman run --replace --rm --name vault \
+    --network {{net}} \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
@@ -234,6 +236,7 @@ postgres version="18":
   fi
   mkdir -p db/log/postgres
   podman run --replace --rm -d --name postgres-permesi \
+      --network {{net}} \
       -e POSTGRES_USER=postgres \
       -e POSTGRES_HOST_AUTH_METHOD=trust \
       -e PGDATA=/db/data/{{ version }} \
@@ -259,6 +262,7 @@ jaeger:
     exit 0
   fi
   podman run --replace --rm --name jaeger \
+    --network {{net}} \
     -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
     -p 6831:6831/udp \
     -p 6832:6832/udp \
@@ -275,6 +279,26 @@ jaeger:
 jaeger_stop:
   podman stop jaeger || true
 
-dev-start: postgres vault jaeger
+dev-start: setup-network postgres vault jaeger
 
 dev-stop: vault_stop postgres_stop jaeger_stop
+
+podman-check:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  socket="/run/user/$(id -u)/podman/podman.sock"
+  socket_url="unix://${socket}"
+  echo "Checking podman socket at: ${socket}"
+  if [[ ! -S "$socket" ]]; then
+    echo "Socket not found. Start it with: systemctl --user start podman.socket" >&2
+    exit 1
+  fi
+  if ! podman --url "$socket_url" info >/dev/null 2>&1 \
+    && ! podman --remote info >/dev/null 2>&1; then
+    echo "podman remote API is not reachable. Common fix:" >&2
+    echo "  sudo chown -R $USER:$USER /run/user/$(id -u)/libpod" >&2
+    echo "  sudo rm -f /run/user/$(id -u)/libpod/tmp/alive.lck" >&2
+    echo "  systemctl --user restart podman.socket" >&2
+    exit 1
+  fi
+  echo "podman remote API is reachable."

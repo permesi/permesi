@@ -30,7 +30,7 @@ opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls"] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 rand = { workspace = true }
 regex = "1.10"
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
