@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
-use tracing::debug;
+use tracing::{Instrument, debug, info_span};
 use url::Url;
 
 pub struct DatabaseCreds {
@@ -60,10 +60,16 @@ pub async fn unwrap(user_agent: &str, url: &str, token: &str) -> Result<String> 
 
     let unwrap_url = endpoint_url(url, "/v1/sys/wrapping/unwrap")?;
 
+    let span = info_span!(
+        "vault.unwrap",
+        http.method = "POST",
+        url = %unwrap_url
+    );
     let response = client
         .post(&unwrap_url)
         .header("X-Vault-Token", token)
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -106,7 +112,17 @@ pub async fn approle_login(
 
     debug!("login URL: {}, role ID: {}", url, rid);
 
-    let response = client.post(url).json(&login_payload).send().await?;
+    let span = info_span!(
+        "vault.approle_login",
+        http.method = "POST",
+        url = %url
+    );
+    let response = client
+        .post(url)
+        .json(&login_payload)
+        .send()
+        .instrument(span)
+        .await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -152,11 +168,17 @@ pub async fn renew_token(
 
     let renew_url = endpoint_url(url, "/v1/auth/token/renew-self")?;
 
+    let span = info_span!(
+        "vault.renew_token",
+        http.method = "POST",
+        url = %renew_url
+    );
     let response = client
         .post(&renew_url)
         .json(&payload)
         .header("X-Vault-Token", token.expose_secret())
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -199,11 +221,17 @@ pub async fn renew_db_token(
 
     let renew_url = endpoint_url(url, "/v1/sys/leases/renew")?;
 
+    let span = info_span!(
+        "vault.renew_db_token",
+        http.method = "POST",
+        url = %renew_url
+    );
     let response = client
         .post(&renew_url)
         .json(&payload)
         .header("X-Vault-Token", token.expose_secret())
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -239,10 +267,16 @@ pub async fn database_creds(
 
     let db_creds = endpoint_url(vault_url, db_path)?;
 
+    let span = info_span!(
+        "vault.database_creds",
+        http.method = "GET",
+        url = %db_creds
+    );
     let response = client
         .get(&db_creds)
         .header("X-Vault-Token", vault_token.expose_secret())
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -292,10 +326,15 @@ mod tests {
     use anyhow::{Result, anyhow};
     use secrecy::ExposeSecret;
     use serde_json::json;
+    use std::net::TcpListener;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const USER_AGENT: &str = "vault-client-test/0.1";
+
+    fn can_bind_localhost() -> bool {
+        TcpListener::bind("127.0.0.1:0").is_ok()
+    }
 
     #[test]
     fn endpoint_url_defaults_http_port() -> Result<()> {
@@ -322,6 +361,10 @@ mod tests {
 
     #[tokio::test]
     async fn unwrap_returns_secret_id() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))
@@ -340,6 +383,10 @@ mod tests {
 
     #[tokio::test]
     async fn unwrap_errors_on_failure_status() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))
@@ -358,6 +405,10 @@ mod tests {
 
     #[tokio::test]
     async fn approle_login_defaults_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))
@@ -382,6 +433,10 @@ mod tests {
 
     #[tokio::test]
     async fn renew_token_returns_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
         let server = MockServer::start().await;
         let token = SecretString::from("vault-token".to_string());
 
@@ -404,6 +459,10 @@ mod tests {
 
     #[tokio::test]
     async fn renew_db_token_returns_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
         let server = MockServer::start().await;
         let token = SecretString::from("vault-token".to_string());
 
@@ -428,6 +487,10 @@ mod tests {
 
     #[tokio::test]
     async fn database_creds_parses_fields() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
         let server = MockServer::start().await;
         let token = SecretString::from("vault-token".to_string());
 

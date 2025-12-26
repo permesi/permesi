@@ -5,7 +5,7 @@ use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use tracing::{error, instrument};
+use tracing::{Instrument, error, info_span, instrument};
 
 use crate::vault;
 
@@ -92,10 +92,18 @@ pub async fn fetch_ed25519_keys(
         &transit_path(transit_mount, &format!("keys/{key_name}")),
     )?;
 
+    let span = info_span!(
+        "vault.transit.keys",
+        http.method = "GET",
+        url = %keys_url,
+        vault.mount = transit_mount,
+        vault.key = key_name
+    );
     let response = client
         .get(&keys_url)
         .header("X-Vault-Token", vault_token.expose_secret())
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -172,11 +180,20 @@ pub async fn sign_ed25519(
         "key_version": key_version,
     });
 
+    let span = info_span!(
+        "vault.transit.sign",
+        http.method = "POST",
+        url = %sign_url,
+        vault.mount = transit_mount,
+        vault.key = key_name,
+        vault.key_version = key_version
+    );
     let response = client
         .post(&sign_url)
         .header("X-Vault-Token", vault_token.expose_secret())
         .json(&payload)
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -194,4 +211,73 @@ pub async fn sign_ed25519(
     })?;
 
     parse_signature(signature)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn transit_path_trims_mount_slashes() {
+        let path = transit_path("/transit/genesis/", "keys/test");
+        assert_eq!(path, "/v1/transit/genesis/keys/test");
+    }
+
+    #[test]
+    fn parse_signature_accepts_valid_format() -> Result<()> {
+        let signature = "vault:v3:YWJj";
+        let parsed = parse_signature(signature)?;
+        assert_eq!(parsed.key_version, 3);
+        assert_eq!(parsed.signature_base64, "YWJj");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_signature_rejects_invalid_prefix() {
+        assert!(parse_signature("bad:v1:YWJj").is_err());
+    }
+
+    #[test]
+    fn parse_signature_rejects_missing_parts() {
+        assert!(parse_signature("vault:v1").is_err());
+    }
+
+    #[test]
+    fn parse_signature_rejects_invalid_version() {
+        assert!(parse_signature("vault:x1:YWJj").is_err());
+    }
+
+    #[test]
+    fn parse_key_version_rejects_overflow() {
+        let overflow = u64::from(u32::MAX) + 1;
+        assert!(parse_key_version(overflow).is_err());
+    }
+
+    #[test]
+    fn vault_error_message_returns_first_error() {
+        let value = json!({ "errors": ["denied"] });
+        assert_eq!(vault_error_message(&value), "denied");
+    }
+
+    #[test]
+    fn vault_error_message_returns_empty_when_missing() {
+        let value = json!({ "error": "nope" });
+        assert_eq!(vault_error_message(&value), "");
+    }
+
+    #[test]
+    fn get_required_str_returns_nested_value() {
+        let value = json!({ "data": { "signature": "vault:v1:abc" } });
+        assert_eq!(
+            get_required_str(&value, &["data", "signature"]),
+            Some("vault:v1:abc")
+        );
+    }
+
+    #[test]
+    fn get_required_str_returns_none_for_missing_path() {
+        let value = json!({ "data": {} });
+        assert!(get_required_str(&value, &["data", "missing"]).is_none());
+    }
 }

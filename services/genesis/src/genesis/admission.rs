@@ -343,6 +343,37 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn paserk_snapshot_returns_cached_when_fresh() -> Result<()> {
+        let public_key_latest = BASE64_STANDARD.encode([42u8; 32]);
+        let key = PaserkKey::from_ed25519_public_key_base64(&public_key_latest)?;
+        let keyset = PaserkKeySet {
+            version: "v4".to_string(),
+            purpose: "public".to_string(),
+            active_kid: key.kid.clone(),
+            keys: vec![key],
+        };
+
+        let cached = CachedKeySet {
+            keyset: keyset.clone(),
+            fetched_at: Instant::now(),
+            latest_version: 1,
+            previous_version: None,
+        };
+
+        let signer = test_signer()?;
+        {
+            let mut cache = signer.cache.write().await;
+            *cache = Some(cached);
+        }
+
+        let snapshot = signer.paserk_snapshot().await?;
+        assert_eq!(snapshot.latest_version, 1);
+        assert_eq!(snapshot.previous_version, None);
+        assert_eq!(snapshot.keyset.active_kid, keyset.active_kid);
+        Ok(())
+    }
+
     #[test]
     fn build_paserk_snapshot_includes_latest_and_previous() -> Result<()> {
         let public_key_latest = BASE64_STANDARD.encode([42u8; 32]);

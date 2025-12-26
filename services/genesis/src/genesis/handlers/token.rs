@@ -9,7 +9,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgDatabaseError};
 use std::{env, future::Future, net::IpAddr, pin::Pin, process, sync::Arc};
-use tracing::{debug, error, instrument};
+use tracing::{Instrument, debug, error, info_span, instrument};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -168,9 +168,16 @@ async fn fetch_client_id(
     client_uuid: Uuid,
 ) -> Result<Option<i16>, (StatusCode, String)> {
     let query = "SELECT id, is_reserved FROM clients WHERE uuid = $1";
+    let span = info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.statement = query
+    );
     let row = match sqlx::query(query)
         .bind(client_uuid)
         .fetch_optional(pool)
+        .instrument(span)
         .await
     {
         Ok(row) => row,
@@ -235,12 +242,19 @@ async fn insert_token_and_metadata(
     metadata: &RequestMetadata,
 ) -> Result<Uuid, (StatusCode, String)> {
     let query = "INSERT INTO tokens (client_id, ip_address, country, user_agent) VALUES ($1, $2, $3, $4) RETURNING id";
+    let span = info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.statement = query
+    );
     let row = sqlx::query(query)
         .bind(client_id)
         .bind(metadata.ip_address)
         .bind(metadata.country.as_deref())
         .bind(metadata.user_agent.as_deref())
         .fetch_one(pool)
+        .instrument(span)
         .await
         .map_err(|err| {
             error!("Failed to insert token into database: {}", err);

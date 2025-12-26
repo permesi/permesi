@@ -183,3 +183,29 @@ impl PostgresContainer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_config_defaults_are_expected() {
+        let config = PostgresConfig::new();
+        assert_eq!(config.image, "postgres");
+        assert_eq!(config.tag, "18");
+        assert_eq!(config.user, "postgres");
+        assert_eq!(config.password, "postgres");
+        assert_eq!(config.db_name, "postgres");
+    }
+
+    #[test]
+    fn postgres_config_overrides_fields() {
+        let config = PostgresConfig::new()
+            .with_user("app")
+            .with_password("secret")
+            .with_db_name("appdb");
+        assert_eq!(config.user, "app");
+        assert_eq!(config.password, "secret");
+        assert_eq!(config.db_name, "appdb");
+    }
+}

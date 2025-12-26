@@ -7,7 +7,7 @@ use axum::{Json, extract::Extension, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
-use tracing::{debug, error, instrument};
+use tracing::{Instrument, debug, error, info_span, instrument};
 use utoipa::ToSchema;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
@@ -28,7 +28,7 @@ pub struct UserLogin {
     tag= "login"
 )]
 // axum handler for health
-#[instrument]
+#[instrument(skip(pool, globals, admission, payload))]
 pub async fn login(
     pool: Extension<PgPool>,
     globals: Extension<GlobalArgs>,
@@ -111,9 +111,17 @@ pub async fn login(
 }
 
 async fn get_password(pool: &PgPool, email: &str) -> Result<String, sqlx::Error> {
-    match sqlx::query("SELECT password FROM users WHERE email = $1")
+    let query = "SELECT password FROM users WHERE email = $1";
+    let span = info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.statement = query
+    );
+    match sqlx::query(query)
         .bind(email)
         .fetch_one(pool)
+        .instrument(span)
         .await
     {
         Ok(row) => Ok(row.get(0)),

@@ -7,7 +7,7 @@ use axum::{Json, extract::Extension, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
-use tracing::{debug, error, instrument};
+use tracing::{Instrument, debug, error, info_span, instrument};
 use utoipa::ToSchema;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
@@ -28,7 +28,7 @@ pub struct UserRegister {
     tag= "register"
 )]
 // axum handler for health
-#[instrument]
+#[instrument(skip(pool, globals, admission, payload))]
 pub async fn register(
     pool: Extension<PgPool>,
     globals: Extension<GlobalArgs>,
@@ -84,10 +84,18 @@ pub async fn register(
     };
 
     // insert user into database
-    match sqlx::query("INSERT INTO users (email, password) VALUES ($1, $2)")
+    let query = "INSERT INTO users (email, password) VALUES ($1, $2)";
+    let span = info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.statement = query
+    );
+    match sqlx::query(query)
         .bind(&user.email)
         .bind(&password)
         .execute(&*pool)
+        .instrument(span)
         .await
     {
         Ok(_) => (StatusCode::CREATED, "User created".to_string()),
@@ -102,9 +110,17 @@ pub async fn register(
 }
 
 async fn user_exists(pool: &PgPool, email: &str) -> Result<bool, sqlx::Error> {
-    match sqlx::query("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1) AS exists")
+    let query = "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1) AS exists";
+    let span = info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.statement = query
+    );
+    match sqlx::query(query)
         .bind(email)
         .fetch_one(pool)
+        .instrument(span)
         .await
     {
         Ok(row) => Ok(row.get("exists")),

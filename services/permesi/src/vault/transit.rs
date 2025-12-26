@@ -5,7 +5,7 @@ use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::{error, instrument};
+use tracing::{Instrument, error, info_span, instrument};
 
 fn vault_error_message(json_response: &Value) -> &str {
     json_response
@@ -26,7 +26,7 @@ fn get_required_str<'a>(json_response: &'a Value, path: &[&str]) -> Option<&'a s
 /// Encrypt using Vault transit engine
 /// # Errors
 /// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
-#[instrument]
+#[instrument(skip(globals, plaintext, context))]
 pub async fn encrypt(globals: &GlobalArgs, plaintext: &str, context: &str) -> Result<String> {
     let client = Client::builder()
         .user_agent(permesi::APP_USER_AGENT)
@@ -40,11 +40,17 @@ pub async fn encrypt(globals: &GlobalArgs, plaintext: &str, context: &str) -> Re
     map.insert("plaintext", Base64::encode_string(plaintext.as_bytes()));
     map.insert("context", Base64::encode_string(context.as_bytes()));
 
+    let span = info_span!(
+        "vault.transit.encrypt",
+        http.method = "POST",
+        url = %encrypt
+    );
     let response = client
         .post(encrypt.as_str())
         .header("X-Vault-Token", globals.vault_token.expose_secret())
         .json(&map)
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -69,7 +75,7 @@ pub async fn encrypt(globals: &GlobalArgs, plaintext: &str, context: &str) -> Re
     )
 }
 
-#[instrument]
+#[instrument(skip(globals, ciphertext, context))]
 /// # Errors
 /// Returns an error if the Vault request fails, Vault returns a non-success status, the response is missing expected fields, or plaintext is not valid UTF-8.
 pub async fn decrypt(globals: &GlobalArgs, ciphertext: &str, context: &str) -> Result<String> {
@@ -85,11 +91,17 @@ pub async fn decrypt(globals: &GlobalArgs, ciphertext: &str, context: &str) -> R
     map.insert("ciphertext", ciphertext.to_string());
     map.insert("context", Base64::encode_string(context.as_bytes()));
 
+    let span = info_span!(
+        "vault.transit.decrypt",
+        http.method = "POST",
+        url = %encrypt
+    );
     let response = client
         .post(encrypt.as_str())
         .header("X-Vault-Token", globals.vault_token.expose_secret())
         .json(&map)
         .send()
+        .instrument(span)
         .await?;
 
     if !response.status().is_success() {
@@ -120,4 +132,37 @@ pub async fn decrypt(globals: &GlobalArgs, ciphertext: &str, context: &str) -> R
         error!("Failed to convert plaintext to string: {}", e);
         anyhow!("Failed to convert plaintext to string")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn vault_error_message_returns_first_error() {
+        let value = json!({ "errors": ["denied"] });
+        assert_eq!(vault_error_message(&value), "denied");
+    }
+
+    #[test]
+    fn vault_error_message_returns_empty_when_missing() {
+        let value = json!({ "error": "nope" });
+        assert_eq!(vault_error_message(&value), "");
+    }
+
+    #[test]
+    fn get_required_str_returns_nested_value() {
+        let value = json!({ "data": { "ciphertext": "vault:v1:abc" } });
+        assert_eq!(
+            get_required_str(&value, &["data", "ciphertext"]),
+            Some("vault:v1:abc")
+        );
+    }
+
+    #[test]
+    fn get_required_str_returns_none_for_missing_path() {
+        let value = json!({ "data": {} });
+        assert!(get_required_str(&value, &["data", "ciphertext"]).is_none());
+    }
 }

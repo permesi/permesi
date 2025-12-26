@@ -184,3 +184,36 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
 
     statements
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn genesis_policy_includes_transit_mount() {
+        let policy = genesis_policy("transit/custom");
+        assert!(policy.contains("transit/custom/keys"));
+        assert!(policy.contains("transit/custom/sign"));
+    }
+
+    #[test]
+    fn split_sql_statements_skips_include_lines() {
+        let sql = r"
+CREATE TABLE users(id int);
+\ir /db/sql/partitioning.sql
+INSERT INTO users(id) VALUES (1);
+";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 2);
+        assert!(
+            statements
+                .first()
+                .is_some_and(|statement| statement.contains("CREATE TABLE users"))
+        );
+        assert!(
+            statements
+                .get(1)
+                .is_some_and(|statement| statement.contains("INSERT INTO users"))
+        );
+    }
+}

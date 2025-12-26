@@ -14,7 +14,7 @@ use tracing::instrument;
     tag = "headers",
 )]
 // axum handler for health
-#[instrument]
+#[instrument(skip(headers))]
 pub async fn headers(headers: HeaderMap) -> impl IntoResponse {
     let body = headers
         .iter()

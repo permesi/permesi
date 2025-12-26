@@ -27,3 +27,21 @@ impl TestNetwork {
 pub(crate) fn unique_name(prefix: &str) -> String {
     format!("{prefix}-{}", Uuid::new_v4().simple())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_name_includes_prefix() {
+        let name = unique_name("test");
+        assert!(name.starts_with("test-"));
+        assert!(name.len() > "test-".len());
+    }
+
+    #[test]
+    fn test_network_name_includes_prefix() {
+        let network = TestNetwork::new("net");
+        assert!(network.name().starts_with("net-"));
+    }
+}

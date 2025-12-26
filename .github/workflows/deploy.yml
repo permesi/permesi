@@ -119,7 +119,9 @@ jobs:
               -f "${dockerfile}" \
               -t "${image}:${{ steps.meta.outputs.TAG_REF }}" \
               -t "${image}:${{ steps.meta.outputs.TAG_SHA }}" \
+              -t "${image}:latest" \
               .
             podman push "${image}:${{ steps.meta.outputs.TAG_REF }}"
             podman push "${image}:${{ steps.meta.outputs.TAG_SHA }}"
+            podman push "${image}:latest"
           done

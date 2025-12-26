@@ -18,7 +18,7 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
 /// vault write -wrap-ttl=300s -f auth/approle/role/permesi/secret-id
 /// # Errors
 /// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
-#[instrument]
+#[instrument(skip(token))]
 pub async fn unwrap(url: &str, token: &str) -> Result<String> {
     vault_client::unwrap(APP_USER_AGENT, url, token).await
 }
@@ -28,7 +28,7 @@ pub async fn unwrap(url: &str, token: &str) -> Result<String> {
 /// vault write -f auth/approle/role/permesi/secret-id
 /// # Errors
 /// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
-#[instrument]
+#[instrument(skip(sid))]
 pub async fn approle_login(url: &str, sid: &str, rid: &str) -> Result<(String, u64)> {
     vault_client::approle_login(APP_USER_AGENT, url, sid, rid).await
 }

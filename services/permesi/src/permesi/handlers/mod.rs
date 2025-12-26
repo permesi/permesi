@@ -18,7 +18,7 @@ use reqwest::Client;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
-use tracing::{error, info, instrument, warn};
+use tracing::{Instrument, error, info, info_span, instrument, warn};
 
 const KEYSET_CACHE_TTL_SECONDS: u64 = 300;
 const KEYSET_REFRESH_COOLDOWN_SECONDS: u64 = 30;
@@ -172,18 +172,27 @@ fn now_unix_seconds_u64() -> u64 {
 }
 
 async fn fetch_keyset(client: &Client, url: &str) -> Result<PaserkKeySet> {
-    let response = client.get(url).send().await?;
-    let status = response.status();
-    let body = response.text().await?;
+    let span = info_span!(
+        "admission.keyset.fetch",
+        http.method = "GET",
+        url = %url
+    );
+    async {
+        let response = client.get(url).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
 
-    if !status.is_success() {
-        return Err(anyhow!("paserk keyset fetch failed: {status}"));
+        if !status.is_success() {
+            return Err(anyhow!("paserk keyset fetch failed: {status}"));
+        }
+
+        PaserkKeySet::from_json(&body).context("Invalid admission PASERK JSON")
     }
-
-    PaserkKeySet::from_json(&body).context("Invalid admission PASERK JSON")
+    .instrument(span)
+    .await
 }
 
-#[instrument]
+#[instrument(skip(verifier, token))]
 pub async fn verify_token(verifier: &AdmissionVerifier, token: &str) -> bool {
     verify_token_claims(verifier, token).await.is_some()
 }
@@ -306,6 +315,34 @@ mod tests {
         })
     }
 
+    #[test]
+    fn valid_email_accepts_simple() {
+        assert!(valid_email("user@example.com"));
+    }
+
+    #[test]
+    fn valid_email_rejects_missing_at() {
+        assert!(!valid_email("user.example.com"));
+    }
+
+    #[test]
+    fn valid_password_accepts_hex() {
+        let password = "a".repeat(64);
+        assert!(valid_password(&password));
+    }
+
+    #[test]
+    fn valid_password_rejects_non_hex() {
+        let password = "g".repeat(64);
+        assert!(!valid_password(&password));
+    }
+
+    #[test]
+    fn valid_password_rejects_short() {
+        let password = "a".repeat(63);
+        assert!(!valid_password(&password));
+    }
+
     #[tokio::test]
     async fn admission_verifier_accepts_valid_token() -> Result<(), AdmissionError> {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
@@ -340,6 +377,40 @@ mod tests {
 
         let claims_result = verify_token_claims(&verifier, &token).await;
         assert!(claims_result.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_on_unknown_kid_skips_static_source() -> anyhow::Result<()> {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let keyset = keyset_for_signing_key(&signing_key)?;
+        let verifier = AdmissionVerifier::new(keyset, ISSUER.to_string(), AUDIENCE.to_string());
+        let refreshed = verifier.refresh_on_unknown_kid().await?;
+        assert!(!refreshed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_on_unknown_kid_suppresses_within_cooldown() -> anyhow::Result<()> {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let keyset = keyset_for_signing_key(&signing_key)?;
+        let cache = KeysetCache {
+            keyset,
+            fetched_at: Instant::now(),
+        };
+        let verifier = AdmissionVerifier {
+            keyset_source: KeysetSource::Remote {
+                url: "http://example.test".to_string(),
+                client: Client::builder().build()?,
+            },
+            keyset_cache: RwLock::new(cache),
+            issuer: ISSUER.to_string(),
+            audience: AUDIENCE.to_string(),
+            action: ADMISSION_ACTION.to_string(),
+            last_refresh_unix: AtomicU64::new(now_unix_seconds_u64()),
+        };
+        let refreshed = verifier.refresh_on_unknown_kid().await?;
+        assert!(!refreshed);
         Ok(())
     }
 }

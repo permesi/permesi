@@ -9,12 +9,12 @@ use tokio::{
 use tracing::{debug, error, info, instrument, warn};
 
 /// Renew a Vault token
-#[instrument]
+#[instrument(skip(token))]
 async fn renew_token(url: &str, token: &SecretString, increment: Option<u64>) -> Result<u64> {
     vault_client::renew_token(vault::APP_USER_AGENT, url, token, increment).await
 }
 
-#[instrument]
+#[instrument(skip(token))]
 async fn renew_db_token(
     url: &str,
     token: &SecretString,
@@ -27,7 +27,7 @@ async fn renew_db_token(
 /// Refresh a Vault token
 /// # Errors
 /// Returns an error if the initial renewal task setup fails (e.g. request construction).
-#[instrument]
+#[instrument(skip(globals, tx))]
 pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> Result<()> {
     // renew the token
     tokio::spawn({

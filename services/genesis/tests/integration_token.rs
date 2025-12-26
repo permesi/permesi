@@ -10,7 +10,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use test_support::{
-    TestNetwork, genesis as genesis_support, postgres::PostgresContainer, vault::VaultContainer,
+    TestNetwork, genesis as genesis_support, postgres::PostgresContainer, runtime,
+    vault::VaultContainer,
 };
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -186,6 +187,11 @@ fn verification_options(expectations: &ClaimsExpectations) -> VerificationOption
 
 #[tokio::test]
 async fn token_endpoint_mints_and_persists() -> Result<()> {
+    if let Err(err) = runtime::ensure_container_runtime() {
+        eprintln!("Skipping integration test: {err}");
+        return Ok(());
+    }
+
     let context = TestContext::new().await?;
     let config = &context.config;
     let base = format!("http://127.0.0.1:{}", config.port);

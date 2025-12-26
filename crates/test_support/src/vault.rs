@@ -36,6 +36,44 @@ impl VaultConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vault_config_defaults_are_expected() {
+        let config = VaultConfig::new();
+        assert_eq!(config.image, "hashicorp/vault");
+        assert_eq!(config.tag, "1.17.3");
+        assert_eq!(config.root_token, "root-token");
+    }
+
+    #[test]
+    fn vault_config_overrides_root_token() {
+        let config = VaultConfig::new().with_root_token("custom-token");
+        assert_eq!(config.root_token, "custom-token");
+    }
+
+    #[test]
+    fn database_config_as_value_includes_roles() {
+        let config = DatabaseConfig::new(
+            "postgresql://localhost/db",
+            "user",
+            "pass",
+            vec!["role1".to_string(), "role2".to_string()],
+        );
+        let value = config.as_value();
+        assert_eq!(
+            value.get("allowed_roles").and_then(Value::as_str),
+            Some("role1,role2")
+        );
+        assert_eq!(
+            value.get("plugin_name").and_then(Value::as_str),
+            Some("postgresql-database-plugin")
+        );
+    }
+}
+
 impl Default for VaultConfig {
     fn default() -> Self {
         Self::new()

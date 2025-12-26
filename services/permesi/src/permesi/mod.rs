@@ -11,8 +11,10 @@ use crate::{
 use anyhow::{Context, Result};
 use axum::{
     Extension, Router,
+    body::Body,
+    extract::MatchedPath,
     http::{
-        HeaderName, HeaderValue, Method,
+        HeaderName, HeaderValue, Method, Request,
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
     routing::{get, post},
@@ -29,7 +31,7 @@ use tower_http::{
     set_header::SetRequestHeaderLayer,
     trace::TraceLayer,
 };
-use tracing::info;
+use tracing::{Span, info, info_span};
 use ulid::Ulid;
 use utoipa::OpenApi;
 
@@ -104,7 +106,7 @@ pub async fn new(
                 .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
                     "x-request-id",
                 )))
-                .layer(TraceLayer::new_for_http())
+                .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
                 .layer(Extension(admission.clone()))
                 .layer(Extension(globals.clone()))
@@ -125,4 +127,23 @@ pub async fn new(
         .await?;
 
     Ok(())
+}
+
+fn make_span(request: &Request<Body>) -> Span {
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|val| val.to_str().ok())
+        .unwrap_or("none");
+    let matched_path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or_else(|| request.uri().path(), MatchedPath::as_str);
+
+    info_span!(
+        "http.request",
+        http.method = %request.method(),
+        http.route = matched_path,
+        request_id
+    )
 }

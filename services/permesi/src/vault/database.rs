@@ -5,7 +5,7 @@ use tracing::instrument;
 /// Get DB credentials from Vault
 /// # Errors
 /// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
-#[instrument]
+#[instrument(skip(globals))]
 pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
     let creds = vault_client::database_creds(
         permesi::APP_USER_AGENT,
