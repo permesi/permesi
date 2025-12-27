@@ -57,3 +57,10 @@ jobs:
         run: |
           cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis
         if: matrix.build != 'linux'
+
+  package:
+    uses: ./.github/workflows/package.yml
+    needs: build
+    if: github.ref_name == 'develop'
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
