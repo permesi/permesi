@@ -73,5 +73,4 @@ jobs:
   package:
     uses: ./.github/workflows/package.yml
     needs: build
-    secrets:
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    secrets: inherit

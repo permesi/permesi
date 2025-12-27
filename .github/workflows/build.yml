@@ -62,5 +62,4 @@ jobs:
     uses: ./.github/workflows/package.yml
     needs: build
     if: github.ref_name == 'develop'
-    secrets:
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    secrets: inherit
