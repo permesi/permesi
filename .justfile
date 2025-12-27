@@ -35,6 +35,44 @@ build-permesi:
 build-genesis:
   cargo build -p genesis
 
+web:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v trunk >/dev/null 2>&1; then
+    just web-setup
+  fi
+  mkdir -p {{root}}/.tmp/xdg-cache
+  cd apps/web
+  : "${PERMESI_API_BASE_URL:=http://localhost:8080}"
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
+    PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
+    trunk serve
+
+web-build:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v trunk >/dev/null 2>&1; then
+    just web-setup
+  fi
+  mkdir -p {{root}}/.tmp/xdg-cache
+  cd apps/web
+  : "${PERMESI_API_BASE_URL:=http://localhost:8080}"
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
+    PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
+    trunk build --release
+
+web-check:
+  cargo check -p permesi_web
+
+web-setup:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  mkdir -p .tmp
+  rustup target add wasm32-unknown-unknown
+  if ! command -v trunk >/dev/null 2>&1; then
+    cargo install --locked trunk
+  fi
+
 genesis:
   cargo watch -x 'run -p genesis --bin genesis -- -vvv'
 

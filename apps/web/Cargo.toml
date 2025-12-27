@@ -1,0 +1,22 @@
+[package]
+name = "permesi_web"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "BSD-3-Clause"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+gloo-net = "0.6"
+wasm-bindgen = "0.2.106"
+js-sys = "0.3.83"
+web-sys = { version = "0.3.83", features = ["Window"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

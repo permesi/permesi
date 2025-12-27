@@ -1,5 +1,7 @@
 /target/
 **/*.rs.bk
+.tmp/
+!.tmp/.gitkeep
 .envrc
 .otel-collector-config.yml
 fly.toml

@@ -5,6 +5,7 @@ resolver = "3"
 members = [
   "services/permesi",
   "services/genesis",
+  "apps/web",
   "crates/admission_token",
   "crates/vault_client",
   "crates/test_support",
