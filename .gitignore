@@ -2,6 +2,7 @@
 **/*.rs.bk
 .tmp/
 !.tmp/.gitkeep
+apps/web/dist/
 .envrc
 .otel-collector-config.yml
 fly.toml
