@@ -43,9 +43,11 @@ web:
   fi
   mkdir -p {{root}}/.tmp/xdg-cache
   cd apps/web
-  : "${PERMESI_API_BASE_URL:=http://localhost:8080}"
+  : "${PERMESI_API_HOST:=http://localhost:8001}"
+  : "${PERMESI_API_TOKEN_HOST:=http://localhost:8000}"
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
-    PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
+    PERMESI_API_HOST="${PERMESI_API_HOST}" \
+    PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
     trunk serve
 
 web-build:
@@ -56,9 +58,11 @@ web-build:
   fi
   mkdir -p {{root}}/.tmp/xdg-cache
   cd apps/web
-  : "${PERMESI_API_BASE_URL:=http://localhost:8080}"
+  : "${PERMESI_API_HOST:=http://localhost:8001}"
+  : "${PERMESI_API_TOKEN_HOST:=http://localhost:8000}"
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
-    PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
+    PERMESI_API_HOST="${PERMESI_API_HOST}" \
+    PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
     trunk build --release
 
 web-check:
@@ -74,10 +78,10 @@ web-setup:
   fi
 
 genesis:
-  cargo watch -x 'run -p genesis --bin genesis -- -vvv'
+  cargo watch -x 'run -p genesis --bin genesis -- --port 8000 -vvv'
 
 permesi:
-  cargo watch -x 'run -p permesi --bin permesi -- -vvv'
+  cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
 
 # ----------------------
 # OpenAPI spec generation
@@ -103,7 +107,7 @@ genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
   token="$(
-    xh '0:8080/token?client_id=00000000-0000-0000-0000-000000000000' \
+    xh '0:8000/token?client_id=00000000-0000-0000-0000-000000000000' \
       | jq -er '.token'
   )"
   python3 - "$token" <<'PY'
@@ -139,7 +143,7 @@ genesis-token:
   print(json.dumps(output, indent=2, sort_keys=True))
   PY
 
-genesis-it: dev-start
+genesis-it: dev-start-infra
   #!/usr/bin/env zsh
   set -euo pipefail
   needs_env() {
@@ -317,7 +321,9 @@ jaeger:
 jaeger_stop:
   podman stop jaeger || true
 
-dev-start: setup-network postgres vault jaeger
+dev-start: dev-start-infra web
+
+dev-start-infra: setup-network postgres vault jaeger
 
 dev-stop: vault_stop postgres_stop jaeger_stop
 

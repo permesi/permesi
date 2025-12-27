@@ -27,27 +27,27 @@ mod app {
 
     #[component]
     fn App() -> impl IntoView {
-        let api_base_url = AppConfig::load().map(|config| config.api_base_url);
+        let config = AppConfig::load();
 
         view! {
             <>
                 <NavBar />
                 <br />
                 <div class="container mx-auto p-4">
-                    <SignIn api_base_url=api_base_url />
+                    <SignIn config=config />
                 </div>
             </>
         }
     }
 
     #[component]
-    fn SignIn(api_base_url: Result<String, String>) -> impl IntoView {
+    fn SignIn(config: Result<AppConfig, String>) -> impl IntoView {
         let (email, set_email) = signal(String::new());
         let (password, set_password) = signal(String::new());
         let (status, set_status) = signal(SubmitStatus::Idle);
         // TODO: Keep tokens in memory only; avoid localStorage or sessionStorage.
         let (_session_token, set_session_token) = signal::<Option<String>>(None);
-        let config_error = api_base_url.clone().err();
+        let config_error = config.clone().err();
 
         let on_submit = move |event: SubmitEvent| {
             event.prevent_default();
@@ -55,7 +55,7 @@ mod app {
                 return;
             }
 
-            let api_base_url = api_base_url.clone();
+            let config = config.clone();
             let email = email.get_untracked();
             let password = password.get_untracked();
             let set_status = set_status.clone();
@@ -65,8 +65,8 @@ mod app {
             set_session_token.set(None);
 
             spawn_local(async move {
-                let base_url = match api_base_url {
-                    Ok(url) => url,
+                let (base_url, _token_host, _client_id) = match config {
+                    Ok(config) => (config.api_host, config.token_host, config.client_id),
                     Err(err) => {
                         set_status.set(SubmitStatus::Error(err));
                         return;
