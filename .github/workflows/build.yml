@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 jobs:
@@ -59,7 +59,27 @@ jobs:
         if: matrix.build != 'linux'
 
   package:
-    uses: ./.github/workflows/package.yml
+    name: Package GHCR
     needs: build
     if: github.ref_name == 'develop'
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GH_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}"
+          --password-stdin
+
+      - name: Build & Push images (podman)
+        shell: bash
+        run: |-
+          set -euo pipefail
+          for service in permesi genesis; do
+            image="ghcr.io/permesi/${service}"
+            dockerfile="services/${service}/Dockerfile"
+            podman build -f "${dockerfile}" -t "${image}:develop" .
+            podman push "${image}:develop"
+          done
