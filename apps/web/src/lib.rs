@@ -1,4 +1,4 @@
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod config;
 
 #[cfg(target_arch = "wasm32")]
@@ -32,6 +32,7 @@ mod app {
         view! {
             <>
                 <NavBar />
+                <br />
                 <div class="container mx-auto p-4">
                     <SignIn api_base_url=api_base_url />
                 </div>
@@ -216,7 +217,7 @@ mod app {
             <nav class="border-gray-200 dark:bg-gray-900">
                 <div class="max-w-screen-xl flex flex-wrap items-center justify-between mx-auto p-4">
                     <a class="flex items-center space-x-3 rtl:space-x-reverse" href="/">
-                        <img class="h-8" src="logo.svg" alt="permesi" />
+                        <img class="h-8" src="/logo.svg" alt="permesi" />
                         <span class="text-1xl font-semibold whitespace-nowrap dark:text-white">
                             "Permesi"
                         </span>
