@@ -2,6 +2,7 @@
 name = "genesis"
 version = "0.1.14"
 edition = "2024"
+publish = false
 authors = ["Team Permesi <team@permesi.dev>"]
 description = "Token Zero generator for permesi"
 documentation = "https://github.com/permesi/genesis/blob/main/README.md"

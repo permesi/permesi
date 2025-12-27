@@ -1,0 +1,80 @@
+---
+name: Package GHCR
+
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - '*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  package:
+    name: Package GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GH_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}"
+          --password-stdin
+
+      - name: Compute image tags
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          should_build=false
+          tags=()
+
+          if [[ "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            if [[ "${GITHUB_REF_NAME}" == "develop" ]]; then
+              should_build=true
+              tags+=("develop")
+            fi
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            if [[ "${GITHUB_REF_NAME}" =~ ^[Vv]?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              should_build=true
+              tags+=("${BASH_REMATCH[1]}")
+              git fetch --no-tags origin main:refs/remotes/origin/main
+              if git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+                tags+=("latest")
+              fi
+            fi
+          fi
+
+          echo "should_build=${should_build}" >> "$GITHUB_OUTPUT"
+          echo "tags=${tags[*]}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push images (podman)
+        if: steps.meta.outputs.should_build == 'true'
+        shell: bash
+        run: |-
+          set -euo pipefail
+          IFS=' ' read -r -a tags <<< "${{ steps.meta.outputs.tags }}"
+
+          for service in permesi genesis; do
+            image="ghcr.io/permesi/${service}"
+            dockerfile="services/${service}/Dockerfile"
+            build_tags=()
+
+            for tag in "${tags[@]}"; do
+              build_tags+=(-t "${image}:${tag}")
+            done
+
+            podman build -f "${dockerfile}" "${build_tags[@]}" .
+
+            for tag in "${tags[@]}"; do
+              podman push "${image}:${tag}"
+            done
+          done

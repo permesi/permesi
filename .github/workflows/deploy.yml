@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get the release version from the tag
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
@@ -65,63 +65,7 @@ jobs:
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |-
             ${{ env.ASSET }}
-
-  publish:
-    name: Publish
-    runs-on: ubuntu-latest
-    needs:
-      - build
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - run: cargo publish -p permesi --token ${CRATES_TOKEN}
-        env:
-          CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
-
-  package:
-    name: Package GHCR
-    runs-on: ubuntu-latest
-    needs:
-      - build
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install podman
-        run: sudo apt-get update && sudo apt-get install -y podman
-
-      - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GH_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}"
-          --password-stdin
-
-      - name: Compute image tags
-        id: meta
-        shell: bash
-        run: |
-          echo "TAG_REF=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
-          echo "TAG_SHA=${GITHUB_SHA}" >> $GITHUB_OUTPUT
-
-      - name: Build & Push images (podman)
-        shell: bash
-        run: |-
-          set -euo pipefail
-          for service in permesi genesis; do
-            image="ghcr.io/permesi/${service}"
-            dockerfile="services/${service}/Dockerfile"
-            podman build \
-              -f "${dockerfile}" \
-              -t "${image}:${{ steps.meta.outputs.TAG_REF }}" \
-              -t "${image}:${{ steps.meta.outputs.TAG_SHA }}" \
-              -t "${image}:latest" \
-              .
-            podman push "${image}:${{ steps.meta.outputs.TAG_REF }}"
-            podman push "${image}:${{ steps.meta.outputs.TAG_SHA }}"
-            podman push "${image}:latest"
-          done
