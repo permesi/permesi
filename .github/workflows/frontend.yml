@@ -1,9 +1,10 @@
+---
 name: Frontend Deploy
 
 on:
   push:
     branches:
-      - "**"
+      - '**'
 
 jobs:
   build:
@@ -11,37 +12,37 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: "Setup: Checkout"
+      - name: 'Setup: Checkout'
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
-      - name: "Setup: Set up Node"
+      - name: 'Setup: Set up Node'
         uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      - name: "Setup: Set up Rust"
+      - name: 'Setup: Set up Rust'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - name: "Setup: Cache Rust"
+      - name: 'Setup: Cache Rust'
         uses: Swatinem/rust-cache@v2.8.2
         with:
           workspaces: |
             . -> target
 
-      - name: "Setup: Install Trunk"
+      - name: 'Setup: Install Trunk'
         run: cargo install --locked trunk
 
-      - name: "Setup: Install Frontend Dependencies"
+      - name: 'Setup: Install Frontend Dependencies'
         working-directory: apps/web
         run: npm ci
 
-      - name: "Setup: Set Frontend Env"
+      - name: 'Setup: Set Frontend Env'
         shell: bash
         env:
           PERMESI_CLIENT_ID: ${{ vars.PERMESI_CLIENT_ID }}
@@ -60,15 +61,15 @@ jobs:
           echo "PERMESI_TOKEN_BASE_URL=${token_base}" >> "$GITHUB_ENV"
           echo "PERMESI_CLIENT_ID=${client_id}" >> "$GITHUB_ENV"
 
-      - name: "Build: Build CSS"
+      - name: 'Build: Build CSS'
         working-directory: apps/web
         run: npm run css:build
 
-      - name: "Build: Build Frontend"
+      - name: 'Build: Build Frontend'
         working-directory: apps/web
         run: trunk build --release
 
-      - name: "Build: Upload Dist Artifact"
+      - name: 'Build: Upload Dist Artifact'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
@@ -84,13 +85,13 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      - name: "Integrity: Download Dist Artifact"
+      - name: 'Integrity: Download Dist Artifact'
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: apps/web/dist
 
-      - name: "Integrity: Generate SHA256SUMS"
+      - name: 'Integrity: Generate SHA256SUMS'
         working-directory: apps/web/dist
         shell: bash
         run: |
@@ -103,10 +104,10 @@ jobs:
             | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
 
-      - name: "Integrity: Install Cosign"
+      - name: 'Integrity: Install Cosign'
         uses: sigstore/cosign-installer@v4.0.0
 
-      - name: "Integrity: Sign Checksums"
+      - name: 'Integrity: Sign Checksums'
         working-directory: apps/web/dist
         run: |
           cosign sign-blob --yes \
@@ -115,12 +116,12 @@ jobs:
             --output-certificate SHA256SUMS.pem \
             SHA256SUMS
 
-      - name: "Integrity: Attest Build Provenance"
+      - name: 'Integrity: Attest Build Provenance'
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: apps/web/dist/**
 
-      - name: "Integrity: Upload Signed Dist Artifact"
+      - name: 'Integrity: Upload Signed Dist Artifact'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist-signed
@@ -133,38 +134,38 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: "Deploy: Download Signed Dist Artifact"
+      - name: 'Deploy: Download Signed Dist Artifact'
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist-signed
           path: apps/web/dist
 
-      - name: "Deploy: Set up Node"
+      - name: 'Deploy: Set up Node'
         uses: actions/setup-node@v6
         with:
           node-version: 24
 
-      - name: "Deploy: Cloudflare Pages (develop)"
+      - name: 'Deploy: Cloudflare Pages (develop)'
         if: github.ref == 'refs/heads/develop'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler pages deploy dist --project-name permesi-dev --branch develop
+        run: npx wrangler pages deploy dist --project-name permesi --branch develop
 
-      - name: "Deploy: Cloudflare Pages (main)"
+      - name: 'Deploy: Cloudflare Pages (main)'
         if: github.ref == 'refs/heads/main'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler pages deploy dist --project-name permesi-web --branch main
+        run: npx wrangler pages deploy dist --project-name permesi --branch main
 
-      - name: "Deploy: Cloudflare Pages (preview)"
+      - name: 'Deploy: Cloudflare Pages (preview)'
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         shell: bash
-        run: |
+        run: |-
           branch="${GITHUB_REF#refs/heads/}"
           branch="${branch//\//-}"
-          npx wrangler pages deploy dist --project-name permesi-dev --branch "${branch}"
+          npx wrangler pages deploy dist --project-name permesi --branch "${branch}"
