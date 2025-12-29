@@ -108,8 +108,6 @@ jobs:
 
       - name: "Integrity: Sign Checksums"
         working-directory: apps/web/dist
-        env:
-          COSIGN_EXPERIMENTAL: "1"
         run: |
           cosign sign-blob --yes \
             --output-signature SHA256SUMS.sig \

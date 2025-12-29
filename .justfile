@@ -88,6 +88,7 @@ web-clean:
     just web-setup
   fi
   just web-node-setup
+  rm -rf {{root}}/.tmp/xdg-cache
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" trunk clean --dist dist
