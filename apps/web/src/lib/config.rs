@@ -1,0 +1,25 @@
+#[derive(Clone, Debug)]
+pub struct AppConfig {
+    pub api_base_url: String,
+    pub token_base_url: String,
+    pub client_id: String,
+}
+
+impl AppConfig {
+    pub fn load() -> Self {
+        let api_base_url = option_env!("PERMESI_API_BASE_URL")
+            .or(option_env!("PERMESI_API_HOST"))
+            .unwrap_or("");
+        let token_base_url = option_env!("PERMESI_TOKEN_BASE_URL")
+            .or(option_env!("PERMESI_TOKEN_HOST"))
+            .or(option_env!("PERMESI_API_TOKEN_HOST"))
+            .unwrap_or("");
+        let client_id = option_env!("PERMESI_CLIENT_ID").unwrap_or("");
+
+        Self {
+            api_base_url: api_base_url.to_string(),
+            token_base_url: token_base_url.to_string(),
+            client_id: client_id.to_string(),
+        }
+    }
+}

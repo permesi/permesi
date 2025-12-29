@@ -1,0 +1,118 @@
+name: Frontend Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install Trunk
+        run: cargo install --locked trunk
+
+      - name: Install Frontend Dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Set Frontend Env
+        shell: bash
+        env:
+          PERMESI_CLIENT_ID: ${{ vars.PERMESI_CLIENT_ID }}
+          PERMESI_API_BASE_URL: ${{ vars.PERMESI_API_BASE_URL }}
+          PERMESI_TOKEN_BASE_URL: ${{ vars.PERMESI_TOKEN_BASE_URL }}
+        run: |
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            domain="permesi.com"
+          else
+            domain="permesi.dev"
+          fi
+          api_base="${PERMESI_API_BASE_URL:-https://api.${domain}}"
+          token_base="${PERMESI_TOKEN_BASE_URL:-https://genesis.${domain}}"
+          client_id="${PERMESI_CLIENT_ID:-00000000-0000-0000-0000-000000000000}"
+          echo "PERMESI_API_BASE_URL=${api_base}" >> "$GITHUB_ENV"
+          echo "PERMESI_TOKEN_BASE_URL=${token_base}" >> "$GITHUB_ENV"
+          echo "PERMESI_CLIENT_ID=${client_id}" >> "$GITHUB_ENV"
+
+      - name: Build CSS
+        working-directory: apps/web
+        run: npm run css:build
+
+      - name: Build Frontend
+        working-directory: apps/web
+        run: trunk build --release
+
+      - name: Generate SHA256SUMS
+        working-directory: apps/web/dist
+        shell: bash
+        run: |
+          find . -type f \
+            ! -name 'SHA256SUMS' \
+            ! -name 'SHA256SUMS.sig' \
+            ! -name 'SHA256SUMS.pem' \
+            -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4
+
+      - name: Sign Checksums
+        working-directory: apps/web/dist
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            SHA256SUMS
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: apps/web/dist/**
+
+      - name: Deploy to Cloudflare Pages (develop)
+        if: github.ref == 'refs/heads/develop'
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler pages deploy dist --project-name permesi-dev --branch develop
+
+      - name: Deploy to Cloudflare Pages (main)
+        if: github.ref == 'refs/heads/main'
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler pages deploy dist --project-name permesi-web --branch main

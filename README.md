@@ -14,6 +14,7 @@ This repository is a Rust workspace (monorepo) containing:
 - `services/permesi`: core IAM / OIDC authority
 - `services/genesis`: edge admission token mint
 - `crates/admission_token`: shared admission token contract + sign/verify helpers
+- `apps/web`: CSR-only Leptos admin console (Trunk + Tailwind, static `dist/`)
 
 ## Architecture
 
@@ -137,6 +138,14 @@ Production readiness checklist:
 
 - `cargo build -p permesi`
 - `cargo build -p genesis`
+
+## Web Console
+
+- `just web`: Tailwind build/watch + Trunk dev server.
+- `just web-build`: production build (`apps/web/dist`).
+- Node.js is only required for CSS tooling; the output is fully static.
+- Frontend env is compile-time (via `option_env!`). Set `PERMESI_API_BASE_URL`, `PERMESI_TOKEN_BASE_URL`, and `PERMESI_CLIENT_ID` before build.
+- `PERMESI_CLIENT_ID` is public (embedded in WASM); store it in GitHub Actions Variables, not Secrets.
 
 ## API Contract (OpenAPI)
 

@@ -3,12 +3,14 @@
 These notes keep contributors aligned on how this Rust workspace is organized and how to land changes safely.
 
 ## Project Structure & Module Organization
-- Workspace members: `services/permesi` (core IAM/OIDC), `services/genesis` (edge admission mint), `crates/admission_token` (shared contract + helpers).
+- Workspace members: `services/permesi` (core IAM/OIDC), `services/genesis` (edge admission mint), `crates/admission_token` (shared contract + helpers), `apps/web` (Leptos CSR frontend).
 - API artifacts live in `docs/openapi/*.json`; diagrams sit in `docs/architecture.mmd`.
 - Each service keeps code under `src/` with `bin/` entrypoints, `cli/` utilities, and `vault/` helpers; SQL/schema assets live in `services/permesi/sql/`.
+- Frontend assets live under `apps/web` with `Trunk.toml` and `public/` for static files; build output is static `dist/` (Cloudflare Pages).
 
 ## Build, Test, and Development Commands
 - `cargo build -p permesi` / `cargo build -p genesis`: compile individual services.
+- `just web` / `just web-build` / `just web-check`: run the Leptos frontend (Trunk-managed).
 - `cargo test --workspace`: run all unit/integration tests.
 - `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-features -- -D warnings`: formatting and lint gates used in CI.
 - Regenerate OpenAPI: `cargo run -p permesi --bin openapi > docs/openapi/permesi.json` and similarly for `genesis`.

@@ -35,11 +35,118 @@ build-permesi:
 build-genesis:
   cargo build -p genesis
 
+web:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  just web-clean
+  mkdir -p {{root}}/.tmp/xdg-cache
+  cd {{root}}/apps/web
+  npm run css:watch &
+  css_pid=$!
+  cleanup() {
+    if kill -0 "$css_pid" >/dev/null 2>&1; then
+      kill "$css_pid" >/dev/null 2>&1 || true
+    fi
+  }
+  trap cleanup EXIT INT TERM
+  : "${PERMESI_API_HOST:=http://localhost:8001}"
+  : "${PERMESI_TOKEN_HOST:=http://localhost:8000}"
+  : "${PERMESI_API_TOKEN_HOST:=${PERMESI_TOKEN_HOST}}"
+  : "${PERMESI_CLIENT_ID:=00000000-0000-0000-0000-000000000000}"
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
+    PERMESI_API_HOST="${PERMESI_API_HOST}" \
+    PERMESI_TOKEN_HOST="${PERMESI_TOKEN_HOST}" \
+    PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
+    PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
+    trunk serve
+
+web-build:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v trunk >/dev/null 2>&1; then
+    just web-setup
+  fi
+  just web-node-setup
+  mkdir -p {{root}}/.tmp/xdg-cache
+  cd {{root}}/apps/web
+  npm run css:build
+  : "${PERMESI_API_HOST:=http://localhost:8001}"
+  : "${PERMESI_TOKEN_HOST:=http://localhost:8000}"
+  : "${PERMESI_API_TOKEN_HOST:=${PERMESI_TOKEN_HOST}}"
+  : "${PERMESI_CLIENT_ID:=00000000-0000-0000-0000-000000000000}"
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
+    PERMESI_API_HOST="${PERMESI_API_HOST}" \
+    PERMESI_TOKEN_HOST="${PERMESI_TOKEN_HOST}" \
+    PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
+    PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
+    trunk build --release
+
+web-clean:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v trunk >/dev/null 2>&1; then
+    just web-setup
+  fi
+  just web-node-setup
+  mkdir -p {{root}}/.tmp/xdg-cache
+  cd {{root}}/apps/web
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" trunk clean --dist dist
+  npm run css:build
+  if [[ ! -s assets/app.gen.css ]]; then
+    echo "Missing generated CSS: apps/web/assets/app.gen.css" >&2
+    exit 1
+  fi
+
+web-check:
+  cargo check -p permesi_web
+
+web-setup:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  mkdir -p {{root}}/.tmp
+  rustup target add wasm32-unknown-unknown
+  if ! command -v trunk >/dev/null 2>&1; then
+    cargo install --locked trunk
+  fi
+
+web-node-setup:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Install Node.js to build Tailwind assets." >&2
+    exit 1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "Install npm to build Tailwind assets." >&2
+    exit 1
+  fi
+  cd {{root}}/apps/web
+  if [[ -f package-lock.json ]]; then
+    npm ci
+  else
+    npm install
+  fi
+
+web-css-watch:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  just web-node-setup
+  cd {{root}}/apps/web
+  npm run css:build
+  npm run css:watch
+
+web-css-build:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  just web-node-setup
+  cd {{root}}/apps/web
+  npm run css:build
+
 genesis:
-  cargo watch -x 'run -p genesis --bin genesis -- -vvv'
+  cargo watch -x 'run -p genesis --bin genesis -- --port 8000 -vvv'
 
 permesi:
-  cargo watch -x 'run -p permesi --bin permesi -- -vvv'
+  cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
 
 # ----------------------
 # OpenAPI spec generation
@@ -65,7 +172,7 @@ genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
   token="$(
-    xh '0:8080/token?client_id=00000000-0000-0000-0000-000000000000' \
+    xh '0:8000/token?client_id=00000000-0000-0000-0000-000000000000' \
       | jq -er '.token'
   )"
   python3 - "$token" <<'PY'
@@ -101,7 +208,7 @@ genesis-token:
   print(json.dumps(output, indent=2, sort_keys=True))
   PY
 
-genesis-it: dev-start
+genesis-it: dev-start-infra
   #!/usr/bin/env zsh
   set -euo pipefail
   needs_env() {
@@ -279,7 +386,9 @@ jaeger:
 jaeger_stop:
   podman stop jaeger || true
 
-dev-start: setup-network postgres vault jaeger
+dev-start: dev-start-infra web
+
+dev-start-infra: setup-network postgres vault jaeger
 
 dev-stop: vault_stop postgres_stop jaeger_stop
 

@@ -1,5 +1,12 @@
 /target/
 **/*.rs.bk
+.tmp/
+!.tmp/.gitkeep
+dist/
+node_modules/
+apps/web/dist/
+apps/web/assets/app.gen.css
+apps/web/node_modules/
 .envrc
 .otel-collector-config.yml
 fly.toml
