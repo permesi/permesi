@@ -10,6 +10,9 @@ VAULT_TRANSIT_KEY="${VAULT_TRANSIT_KEY:-users}"
 VAULT_GENESIS_TRANSIT_MOUNT="${VAULT_GENESIS_TRANSIT_MOUNT:-transit/genesis}"
 VAULT_GENESIS_TRANSIT_KEY="${VAULT_GENESIS_TRANSIT_KEY:-genesis-signing}"
 VAULT_TRANSIT_AUTO_ROTATE_PERIOD="${VAULT_TRANSIT_AUTO_ROTATE_PERIOD:-30d}"
+VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-kv}"
+VAULT_OPAQUE_SECRET_PATH="${VAULT_OPAQUE_SECRET_PATH:-permesi/opaque}"
+VAULT_OPAQUE_SEED_B64="${VAULT_OPAQUE_SEED_B64:-}"
 VAULT_DATABASE_MOUNT="${VAULT_DATABASE_MOUNT:-database}"
 VAULT_POSTGRES_HOST="${VAULT_POSTGRES_HOST:-host.containers.internal}"
 VAULT_POSTGRES_PORT="${VAULT_POSTGRES_PORT:-5432}"
@@ -49,6 +52,14 @@ vault write "${VAULT_GENESIS_TRANSIT_MOUNT}/keys/${VAULT_GENESIS_TRANSIT_KEY}/co
 
 # AppRole auth for both services (mounted at `auth/<mount>/`).
 vault auth enable -path="$VAULT_APPROLE_MOUNT" approle >/dev/null 2>&1 || true
+
+# KV v2 for OPAQUE server setup (seed-based).
+vault secrets enable -path="$VAULT_KV_MOUNT" kv-v2 >/dev/null 2>&1 || true
+if [ -z "$VAULT_OPAQUE_SEED_B64" ]; then
+    VAULT_OPAQUE_SEED_B64=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+fi
+vault kv put "${VAULT_KV_MOUNT}/${VAULT_OPAQUE_SECRET_PATH}" \
+    opaque_seed_b64="$VAULT_OPAQUE_SEED_B64" >/dev/null
 
 # Database secrets engine (Postgres) for local dev.
 #
@@ -152,6 +163,8 @@ path "${VAULT_TRANSIT_MOUNT}/encrypt/${VAULT_TRANSIT_KEY}" { capabilities = ["up
 path "${VAULT_TRANSIT_MOUNT}/decrypt/${VAULT_TRANSIT_KEY}" { capabilities = ["update"] }
 path "${VAULT_TRANSIT_MOUNT}/keys/${VAULT_TRANSIT_KEY}"    { capabilities = ["read"] }
 
+path "${VAULT_KV_MOUNT}/data/${VAULT_OPAQUE_SECRET_PATH}" { capabilities = ["read"] }
+
 path "${VAULT_DATABASE_MOUNT}/creds/permesi" { capabilities = ["read"] }
 
 path "auth/token/renew-self" { capabilities = ["update"] }
@@ -183,6 +196,8 @@ AppRole mount: ${VAULT_APPROLE_MOUNT}
 Login URL: ${VAULT_ADDR%/}/v1/auth/${VAULT_APPROLE_MOUNT}/login
 
 Database mount: ${VAULT_DATABASE_MOUNT}
+OPAQUE KV mount: ${VAULT_KV_MOUNT}
+OPAQUE secret path: ${VAULT_OPAQUE_SECRET_PATH}
 
 permesi RoleID:  ${PERMESI_ROLE_ID}
 permesi SecretID: ${PERMESI_SECRET_ID}

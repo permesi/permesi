@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 license = "BSD-3-Clause"
 build = "build.rs"
+authors = ["Team Permesi <team@permesi.dev>"]
 
 [lints]
 workspace = true
@@ -18,6 +19,12 @@ leptos = { version = "0.8", features = ["csr"] }
 leptos_router = { version = "0.8" }
 gloo-net = { version = "0.6", features = ["json"] }
 gloo-timers = "0.3"
+base64 = { workspace = true }
+opaque-ke = { workspace = true }
+rand = { workspace = true }
+argon2 = { workspace = true }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 hex = "0.4"
 sha2 = "0.10"
-web-sys = { version = "0.3.83", features = ["AbortController", "AbortSignal"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3.83", features = ["AbortController", "AbortSignal", "History", "Location", "UrlSearchParams", "Window"] }

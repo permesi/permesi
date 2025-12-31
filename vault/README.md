@@ -25,6 +25,9 @@ podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID
   - Key: `${VAULT_TRANSIT_KEY}` (default `users`, type `chacha20-poly1305`)
 - **Transit (genesis)**: mounted at `${VAULT_GENESIS_TRANSIT_MOUNT}` (default `transit/genesis`)
   - Key: `${VAULT_GENESIS_TRANSIT_KEY}` (default `genesis-signing`)
+- **KV v2 (OPAQUE seed)**: mounted at `${VAULT_KV_MOUNT}` (default `kv`)
+  - Secret: `${VAULT_OPAQUE_SECRET_PATH}` (default `permesi/opaque`)
+  - Field: `opaque_seed_b64` (base64-encoded 32 bytes)
 - **Database creds (Postgres)**: mounted at `${VAULT_DATABASE_MOUNT}` (default `database`)
   - Connections: `genesis` (DB `${VAULT_POSTGRES_DATABASE_GENESIS}`), `permesi` (DB `${VAULT_POSTGRES_DATABASE_PERMESI}`)
   - Roles (Vault database roles): `genesis`, `permesi`
@@ -37,8 +40,11 @@ Note: Postgres roles/users are created **on-demand** when credentials are reques
 - Root login: `VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root vault status`
 - AppRole login (example): `vault write auth/approle/login role_id=<ROLE_ID> secret_id=<SECRET_ID>`
 - Fetch DB creds: `vault read database/creds/genesis`
+- Read OPAQUE seed: `vault kv get ${VAULT_KV_MOUNT}/${VAULT_OPAQUE_SECRET_PATH}`
 - Print dev exports from Vault logs: `just vault-env`
 - Write dev exports into `.envrc` (overwrites it): `just vault-envrc`
+- Print Vault exports plus local dev endpoints: `just dev-env`
+- Write Vault exports plus local dev endpoints into `.envrc`: `just dev-envrc` (runs `direnv allow` if available)
 
 ## Transit key retention (optional)
 
@@ -95,6 +101,7 @@ Then pass that wrapping token to the service via `*_VAULT_WRAPPED_TOKEN`.
 The most useful env vars (all have defaults in `vault.Dockerfile` and/or `vault/bootstrap.sh`):
 
 - `VAULT_APPROLE_MOUNT`, `VAULT_TRANSIT_MOUNT`, `VAULT_TRANSIT_KEY`, `VAULT_GENESIS_TRANSIT_MOUNT`, `VAULT_GENESIS_TRANSIT_KEY`, `VAULT_TRANSIT_AUTO_ROTATE_PERIOD`, `VAULT_DATABASE_MOUNT`
+- `VAULT_KV_MOUNT`, `VAULT_OPAQUE_SECRET_PATH`, `VAULT_OPAQUE_SEED_B64`
 - `VAULT_POSTGRES_HOST`, `VAULT_POSTGRES_PORT`, `VAULT_POSTGRES_USERNAME`, `VAULT_POSTGRES_PASSWORD`
 - `VAULT_POSTGRES_DATABASE_GENESIS`, `VAULT_POSTGRES_DATABASE_PERMESI`, `VAULT_POSTGRES_SSLMODE`
 - `VAULT_POSTGRES_REASSIGN_OWNER` (role used for `REASSIGN OWNED BY ... TO ...` during revocation)

@@ -33,16 +33,86 @@ Note: running `trunk serve` directly will skip CSS generation unless you also ru
 - `/`: Dashboard
 - `/health`: Build version (git commit)
 - `/login`: Sign in
-- `/signup`: Sign up (UI-only placeholder)
+- `/signup`: Sign up
+- `/verify-email`: Verify email token + resend link
 - `/users`: Users list
 - `/users/:id`: User detail
 - any other path: Not Found
+
+## Signup + Email Verification Flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant User
+  participant Web as permesi.dev (CSR)
+  participant Genesis as genesis.permesi.dev
+  participant API as api.permesi.dev
+  participant DB as Postgres
+  participant Outbox as Email outbox worker
+  participant Mail as Email provider
+
+  Note over Web,API: Each auth POST includes X-Permesi-Zero-Token minted by Genesis.
+
+  Note over Web,API: OPAQUE signup start
+  User->>Web: Open signup form
+  Web->>Genesis: Mint zero token (signup start)
+  Genesis-->>Web: Zero token
+  Web->>API: POST /v1/auth/opaque/signup/start (registration_request)
+  API->>Genesis: POST /v1/zero-token/validate
+  Genesis-->>API: valid/invalid
+  API-->>Web: registration_response
+
+  Note over Web,API: OPAQUE signup finish
+  Web->>Genesis: Mint zero token (signup finish)
+  Genesis-->>Web: Zero token
+  Web->>API: POST /v1/auth/opaque/signup/finish (registration_record)
+  API->>Genesis: POST /v1/zero-token/validate
+  Genesis-->>API: valid/invalid
+  Note over API,DB: Single transaction
+  API->>DB: Insert user (pending_verification)
+  API->>DB: Insert verification token (hashed, TTL)
+  API->>DB: Insert email_outbox row
+  API-->>Web: 201 generic response
+
+  Outbox->>DB: Poll pending emails
+  Outbox->>Mail: Send verification email
+  Mail-->>User: Link https://permesi.dev/verify-email#token=...
+
+  Note over Web,API: Email verification
+  User->>Web: Open verify link
+  Web->>Genesis: Mint zero token (verify)
+  Genesis-->>Web: Zero token
+  Web->>API: POST /v1/auth/verify-email
+  API->>Genesis: POST /v1/zero-token/validate
+  Genesis-->>API: valid/invalid
+  API->>DB: Consume token + activate user
+  API-->>Web: 204
+
+  opt Resend verification (optional)
+    User->>Web: Request new link
+    Web->>Genesis: Mint zero token (resend)
+    Genesis-->>Web: Zero token
+    Web->>API: POST /v1/auth/resend-verification
+    API->>Genesis: POST /v1/zero-token/validate
+    Genesis-->>API: valid/invalid
+    API->>DB: Enqueue new token/outbox (cooldown)
+    API-->>Web: 204
+  end
+```
+
+Legend:
+- `registration_request`: OPAQUE client message (start)
+- `registration_response`: OPAQUE server message (start)
+- `registration_record`: OPAQUE client registration upload (finish)
 
 ## Current UI state
 
 - Home (`/`) is a placeholder ("Home").
 - Header shows only the "Sign In" link for now (Solid parity).
-- Login posts hashed credentials + admission token to `/api/auth/login`, but the session is still local-only until the API returns real session data.
+- Login performs OPAQUE (`/v1/auth/opaque/login/start` + `/finish`) and fetches a Genesis zero token for each step; the session is still local-only until the API returns real session data.
+- Signup performs an OPAQUE registration (`/v1/auth/opaque/signup/start` + `/finish`) with Genesis zero tokens and shows a verify-email prompt.
+- Verify email reads the fragment token and POSTs to `/v1/auth/verify-email`; resend is available on the same page (both require zero tokens).
 - Auth is UX-only; real access control must be enforced by the API.
 
 ## API base URL configuration
@@ -51,6 +121,7 @@ Note: running `trunk serve` directly will skip CSS generation unless you also ru
 - Fallback: `PERMESI_API_HOST` is also supported.
 - Default: empty base URL (uses relative `/api/...`).
 - CI default: `main` builds use `https://api.permesi.com`, `develop` builds use `https://api.permesi.dev` unless `PERMESI_API_BASE_URL` is set as a GitHub Actions Variable.
+- OPAQUE server identifier: `PERMESI_OPAQUE_SERVER_ID` (default `api.permesi.dev`).
 
 ## Admission token configuration
 

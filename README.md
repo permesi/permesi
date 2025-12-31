@@ -31,13 +31,13 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 #### 2. `permesi` (The Core / "The Authority")
 * **Role:** The OIDC Authority.
-* **Responsibility:** Validates User Credentials and OIDC flows.
-* **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling.
+* **Responsibility:** OPAQUE signup/login, email verification, and OIDC flows.
+* **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Separately validates short-lived **Zero Tokens** by calling the Genesis validation endpoint for auth POSTs.
 * **Output:** Issues standard OIDC Access/ID Tokens (JWTs).
 
 #### 3. Database
 * **Role:** System of Record.
-* **Usage:** Primarily for **Audit Logs** and **Revocation Lists**. It is **not** required for the hot-path verification of Admission Tokens, ensuring high availability even during DB latency spikes.
+* **Usage:** Stores user records (OPAQUE registration records), email verification tokens/outbox, plus **Audit Logs** and **Revocation Lists**. It is **not** required for the hot-path verification of Admission Tokens, ensuring high availability even during DB latency spikes.
 
 ---
 
@@ -45,6 +45,7 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 - **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.
 - **permesi encryption:** Vault Transit key type `chacha20-poly1305` (default `transit/permesi` / key `users`) for encrypt/decrypt operations.
+- **OPAQUE (user auth):** Client-side OPAQUE; server stores only the registration record. The server setup seed is stored in Vault KV v2 (`opaque_seed_b64`).
 
 ## Admission Token Verification (Offline)
 
@@ -97,36 +98,50 @@ flowchart LR
   P -.->|"Optional revocation check (jti)"| DB
 ```
 
-## The Authentication Flow
+## User Authentication (OPAQUE + Zero Token)
+
+All auth POSTs require a Genesis zero token (validated online). Admission token verification for other APIs remains offline.
 
 ```mermaid
 sequenceDiagram
     participant U as User / Client
     participant G as Genesis (Edge)
     participant P as Permesi (Core)
-    participant DB as Audit DB
+    participant DB as Postgres
 
-    Note over U, G: 1. Admission Phase
-    U->>G: Connection Request
-    G->>G: Check Rate Limits / Abuse
-    G-->>U: Signed Admission Token (Short-lived)
+    Note over U, G: Zero token mint
+    U->>G: Request zero token
+    G-->>U: Zero token
 
-    Note over U, P: 2. Authorization Phase
-    U->>P: Login (Creds) + Admission Token
-    P->>P: Verify Admission Sig (Offline)
-    alt Invalid Admission
-        P-->>U: 401 Unauthorized (Drop)
-    else Valid Admission
-        P->>DB: Read Hash (Async/Cached)
-        P->>P: Verify Credentials
-        P-->>U: OIDC Access Token (JWT)
-        P->>DB: Async Audit Log
-    end
+    Note over U, P: OPAQUE login
+    U->>P: /v1/auth/opaque/login/start + zero token
+    P->>G: /v1/zero-token/validate
+    G-->>P: valid/invalid
+    P-->>U: credential_response + login_id
+
+    U->>P: /v1/auth/opaque/login/finish + zero token
+    P->>G: /v1/zero-token/validate
+    G-->>P: valid/invalid
+    P->>P: OPAQUE finish (no password sent)
+    P-->>U: 204
 ```
+
+Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
+
+### Auth endpoints (quick scan)
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/v1/auth/opaque/signup/start` | OPAQUE registration start; requires zero token |
+| `POST` | `/v1/auth/opaque/signup/finish` | OPAQUE registration finish; requires zero token |
+| `POST` | `/v1/auth/opaque/login/start` | OPAQUE login start; requires zero token |
+| `POST` | `/v1/auth/opaque/login/finish` | OPAQUE login finish; requires zero token |
+| `POST` | `/v1/auth/verify-email` | Consume email verification token; requires zero token |
+| `POST` | `/v1/auth/resend-verification` | Resend verification link; requires zero token |
 
 ## Vault Dependency
 
-Vault is required for both services in production (AppRole auth, dynamic DB creds, transit encryption). Running without Vault is not supported.
+Vault is required for both services in production (AppRole auth, dynamic DB creds, transit encryption, and the OPAQUE seed in KV v2). Running without Vault is not supported.
 
 Production readiness checklist:
 - HA cluster with tested failover.
@@ -146,6 +161,24 @@ Production readiness checklist:
 - Node.js is only required for CSS tooling; the output is fully static.
 - Frontend env is compile-time (via `option_env!`). Set `PERMESI_API_BASE_URL`, `PERMESI_TOKEN_BASE_URL`, and `PERMESI_CLIENT_ID` before build.
 - `PERMESI_CLIENT_ID` is public (embedded in WASM); store it in GitHub Actions Variables, not Secrets.
+
+## Local Development (Full Flow)
+
+Default ports: genesis `8000`, permesi `8001`, web `8080`.
+
+1) One command: `just dev-start` (infra + `.envrc` + web).
+2) Run services: `just genesis` and `just permesi` (they auto-source `.envrc`, so direnv is optional).
+
+Alternative: `just dev-start-all` starts a tmux session (`permesi-dev`) with genesis + permesi + web panes.
+If you're already inside tmux, it creates/uses a window named `permesi-dev` instead of nesting.
+Re-running attaches/selects the existing session/window; stop with `tmux kill-session -t permesi-dev`.
+
+If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also runs `direnv allow` if available).
+
+`just dev-envrc` emits Vault credentials plus local endpoints:
+- `PERMESI_ADMISSION_PASERK_URL=http://localhost:8000/paserk.json`
+- `PERMESI_ZERO_TOKEN_VALIDATE_URL=http://localhost:8000/v1/zero-token/validate`
+- `PERMESI_FRONTEND_BASE_URL=http://localhost:8080`
 
 ## API Contract (OpenAPI)
 

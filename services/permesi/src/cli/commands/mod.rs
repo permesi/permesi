@@ -63,6 +63,7 @@ pub fn new() -> Command {
 
     let command = with_admission_args(command);
     let command = with_vault_args(command);
+    let command = with_auth_args(command);
     with_logging_args(command)
 }
 
@@ -146,6 +147,69 @@ fn with_vault_args(command: Command) -> Command {
                 .long("vault-wrapped-token")
                 .help("Vault wrapped token")
                 .env("PERMESI_VAULT_WRAPPED_TOKEN"),
+        )
+}
+
+fn with_auth_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("zero-token-validate-url")
+                .long("zero-token-validate-url")
+                .help("Genesis zero token validation URL")
+                .env("PERMESI_ZERO_TOKEN_VALIDATE_URL")
+                .default_value("https://genesis.permesi.dev/v1/zero-token/validate"),
+        )
+        .arg(
+            Arg::new("frontend-base-url")
+                .long("frontend-base-url")
+                .help("Frontend base URL used for verification links")
+                .env("PERMESI_FRONTEND_BASE_URL")
+                .default_value("https://permesi.dev"),
+        )
+        .arg(
+            Arg::new("email-token-ttl-seconds")
+                .long("email-token-ttl-seconds")
+                .help("Email verification token TTL in seconds")
+                .env("PERMESI_EMAIL_TOKEN_TTL_SECONDS")
+                .default_value("1800")
+                .value_parser(clap::value_parser!(i64)),
+        )
+        .arg(
+            Arg::new("email-resend-cooldown-seconds")
+                .long("email-resend-cooldown-seconds")
+                .help("Cooldown before resending verification emails")
+                .env("PERMESI_EMAIL_RESEND_COOLDOWN_SECONDS")
+                .default_value("60")
+                .value_parser(clap::value_parser!(i64)),
+        )
+        .arg(
+            Arg::new("opaque-kv-mount")
+                .long("opaque-kv-mount")
+                .help("Vault KV v2 mount containing the OPAQUE seed")
+                .env("PERMESI_OPAQUE_KV_MOUNT")
+                .default_value("kv"),
+        )
+        .arg(
+            Arg::new("opaque-kv-path")
+                .long("opaque-kv-path")
+                .help("Vault KV v2 path containing the OPAQUE seed")
+                .env("PERMESI_OPAQUE_KV_PATH")
+                .default_value("permesi/opaque"),
+        )
+        .arg(
+            Arg::new("opaque-server-id")
+                .long("opaque-server-id")
+                .help("OPAQUE server identifier")
+                .env("PERMESI_OPAQUE_SERVER_ID")
+                .default_value("api.permesi.dev"),
+        )
+        .arg(
+            Arg::new("opaque-login-ttl-seconds")
+                .long("opaque-login-ttl-seconds")
+                .help("TTL for OPAQUE login state storage")
+                .env("PERMESI_OPAQUE_LOGIN_TTL_SECONDS")
+                .default_value("300")
+                .value_parser(clap::value_parser!(u64)),
         )
 }
 

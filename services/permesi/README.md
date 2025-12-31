@@ -44,6 +44,41 @@ cargo run -p permesi --bin permesi -- \
   --vault-wrapped-token "$PERMESI_WRAPPED_TOKEN"
 ```
 
+## OPAQUE auth + email verification
+
+`permesi` uses OPAQUE for signup/login. Passwords never leave the client; the database stores only
+the OPAQUE registration record (`opaque_registration_record`).
+
+Endpoints:
+
+- `POST /v1/auth/opaque/signup/start`
+- `POST /v1/auth/opaque/signup/finish`
+- `POST /v1/auth/opaque/login/start`
+- `POST /v1/auth/opaque/login/finish`
+- `POST /v1/auth/verify-email`
+- `POST /v1/auth/resend-verification`
+
+All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated via
+`--zero-token-validate-url` (default: `https://genesis.permesi.dev/v1/zero-token/validate`).
+
+### OPAQUE seed (Vault KV v2)
+
+OPAQUE server setup is derived from a 32-byte seed stored in Vault KV v2:
+
+- Mount: `--opaque-kv-mount` / `PERMESI_OPAQUE_KV_MOUNT` (default: `kv`)
+- Path: `--opaque-kv-path` / `PERMESI_OPAQUE_KV_PATH` (default: `permesi/opaque`)
+- Field: `opaque_seed_b64` (base64-encoded 32 bytes)
+
+The dev bootstrap (`vault/bootstrap.sh`) seeds this automatically for local runs.
+
+### Auth config flags
+
+- `--frontend-base-url` / `PERMESI_FRONTEND_BASE_URL` (verification link base, default `https://permesi.dev`)
+- `--email-token-ttl-seconds` / `PERMESI_EMAIL_TOKEN_TTL_SECONDS`
+- `--email-resend-cooldown-seconds` / `PERMESI_EMAIL_RESEND_COOLDOWN_SECONDS`
+- `--opaque-server-id` / `PERMESI_OPAQUE_SERVER_ID` (default `api.permesi.dev`)
+- `--opaque-login-ttl-seconds` / `PERMESI_OPAQUE_LOGIN_TTL_SECONDS`
+
 ## Admission Token Verification
 
 - `permesi` verifies Admission Tokens offline using the PASERK keyset (file/string/URL).

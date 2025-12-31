@@ -1,6 +1,12 @@
 pub mod health;
 pub use self::health::health;
 
+pub mod auth;
+pub use self::auth::{
+    opaque_login_finish, opaque_login_start, opaque_signup_finish, opaque_signup_start,
+    resend_verification, verify_email,
+};
+
 pub mod user_register;
 pub use self::user_register::register;
 

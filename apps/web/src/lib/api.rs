@@ -39,20 +39,56 @@ pub async fn get_json_with_base<T: DeserializeOwned>(
     handle_json_response(response).await
 }
 
-pub async fn post_json_no_response<B: Serialize>(path: &str, body: &B) -> Result<(), AppError> {
+pub async fn post_json_with_headers<B: Serialize>(
+    path: &str,
+    body: &B,
+    headers: &[(String, String)],
+) -> Result<(), AppError> {
     let url = build_url(path);
     let payload = to_string(body)
         .map_err(|err| AppError::Serialization(format!("Failed to encode request: {err}")))?;
     let response = send_with_timeout(move |signal| {
-        Request::post(&url)
+        let mut builder = Request::post(&url)
             .header("Content-Type", "application/json")
-            .abort_signal(Some(signal))
+            .abort_signal(Some(signal));
+
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+
+        builder
             .body(payload)
             .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
     })
     .await?;
 
     handle_empty_response(response).await
+}
+
+pub async fn post_json_with_headers_response<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+    headers: &[(String, String)],
+) -> Result<T, AppError> {
+    let url = build_url(path);
+    let payload = to_string(body)
+        .map_err(|err| AppError::Serialization(format!("Failed to encode request: {err}")))?;
+    let response = send_with_timeout(move |signal| {
+        let mut builder = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .abort_signal(Some(signal));
+
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+
+        builder
+            .body(payload)
+            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
+    })
+    .await?;
+
+    handle_json_response(response).await
 }
 
 fn build_url(path: &str) -> String {

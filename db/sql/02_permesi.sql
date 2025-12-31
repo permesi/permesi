@@ -1,4 +1,5 @@
--- psql -U <user> -d permesi -f schema.sql
+-- Permesi schema bootstrap for dev containers.
+-- Keep in sync with services/permesi/sql/schema.sql.
 
 DROP TABLE IF EXISTS email_outbox;
 DROP TABLE IF EXISTS email_verification_tokens;

@@ -16,6 +16,7 @@ Token Zero generator (edge admission token mint).
 - Publishes its public keys as a **PASERK keyset** at `GET /paserk.json` so `permesi` can verify tokens offline
 - Persists minted token IDs (`jti`) and request metadata in Postgres for short-term validation/auditing
 - Uses Vault (AppRole) to obtain DB credentials and keeps Vault leases renewed at runtime
+- Acts as the **Zero Token** mint for user-facing auth flows; `permesi` validates these tokens via `POST /v1/zero-token/validate`
 
 ## Vault requirement
 
@@ -32,6 +33,7 @@ In the workspace “Split-Trust” flow:
 2. `genesis` returns a signed Admission Token (short-lived PASETO)
 3. Client presents that token to `permesi`
 4. `permesi` verifies it offline (`sig` + `exp` + `aud` + `iss`) using the PASERK keyset
+5. For auth POSTs (OPAQUE signup/login, verify/resend), `permesi` validates a short-lived zero token online.
 
 ## HTTP API
 
@@ -40,6 +42,7 @@ Implemented routes (see `services/genesis/src/genesis/mod.rs`):
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/token?client_id=<uuid>` | Mints an Admission Token and stores `jti` + metadata in Postgres |
+| `POST` | `/v1/zero-token/validate` | Validates a zero token for `permesi` auth flows (internal-only) |
 | `GET` | `/paserk.json` | PASERK keyset derived from the configured signing key |
 | `GET` | `/health` | Checks Postgres connectivity; returns build info; sets `X-App` header |
 | `OPTIONS` | `/health` | Health preflight |
@@ -49,6 +52,25 @@ Note: there is no public token introspection endpoint. `jti` + metadata are pers
 and potential future revocation tooling.
 The `/token` response includes `Cache-Control: no-store` to discourage intermediaries from caching
 admission tokens.
+
+### `/v1/zero-token/validate` (internal-only)
+
+This endpoint is **not** intended for browser or public client use. It exists solely so `permesi`
+can validate short-lived zero tokens before accepting auth POSTs.
+
+Operational expectations:
+- Restrict access to `permesi` (VPC allowlist, service mesh policy, or firewall).
+- If using HAProxy, apply an IP allowlist at the edge:
+  ```
+  acl zero_token_validate path -i /v1/zero-token/validate
+  acl permesi_ips src 10.0.10.5 10.0.10.6
+  http-request deny if zero_token_validate !permesi_ips
+  ```
+- Apply aggressive rate limits and monitoring; treat spikes as abuse signals.
+- Do not expose from the public edge; clients should only call `/token`.
+
+The endpoint returns only validity (no introspection payload) and should remain
+minimal to reduce enumeration or amplification risk.
 
 ## Configuration
 

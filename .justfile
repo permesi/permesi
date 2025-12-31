@@ -144,9 +144,19 @@ web-css-build:
   npm run css:build
 
 genesis:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -f {{root}}/.envrc ]]; then
+    source {{root}}/.envrc
+  fi
   cargo watch -x 'run -p genesis --bin genesis -- --port 8000 -vvv'
 
 permesi:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -f {{root}}/.envrc ]]; then
+    source {{root}}/.envrc
+  fi
   cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
 
 # ----------------------
@@ -323,6 +333,16 @@ vault-env:
     "export PERMESI_VAULT_ROLE_ID=\"${permesi_role_id}\"" \
     "export PERMESI_VAULT_SECRET_ID=\"${permesi_secret_id}\""
 
+dev-env:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  just --quiet vault-env
+  printf '\n'
+  printf '%s\n' \
+    "export PERMESI_ADMISSION_PASERK_URL=\"http://localhost:8000/paserk.json\"" \
+    "export PERMESI_ZERO_TOKEN_VALIDATE_URL=\"http://localhost:8000/v1/zero-token/validate\"" \
+    "export PERMESI_FRONTEND_BASE_URL=\"http://localhost:8080\""
+
 vault-envrc:
   #!/usr/bin/env zsh
   set -e
@@ -331,6 +351,18 @@ vault-envrc:
   just --quiet vault-env > "$tmp"
   mv "$tmp" .envrc
   echo "Wrote .envrc from Vault logs."
+
+dev-envrc:
+  #!/usr/bin/env zsh
+  set -e
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+  just --quiet dev-env > "$tmp"
+  mv "$tmp" .envrc
+  if command -v direnv >/dev/null 2>&1; then
+    direnv allow >/dev/null 2>&1 || true
+  fi
+  echo "Wrote .envrc from Vault logs + dev endpoints."
 
 vault_stop:
   podman stop vault || true
@@ -387,7 +419,46 @@ jaeger:
 jaeger_stop:
   podman stop jaeger || true
 
-dev-start: dev-start-infra web
+dev-start:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  just dev-start-infra
+  just dev-envrc
+  just web
+
+dev-start-all:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux not found. Install tmux or run: just dev-start" >&2
+    exit 1
+  fi
+  session="permesi-dev"
+  if [[ -n "${TMUX-}" ]]; then
+    just dev-start-infra
+    just dev-envrc
+    if tmux list-windows -F '#W' | rg -q "^${session}$"; then
+      tmux select-window -t "$session"
+      exit 0
+    fi
+    tmux new-window -n "$session" -c "{{root}}" "just genesis"
+    tmux split-window -t "$session" -h -c "{{root}}" "just permesi"
+    tmux split-window -t "$session" -v -c "{{root}}" "just web"
+    tmux select-layout -t "$session" tiled
+    tmux select-window -t "$session"
+    exit 0
+  fi
+  if tmux has-session -t "$session" 2>/dev/null; then
+    tmux attach -t "$session"
+    exit 0
+  fi
+  just dev-start-infra
+  just dev-envrc
+  tmux new-session -d -s "$session" -c "{{root}}" "just genesis"
+  tmux split-window -t "$session" -h -c "{{root}}" "just permesi"
+  tmux split-window -t "$session" -v -c "{{root}}" "just web"
+  tmux select-layout -t "$session" tiled
+  tmux attach -t "$session"
 
 dev-start-infra: setup-network postgres vault jaeger
 

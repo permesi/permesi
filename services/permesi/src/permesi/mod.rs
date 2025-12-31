@@ -3,7 +3,7 @@
 use crate::{
     cli::globals::GlobalArgs,
     permesi::handlers::{
-        health, health::__path_health, user_login, user_login::__path_login, user_register,
+        auth, health, health::__path_health, user_login, user_login::__path_login, user_register,
         user_register::__path_register,
     },
     vault,
@@ -35,6 +35,7 @@ use tracing::{Span, info, info_span};
 use ulid::Ulid;
 use utoipa::OpenApi;
 
+pub(crate) mod email;
 pub(crate) mod handlers;
 
 #[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
@@ -51,10 +52,35 @@ pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CAR
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(health, register, login),
-    components(schemas(health::Health, user_register::UserRegister, user_login::UserLogin)),
+    paths(
+        health,
+        register,
+        login,
+        auth::opaque_signup_start,
+        auth::opaque_signup_finish,
+        auth::opaque_login_start,
+        auth::opaque_login_finish,
+        auth::verify_email,
+        auth::resend_verification
+    ),
+    components(schemas(
+        health::Health,
+        user_register::UserRegister,
+        user_login::UserLogin,
+        auth::OpaqueSignupStartRequest,
+        auth::OpaqueSignupStartResponse,
+        auth::OpaqueSignupFinishRequest,
+        auth::OpaqueSignupFinishResponse,
+        auth::OpaqueLoginStartRequest,
+        auth::OpaqueLoginStartResponse,
+        auth::OpaqueLoginFinishRequest,
+        auth::OpaqueLoginFinishResponse,
+        auth::VerifyEmailRequest,
+        auth::ResendVerificationRequest
+    )),
     tags(
-        (name = "permesi", description = "Identity and access management API")
+        (name = "permesi", description = "Identity and access management API"),
+        (name = "auth", description = "Signup and email verification")
     )
 )]
 struct ApiDoc;
@@ -72,6 +98,7 @@ pub async fn new(
     dsn: String,
     globals: &GlobalArgs,
     admission: Arc<handlers::AdmissionVerifier>,
+    auth_config: auth::AuthConfig,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -88,8 +115,35 @@ pub async fn new(
         .await
         .context("Failed to connect to database")?;
 
+    let opaque_seed = vault::kv::read_opaque_seed(
+        globals,
+        auth_config.opaque_kv_mount(),
+        auth_config.opaque_kv_path(),
+    )
+    .await
+    .context("Failed to load OPAQUE seed from Vault")?;
+    let opaque_state = auth::OpaqueState::from_seed(
+        opaque_seed,
+        auth_config.opaque_server_id().to_string(),
+        Duration::from_secs(auth_config.opaque_login_ttl_seconds()),
+    );
+    let auth_state = Arc::new(
+        auth::AuthState::new(auth_config, opaque_state, Arc::new(auth::NoopRateLimiter))
+            .context("Failed to initialize auth state")?,
+    );
+
+    email::spawn_outbox_worker(
+        pool.clone(),
+        Arc::new(email::LogEmailSender),
+        email::EmailWorkerConfig::new(),
+    );
+
     let cors = CorsLayer::new()
-        .allow_headers([CONTENT_TYPE, AUTHORIZATION])
+        .allow_headers([
+            CONTENT_TYPE,
+            AUTHORIZATION,
+            HeaderName::from_static("x-permesi-zero-token"),
+        ])
         .allow_methods([Method::GET, Method::POST])
         .allow_origin(Any);
 
@@ -97,6 +151,27 @@ pub async fn new(
         .route("/", get(|| async { "🌱" }))
         .route("/user/register", post(handlers::register))
         .route("/user/login", post(handlers::login))
+        .route(
+            "/v1/auth/opaque/signup/start",
+            post(handlers::opaque_signup_start),
+        )
+        .route(
+            "/v1/auth/opaque/signup/finish",
+            post(handlers::opaque_signup_finish),
+        )
+        .route(
+            "/v1/auth/opaque/login/start",
+            post(handlers::opaque_login_start),
+        )
+        .route(
+            "/v1/auth/opaque/login/finish",
+            post(handlers::opaque_login_finish),
+        )
+        .route("/v1/auth/verify-email", post(handlers::verify_email))
+        .route(
+            "/v1/auth/resend-verification",
+            post(handlers::resend_verification),
+        )
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestHeaderLayer::if_not_present(
@@ -108,6 +183,7 @@ pub async fn new(
                 )))
                 .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
+                .layer(Extension(auth_state.clone()))
                 .layer(Extension(admission.clone()))
                 .layer(Extension(globals.clone()))
                 .layer(Extension(pool.clone())),

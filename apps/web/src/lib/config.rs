@@ -3,6 +3,7 @@ pub struct AppConfig {
     pub api_base_url: String,
     pub token_base_url: String,
     pub client_id: String,
+    pub opaque_server_id: String,
 }
 
 impl AppConfig {
@@ -15,11 +16,13 @@ impl AppConfig {
             .or(option_env!("PERMESI_API_TOKEN_HOST"))
             .unwrap_or("");
         let client_id = option_env!("PERMESI_CLIENT_ID").unwrap_or("");
+        let opaque_server_id = option_env!("PERMESI_OPAQUE_SERVER_ID").unwrap_or("api.permesi.dev");
 
         Self {
             api_base_url: api_base_url.to_string(),
             token_base_url: token_base_url.to_string(),
             client_id: client_id.to_string(),
+            opaque_server_id: opaque_server_id.to_string(),
         }
     }
 }

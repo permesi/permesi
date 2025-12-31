@@ -19,6 +19,14 @@ pub struct Args {
     pub admission_paserk_url: Option<String>,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
+    pub zero_token_validate_url: String,
+    pub frontend_base_url: String,
+    pub email_token_ttl_seconds: i64,
+    pub email_resend_cooldown_seconds: i64,
+    pub opaque_kv_mount: String,
+    pub opaque_kv_path: String,
+    pub opaque_server_id: String,
+    pub opaque_login_ttl_seconds: u64,
 }
 
 /// Execute the server action.
@@ -93,5 +101,23 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    permesi::new(args.port, dsn.to_string(), &globals, admission_verifier).await
+    let auth_config = permesi::handlers::auth::AuthConfig::new(
+        args.zero_token_validate_url,
+        args.frontend_base_url,
+    )
+    .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
+    .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
+    .with_opaque_kv_mount(args.opaque_kv_mount)
+    .with_opaque_kv_path(args.opaque_kv_path)
+    .with_opaque_server_id(args.opaque_server_id)
+    .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
+
+    permesi::new(
+        args.port,
+        dsn.to_string(),
+        &globals,
+        admission_verifier,
+        auth_config,
+    )
+    .await
 }

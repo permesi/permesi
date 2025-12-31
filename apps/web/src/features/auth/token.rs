@@ -27,3 +27,7 @@ pub async fn fetch_admission_token() -> Result<String, AppError> {
     let response: TokenResponse = get_json_with_base(&config.token_base_url, &path).await?;
     Ok(response.token)
 }
+
+pub async fn fetch_zero_token() -> Result<String, AppError> {
+    fetch_admission_token().await
+}

@@ -1,11 +1,19 @@
 use crate::app_lib::AppError;
+use crate::app_lib::config::AppConfig;
 use crate::components::{Alert, AlertKind, AppShell, Button, Spinner};
+use crate::features::auth::client;
+use crate::features::auth::opaque::{OpaqueSuite, identifiers, ksf, normalize_email};
 use crate::features::auth::state::use_auth;
-use crate::features::auth::types::LoginRequest;
-use crate::features::auth::{client, crypto, token};
+use crate::features::auth::token;
+use crate::features::auth::types::{
+    OpaqueLoginFinishRequest, OpaqueLoginStartRequest, UserSession,
+};
+use base64::Engine;
 use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
+use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
+use rand::rngs::OsRng;
 
 #[derive(Clone)]
 struct LoginInput {
@@ -24,14 +32,52 @@ pub fn LoginPage() -> impl IntoView {
     let login_action = Action::new_local(move |input: &LoginInput| {
         let input = input.clone();
         async move {
-            let token_value = token::fetch_admission_token().await?;
-            let hashed_password = crypto::hash_password(&input.password);
-            let request = LoginRequest {
-                email: input.email,
-                password: hashed_password,
-                token: token_value,
+            let config = AppConfig::load();
+            let client_id = normalize_email(&input.email);
+            let server_id = config.opaque_server_id;
+
+            let mut rng = OsRng;
+            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
+                .map_err(|_| AppError::Config("Unable to start secure login.".to_string()))?;
+            let start_request = OpaqueLoginStartRequest {
+                email: input.email.clone(),
+                credential_request: base64::engine::general_purpose::STANDARD
+                    .encode(start.message.serialize()),
             };
-            client::login(&request).await
+            let zero_token = token::fetch_zero_token().await?;
+            let start_response = client::opaque_login_start(&start_request, &zero_token).await?;
+
+            let response_bytes = base64::engine::general_purpose::STANDARD
+                .decode(start_response.credential_response)
+                .map_err(|_| AppError::Config("Invalid login response.".to_string()))?;
+            let credential_response =
+                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
+                    AppError::Config("Unable to complete secure login.".to_string())
+                })?;
+
+            let ksf_params = ksf();
+            let params = ClientLoginFinishParameters::new(
+                None,
+                identifiers(client_id.as_bytes(), server_id.as_bytes()),
+                Some(&ksf_params),
+            );
+            let finish = start
+                .state
+                .finish(input.password.as_bytes(), credential_response, params)
+                .map_err(|_| AppError::Config("Unable to complete secure login.".to_string()))?;
+
+            let finish_request = OpaqueLoginFinishRequest {
+                login_id: start_response.login_id,
+                email: input.email.clone(),
+                credential_finalization: base64::engine::general_purpose::STANDARD
+                    .encode(finish.message.serialize()),
+            };
+            let zero_token = token::fetch_zero_token().await?;
+            client::opaque_login_finish(&finish_request, &zero_token).await?;
+            Ok(UserSession {
+                user_id: client_id,
+                access_token: String::new(),
+            })
         }
     });
 
@@ -115,14 +161,22 @@ pub fn LoginPage() -> impl IntoView {
                     error
                         .get()
                         .map(|err| {
+                            let message = format_error(&err);
                             view! {
                                 <div class="mt-4">
-                                    <Alert kind=AlertKind::Error message=err.to_string() />
+                                    <Alert kind=AlertKind::Error message=message />
                                 </div>
                             }
                         })
                 }}
             </form>
         </AppShell>
+    }
+}
+
+fn format_error(err: &AppError) -> String {
+    match err {
+        AppError::Config(message) => message.clone(),
+        _ => err.to_string(),
     }
 }
