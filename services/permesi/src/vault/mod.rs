@@ -3,7 +3,7 @@ pub mod kv;
 pub mod renew;
 pub mod transit;
 
-use crate::permesi::APP_USER_AGENT;
+use crate::api::APP_USER_AGENT;
 use anyhow::Result;
 use tracing::instrument;
 

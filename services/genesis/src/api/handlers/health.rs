@@ -1,4 +1,4 @@
-use crate::permesi::GIT_COMMIT_HASH;
+use crate::api::GIT_COMMIT_HASH;
 use axum::{
     body::Body,
     extract::Extension,
@@ -25,7 +25,7 @@ pub struct Health {
         (status = 200, description = "Database connection is healthy", body = [Health]),
         (status = 503, description = "Database connection is unhealthy", body = [Health])
     ),
-    tag= "health"
+    tag = "health",
 )]
 // axum handler for health
 pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoResponse {
@@ -91,7 +91,7 @@ pub async fn health(method: Method, pool: Extension<PgPool>) -> impl IntoRespons
             headers
         })
         .map_err(|err| {
-            error!("Failed to parse X-App header: {}", err);
+            debug!("Failed to parse X-App header: {}", err);
         });
 
     // Unwrap the headers or provide a default value (empty headers) in case of an error

@@ -1,28 +1,21 @@
-#![allow(clippy::needless_for_each)]
-
 use crate::{
+    api::handlers::{auth, health},
     cli::globals::GlobalArgs,
-    permesi::handlers::{
-        auth, health, health::__path_health, user_login, user_login::__path_login, user_register,
-        user_register::__path_register,
-    },
     vault,
 };
 use anyhow::{Context, Result};
 use axum::{
-    Extension, Router,
+    Extension,
     body::Body,
     extract::MatchedPath,
     http::{
         HeaderName, HeaderValue, Method, Request,
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
-    routing::{get, post},
+    routing::{get, options},
 };
 use sqlx::postgres::PgPoolOptions;
-use std::env;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -33,10 +26,20 @@ use tower_http::{
 };
 use tracing::{Span, info, info_span};
 use ulid::Ulid;
-use utoipa::OpenApi;
-
+use utoipa_axum::router::OpenApiRouter;
+// Keep these internal to the crate while allowing CLI/server wiring to reference them.
 pub(crate) mod email;
 pub(crate) mod handlers;
+// OpenAPI router wiring and route registration live in openapi.rs.
+mod openapi;
+
+pub use openapi::openapi;
+
+/// Build the API router with all documented routes registered.
+#[must_use]
+pub fn router() -> OpenApiRouter {
+    openapi::api_router()
+}
 
 #[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
 pub mod built_info {
@@ -50,46 +53,6 @@ pub const GIT_COMMIT_HASH: &str = match built_info::GIT_COMMIT_HASH {
 
 pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        health,
-        register,
-        login,
-        auth::opaque_signup_start,
-        auth::opaque_signup_finish,
-        auth::opaque_login_start,
-        auth::opaque_login_finish,
-        auth::verify_email,
-        auth::resend_verification
-    ),
-    components(schemas(
-        health::Health,
-        user_register::UserRegister,
-        user_login::UserLogin,
-        auth::OpaqueSignupStartRequest,
-        auth::OpaqueSignupStartResponse,
-        auth::OpaqueSignupFinishRequest,
-        auth::OpaqueSignupFinishResponse,
-        auth::OpaqueLoginStartRequest,
-        auth::OpaqueLoginStartResponse,
-        auth::OpaqueLoginFinishRequest,
-        auth::OpaqueLoginFinishResponse,
-        auth::VerifyEmailRequest,
-        auth::ResendVerificationRequest
-    )),
-    tags(
-        (name = "permesi", description = "Identity and access management API"),
-        (name = "auth", description = "Signup and email verification")
-    )
-)]
-struct ApiDoc;
-
-#[must_use]
-pub fn openapi() -> utoipa::openapi::OpenApi {
-    ApiDoc::openapi()
-}
-
 /// Start the server
 /// # Errors
 /// Return error if failed to start the server
@@ -99,6 +62,7 @@ pub async fn new(
     globals: &GlobalArgs,
     admission: Arc<handlers::AdmissionVerifier>,
     auth_config: auth::AuthConfig,
+    email_config: email::EmailWorkerConfig,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -132,11 +96,9 @@ pub async fn new(
             .context("Failed to initialize auth state")?,
     );
 
-    email::spawn_outbox_worker(
-        pool.clone(),
-        Arc::new(email::LogEmailSender),
-        email::EmailWorkerConfig::new(),
-    );
+    // Background worker polls email_outbox (DB-backed queue) for pending rows,
+    // delivers/logs them, and retries failures with exponential backoff.
+    email::spawn_outbox_worker(pool.clone(), Arc::new(email::LogEmailSender), email_config);
 
     let cors = CorsLayer::new()
         .allow_headers([
@@ -147,31 +109,12 @@ pub async fn new(
         .allow_methods([Method::GET, Method::POST])
         .allow_origin(Any);
 
-    let app = Router::new()
+    // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
+    // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
+    let (router, _openapi) = router().split_for_parts();
+    let app = router
         .route("/", get(|| async { "🌱" }))
-        .route("/user/register", post(handlers::register))
-        .route("/user/login", post(handlers::login))
-        .route(
-            "/v1/auth/opaque/signup/start",
-            post(handlers::opaque_signup_start),
-        )
-        .route(
-            "/v1/auth/opaque/signup/finish",
-            post(handlers::opaque_signup_finish),
-        )
-        .route(
-            "/v1/auth/opaque/login/start",
-            post(handlers::opaque_login_start),
-        )
-        .route(
-            "/v1/auth/opaque/login/finish",
-            post(handlers::opaque_login_finish),
-        )
-        .route("/v1/auth/verify-email", post(handlers::verify_email))
-        .route(
-            "/v1/auth/resend-verification",
-            post(handlers::resend_verification),
-        )
+        .route("/health", options(health::health))
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestHeaderLayer::if_not_present(
@@ -188,7 +131,6 @@ pub async fn new(
                 .layer(Extension(globals.clone()))
                 .layer(Extension(pool.clone())),
         )
-        .route("/health", get(handlers::health).options(handlers::health))
         .layer(Extension(pool));
 
     let listener = TcpListener::bind(format!("::0:{port}")).await?;

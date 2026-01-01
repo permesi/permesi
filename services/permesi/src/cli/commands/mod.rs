@@ -183,6 +183,46 @@ fn with_auth_args(command: Command) -> Command {
                 .value_parser(clap::value_parser!(i64)),
         )
         .arg(
+            Arg::new("email-outbox-poll-seconds")
+                .long("email-outbox-poll-seconds")
+                .help("Email outbox poll interval in seconds")
+                .env("PERMESI_EMAIL_OUTBOX_POLL_SECONDS")
+                .default_value("5")
+                .value_parser(clap::value_parser!(u64)),
+        )
+        .arg(
+            Arg::new("email-outbox-batch-size")
+                .long("email-outbox-batch-size")
+                .help("Email outbox batch size per poll")
+                .env("PERMESI_EMAIL_OUTBOX_BATCH_SIZE")
+                .default_value("10")
+                .value_parser(clap::value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("email-outbox-max-attempts")
+                .long("email-outbox-max-attempts")
+                .help("Max attempts before marking an email as failed")
+                .env("PERMESI_EMAIL_OUTBOX_MAX_ATTEMPTS")
+                .default_value("5")
+                .value_parser(clap::value_parser!(u32)),
+        )
+        .arg(
+            Arg::new("email-outbox-backoff-base-seconds")
+                .long("email-outbox-backoff-base-seconds")
+                .help("Base delay for email outbox retry backoff")
+                .env("PERMESI_EMAIL_OUTBOX_BACKOFF_BASE_SECONDS")
+                .default_value("5")
+                .value_parser(clap::value_parser!(u64)),
+        )
+        .arg(
+            Arg::new("email-outbox-backoff-max-seconds")
+                .long("email-outbox-backoff-max-seconds")
+                .help("Max delay for email outbox retry backoff")
+                .env("PERMESI_EMAIL_OUTBOX_BACKOFF_MAX_SECONDS")
+                .default_value("300")
+                .value_parser(clap::value_parser!(u64)),
+        )
+        .arg(
             Arg::new("opaque-kv-mount")
                 .long("opaque-kv-mount")
                 .help("Vault KV v2 mount containing the OPAQUE seed")

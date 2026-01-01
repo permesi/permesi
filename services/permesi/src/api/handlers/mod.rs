@@ -1,17 +1,10 @@
 pub mod health;
-pub use self::health::health;
 
 pub mod auth;
-pub use self::auth::{
-    opaque_login_finish, opaque_login_start, opaque_signup_finish, opaque_signup_start,
-    resend_verification, verify_email,
-};
 
 pub mod user_register;
-pub use self::user_register::register;
 
 pub mod user_login;
-pub use self::user_login::login;
 
 // common functions for the handlers
 use admission_token::{
@@ -91,7 +84,7 @@ impl AdmissionVerifier {
     /// Returns an error if the keyset cannot be fetched or parsed.
     pub async fn new_remote(url: String, issuer: String, audience: String) -> Result<Self> {
         let client = Client::builder()
-            .user_agent(crate::permesi::APP_USER_AGENT)
+            .user_agent(crate::api::APP_USER_AGENT)
             .build()?;
         let keyset = fetch_keyset(&client, &url).await?;
         keyset

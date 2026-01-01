@@ -1,4 +1,4 @@
-use crate::{cli::globals::GlobalArgs, permesi, vault};
+use crate::{api, cli::globals::GlobalArgs, vault};
 use admission_token::PaserkKeySet;
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
@@ -23,6 +23,11 @@ pub struct Args {
     pub frontend_base_url: String,
     pub email_token_ttl_seconds: i64,
     pub email_resend_cooldown_seconds: i64,
+    pub email_outbox_poll_seconds: u64,
+    pub email_outbox_batch_size: usize,
+    pub email_outbox_max_attempts: u32,
+    pub email_outbox_backoff_base_seconds: u64,
+    pub email_outbox_backoff_max_seconds: u64,
     pub opaque_kv_mount: String,
     pub opaque_kv_path: String,
     pub opaque_server_id: String,
@@ -41,9 +46,7 @@ pub async fn execute(args: Args) -> Result<()> {
         .unwrap_or_else(|| "permesi".to_string());
 
     let admission_verifier = if let Some(url) = &args.admission_paserk_url {
-        Arc::new(
-            permesi::handlers::AdmissionVerifier::new_remote(url.clone(), issuer, audience).await?,
-        )
+        Arc::new(api::handlers::AdmissionVerifier::new_remote(url.clone(), issuer, audience).await?)
     } else {
         let keyset_json = if let Some(path) = &args.admission_paserk_path {
             fs::read_to_string(path)
@@ -59,7 +62,7 @@ pub async fn execute(args: Args) -> Result<()> {
         keyset
             .validate()
             .context("Invalid admission PASERK keyset")?;
-        Arc::new(permesi::handlers::AdmissionVerifier::new(
+        Arc::new(api::handlers::AdmissionVerifier::new(
             keyset, issuer, audience,
         ))
     };
@@ -101,23 +104,29 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    let auth_config = permesi::handlers::auth::AuthConfig::new(
-        args.zero_token_validate_url,
-        args.frontend_base_url,
-    )
-    .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
-    .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
-    .with_opaque_kv_mount(args.opaque_kv_mount)
-    .with_opaque_kv_path(args.opaque_kv_path)
-    .with_opaque_server_id(args.opaque_server_id)
-    .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
+    let auth_config =
+        api::handlers::auth::AuthConfig::new(args.zero_token_validate_url, args.frontend_base_url)
+            .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
+            .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
+            .with_opaque_kv_mount(args.opaque_kv_mount)
+            .with_opaque_kv_path(args.opaque_kv_path)
+            .with_opaque_server_id(args.opaque_server_id)
+            .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
-    permesi::new(
+    let email_config = api::email::EmailWorkerConfig::new()
+        .with_poll_interval_seconds(args.email_outbox_poll_seconds)
+        .with_batch_size(args.email_outbox_batch_size)
+        .with_max_attempts(args.email_outbox_max_attempts)
+        .with_backoff_base_seconds(args.email_outbox_backoff_base_seconds)
+        .with_backoff_max_seconds(args.email_outbox_backoff_max_seconds);
+
+    api::new(
         args.port,
         dsn.to_string(),
         &globals,
         admission_verifier,
         auth_config,
+        email_config,
     )
     .await
 }

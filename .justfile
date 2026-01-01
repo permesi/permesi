@@ -341,7 +341,8 @@ dev-env:
   printf '%s\n' \
     "export PERMESI_ADMISSION_PASERK_URL=\"http://localhost:8000/paserk.json\"" \
     "export PERMESI_ZERO_TOKEN_VALIDATE_URL=\"http://localhost:8000/v1/zero-token/validate\"" \
-    "export PERMESI_FRONTEND_BASE_URL=\"http://localhost:8080\""
+    "export PERMESI_FRONTEND_BASE_URL=\"http://localhost:8080\"" \
+    "export PERMESI_EMAIL_OUTBOX_POLL_SECONDS=\"10\""
 
 vault-envrc:
   #!/usr/bin/env zsh
@@ -433,19 +434,30 @@ dev-start-all:
     echo "tmux not found. Install tmux or run: just dev-start" >&2
     exit 1
   fi
-  session="permesi-dev"
+  session="permesi"
+  start_session() {
+    local left_pane
+    local right_pane
+    left_pane="$(
+      tmux new-session -d -s "$session" -c "{{root}}" -P -F "#{pane_id}" "just genesis"
+    )"
+    right_pane="$(
+      tmux split-window -t "$left_pane" -h -c "{{root}}" -P -F "#{pane_id}" "just permesi"
+    )"
+    tmux split-window -t "$left_pane" -v -c "{{root}}" "just web"
+    tmux split-window -t "$right_pane" -v -c "{{root}}"
+  }
   if [[ -n "${TMUX-}" ]]; then
     just dev-start-infra
     just dev-envrc
-    if tmux list-windows -F '#W' | rg -q "^${session}$"; then
-      tmux select-window -t "$session"
+    if tmux has-session -t "$session" 2>/dev/null; then
+      echo "tmux session '${session}' already exists."
+      echo "Attach with: tmux attach -t ${session}"
       exit 0
     fi
-    tmux new-window -n "$session" -c "{{root}}" "just genesis"
-    tmux split-window -t "$session" -h -c "{{root}}" "just permesi"
-    tmux split-window -t "$session" -v -c "{{root}}" "just web"
-    tmux select-layout -t "$session" tiled
-    tmux select-window -t "$session"
+    start_session
+    echo "Created tmux session '${session}'."
+    echo "Attach with: tmux attach -t ${session}"
     exit 0
   fi
   if tmux has-session -t "$session" 2>/dev/null; then
@@ -454,10 +466,7 @@ dev-start-all:
   fi
   just dev-start-infra
   just dev-envrc
-  tmux new-session -d -s "$session" -c "{{root}}" "just genesis"
-  tmux split-window -t "$session" -h -c "{{root}}" "just permesi"
-  tmux split-window -t "$session" -v -c "{{root}}" "just web"
-  tmux select-layout -t "$session" tiled
+  start_session
   tmux attach -t "$session"
 
 dev-start-infra: setup-network postgres vault jaeger

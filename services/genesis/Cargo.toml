@@ -57,6 +57,7 @@ tonic = { workspace = true, features = ["tls-native-roots"] }
 ulid = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }
+utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
 
 [build-dependencies]

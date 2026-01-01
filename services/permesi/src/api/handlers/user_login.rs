@@ -1,6 +1,6 @@
 use crate::{
+    api::handlers::{AdmissionVerifier, valid_email, valid_password, verify_token},
     cli::globals::GlobalArgs,
-    permesi::handlers::{AdmissionVerifier, valid_email, valid_password, verify_token},
     vault::transit::decrypt,
 };
 use axum::{Json, extract::Extension, http::StatusCode, response::IntoResponse};

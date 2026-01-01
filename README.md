@@ -16,6 +16,8 @@ This repository is a Rust workspace (monorepo) containing:
 - `crates/admission_token`: shared admission token contract + sign/verify helpers
 - `apps/web`: CSR-only Leptos admin console (Trunk + Tailwind, static `dist/`)
 
+Note: service HTTP modules live under `src/api/` (previously `src/permesi/` and `src/genesis/`).
+
 ## Architecture
 
 permesi employs a **Split-Trust Architecture** to separate network noise from core identity logic.
@@ -169,9 +171,9 @@ Default ports: genesis `8000`, permesi `8001`, web `8080`.
 1) One command: `just dev-start` (infra + `.envrc` + web).
 2) Run services: `just genesis` and `just permesi` (they auto-source `.envrc`, so direnv is optional).
 
-Alternative: `just dev-start-all` starts a tmux session (`permesi-dev`) with genesis + permesi + web panes.
-If you're already inside tmux, it creates/uses a window named `permesi-dev` instead of nesting.
-Re-running attaches/selects the existing session/window; stop with `tmux kill-session -t permesi-dev`.
+Alternative: `just dev-start-all` starts a tmux session (`permesi`) with genesis + permesi + web panes, plus a fourth pane for ad hoc commands.
+If you're already inside tmux, it creates the `permesi` session in the background and prints attach instructions.
+Re-running attaches to the existing session when not inside tmux; stop with `tmux kill-session -t permesi`.
 
 If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also runs `direnv allow` if available).
 

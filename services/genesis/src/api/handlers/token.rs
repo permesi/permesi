@@ -13,7 +13,7 @@ use tracing::{Instrument, debug, error, info_span, instrument};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::genesis::admission::AdmissionSigner;
+use crate::api::admission::AdmissionSigner;
 
 pub const TOKEN_EXPIRATION: i64 = 120; // 2 minutes
 

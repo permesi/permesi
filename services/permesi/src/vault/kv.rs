@@ -1,4 +1,4 @@
-use crate::{cli::globals::GlobalArgs, permesi, vault};
+use crate::{cli::globals::GlobalArgs, vault};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use reqwest::Client;
@@ -18,7 +18,7 @@ pub async fn read_opaque_seed(
     kv_path: &str,
 ) -> Result<[u8; OPAQUE_SEED_LEN]> {
     let client = Client::builder()
-        .user_agent(permesi::APP_USER_AGENT)
+        .user_agent(crate::api::APP_USER_AGENT)
         .build()?;
     let path = format!("/v1/{kv_mount}/data/{kv_path}");
     let url = vault::endpoint_url(&globals.vault_url, &path)?;

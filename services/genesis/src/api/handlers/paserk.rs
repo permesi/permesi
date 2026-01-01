@@ -1,4 +1,4 @@
-use crate::genesis::admission::AdmissionSigner;
+use crate::api::admission::AdmissionSigner;
 use axum::{
     extract::Extension,
     http::{

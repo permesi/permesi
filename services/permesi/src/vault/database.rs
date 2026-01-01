@@ -1,4 +1,4 @@
-use crate::{cli::globals::GlobalArgs, permesi};
+use crate::cli::globals::GlobalArgs;
 use anyhow::Result;
 use tracing::instrument;
 
@@ -8,7 +8,7 @@ use tracing::instrument;
 #[instrument(skip(globals))]
 pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
     let creds = vault_client::database_creds(
-        permesi::APP_USER_AGENT,
+        crate::api::APP_USER_AGENT,
         &globals.vault_url,
         &globals.vault_token,
         "/v1/database/creds/permesi",

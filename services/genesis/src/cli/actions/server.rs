@@ -1,4 +1,4 @@
-use crate::{cli::globals::GlobalArgs, genesis, vault};
+use crate::{api, cli::globals::GlobalArgs, vault};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
 use tracing::debug;
@@ -55,5 +55,5 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    genesis::new(args.port, dsn.to_string(), &globals).await
+    api::new(args.port, dsn.to_string(), &globals).await
 }

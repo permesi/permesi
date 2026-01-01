@@ -49,6 +49,15 @@ cargo run -p permesi --bin permesi -- \
 `permesi` uses OPAQUE for signup/login. Passwords never leave the client; the database stores only
 the OPAQUE registration record (`opaque_registration_record`).
 
+### API router (OpenAPI-aware)
+
+`permesi::api::router()` returns an `OpenApiRouter` with all documented routes registered via
+`#[utoipa::path]`. Use it to build a server or to split out the OpenAPI spec in tests.
+
+```rust
+let (router, openapi) = permesi::api::router().split_for_parts();
+```
+
 Endpoints:
 
 - `POST /v1/auth/opaque/signup/start`
@@ -60,6 +69,20 @@ Endpoints:
 
 All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated via
 `--zero-token-validate-url` (default: `https://genesis.permesi.dev/v1/zero-token/validate`).
+
+### Email outbox (transactional)
+
+Signup/resend requests enqueue email work in `email_outbox` during the same DB transaction that
+creates the user + verification token. A background worker polls for `pending` rows, locks a
+batch with `FOR UPDATE SKIP LOCKED`, and hands each row to an `EmailSender` implementation.
+Success marks the row `sent`; failures are retried with exponential backoff + jitter using
+`next_attempt_at` until max attempts is reached (default 5), then marked `failed`.
+Defaults: base delay 5s, max delay 5m.
+
+The default sender is a log-only stub for local dev. To deliver real email, implement
+`EmailSender` (SMTP, SendGrid, etc.) and swap it in where the worker is spawned.
+If you later need higher throughput or multi-service fan-out, consider a broker (NATS JetStream,
+RabbitMQ). For current scale, the DB outbox keeps infrastructure minimal and consistent.
 
 ### OPAQUE seed (Vault KV v2)
 
@@ -78,6 +101,14 @@ The dev bootstrap (`vault/bootstrap.sh`) seeds this automatically for local runs
 - `--email-resend-cooldown-seconds` / `PERMESI_EMAIL_RESEND_COOLDOWN_SECONDS`
 - `--opaque-server-id` / `PERMESI_OPAQUE_SERVER_ID` (default `api.permesi.dev`)
 - `--opaque-login-ttl-seconds` / `PERMESI_OPAQUE_LOGIN_TTL_SECONDS`
+
+### Email outbox worker flags
+
+- `--email-outbox-poll-seconds` / `PERMESI_EMAIL_OUTBOX_POLL_SECONDS` (default `5`)
+- `--email-outbox-batch-size` / `PERMESI_EMAIL_OUTBOX_BATCH_SIZE` (default `10`)
+- `--email-outbox-max-attempts` / `PERMESI_EMAIL_OUTBOX_MAX_ATTEMPTS` (default `5`)
+- `--email-outbox-backoff-base-seconds` / `PERMESI_EMAIL_OUTBOX_BACKOFF_BASE_SECONDS` (default `5`)
+- `--email-outbox-backoff-max-seconds` / `PERMESI_EMAIL_OUTBOX_BACKOFF_MAX_SECONDS` (default `300`)
 
 ## Admission Token Verification
 

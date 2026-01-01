@@ -20,6 +20,8 @@ These notes keep contributors aligned on how this Rust workspace is organized an
 - Rust 2024 edition; defaults to `rustfmt`.
 - Clippy is strict (`all` + `pedantic` deny). Avoid `unwrap`, `expect`, and panics; prefer `?` and typed errors.
 - Do not add `#[allow(...)]` in production code; only acceptable inside test modules when needed.
+  Exception: a dedicated `openapi_doc` submodule may include `#![allow(clippy::needless_for_each)]`
+  to wrap `#[derive(OpenApi)] pub struct ApiDoc` (the lint is emitted from the derive macro).
 - File/module names stay `snake_case`; types `UpperCamelCase`; constants `SCREAMING_SNAKE_CASE`.
 - Keep functions small; prefer builder-style constructors for configs and explicit structs over loose maps.
 

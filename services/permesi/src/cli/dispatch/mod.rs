@@ -1,6 +1,39 @@
 use crate::cli::actions::{Action, server::Args};
 use anyhow::{Context, Result};
 
+struct EmailOutboxArgs {
+    poll_seconds: u64,
+    batch_size: usize,
+    max_attempts: u32,
+    backoff_base_seconds: u64,
+    backoff_max_seconds: u64,
+}
+
+fn parse_email_outbox_args(matches: &clap::ArgMatches) -> EmailOutboxArgs {
+    EmailOutboxArgs {
+        poll_seconds: matches
+            .get_one::<u64>("email-outbox-poll-seconds")
+            .copied()
+            .unwrap_or(5),
+        batch_size: matches
+            .get_one::<usize>("email-outbox-batch-size")
+            .copied()
+            .unwrap_or(10),
+        max_attempts: matches
+            .get_one::<u32>("email-outbox-max-attempts")
+            .copied()
+            .unwrap_or(5),
+        backoff_base_seconds: matches
+            .get_one::<u64>("email-outbox-backoff-base-seconds")
+            .copied()
+            .unwrap_or(5),
+        backoff_max_seconds: matches
+            .get_one::<u64>("email-outbox-backoff-max-seconds")
+            .copied()
+            .unwrap_or(300),
+    }
+}
+
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
 pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
@@ -58,6 +91,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one::<i64>("email-resend-cooldown-seconds")
         .copied()
         .unwrap_or(60);
+    let email_outbox = parse_email_outbox_args(matches);
     let opaque_kv_mount = matches
         .get_one::<String>("opaque-kv-mount")
         .cloned()
@@ -91,6 +125,11 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         frontend_base_url,
         email_token_ttl_seconds,
         email_resend_cooldown_seconds,
+        email_outbox_poll_seconds: email_outbox.poll_seconds,
+        email_outbox_batch_size: email_outbox.batch_size,
+        email_outbox_max_attempts: email_outbox.max_attempts,
+        email_outbox_backoff_base_seconds: email_outbox.backoff_base_seconds,
+        email_outbox_backoff_max_seconds: email_outbox.backoff_max_seconds,
         opaque_kv_mount,
         opaque_kv_path,
         opaque_server_id,

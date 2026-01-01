@@ -52,8 +52,10 @@ CREATE TABLE email_outbox (
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at TIMESTAMPTZ
 );
 
 CREATE INDEX email_outbox_status_idx ON email_outbox (status);
+CREATE INDEX email_outbox_next_attempt_idx ON email_outbox (status, next_attempt_at);
 CREATE INDEX email_outbox_created_at_idx ON email_outbox (created_at);
