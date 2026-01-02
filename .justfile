@@ -35,6 +35,12 @@ build-permesi:
 build-genesis:
   cargo build -p genesis
 
+update:
+  cargo update
+
+clean:
+  cargo clean
+
 # ----------------------
 # Version bumping
 # ----------------------
@@ -88,6 +94,15 @@ _bump-workspace bump_kind: check-develop check-clean
     echo "cargo set-version not found; install cargo-edit (cargo install cargo-edit)." >&2
     exit 1
   fi
+  cleanup() {
+    local status=$?
+    if [[ $status -ne 0 ]]; then
+      echo "↩️  Restoring version files after failure..."
+      git checkout -- Cargo.toml Cargo.lock >/dev/null 2>&1 || true
+    fi
+    exit $status
+  }
+  trap cleanup EXIT
   base_commit="$(git merge-base "$base_ref" HEAD)"
   changed="$(git diff --name-only "$base_commit"..HEAD | sort -u)"
   if [[ -z "$changed" ]]; then
@@ -104,10 +119,8 @@ _bump-workspace bump_kind: check-develop check-clean
     exit 1
   fi
   echo "ℹ️  Current version: ${current_version}"
+  echo ""
   echo "🔧 Bumping ${bump_kind} version..."
-  cargo update
-  echo "🧪 Running tests..."
-  just test
   cargo set-version --workspace --bump "$bump_kind"
   new_version="$(
     cargo metadata --no-deps --format-version 1 \
@@ -119,8 +132,37 @@ _bump-workspace bump_kind: check-develop check-clean
     exit 1
   fi
   echo "📝 New version: ${new_version}"
+  echo ""
+  validate_bump() {
+    local previous=$1 bump=$2 current=$3
+    IFS=. read -r prev_major prev_minor prev_patch <<<"${previous}"
+    IFS=. read -r new_major new_minor new_patch <<<"${current}"
+
+    case "${bump}" in
+      patch)
+        (( new_major == prev_major && new_minor == prev_minor && new_patch == prev_patch + 1 )) || { echo "❌ Expected patch bump from ${previous}, got ${current}"; exit 1; }
+        ;;
+      minor)
+        (( new_major == prev_major && new_minor == prev_minor + 1 && new_patch == 0 )) || { echo "❌ Expected minor bump from ${previous}, got ${current}"; exit 1; }
+        ;;
+      major)
+        (( new_major == prev_major + 1 && new_minor == 0 && new_patch == 0 )) || { echo "❌ Expected major bump from ${previous}, got ${current}"; exit 1; }
+        ;;
+    esac
+  }
+  validate_bump "${current_version}" "${bump_kind}" "${new_version}"
   echo "🔍 Verifying tag does not exist for ${new_version}..."
   just check-tag-not-exists "$new_version"
+  echo ""
+  echo "🔄 Updating dependencies..."
+  cargo update
+  echo ""
+  echo "🧹 Running clean build..."
+  cargo clean
+  echo ""
+  echo "🧪 Running tests..."
+  just test
+  echo ""
   git add -A
   git commit -m "bump version to ${new_version}"
   git push origin develop
@@ -142,24 +184,31 @@ _deploy-merge-and-tag:
     exit 1
   fi
   echo "🚀 Starting deployment for version ${new_version}..."
+  echo ""
   echo "🔍 Verifying tag does not exist..."
   just check-tag-not-exists "$new_version"
+  echo ""
   echo "🔄 Ensuring develop is up to date..."
   git pull --ff-only origin develop
+  echo ""
   echo "🔄 Switching to main branch..."
   git checkout main
   echo "🔄 Pulling main..."
   git pull --ff-only origin main
+  echo ""
   echo "🔀 Merging develop into main..."
   if ! git merge develop --no-edit; then
     echo "❌ Merge failed; resolve conflicts manually." >&2
     git checkout develop
     exit 1
   fi
+  echo ""
   echo "🏷️  Creating tag ${new_version}..."
-  git tag "$new_version"
+  git tag -m "Release version ${new_version}" "$new_version"
+  echo ""
   echo "⬆️  Pushing main and tag..."
   git push origin main "$new_version"
+  echo ""
   echo "🔄 Switching back to develop..."
   git checkout develop
   echo "✅ Deployment complete!"
