@@ -43,20 +43,33 @@ check-clean:
   #!/usr/bin/env zsh
   set -euo pipefail
   if [[ -n "$(git status --porcelain)" ]]; then
-    echo "Working directory is not clean. Commit or stash your changes first." >&2
+    echo "❌ Working directory is not clean. Commit or stash your changes first." >&2
     git status --short
     exit 1
   fi
+  echo "✅ Working directory is clean"
 
 check-develop:
   #!/usr/bin/env zsh
   set -euo pipefail
   current_branch="$(git branch --show-current)"
   if [[ "$current_branch" != "develop" ]]; then
-    echo "Not on develop branch (currently on: ${current_branch})." >&2
+    echo "❌ Not on develop branch (currently on: ${current_branch})." >&2
     echo "Switch to develop before bumping." >&2
     exit 1
   fi
+  echo "✅ On develop branch"
+
+check-tag-not-exists version:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  version="{{version}}"
+  git fetch --tags --quiet
+  if git rev-parse -q --verify "refs/tags/${version}" >/dev/null 2>&1; then
+    echo "❌ Tag ${version} already exists!" >&2
+    exit 1
+  fi
+  echo "✅ No tag exists for version ${version}"
 
 _bump-workspace bump_kind: check-develop check-clean
   #!/usr/bin/env zsh
@@ -90,8 +103,10 @@ _bump-workspace bump_kind: check-develop check-clean
     echo "Failed to resolve current workspace version." >&2
     exit 1
   fi
-  echo "Current version: ${current_version}"
+  echo "ℹ️  Current version: ${current_version}"
+  echo "🔧 Bumping ${bump_kind} version..."
   cargo update
+  echo "🧪 Running tests..."
   just test
   cargo set-version --workspace --bump "$bump_kind"
   new_version="$(
@@ -103,12 +118,9 @@ _bump-workspace bump_kind: check-develop check-clean
     echo "Failed to resolve new workspace version." >&2
     exit 1
   fi
-  echo "New version: ${new_version}"
-  git fetch --tags --quiet
-  if git rev-parse -q --verify "refs/tags/${new_version}" >/dev/null 2>&1; then
-    echo "Tag ${new_version} already exists." >&2
-    exit 1
-  fi
+  echo "📝 New version: ${new_version}"
+  echo "🔍 Verifying tag does not exist for ${new_version}..."
+  just check-tag-not-exists "$new_version"
   git add -A
   git commit -m "chore(release): bump version to ${new_version}"
   git push origin develop
@@ -129,22 +141,28 @@ _deploy-merge-and-tag:
     echo "Failed to resolve workspace version." >&2
     exit 1
   fi
-  git fetch --tags --quiet
-  if git rev-parse -q --verify "refs/tags/${new_version}" >/dev/null 2>&1; then
-    echo "Tag ${new_version} already exists." >&2
-    exit 1
-  fi
+  echo "🚀 Starting deployment for version ${new_version}..."
+  echo "🔍 Verifying tag does not exist..."
+  just check-tag-not-exists "$new_version"
+  echo "🔄 Ensuring develop is up to date..."
   git pull origin develop
+  echo "🔄 Switching to main branch..."
   git checkout main
+  echo "🔄 Pulling main..."
   git pull origin main
+  echo "🔀 Merging develop into main..."
   if ! git merge develop --no-edit; then
-    echo "Merge failed; resolve conflicts manually." >&2
+    echo "❌ Merge failed; resolve conflicts manually." >&2
     git checkout develop
     exit 1
   fi
+  echo "🏷️  Creating tag ${new_version}..."
   git tag "$new_version"
+  echo "⬆️  Pushing main and tag..."
   git push origin main "$new_version"
+  echo "🔄 Switching back to develop..."
   git checkout develop
+  echo "✅ Deployment complete!"
 
 deploy:
   @just _bump-workspace patch
