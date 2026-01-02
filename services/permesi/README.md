@@ -67,8 +67,8 @@ Endpoints:
 - `POST /v1/auth/verify-email`
 - `POST /v1/auth/resend-verification`
 
-All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated via
-`--zero-token-validate-url` (default: `https://genesis.permesi.dev/v1/zero-token/validate`).
+All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated offline
+using the PASERK keyset (same as Admission Tokens).
 
 ### Email outbox (transactional)
 
@@ -93,6 +93,20 @@ OPAQUE server setup is derived from a 32-byte seed stored in Vault KV v2:
 - Field: `opaque_seed_b64` (base64-encoded 32 bytes)
 
 The dev bootstrap (`vault/bootstrap.sh`) seeds this automatically for local runs.
+
+Creation:
+- Generate 32 random bytes and store the base64 value as `opaque_seed_b64`.
+- Example: `OPAQUE_SEED_B64=$(openssl rand -base64 32)` and `vault kv put kv/permesi/opaque opaque_seed_b64="$OPAQUE_SEED_B64"`.
+- All `permesi` instances must read the same seed so existing registrations remain valid.
+
+Rotation:
+- Rotation is not routine: changing the seed invalidates all existing OPAQUE registration records.
+- Only rotate if the seed is compromised or you plan a forced re-registration/reset for all users.
+- There is no dual-seed support today; rotation requires a coordinated maintenance window.
+
+Maintenance:
+- Treat the seed as a long-lived secret; restrict read access to the `permesi` runtime.
+- Back it up in your secret manager; losing it makes all existing registrations unusable.
 
 ### Auth config flags
 

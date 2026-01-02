@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.1.6"
+    "version": "0.2.0"
   },
   "paths": {
     "/health": {
@@ -22,7 +22,7 @@
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "Database connection is healthy",
+            "description": "Database and admission PASERK endpoint are healthy",
             "content": {
               "application/json": {
                 "schema": {
@@ -35,7 +35,7 @@
             }
           },
           "503": {
-            "description": "Database connection is unhealthy",
+            "description": "Database or admission PASERK endpoint is unhealthy",
             "content": {
               "application/json": {
                 "schema": {
@@ -125,7 +125,7 @@
             }
           },
           "409": {
-            "description": "User with the specified username or email already exists",
+            "description": "User with the specified email already exists",
             "content": {
               "application/json": {
                 "schema": {
@@ -136,6 +136,19 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Session cleared"
           }
         }
       }
@@ -382,6 +395,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Resend a verification email (always returns 204 to avoid user enumeration).",
         "operationId": "resend_verification",
         "parameters": [
           {
@@ -411,11 +425,35 @@
         }
       }
     },
+    "/v1/auth/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "session",
+        "responses": {
+          "200": {
+            "description": "Session is active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No active session"
+          }
+        }
+      }
+    },
     "/v1/auth/verify-email": {
       "post": {
         "tags": [
           "auth"
         ],
+        "summary": "Verify the email link by consuming the hashed token and activating the user.",
         "operationId": "verify_email",
         "parameters": [
           {
@@ -474,9 +512,13 @@
           "commit",
           "name",
           "version",
-          "database"
+          "database",
+          "admission_keyset"
         ],
         "properties": {
+          "admission_keyset": {
+            "type": "string"
+          },
           "commit": {
             "type": "string"
           },
@@ -543,7 +585,6 @@
       "OpaqueSignupFinishRequest": {
         "type": "object",
         "required": [
-          "username",
           "email",
           "registration_record"
         ],
@@ -552,9 +593,6 @@
             "type": "string"
           },
           "registration_record": {
-            "type": "string"
-          },
-          "username": {
             "type": "string"
           }
         }
@@ -573,7 +611,6 @@
       "OpaqueSignupStartRequest": {
         "type": "object",
         "required": [
-          "username",
           "email",
           "registration_request"
         ],
@@ -582,9 +619,6 @@
             "type": "string"
           },
           "registration_request": {
-            "type": "string"
-          },
-          "username": {
             "type": "string"
           }
         }
@@ -607,6 +641,21 @@
         ],
         "properties": {
           "email": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "user_id": {
             "type": "string"
           }
         }

@@ -1,6 +1,6 @@
 //! Database helpers for auth and verification state.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use tracing::Instrument;
@@ -8,15 +8,18 @@ use uuid::Uuid;
 
 use super::state::AuthConfig;
 use super::utils::{
-    build_verify_url, generate_verification_token, hash_verification_token, is_unique_violation,
+    build_verify_url, generate_session_token, generate_verification_token, hash_session_token,
+    hash_verification_token, is_unique_violation,
 };
 
+/// Outcome when attempting to create a new user + verification record.
 #[derive(Debug)]
 pub(super) enum SignupOutcome {
     Created,
     Conflict,
 }
 
+/// Outcome for a resend request (always 204 to avoid account probing).
 #[derive(Debug)]
 pub(super) enum ResendOutcome {
     Queued,
@@ -24,17 +27,23 @@ pub(super) enum ResendOutcome {
     Noop,
 }
 
+/// Minimal fields needed to start OPAQUE login.
 pub(super) struct LoginRecord {
     pub(super) user_id: Uuid,
     pub(super) status: String,
     pub(super) opaque_record: Vec<u8>,
 }
 
-pub(super) async fn lookup_login_record(
-    pool: &PgPool,
-    email_normalized: &str,
-) -> Result<Option<LoginRecord>> {
-    let query = "SELECT id, status::text AS status, opaque_registration_record FROM users WHERE email_normalized = $1";
+/// Minimal data returned for a valid session cookie.
+pub(super) struct SessionRecord {
+    pub(super) user_id: Uuid,
+    pub(super) email: String,
+}
+
+/// Look up login data by email (used by OPAQUE login start).
+pub(super) async fn lookup_login_record(pool: &PgPool, email: &str) -> Result<Option<LoginRecord>> {
+    let query =
+        "SELECT id, status::text AS status, opaque_registration_record FROM users WHERE email = $1";
     let span = tracing::info_span!(
         "db.query",
         db.system = "postgresql",
@@ -42,7 +51,7 @@ pub(super) async fn lookup_login_record(
         db.statement = query
     );
     let row = sqlx::query(query)
-        .bind(email_normalized)
+        .bind(email)
         .fetch_optional(pool)
         .instrument(span)
         .await
@@ -57,19 +66,18 @@ pub(super) async fn lookup_login_record(
 
 pub(super) async fn insert_user_and_verification(
     pool: &PgPool,
-    username: &str,
-    username_normalized: &str,
     email: &str,
-    email_normalized: &str,
     opaque_record: &[u8],
     config: &AuthConfig,
 ) -> Result<SignupOutcome> {
+    // Transaction ensures user creation, verification token, and email outbox row
+    // stay consistent even if something fails.
     let mut tx = pool.begin().await.context("begin signup transaction")?;
 
     let query = r"
         INSERT INTO users
-            (username, username_normalized, email, email_normalized, opaque_registration_record)
-        VALUES ($1, $2, $3, $4, $5)
+            (email, opaque_registration_record)
+        VALUES ($1, $2)
         RETURNING id
     ";
     let span = tracing::info_span!(
@@ -79,10 +87,7 @@ pub(super) async fn insert_user_and_verification(
         db.statement = query
     );
     let row = sqlx::query(query)
-        .bind(username)
-        .bind(username_normalized)
         .bind(email)
-        .bind(email_normalized)
         .bind(opaque_record)
         .fetch_one(&mut *tx)
         .instrument(span)
@@ -99,7 +104,7 @@ pub(super) async fn insert_user_and_verification(
         }
     };
 
-    let _token = insert_verification_records(&mut tx, user_id, email, username, config).await?;
+    let _token = insert_verification_records(&mut tx, user_id, email, config).await?;
 
     tx.commit().await.context("commit signup transaction")?;
 
@@ -110,9 +115,9 @@ pub(super) async fn insert_verification_records(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
     email: &str,
-    username: &str,
     config: &AuthConfig,
 ) -> Result<String> {
+    // Generate a raw token for the email link and store only its hash.
     let token = generate_verification_token()?;
     let token_hash = hash_verification_token(&token);
 
@@ -138,7 +143,7 @@ pub(super) async fn insert_verification_records(
 
     let verify_url = build_verify_url(config.frontend_base_url(), &token);
     let payload_json = json!({
-        "username": username,
+        "email": email,
         "verify_url": verify_url,
     });
     let payload_text =
@@ -166,10 +171,124 @@ pub(super) async fn insert_verification_records(
     Ok(token)
 }
 
+pub(super) async fn insert_session(
+    pool: &PgPool,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    // Generate a random token, store only its hash, and return the raw value
+    // so the caller can set the session cookie.
+    let query = r"
+        INSERT INTO user_sessions (user_id, session_hash, expires_at)
+        VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.statement = query
+    );
+
+    for _ in 0..3 {
+        let token = generate_session_token()?;
+        let token_hash = hash_session_token(&token);
+        let result = sqlx::query(query)
+            .bind(user_id)
+            .bind(token_hash)
+            .bind(ttl_seconds)
+            .execute(pool)
+            .instrument(span.clone())
+            .await;
+
+        match result {
+            Ok(_) => return Ok(token),
+            Err(err) if is_unique_violation(&err) => {}
+            Err(err) => return Err(err).context("failed to insert session"),
+        }
+    }
+
+    Err(anyhow!("failed to generate unique session token"))
+}
+
+pub(super) async fn lookup_session(
+    pool: &PgPool,
+    token_hash: &[u8],
+) -> Result<Option<SessionRecord>> {
+    // Only accept active users and unexpired sessions.
+    let query = r"
+        SELECT users.id, users.email
+        FROM user_sessions
+        JOIN users ON users.id = user_sessions.user_id
+        WHERE user_sessions.session_hash = $1
+          AND user_sessions.expires_at > NOW()
+          AND users.status = 'active'
+        LIMIT 1
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.statement = query
+    );
+    let row = sqlx::query(query)
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .instrument(span)
+        .await
+        .context("failed to lookup session")?;
+
+    if row.is_none() {
+        return Ok(None);
+    }
+
+    // Record activity for audit/visibility without extending the session TTL.
+    let query = r"
+        UPDATE user_sessions
+        SET last_seen_at = NOW()
+        WHERE session_hash = $1
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "UPDATE",
+        db.statement = query
+    );
+    sqlx::query(query)
+        .bind(token_hash)
+        .execute(pool)
+        .instrument(span)
+        .await
+        .context("failed to update session last_seen_at")?;
+
+    Ok(row.map(|row| SessionRecord {
+        user_id: row.get("id"),
+        email: row.get("email"),
+    }))
+}
+
+pub(super) async fn delete_session(pool: &PgPool, token_hash: &[u8]) -> Result<()> {
+    // Logout is idempotent; it's fine if no rows are deleted.
+    let query = "DELETE FROM user_sessions WHERE session_hash = $1";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "DELETE",
+        db.statement = query
+    );
+    sqlx::query(query)
+        .bind(token_hash)
+        .execute(pool)
+        .instrument(span)
+        .await
+        .context("failed to delete session")?;
+    Ok(())
+}
+
 pub(super) async fn consume_verification_token(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     token_hash: &[u8],
 ) -> Result<bool> {
+    // Mark the token consumed if still valid; then activate the user in the same transaction.
     let query = r"
         UPDATE email_verification_tokens
         SET consumed_at = NOW()
@@ -223,8 +342,9 @@ pub(super) async fn lookup_email_by_token_hash(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     token_hash: &[u8],
 ) -> Result<Option<String>> {
+    // Used for per-email rate limiting during verification.
     let query = r"
-        SELECT users.email_normalized
+        SELECT users.email
         FROM email_verification_tokens
         JOIN users ON users.id = email_verification_tokens.user_id
         WHERE email_verification_tokens.token_hash = $1
@@ -242,20 +362,21 @@ pub(super) async fn lookup_email_by_token_hash(
         .instrument(span)
         .await
         .context("failed to lookup email for token")?;
-    Ok(row.map(|row| row.get("email_normalized")))
+    Ok(row.map(|row| row.get("email")))
 }
 
 pub(super) async fn enqueue_resend_verification(
     pool: &PgPool,
-    email_normalized: &str,
+    email: &str,
     config: &AuthConfig,
 ) -> Result<ResendOutcome> {
+    // Resend is intentionally opaque: callers always get 204 to avoid account probing.
     let mut tx = pool.begin().await.context("begin resend transaction")?;
 
     let query = r"
-        SELECT id, email, username, status::text AS status
+        SELECT id, email, status::text AS status
         FROM users
-        WHERE email_normalized = $1
+        WHERE email = $1
         LIMIT 1
     ";
     let span = tracing::info_span!(
@@ -265,7 +386,7 @@ pub(super) async fn enqueue_resend_verification(
         db.statement = query
     );
     let row = sqlx::query(query)
-        .bind(email_normalized)
+        .bind(email)
         .fetch_optional(&mut *tx)
         .instrument(span)
         .await
@@ -289,8 +410,7 @@ pub(super) async fn enqueue_resend_verification(
     }
 
     let email: String = row.get("email");
-    let username: String = row.get("username");
-    let _ = insert_verification_records(&mut tx, user_id, &email, &username, config).await?;
+    let _ = insert_verification_records(&mut tx, user_id, &email, config).await?;
     tx.commit().await.context("commit resend enqueue")?;
     Ok(ResendOutcome::Queued)
 }
@@ -300,6 +420,7 @@ async fn resend_cooldown_active(
     user_id: Uuid,
     cooldown_seconds: i64,
 ) -> Result<bool> {
+    // Cooldown prevents repeated resend requests from spamming the outbox.
     let query = r"
         SELECT 1
         FROM email_verification_tokens

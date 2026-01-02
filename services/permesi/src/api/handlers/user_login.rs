@@ -41,12 +41,13 @@ pub async fn login(
     };
 
     debug!("user: {:?}", user);
+    let email = user.email.trim().to_lowercase();
 
-    // if not valid username, password or token return 400
-    if !valid_email(&user.email) {
-        error!("Invalid username");
+    // if not valid email, password or token return 400
+    if !valid_email(&email) {
+        error!("Invalid email");
 
-        return (StatusCode::BAD_REQUEST, "Invalid username".to_string());
+        return (StatusCode::BAD_REQUEST, "Invalid email".to_string());
     }
 
     if !valid_password(&user.password) {
@@ -60,14 +61,12 @@ pub async fn login(
     }
 
     // get password from database and decrypt it using vault transit
-    let stored_password = match get_password(&pool, &user.email).await {
-        Ok(ciphertext) => decrypt(&globals, &ciphertext, &user.email)
-            .await
-            .map_err(|e| {
-                error!("Error decrypting password: {:?}", e);
+    let stored_password = match get_password(&pool, &email).await {
+        Ok(ciphertext) => decrypt(&globals, &ciphertext, &email).await.map_err(|e| {
+            error!("Error decrypting password: {:?}", e);
 
-                StatusCode::INTERNAL_SERVER_ERROR
-            }),
+            StatusCode::INTERNAL_SERVER_ERROR
+        }),
 
         Err(sqlx::Error::RowNotFound) => {
             debug!("User not found");

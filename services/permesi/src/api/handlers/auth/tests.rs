@@ -8,7 +8,7 @@ use super::storage::{
 };
 use super::utils::{
     build_verify_url, decode_base64_field, generate_verification_token, hash_verification_token,
-    normalize_email, normalize_username, valid_email, valid_username,
+    normalize_email, valid_email,
 };
 use super::zero_token::{ZeroTokenError, zero_token_error_response};
 use anyhow::{Context, Result, anyhow};
@@ -101,29 +101,14 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
 }
 
 fn auth_config() -> AuthConfig {
-    AuthConfig::new(
-        "http://genesis.test/v1/zero-token/validate".to_string(),
-        "https://permesi.dev".to_string(),
-    )
-    .with_email_token_ttl_seconds(60)
-    .with_resend_cooldown_seconds(300)
-}
-
-#[test]
-fn normalize_username_trims_and_lowercases() {
-    assert_eq!(normalize_username(" Alice "), "alice");
+    AuthConfig::new("https://permesi.dev".to_string())
+        .with_email_token_ttl_seconds(60)
+        .with_resend_cooldown_seconds(300)
 }
 
 #[test]
 fn normalize_email_trims_and_lowercases() {
     assert_eq!(normalize_email(" Alice@Example.COM "), "alice@example.com");
-}
-
-#[test]
-fn valid_username_enforces_length_and_charset() {
-    assert!(valid_username("alice"));
-    assert!(!valid_username("ab"));
-    assert!(!valid_username("alice!"));
 }
 
 #[test]
@@ -185,11 +170,6 @@ fn zero_token_error_response_maps_status() {
     let (status, message) = zero_token_error_response(&ZeroTokenError::Invalid);
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(message, "Invalid token");
-
-    let err = ZeroTokenError::Unavailable(anyhow!("down"));
-    let (status, message) = zero_token_error_response(&err);
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(message, "Zero token validation unavailable");
 }
 
 fn opaque_test_record() -> Result<Vec<u8>> {
@@ -215,9 +195,9 @@ fn opaque_test_record() -> Result<Vec<u8>> {
     Ok(record.serialize().to_vec())
 }
 
-async fn lookup_user_id(pool: &PgPool, email_normalized: &str) -> Result<Uuid> {
-    let row = sqlx::query("SELECT id FROM users WHERE email_normalized = $1")
-        .bind(email_normalized)
+async fn lookup_user_id(pool: &PgPool, email: &str) -> Result<Uuid> {
+    let row = sqlx::query("SELECT id FROM users WHERE email = $1")
+        .bind(email)
         .fetch_one(pool)
         .await
         .context("failed to lookup user id")?;
@@ -228,48 +208,29 @@ async fn issue_verification_token(
     pool: &PgPool,
     user_id: Uuid,
     email: &str,
-    username: &str,
     config: &AuthConfig,
 ) -> Result<String> {
     let mut tx = pool.begin().await.context("begin token transaction")?;
-    let token = insert_verification_records(&mut tx, user_id, email, username, config).await?;
+    let token = insert_verification_records(&mut tx, user_id, email, config).await?;
     tx.commit().await.context("commit token transaction")?;
     Ok(token)
 }
 
 #[tokio::test]
-async fn signup_concurrent_username_unique() -> Result<()> {
+async fn signup_concurrent_email_unique() -> Result<()> {
     let Ok(db) = TestDb::new().await else {
         return Ok(());
     };
 
     let config = auth_config();
     let opaque_record = opaque_test_record()?;
-    let username = "alice";
-    let username_normalized = normalize_username(username);
-    let email_one = "alice@example.com";
-    let email_two = "alice2@example.com";
-    let email_one_normalized = normalize_email(email_one);
-    let email_two_normalized = normalize_email(email_two);
+    let email = "alice@example.com";
+    let email_normalized = normalize_email(email);
 
-    let task_one = insert_user_and_verification(
-        &db.pool,
-        username,
-        &username_normalized,
-        email_one,
-        &email_one_normalized,
-        &opaque_record,
-        &config,
-    );
-    let task_two = insert_user_and_verification(
-        &db.pool,
-        username,
-        &username_normalized,
-        email_two,
-        &email_two_normalized,
-        &opaque_record,
-        &config,
-    );
+    let task_one =
+        insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config);
+    let task_two =
+        insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config);
 
     let (result_one, result_two) = tokio::join!(task_one, task_two);
     let outcomes = [result_one?, result_two?];
@@ -297,24 +258,15 @@ async fn verify_token_reuse_rejected() -> Result<()> {
     let config = auth_config();
     let opaque_record = opaque_test_record()?;
     let email_normalized = normalize_email("bob@example.com");
-    let outcome = insert_user_and_verification(
-        &db.pool,
-        "bob",
-        "bob",
-        "bob@example.com",
-        &email_normalized,
-        &opaque_record,
-        &config,
-    )
-    .await?;
+    let outcome =
+        insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config).await?;
 
     match outcome {
         SignupOutcome::Created => {}
         SignupOutcome::Conflict => return Err(anyhow!("unexpected conflict")),
     }
     let user_id = lookup_user_id(&db.pool, &email_normalized).await?;
-    let token =
-        issue_verification_token(&db.pool, user_id, "bob@example.com", "bob", &config).await?;
+    let token = issue_verification_token(&db.pool, user_id, &email_normalized, &config).await?;
     let token_hash = hash_verification_token(&token);
 
     let mut tx = db.pool.begin().await?;
@@ -339,23 +291,14 @@ async fn verify_token_expired_rejected() -> Result<()> {
     let config = auth_config();
     let opaque_record = opaque_test_record()?;
     let email_normalized = normalize_email("carol@example.com");
-    let outcome = insert_user_and_verification(
-        &db.pool,
-        "carol",
-        "carol",
-        "carol@example.com",
-        &email_normalized,
-        &opaque_record,
-        &config,
-    )
-    .await?;
+    let outcome =
+        insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config).await?;
     match outcome {
         SignupOutcome::Created => {}
         SignupOutcome::Conflict => return Err(anyhow!("unexpected conflict")),
     }
     let user_id = lookup_user_id(&db.pool, &email_normalized).await?;
-    let token =
-        issue_verification_token(&db.pool, user_id, "carol@example.com", "carol", &config).await?;
+    let token = issue_verification_token(&db.pool, user_id, &email_normalized, &config).await?;
     let token_hash = hash_verification_token(&token);
 
     sqlx::query(
@@ -383,16 +326,8 @@ async fn resend_verification_respects_cooldown() -> Result<()> {
     let config = auth_config();
     let opaque_record = opaque_test_record()?;
     let email_normalized = normalize_email("dora@example.com");
-    let _ = insert_user_and_verification(
-        &db.pool,
-        "dora",
-        "dora",
-        "dora@example.com",
-        &email_normalized,
-        &opaque_record,
-        &config,
-    )
-    .await?;
+    let _ =
+        insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config).await?;
 
     let first = enqueue_resend_verification(&db.pool, "dora@example.com", &config).await?;
     assert!(matches!(

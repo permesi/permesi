@@ -1,26 +1,36 @@
-use crate::app_lib::AppError;
-use crate::app_lib::config::AppConfig;
-use crate::components::{Alert, AlertKind, AppShell, Button, Spinner};
-use crate::features::auth::client;
-use crate::features::auth::opaque::{OpaqueSuite, identifiers, ksf, normalize_email};
-use crate::features::auth::state::use_auth;
-use crate::features::auth::token;
-use crate::features::auth::types::{
-    OpaqueLoginFinishRequest, OpaqueLoginStartRequest, UserSession,
+//! Login route that implements the client-side OPAQUE exchange. It keeps passwords
+//! local, uses zero-token headers for permesi calls, and hydrates session state
+//! via cookie-based auth after a successful login.
+//!
+//! Flow Overview: Start OPAQUE with the server, finish the exchange, then fetch
+//! the session and redirect to the home route.
+
+use crate::{
+    app_lib::{AppError, config::AppConfig},
+    components::{Alert, AlertKind, AppShell, Button, Spinner},
+    features::auth::{
+        client,
+        opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
+        state::use_auth,
+        token,
+        types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest},
+    },
 };
 use base64::Engine;
-use leptos::ev::SubmitEvent;
-use leptos::prelude::*;
+use leptos::{ev::SubmitEvent, prelude::*};
 use leptos_router::hooks::use_navigate;
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
 use rand::rngs::OsRng;
 
 #[derive(Clone)]
+/// Captures login form input for the async action without borrowing signals.
 struct LoginInput {
     email: String,
     password: String,
 }
 
+/// Renders the login form and drives the OPAQUE login flow.
+/// On success it fetches the session cookie and updates auth state.
 #[component]
 pub fn LoginPage() -> impl IntoView {
     let auth = use_auth();
@@ -37,6 +47,7 @@ pub fn LoginPage() -> impl IntoView {
             let server_id = config.opaque_server_id;
 
             let mut rng = OsRng;
+            // Start OPAQUE locally so the password never leaves the browser.
             let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
                 .map_err(|_| AppError::Config("Unable to start secure login.".to_string()))?;
             let start_request = OpaqueLoginStartRequest {
@@ -44,9 +55,11 @@ pub fn LoginPage() -> impl IntoView {
                 credential_request: base64::engine::general_purpose::STANDARD
                     .encode(start.message.serialize()),
             };
+            // Zero tokens gate permesi auth calls and are separate from sessions.
             let zero_token = token::fetch_zero_token().await?;
             let start_response = client::opaque_login_start(&start_request, &zero_token).await?;
 
+            // Decode the server's OPAQUE response before finishing the exchange.
             let response_bytes = base64::engine::general_purpose::STANDARD
                 .decode(start_response.credential_response)
                 .map_err(|_| AppError::Config("Invalid login response.".to_string()))?;
@@ -56,6 +69,7 @@ pub fn LoginPage() -> impl IntoView {
                 })?;
 
             let ksf_params = ksf();
+            // Bind identifiers and KSF params so the finish step is scoped correctly.
             let params = ClientLoginFinishParameters::new(
                 None,
                 identifiers(client_id.as_bytes(), server_id.as_bytes()),
@@ -73,11 +87,13 @@ pub fn LoginPage() -> impl IntoView {
                     .encode(finish.message.serialize()),
             };
             let zero_token = token::fetch_zero_token().await?;
+            // Finish login so the server can mint the session cookie.
             client::opaque_login_finish(&finish_request, &zero_token).await?;
-            Ok(UserSession {
-                user_id: client_id,
-                access_token: String::new(),
-            })
+            // Hydrate auth state by fetching the session established via cookie.
+            let session = client::fetch_session().await?.ok_or_else(|| {
+                AppError::Config("Login succeeded but no session found.".to_string())
+            })?;
+            Ok(session)
         }
     });
 
@@ -97,6 +113,7 @@ pub fn LoginPage() -> impl IntoView {
         event.prevent_default();
         set_error.set(None);
 
+        // Trim input before validation to avoid accidental whitespace failures.
         let email_value = email.get_untracked().trim().to_string();
         let password_value = password.get_untracked();
         if email_value.is_empty() || password_value.trim().is_empty() {
@@ -174,6 +191,7 @@ pub fn LoginPage() -> impl IntoView {
     }
 }
 
+/// Maps internal errors to user-facing strings without leaking details.
 fn format_error(err: &AppError) -> String {
     match err {
         AppError::Config(message) => message.clone(),

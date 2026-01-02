@@ -52,23 +52,21 @@ sequenceDiagram
   participant Outbox as Email outbox worker
   participant Mail as Email provider
 
-  Note over Web,API: Each auth POST includes X-Permesi-Zero-Token minted by Genesis.
+  Note over Web,API: Each auth POST includes X-Permesi-Zero-Token minted by Genesis (verified offline).
 
   Note over Web,API: OPAQUE signup start
   User->>Web: Open signup form
   Web->>Genesis: Mint zero token (signup start)
   Genesis-->>Web: Zero token
   Web->>API: POST /v1/auth/opaque/signup/start (registration_request)
-  API->>Genesis: POST /v1/zero-token/validate
-  Genesis-->>API: valid/invalid
+  API->>API: Verify token (PASERK keyset)
   API-->>Web: registration_response
 
   Note over Web,API: OPAQUE signup finish
   Web->>Genesis: Mint zero token (signup finish)
   Genesis-->>Web: Zero token
   Web->>API: POST /v1/auth/opaque/signup/finish (registration_record)
-  API->>Genesis: POST /v1/zero-token/validate
-  Genesis-->>API: valid/invalid
+  API->>API: Verify token (PASERK keyset)
   Note over API,DB: Single transaction
   API->>DB: Insert user (pending_verification)
   API->>DB: Insert verification token (hashed, TTL)
@@ -84,8 +82,7 @@ sequenceDiagram
   Web->>Genesis: Mint zero token (verify)
   Genesis-->>Web: Zero token
   Web->>API: POST /v1/auth/verify-email
-  API->>Genesis: POST /v1/zero-token/validate
-  Genesis-->>API: valid/invalid
+  API->>API: Verify token (PASERK keyset)
   API->>DB: Consume token + activate user
   API-->>Web: 204
 
@@ -94,8 +91,7 @@ sequenceDiagram
     Web->>Genesis: Mint zero token (resend)
     Genesis-->>Web: Zero token
     Web->>API: POST /v1/auth/resend-verification
-    API->>Genesis: POST /v1/zero-token/validate
-    Genesis-->>API: valid/invalid
+    API->>API: Verify token (PASERK keyset)
     API->>DB: Enqueue new token/outbox (cooldown)
     API-->>Web: 204
   end
@@ -110,7 +106,7 @@ Legend:
 
 - Home (`/`) is a placeholder ("Home").
 - Header shows only the "Sign In" link for now (Solid parity).
-- Login performs OPAQUE (`/v1/auth/opaque/login/start` + `/finish`) and fetches a Genesis zero token for each step; the session is still local-only until the API returns real session data.
+- Login performs OPAQUE (`/v1/auth/opaque/login/start` + `/finish`) and fetches a Genesis zero token for each step; permesi sets an HttpOnly session cookie and the frontend reads `/v1/auth/session` to hydrate state.
 - Signup performs an OPAQUE registration (`/v1/auth/opaque/signup/start` + `/finish`) with Genesis zero tokens and shows a verify-email prompt.
 - Verify email reads the fragment token and POSTs to `/v1/auth/verify-email`; resend is available on the same page (both require zero tokens).
 - Auth is UX-only; real access control must be enforced by the API.

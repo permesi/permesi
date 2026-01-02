@@ -64,3 +64,95 @@ pub async fn read_opaque_seed(
     seed.copy_from_slice(&decoded);
     Ok(seed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_opaque_seed;
+    use crate::cli::globals::GlobalArgs;
+    use anyhow::{Result, anyhow};
+    use base64::Engine;
+    use secrecy::SecretString;
+    use serde_json::json;
+    use std::net::TcpListener;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn can_bind_localhost() -> bool {
+        TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    #[tokio::test]
+    async fn read_opaque_seed_returns_bytes() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let seed_bytes = [7u8; 32];
+        let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed_bytes);
+
+        Mock::given(method("GET"))
+            .and(path("/v1/kv/data/opaque"))
+            .and(header("X-Vault-Token", "vault-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"data": {"opaque_seed_b64": seed_b64}}
+            })))
+            .mount(&server)
+            .await;
+
+        let mut globals = GlobalArgs::new(server.uri());
+        globals.set_token(SecretString::from("vault-token".to_string()));
+
+        let seed = read_opaque_seed(&globals, "kv", "opaque").await?;
+        assert_eq!(seed, seed_bytes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_opaque_seed_errors_on_missing_field() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/kv/data/opaque"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"data": {}}
+            })))
+            .mount(&server)
+            .await;
+
+        let globals = GlobalArgs::new(server.uri());
+        let result = read_opaque_seed(&globals, "kv", "opaque").await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("opaque seed missing"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_opaque_seed_errors_on_wrong_length() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let seed_bytes = [1u8; 16];
+        let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed_bytes);
+
+        Mock::given(method("GET"))
+            .and(path("/v1/kv/data/opaque"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"data": {"opaque_seed_b64": seed_b64}}
+            })))
+            .mount(&server)
+            .await;
+
+        let globals = GlobalArgs::new(server.uri());
+        let result = read_opaque_seed(&globals, "kv", "opaque").await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("opaque seed length"));
+        Ok(())
+    }
+}

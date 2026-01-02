@@ -1,16 +1,41 @@
 # Vault (dev)
 
-Local dev Vault runs as a container built from `vault.Dockerfile` and bootstrapped by `vault/bootstrap.sh`.
-The bootstrap script provisions the auth + secrets engines that `services/permesi` and `services/genesis`
-expect (AppRole, transit, and database creds).
+Local dev Vault runs as a container built from `vault.Dockerfile` with two modes:
+- **Dev-only (in-memory)**: `just vault` runs Vault in dev mode and bootstraps via `vault/bootstrap.sh`.
+- **Persistent (recommended)**: `just vault-persist-ready` runs Vault in server mode with `vault/config.hcl`
+  and bootstraps via `vault/bootstrap-persist.sh`.
+
+The bootstrap scripts provision the auth + secrets engines that `services/permesi` and
+`services/genesis` expect (AppRole, transit, and database creds). `just dev-start` uses the
+persistent path by default.
 
 ## Quick start
 
 - Start Postgres: `just postgres` (creates the `genesis` and `permesi` databases if missing)
-- Start Vault: `just vault` (or `just dev-start`)
+- Start persistent Vault + bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
+- Start dev-only Vault (no persistence): `just vault`
 
-Vault prints the root token plus AppRole `role_id` / `secret_id` values for both services.
-Tip: if you missed the startup output, you can recover it from logs:
+## Dev-only Vault (no persistence)
+
+Use this when you do not need data to survive restarts. It starts in dev mode, auto-unseals,
+and wipes data when the container stops. The dev root token and AppRole IDs are printed to the
+container logs (inspect with `podman logs vault`).
+
+## Persistent dev Vault (recommended)
+
+The persistent mode keeps Vault data in a Podman volume and stores init keys in a gitignored file.
+This is what `just dev-start` uses.
+
+- Start + init + unseal + bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
+- Stop Vault: `just vault-stop`
+- Reset data + keys (prompts): `just vault-reset`
+- Keys file (keep safe): `vault/keys.json` (gitignored)
+- Data volume: `permesi-vault-data`
+
+To reset a persistent Vault, stop the container and remove the data volume plus `vault/keys.json`.
+
+Persistent bootstrapping prints the AppRole `role_id` / `secret_id` values to the terminal.
+Re-run `just vault-bootstrap` to print them again. In dev-only mode, they are printed to logs:
 
 ```sh
 podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID|permesi SecretID"

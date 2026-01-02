@@ -1,3 +1,6 @@
+//! Frontend route definitions wired into the root `App` component. Routing is
+//! client-side only, so backend endpoints must enforce access control.
+
 mod dashboard;
 mod health;
 mod login;
@@ -15,9 +18,12 @@ pub(crate) use users::{UserDetailPage, UsersListPage};
 pub(crate) use verify_email::VerifyEmailPage;
 
 use leptos::prelude::*;
-use leptos_router::components::{Route, Routes};
-use leptos_router::path;
+use leptos_router::{
+    components::{Route, Routes},
+    path,
+};
 
+/// Declares the application route tree.
 #[component]
 pub fn AppRoutes() -> impl IntoView {
     view! {

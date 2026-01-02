@@ -1,9 +1,9 @@
 [package]
 name = "genesis"
-version = "0.1.14"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
-authors = ["Team Permesi <team@permesi.dev>"]
+authors.workspace = true
 description = "Token Zero generator for permesi"
 documentation = "https://github.com/permesi/genesis/blob/main/README.md"
 homepage = "https://github.com/permesi/genesis"
@@ -11,7 +11,7 @@ repository = "https://github.com/permesi/genesis"
 readme = "../../README.md"
 keywords = ["password", "security", "token"]
 categories = ["web-programming::http-server"]
-license = "BSD-3-Clause"
+license.workspace = true
 build = "build.rs"
 
 [lints]
@@ -65,3 +65,4 @@ built = { workspace = true, features = ["git2"] }
 
 [dev-dependencies]
 test_support = { workspace = true }
+wiremock = "0.6"

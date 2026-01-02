@@ -1,13 +1,20 @@
-use leptos::prelude::*;
-use leptos_router::components::A;
-use leptos_router::hooks::use_location;
+//! Shared layout wrapper with navigation and content container. It centralizes
+//! header markup and the mobile menu toggle so routes can focus on content.
+//! Navigation remains client-side; backend routes must enforce access control.
 
+use crate::features::auth::{client, state::use_auth};
+use leptos::{prelude::*, task::spawn_local};
+use leptos_router::{components::A, hooks::use_location};
+
+/// Wraps routes with a header and main content container.
 #[component]
 pub fn AppShell(children: Children) -> impl IntoView {
     let (menu_open, set_menu_open) = signal(false);
     let toggle_menu = move |_| {
         set_menu_open.update(|open| *open = !*open);
     };
+    let auth = use_auth();
+    let is_authenticated = auth.is_authenticated;
     let location = use_location();
     let on_login = move || location.pathname.get() == "/login";
 
@@ -59,28 +66,49 @@ pub fn AppShell(children: Children) -> impl IntoView {
                         <ul class="font-medium flex flex-col p-4 md:p-0 mt-4 border border-gray-100 rounded-lg bg-gray-50 md:flex-row md:space-x-8 rtl:space-x-reverse md:mt-0 md:border-0 md:bg-white dark:bg-gray-800 md:dark:bg-gray-900 dark:border-gray-700">
                             <li>
                                 <Show
-                                    when=on_login
+                                    when=move || is_authenticated.get()
                                     fallback=move || {
                                         view! {
-                                            <A
-                                                href="/login"
-                                                {..}
-                                                class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:border-0 md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500 dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent"
-                                                on:click=move |_| set_menu_open.set(false)
+                                            <Show
+                                                when=on_login
+                                                fallback=move || {
+                                                    view! {
+                                                        <A
+                                                            href="/login"
+                                                            {..}
+                                                            class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:border-0 md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500 dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent"
+                                                            on:click=move |_| set_menu_open.set(false)
+                                                        >
+                                                            "Sign In"
+                                                        </A>
+                                                    }
+                                                }
                                             >
-                                                "Sign In"
-                                            </A>
+                                                <A
+                                                    href="/signup"
+                                                    {..}
+                                                    class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:border-0 md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500 dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent"
+                                                    on:click=move |_| set_menu_open.set(false)
+                                                >
+                                                    "Sign Up"
+                                                </A>
+                                            </Show>
                                         }
                                     }
                                 >
-                                    <A
-                                        href="/signup"
-                                        {..}
+                                    <button
+                                        type="button"
                                         class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:border-0 md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500 dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent"
-                                        on:click=move |_| set_menu_open.set(false)
+                                        on:click=move |_| {
+                                            spawn_local(async move {
+                                                let _ = client::logout().await;
+                                                auth.clear_session();
+                                            });
+                                            set_menu_open.set(false);
+                                        }
                                     >
-                                        "Sign Up"
-                                    </A>
+                                        "Sign Out"
+                                    </button>
                                 </Show>
                             </li>
                         </ul>

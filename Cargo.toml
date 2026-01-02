@@ -11,6 +11,12 @@ members = [
   "crates/test_support",
 ]
 
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "BSD-3-Clause"
+authors = ["Team Permesi <team@permesi.dev>"]
+
 [workspace.dependencies]
 admission_token = { path = "crates/admission_token" }
 vault_client = { path = "crates/vault_client" }
@@ -65,7 +71,6 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
 uuid = { version = "1.11", features = ["v1", "v4", "v7"] }
 built = { version = "0.7", features = ["git2"] }
-unicode-normalization = "0.1"
 
 [profile.release]
 lto = "fat"

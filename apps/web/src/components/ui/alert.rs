@@ -1,11 +1,16 @@
+//! Alert banners for success and error messages. Messages must be safe to render
+//! and should never include secrets or tokens.
+
 use leptos::prelude::*;
 
 #[derive(Clone, Copy)]
+/// Supported alert styles.
 pub enum AlertKind {
     Error,
     Success,
 }
 
+/// Renders a styled alert banner.
 #[component]
 pub fn Alert(kind: AlertKind, message: String) -> impl IntoView {
     let class = match kind {

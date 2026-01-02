@@ -5,7 +5,6 @@ use utoipa::ToSchema;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct OpaqueSignupStartRequest {
-    pub username: String,
     pub email: String,
     pub registration_request: String,
 }
@@ -17,7 +16,6 @@ pub struct OpaqueSignupStartResponse {
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct OpaqueSignupFinishRequest {
-    pub username: String,
     pub email: String,
     pub registration_record: String,
 }
@@ -56,6 +54,12 @@ pub struct ResendVerificationRequest {
     pub email: String,
 }
 
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct SessionResponse {
+    pub user_id: String,
+    pub email: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,23 +68,16 @@ mod tests {
     #[test]
     fn opaque_signup_start_request_round_trips() -> Result<()> {
         let request = OpaqueSignupStartRequest {
-            username: "alice".to_string(),
             email: "alice@example.com".to_string(),
             registration_request: "opaque".to_string(),
         };
         let value = serde_json::to_value(&request)?;
-        let username = value
-            .get("username")
-            .and_then(serde_json::Value::as_str)
-            .context("missing username")?;
         let email = value
             .get("email")
             .and_then(serde_json::Value::as_str)
             .context("missing email")?;
-        assert_eq!(username, "alice");
         assert_eq!(email, "alice@example.com");
         let decoded: OpaqueSignupStartRequest = serde_json::from_value(value)?;
-        assert_eq!(decoded.username, "alice");
         assert_eq!(decoded.registration_request, "opaque");
         Ok(())
     }

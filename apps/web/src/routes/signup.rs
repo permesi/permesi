@@ -1,30 +1,39 @@
-use crate::app_lib::AppError;
-use crate::app_lib::config::AppConfig;
-use crate::components::{Alert, AlertKind, AppShell, Button, Spinner};
-use crate::features::auth::client;
-use crate::features::auth::opaque::{OpaqueSuite, identifiers, ksf, normalize_email};
-use crate::features::auth::token;
-use crate::features::auth::types::{OpaqueSignupFinishRequest, OpaqueSignupStartRequest};
+//! Signup route that implements the client-side OPAQUE registration exchange. It
+//! validates inputs locally, sends only OPAQUE messages to the API, and prompts
+//! the user to verify their email before signing in. Requests are zero-token
+//! gated to avoid unauthenticated abuse.
+//!
+//! Flow Overview: Start OPAQUE registration, finish the exchange, then display
+//! the verification prompt.
+
+use crate::{
+    app_lib::{AppError, config::AppConfig},
+    components::{Alert, AlertKind, AppShell, Button, Spinner},
+    features::auth::{
+        client,
+        opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
+        token,
+        types::{OpaqueSignupFinishRequest, OpaqueSignupStartRequest},
+    },
+};
 use base64::Engine;
-use leptos::ev::SubmitEvent;
-use leptos::prelude::*;
+use leptos::{ev::SubmitEvent, prelude::*};
 use opaque_ke::{ClientRegistration, ClientRegistrationFinishParameters, RegistrationResponse};
 use rand::rngs::OsRng;
 
+/// Minimum password length enforced by the client for early UX feedback.
 const MIN_PASSWORD_LENGTH: usize = 12;
-const USERNAME_MIN_LENGTH: usize = 3;
-const USERNAME_MAX_LENGTH: usize = 32;
-
 #[derive(Clone)]
+/// Captures signup form input for the async action without borrowing signals.
 struct SignupInput {
-    username: String,
     email: String,
     password: String,
 }
 
+/// Renders the signup form and drives the OPAQUE registration flow.
+/// On success it prompts the user to verify their email.
 #[component]
 pub fn SignUpPage() -> impl IntoView {
-    let (username, set_username) = signal(String::new());
     let (email, set_email) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (confirm_password, set_confirm_password) = signal(String::new());
@@ -44,7 +53,6 @@ pub fn SignUpPage() -> impl IntoView {
                     .map_err(|_| AppError::Config("Unable to start secure signup.".to_string()))?;
 
             let start_request = OpaqueSignupStartRequest {
-                username: input.username.clone(),
                 email: input.email.clone(),
                 registration_request: base64::engine::general_purpose::STANDARD
                     .encode(start.message.serialize()),
@@ -77,7 +85,6 @@ pub fn SignUpPage() -> impl IntoView {
                 .map_err(|_| AppError::Config("Unable to complete secure signup.".to_string()))?;
 
             let finish_request = OpaqueSignupFinishRequest {
-                username: input.username,
                 email: input.email,
                 registration_record: base64::engine::general_purpose::STANDARD
                     .encode(finish.message.serialize()),
@@ -104,26 +111,16 @@ pub fn SignUpPage() -> impl IntoView {
         set_error.set(None);
         set_success.set(false);
 
-        let username_value = username.get_untracked().trim().to_string();
-        let email_value = email.get_untracked().trim().to_string();
+        let email_value = normalize_email(&email.get_untracked());
         let password_value = password.get_untracked();
         let confirm_value = confirm_password.get_untracked();
 
-        if username_value.is_empty()
-            || email_value.is_empty()
+        if email_value.is_empty()
             || password_value.trim().is_empty()
             || confirm_value.trim().is_empty()
         {
             set_error.set(Some(AppError::Config(
-                "Username, email, and both password fields are required.".to_string(),
-            )));
-            return;
-        }
-
-        if !valid_username(&username_value) {
-            set_error.set(Some(AppError::Config(
-                "Username must be 3-32 chars, start with a letter/number, and use only letters, numbers, _ or -."
-                    .to_string(),
+                "Email and both password fields are required.".to_string(),
             )));
             return;
         }
@@ -150,7 +147,6 @@ pub fn SignUpPage() -> impl IntoView {
         }
 
         signup_action.dispatch(SignupInput {
-            username: username_value,
             email: email_value,
             password: password_value,
         });
@@ -159,23 +155,6 @@ pub fn SignUpPage() -> impl IntoView {
     view! {
         <AppShell>
             <form class="max-w-sm mx-auto" on:submit=on_submit>
-                <div class="mb-5">
-                    <label
-                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                        for="username"
-                    >
-                        "Username"
-                    </label>
-                    <input
-                        id="username"
-                        type="text"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                        autocomplete="username"
-                        placeholder="yourname"
-                        required
-                        on:input=move |event| set_username.set(event_target_value(&event))
-                    />
-                </div>
                 <div class="mb-5">
                     <label
                         class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
@@ -263,23 +242,7 @@ pub fn SignUpPage() -> impl IntoView {
     }
 }
 
-fn valid_username(input: &str) -> bool {
-    let trimmed = input.trim();
-    let length = trimmed.len();
-    if length < USERNAME_MIN_LENGTH || length > USERNAME_MAX_LENGTH {
-        return false;
-    }
-    let mut chars = trimmed.chars();
-    let first = match chars.next() {
-        Some(ch) => ch,
-        None => return false,
-    };
-    if !first.is_ascii_alphanumeric() {
-        return false;
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-}
-
+/// Maps internal errors to user-facing strings without leaking details.
 fn format_error(err: &AppError) -> String {
     match err {
         AppError::Config(message) => message.clone(),

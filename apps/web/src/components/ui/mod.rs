@@ -1,3 +1,5 @@
+//! Shared UI atoms such as buttons, alerts, and spinners.
+
 mod alert;
 mod button;
 mod spinner;

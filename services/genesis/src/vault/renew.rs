@@ -145,3 +145,69 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{renew_db_token, renew_token};
+    use anyhow::Result;
+    use secrecy::SecretString;
+    use serde_json::json;
+    use std::net::TcpListener;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn can_bind_localhost() -> bool {
+        TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    #[tokio::test]
+    async fn renew_token_returns_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/token/renew-self"))
+            .and(header("X-Vault-Token", "vault-token"))
+            .and(body_json(json!({ "increment": 0 })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "lease_duration": 42 }
+            })))
+            .mount(&server)
+            .await;
+
+        let lease_duration = renew_token(&server.uri(), &token, None).await?;
+        assert_eq!(lease_duration, 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_db_token_returns_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/leases/renew"))
+            .and(header("X-Vault-Token", "vault-token"))
+            .and(body_json(json!({
+                "increment": 120,
+                "lease_id": "lease-1"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "lease_duration": 120
+            })))
+            .mount(&server)
+            .await;
+
+        let lease_duration = renew_db_token(&server.uri(), &token, "lease-1", 120).await?;
+        assert_eq!(lease_duration, 120);
+        Ok(())
+    }
+}

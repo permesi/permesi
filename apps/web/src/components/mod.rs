@@ -1,3 +1,5 @@
+//! Shared UI components exported for routes and features.
+
 pub(crate) mod layout;
 pub(crate) mod ui;
 

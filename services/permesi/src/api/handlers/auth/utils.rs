@@ -1,36 +1,24 @@
-//! Small helpers for auth validation and token handling.
+//! Small helpers for auth validation and email verification token handling.
 
 use anyhow::{Context, Result};
 use base64::Engine;
 use rand::{RngCore, rngs::OsRng};
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use unicode_normalization::UnicodeNormalization;
 
-const USERNAME_MIN_LENGTH: usize = 3;
-const USERNAME_MAX_LENGTH: usize = 32;
-
-pub(super) fn normalize_username(username: &str) -> String {
-    let normalized = username.nfkc().collect::<String>();
-    normalized.trim().to_lowercase()
-}
-
+/// Normalize an email for lookup/uniqueness checks.
 pub(super) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
 }
 
-pub(super) fn valid_username(username_normalized: &str) -> bool {
-    let length = username_normalized.len();
-    if !(USERNAME_MIN_LENGTH..=USERNAME_MAX_LENGTH).contains(&length) {
-        return false;
-    }
-    Regex::new(r"^[a-z0-9][a-z0-9_-]*$").is_ok_and(|regex| regex.is_match(username_normalized))
-}
-
+/// Basic email format check on already-normalized input.
 pub(super) fn valid_email(email_normalized: &str) -> bool {
     Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").is_ok_and(|regex| regex.is_match(email_normalized))
 }
 
+/// Create a new verification token for email links.
+///
+/// Returned token is only sent to the user; we store a hash in the database.
 pub(super) fn generate_verification_token() -> Result<String> {
     let mut bytes = [0u8; 32];
     OsRng
@@ -39,17 +27,38 @@ pub(super) fn generate_verification_token() -> Result<String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
+/// Create a new session token for the auth cookie.
+/// The raw value is only returned to set the cookie; the database stores a hash.
+pub(super) fn generate_session_token() -> Result<String> {
+    let mut bytes = [0u8; 32];
+    OsRng
+        .try_fill_bytes(&mut bytes)
+        .context("failed to generate session token")?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// Hash a verification token so we never store the raw token in the database.
 pub(super) fn hash_verification_token(token: &str) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     hasher.finalize().to_vec()
 }
 
+/// Hash a session token so raw values never touch the database.
+/// The hash is used for lookups when the cookie is presented.
+pub(super) fn hash_session_token(token: &str) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hasher.finalize().to_vec()
+}
+
+/// Build the frontend verification link included in outbound emails.
 pub(super) fn build_verify_url(frontend_base_url: &str, token: &str) -> String {
     let base = frontend_base_url.trim_end_matches('/');
     format!("{base}/verify-email#token={token}")
 }
 
+/// Decode a base64 payload (used by OPAQUE handlers).
 pub(super) fn decode_base64_field(value: &str) -> Result<Vec<u8>, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -67,6 +76,7 @@ pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
     }
 }
 
+/// Extract a client IP for rate limiting from common proxy headers.
 pub(super) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
     let forwarded = headers
         .get("x-forwarded-for")
@@ -97,27 +107,8 @@ mod tests {
     use std::fmt;
 
     #[test]
-    fn normalize_username_trims_and_lowercases() {
-        assert_eq!(normalize_username(" Alice "), "alice");
-    }
-
-    #[test]
     fn normalize_email_trims_and_lowercases() {
         assert_eq!(normalize_email(" Alice@Example.COM "), "alice@example.com");
-    }
-
-    #[test]
-    fn valid_username_enforces_length_bounds() {
-        assert!(!valid_username("ab"));
-        assert!(valid_username("abc"));
-        assert!(valid_username(&"a".repeat(32)));
-        assert!(!valid_username(&"a".repeat(33)));
-    }
-
-    #[test]
-    fn valid_username_rejects_invalid_chars() {
-        assert!(!valid_username("alice!"));
-        assert!(!valid_username("-alice"));
     }
 
     #[test]

@@ -1,16 +1,21 @@
-use crate::app_lib::AppError;
-use crate::components::{Alert, AlertKind, AppShell, Spinner};
-use crate::features::auth::guards::RequireAuth;
-use crate::features::users::client;
-use leptos::prelude::*;
-use leptos_router::hooks::use_params;
-use leptos_router::params::Params;
+//! User detail route guarded by the auth gate. It fetches a single user record
+//! by id and relies on the backend for authorization.
 
+use crate::{
+    app_lib::AppError,
+    components::{Alert, AlertKind, AppShell, Spinner},
+    features::{auth::guards::RequireAuth, users::client},
+};
+use leptos::prelude::*;
+use leptos_router::{hooks::use_params, params::Params};
+
+/// Typed route params for `/users/:id`.
 #[derive(Params, PartialEq, Clone)]
 struct UserParams {
     id: Option<String>,
 }
 
+/// Renders the user detail view and fetches data by id.
 #[component]
 pub fn UserDetailPage() -> impl IntoView {
     let params = use_params::<UserParams>();

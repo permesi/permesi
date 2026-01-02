@@ -151,14 +151,13 @@ fn with_vault_args(command: Command) -> Command {
 }
 
 fn with_auth_args(command: Command) -> Command {
+    let command = with_auth_email_args(command);
+    let command = with_auth_outbox_args(command);
+    with_auth_opaque_args(command)
+}
+
+fn with_auth_email_args(command: Command) -> Command {
     command
-        .arg(
-            Arg::new("zero-token-validate-url")
-                .long("zero-token-validate-url")
-                .help("Genesis zero token validation URL")
-                .env("PERMESI_ZERO_TOKEN_VALIDATE_URL")
-                .default_value("https://genesis.permesi.dev/v1/zero-token/validate"),
-        )
         .arg(
             Arg::new("frontend-base-url")
                 .long("frontend-base-url")
@@ -182,6 +181,18 @@ fn with_auth_args(command: Command) -> Command {
                 .default_value("60")
                 .value_parser(clap::value_parser!(i64)),
         )
+        .arg(
+            Arg::new("session-ttl-seconds")
+                .long("session-ttl-seconds")
+                .help("Session cookie TTL in seconds")
+                .env("PERMESI_SESSION_TTL_SECONDS")
+                .default_value("604800")
+                .value_parser(clap::value_parser!(i64)),
+        )
+}
+
+fn with_auth_outbox_args(command: Command) -> Command {
+    command
         .arg(
             Arg::new("email-outbox-poll-seconds")
                 .long("email-outbox-poll-seconds")
@@ -222,6 +233,10 @@ fn with_auth_args(command: Command) -> Command {
                 .default_value("300")
                 .value_parser(clap::value_parser!(u64)),
         )
+}
+
+fn with_auth_opaque_args(command: Command) -> Command {
+    command
         .arg(
             Arg::new("opaque-kv-mount")
                 .long("opaque-kv-mount")

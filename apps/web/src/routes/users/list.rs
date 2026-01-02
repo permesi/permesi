@@ -1,9 +1,14 @@
-use crate::components::{Alert, AlertKind, AppShell, Spinner};
-use crate::features::auth::guards::RequireAuth;
-use crate::features::users::client;
+//! Users list route guarded by the auth gate. It keeps the list view minimal
+//! and relies on the backend for authorization.
+
+use crate::{
+    components::{Alert, AlertKind, AppShell, Spinner},
+    features::{auth::guards::RequireAuth, users::client},
+};
 use leptos::prelude::*;
 use leptos_router::components::A;
 
+/// Renders the users list view and fetches data on mount.
 #[component]
 pub fn UsersListPage() -> impl IntoView {
     let users = LocalResource::new(move || async move { client::list_users().await });

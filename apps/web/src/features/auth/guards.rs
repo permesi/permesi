@@ -1,7 +1,12 @@
+//! UI-only auth guards for protected routes. These guards improve UX by
+//! redirecting unauthenticated users but do not enforce security; the API
+//! must still validate sessions.
+
 use crate::features::auth::state::use_auth;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
+/// Renders children and redirects to login when unauthenticated.
 #[component]
 pub fn RequireAuth(children: Children) -> impl IntoView {
     let auth = use_auth();

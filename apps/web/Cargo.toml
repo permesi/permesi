@@ -1,11 +1,11 @@
 [package]
 name = "permesi_web"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
-license = "BSD-3-Clause"
+license.workspace = true
 build = "build.rs"
-authors = ["Team Permesi <team@permesi.dev>"]
+authors.workspace = true
 
 [lints]
 workspace = true

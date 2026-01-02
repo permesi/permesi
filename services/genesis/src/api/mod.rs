@@ -1,5 +1,5 @@
 use crate::{
-    api::handlers::{headers, health, paserk, token},
+    api::handlers::{headers, health, paserk, root, token},
     cli::globals::GlobalArgs,
     vault,
 };
@@ -8,7 +8,7 @@ use axum::{
     Extension,
     body::Body,
     http::{HeaderName, HeaderValue, Method, Request},
-    routing::options,
+    routing::{get, options},
 };
 use sqlx::postgres::PgPoolOptions;
 use std::{sync::Arc, time::Duration};
@@ -175,6 +175,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
                 .layer(Extension(admission.clone()))
                 .layer(Extension(pool.clone())),
         )
+        .route("/", get(root::root))
         .route("/health", options(health::health))
         .layer(Extension(pool));
 

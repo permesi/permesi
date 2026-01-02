@@ -1,5 +1,10 @@
+//! Shared error type for frontend network and config failures. It keeps error
+//! handling consistent across features without exposing sensitive payloads, and
+//! the enum stays lightweight for reactive UI state.
+
 use std::fmt;
 
+/// Uniform error type surfaced by API helpers and route actions.
 #[derive(Clone, Debug)]
 pub enum AppError {
     Config(String),
@@ -11,6 +16,7 @@ pub enum AppError {
 }
 
 impl fmt::Display for AppError {
+    /// Formats user-facing error strings for alerts and logs.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AppError::Config(message) => write!(formatter, "Config error: {message}"),

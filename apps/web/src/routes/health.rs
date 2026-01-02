@@ -1,7 +1,10 @@
-use crate::app_lib::build_info;
-use crate::components::AppShell;
+//! Health route that displays build metadata for quick diagnostics. It shows the
+//! git commit locally without a backend call and exposes only non-sensitive data.
+
+use crate::{app_lib::build_info, components::AppShell};
 use leptos::prelude::*;
 
+/// Renders the build version card.
 #[component]
 pub fn HealthPage() -> impl IntoView {
     let commit = build_info::git_commit_hash();

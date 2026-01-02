@@ -2,6 +2,11 @@
 dist = "dist"
 public_url = "/"
 
+[[hooks]]
+stage = "pre_build"
+command = "npm"
+command_arguments = ["run", "css:build"]
+
 [tools]
 # Match the wasm-bindgen CLI to the crate version in Cargo.lock.
 wasm_bindgen = "0.2.106"

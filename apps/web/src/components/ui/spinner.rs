@@ -1,5 +1,8 @@
+//! Lightweight loading spinner used during async operations.
+
 use leptos::prelude::*;
 
+/// Renders a small animated spinner.
 #[component]
 pub fn Spinner() -> impl IntoView {
     view! {

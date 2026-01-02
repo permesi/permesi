@@ -23,7 +23,7 @@ pub struct UserRegister {
     path= "/user/register",
     responses (
         (status = 201, description = "Registration successful", body = [UserRegister], content_type = "application/json"),
-        (status = 409, description = "User with the specified username or email already exists", body = [UserRegister]),
+        (status = 409, description = "User with the specified email already exists", body = [UserRegister]),
     ),
     tag= "register"
 )]
@@ -41,10 +41,11 @@ pub async fn register(
     };
 
     debug!("user: {:?}", user);
+    let email = user.email.trim().to_lowercase();
 
-    // if not valid username, password or token return 400
-    if !valid_email(&user.email) {
-        return (StatusCode::BAD_REQUEST, "Invalid username".to_string());
+    // if not valid email, password or token return 400
+    if !valid_email(&email) {
+        return (StatusCode::BAD_REQUEST, "Invalid email".to_string());
     }
 
     if !valid_password(&user.password) {
@@ -56,7 +57,7 @@ pub async fn register(
     }
 
     // check if user exists
-    match user_exists(&pool, &user.email).await {
+    match user_exists(&pool, &email).await {
         Ok(true) => {
             error!("User already exists");
             return (StatusCode::CONFLICT, "User already exists".to_string());
@@ -72,7 +73,7 @@ pub async fn register(
     }
 
     // encrypt password using vault transit engine
-    let password = match encrypt(&globals, &user.password, &user.email).await {
+    let password = match encrypt(&globals, &user.password, &email).await {
         Ok(password) => password,
         Err(e) => {
             error!("Error encrypting password: {:?}", e);
@@ -92,7 +93,7 @@ pub async fn register(
         db.statement = query
     );
     match sqlx::query(query)
-        .bind(&user.email)
+        .bind(&email)
         .bind(&password)
         .execute(&*pool)
         .instrument(span)

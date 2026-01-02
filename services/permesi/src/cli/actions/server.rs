@@ -19,10 +19,10 @@ pub struct Args {
     pub admission_paserk_url: Option<String>,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
-    pub zero_token_validate_url: String,
     pub frontend_base_url: String,
     pub email_token_ttl_seconds: i64,
     pub email_resend_cooldown_seconds: i64,
+    pub session_ttl_seconds: i64,
     pub email_outbox_poll_seconds: u64,
     pub email_outbox_batch_size: usize,
     pub email_outbox_max_attempts: u32,
@@ -104,14 +104,14 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    let auth_config =
-        api::handlers::auth::AuthConfig::new(args.zero_token_validate_url, args.frontend_base_url)
-            .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
-            .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
-            .with_opaque_kv_mount(args.opaque_kv_mount)
-            .with_opaque_kv_path(args.opaque_kv_path)
-            .with_opaque_server_id(args.opaque_server_id)
-            .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
+    let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url)
+        .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
+        .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
+        .with_session_ttl_seconds(args.session_ttl_seconds)
+        .with_opaque_kv_mount(args.opaque_kv_mount)
+        .with_opaque_kv_path(args.opaque_kv_path)
+        .with_opaque_server_id(args.opaque_server_id)
+        .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
     let email_config = api::email::EmailWorkerConfig::new()
         .with_poll_interval_seconds(args.email_outbox_poll_seconds)

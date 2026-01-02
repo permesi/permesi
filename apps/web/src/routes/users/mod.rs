@@ -1,3 +1,5 @@
+//! User route group re-exported by the top-level routing module.
+
 mod detail;
 mod list;
 

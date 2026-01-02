@@ -1,6 +1,8 @@
-use leptos::ev::MouseEvent;
-use leptos::prelude::*;
+//! Styled button component used across forms and actions.
 
+use leptos::{ev::MouseEvent, prelude::*};
+
+/// Renders a styled button with optional disabled state and click handler.
 #[component]
 pub fn Button(
     #[prop(optional)] button_type: Option<&'static str>,

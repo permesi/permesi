@@ -35,6 +35,129 @@ build-permesi:
 build-genesis:
   cargo build -p genesis
 
+# ----------------------
+# Version bumping
+# ----------------------
+
+check-clean:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Working directory is not clean. Commit or stash your changes first." >&2
+    git status --short
+    exit 1
+  fi
+
+check-develop:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  current_branch="$(git branch --show-current)"
+  if [[ "$current_branch" != "develop" ]]; then
+    echo "Not on develop branch (currently on: ${current_branch})." >&2
+    echo "Switch to develop before bumping." >&2
+    exit 1
+  fi
+
+_bump-workspace bump_kind: check-develop check-clean
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  bump_kind="{{bump_kind}}"
+  base_ref_default="origin/main"
+  if ! git rev-parse --verify "$base_ref_default" >/dev/null 2>&1; then
+    base_ref_default="main"
+  fi
+  base_ref="${BUMP_BASE_REF:-$base_ref_default}"
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required for version bumping." >&2
+    exit 1
+  fi
+  if ! cargo set-version -h >/dev/null 2>&1; then
+    echo "cargo set-version not found; install cargo-edit (cargo install cargo-edit)." >&2
+    exit 1
+  fi
+  base_commit="$(git merge-base "$base_ref" HEAD)"
+  changed="$(git diff --name-only "$base_commit"..HEAD | sort -u)"
+  if [[ -z "$changed" ]]; then
+    echo "No changes detected."
+    exit 0
+  fi
+  current_version="$(
+    cargo metadata --no-deps --format-version 1 \
+      | jq -r '.packages[] | select(.name == "permesi") | .version' \
+      | head -n 1
+  )"
+  if [[ -z "$current_version" || "$current_version" == "null" ]]; then
+    echo "Failed to resolve current workspace version." >&2
+    exit 1
+  fi
+  echo "Current version: ${current_version}"
+  cargo update
+  just test
+  cargo set-version --workspace --bump "$bump_kind"
+  new_version="$(
+    cargo metadata --no-deps --format-version 1 \
+      | jq -r '.packages[] | select(.name == "permesi") | .version' \
+      | head -n 1
+  )"
+  if [[ -z "$new_version" || "$new_version" == "null" ]]; then
+    echo "Failed to resolve new workspace version." >&2
+    exit 1
+  fi
+  echo "New version: ${new_version}"
+  git fetch --tags --quiet
+  if git rev-parse -q --verify "refs/tags/${new_version}" >/dev/null 2>&1; then
+    echo "Tag ${new_version} already exists." >&2
+    exit 1
+  fi
+  git add -A
+  git commit -m "chore(release): bump version to ${new_version}"
+  git push origin develop
+
+_deploy-merge-and-tag:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required for tagging." >&2
+    exit 1
+  fi
+  new_version="$(
+    cargo metadata --no-deps --format-version 1 \
+      | jq -r '.packages[] | select(.name == "permesi") | .version' \
+      | head -n 1
+  )"
+  if [[ -z "$new_version" || "$new_version" == "null" ]]; then
+    echo "Failed to resolve workspace version." >&2
+    exit 1
+  fi
+  git fetch --tags --quiet
+  if git rev-parse -q --verify "refs/tags/${new_version}" >/dev/null 2>&1; then
+    echo "Tag ${new_version} already exists." >&2
+    exit 1
+  fi
+  git pull origin develop
+  git checkout main
+  git pull origin main
+  if ! git merge develop --no-edit; then
+    echo "Merge failed; resolve conflicts manually." >&2
+    git checkout develop
+    exit 1
+  fi
+  git tag "$new_version"
+  git push origin main "$new_version"
+  git checkout develop
+
+deploy:
+  @just _bump-workspace patch
+  @just _deploy-merge-and-tag
+
+deploy-minor:
+  @just _bump-workspace minor
+  @just _deploy-merge-and-tag
+
+deploy-major:
+  @just _bump-workspace major
+  @just _deploy-merge-and-tag
+
 web:
   #!/usr/bin/env zsh
   set -euo pipefail
@@ -69,7 +192,6 @@ web-build:
   just web-node-setup
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
-  npm run css:build
   : "${PERMESI_API_HOST:=http://localhost:8001}"
   : "${PERMESI_TOKEN_HOST:=http://localhost:8000}"
   : "${PERMESI_API_TOKEN_HOST:=${PERMESI_TOKEN_HOST}}"
@@ -80,6 +202,10 @@ web-build:
     PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
     trunk build --release
+  if [[ ! -s assets/app.gen.css ]]; then
+    echo "Missing generated CSS: apps/web/assets/app.gen.css" >&2
+    exit 1
+  fi
 
 web-clean:
   #!/usr/bin/env zsh
@@ -143,6 +269,27 @@ web-css-build:
   cd {{root}}/apps/web
   npm run css:build
 
+firefox-dev:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  script="{{root}}/firefox-dev.sh"
+  if [[ ! -x "$script" ]]; then
+    echo "Missing executable: ${script}" >&2
+    exit 1
+  fi
+  nohup "$script" >/tmp/firefox-dev.log 2>&1 &
+  disown
+  echo "Firefox dev launched (log: /tmp/firefox-dev.log)"
+
+firefox:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v hyprctl >/dev/null 2>&1; then
+    echo "hyprctl not found; run: just firefox-dev" >&2
+    exit 1
+  fi
+  hyprctl dispatch exec "[workspace 2] bash -lc 'cd {{root}} && just firefox-dev'"
+
 genesis:
   #!/usr/bin/env zsh
   set -euo pipefail
@@ -156,6 +303,31 @@ permesi:
   set -euo pipefail
   if [[ -f {{root}}/.envrc ]]; then
     source {{root}}/.envrc
+  fi
+  if [[ -n "${PERMESI_ADMISSION_PASERK_URL:-}" ]]; then
+  echo "Waiting for genesis PASERK at ${PERMESI_ADMISSION_PASERK_URL}..."
+  python3 - "$PERMESI_ADMISSION_PASERK_URL" <<'PY'
+  import json
+  import sys
+  import time
+  import urllib.request
+
+  url = sys.argv[1]
+  deadline = time.time() + 30
+
+  while time.time() < deadline:
+      try:
+          with urllib.request.urlopen(url, timeout=1) as resp:
+              if resp.status != 200:
+                  raise RuntimeError(f"status {resp.status}")
+              json.loads(resp.read())
+          raise SystemExit(0)
+      except Exception:
+          time.sleep(0.5)
+
+  print(f"Timed out waiting for {url}", file=sys.stderr)
+  raise SystemExit(1)
+  PY
   fi
   cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
 
@@ -218,6 +390,12 @@ genesis-token:
 
   print(json.dumps(output, indent=2, sort_keys=True))
   PY
+
+signup-verify-url:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  podman exec -i postgres-permesi psql -U postgres -d permesi -Atc \
+    "select payload_json->>'verify_url' from email_outbox order by created_at desc limit 1;"
 
 genesis-it: dev-start-infra
   #!/usr/bin/env zsh
@@ -291,9 +469,156 @@ vault: image-vault
     -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
     permesi-vault:{{ branch }} &
 
+vault-persist: image-vault
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
+    echo "vault already running"
+    exit 0
+  fi
+  podman volume inspect permesi-vault-data >/dev/null 2>&1 || podman volume create permesi-vault-data >/dev/null
+  podman run --replace --rm --name vault \
+    --network {{net}} \
+    --cap-add=IPC_LOCK \
+    -p 8200:8200 \
+    -v {{root}}/vault/config.hcl:/vault/config/vault.hcl:ro \
+    -v {{root}}/vault:/workspace/vault:ro \
+    -v permesi-vault-data:/vault/data \
+    --entrypoint vault \
+    permesi-vault:{{ branch }} \
+    server -config=/vault/config/vault.hcl &
+
+vault-wait:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  for _ in {1..40}; do
+    vault_status="$(
+      podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
+    )"
+    if [[ -n "$vault_status" ]] && rg -q '"initialized":' <<<"$vault_status"; then
+      exit 0
+    fi
+    sleep 0.5
+  done
+  echo "Vault did not respond on http://127.0.0.1:8200" >&2
+  exit 1
+
+vault-init:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  keys="{{root}}/vault/keys.json"
+  mkdir -p {{root}}/vault
+  if [[ -f "$keys" ]]; then
+    echo "Vault already initialized (keys file exists)."
+    exit 0
+  fi
+  just vault-wait
+  vault_status="$(
+    podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
+  )"
+  if [[ -z "$vault_status" ]]; then
+    echo "Vault status unavailable; is the server running?" >&2
+    exit 1
+  fi
+  initialized="$(printf '%s' "$vault_status" | jq -r '.initialized')"
+  if [[ "$initialized" == "true" ]]; then
+    echo "Vault is already initialized but ${keys} is missing." >&2
+    echo "Restore the keys file or reset the vault data volume." >&2
+    exit 1
+  fi
+  podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault operator init -key-shares=1 -key-threshold=1 -format=json' > "$keys"
+  chmod 600 "$keys"
+  echo "Wrote ${keys}"
+
+vault-unseal:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  keys="{{root}}/vault/keys.json"
+  if [[ ! -f "$keys" ]]; then
+    echo "Missing ${keys}. Run: just vault-init" >&2
+    exit 1
+  fi
+  just vault-wait
+  vault_status="$(
+    podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
+  )"
+  sealed="$(printf '%s' "$vault_status" | jq -r '.sealed')"
+  if [[ "$sealed" != "true" ]]; then
+    echo "Vault already unsealed."
+    exit 0
+  fi
+  unseal_key="$(jq -r '.unseal_keys_b64[0]' "$keys")"
+  podman exec vault sh -c "VAULT_ADDR=http://127.0.0.1:8200 vault operator unseal '${unseal_key}'" >/dev/null
+  echo "Vault unsealed."
+
+vault-bootstrap:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  keys="{{root}}/vault/keys.json"
+  if [[ ! -f "$keys" ]]; then
+    echo "Missing ${keys}. Run: just vault-init" >&2
+    exit 1
+  fi
+  token="$(jq -r '.root_token' "$keys")"
+  podman exec \
+    -e VAULT_ADDR=http://127.0.0.1:8200 \
+    -e VAULT_TOKEN="$token" \
+    vault \
+    sh /workspace/vault/bootstrap-persist.sh
+
+vault-persist-ready: vault-persist vault-init vault-unseal vault-bootstrap
+
 vault-env:
   #!/usr/bin/env zsh
   set -e
+  keys="{{root}}/vault/keys.json"
+  if [[ -f "$keys" ]]; then
+    vault_addr="${VAULT_ADDR:-http://127.0.0.1:8200}"
+    approle_mount="${VAULT_APPROLE_MOUNT:-approle}"
+    token="$(jq -r '.root_token' "$keys")"
+    permesi_role_id="$(
+      podman exec \
+        -e VAULT_ADDR="$vault_addr" \
+        -e VAULT_TOKEN="$token" \
+        vault \
+        vault read -field=role_id "auth/${approle_mount}/role/permesi/role-id"
+    )"
+    permesi_secret_id="$(
+      podman exec \
+        -e VAULT_ADDR="$vault_addr" \
+        -e VAULT_TOKEN="$token" \
+        vault \
+        vault write -field=secret_id -f "auth/${approle_mount}/role/permesi/secret-id"
+    )"
+    genesis_role_id="$(
+      podman exec \
+        -e VAULT_ADDR="$vault_addr" \
+        -e VAULT_TOKEN="$token" \
+        vault \
+        vault read -field=role_id "auth/${approle_mount}/role/genesis/role-id"
+    )"
+    genesis_secret_id="$(
+      podman exec \
+        -e VAULT_ADDR="$vault_addr" \
+        -e VAULT_TOKEN="$token" \
+        vault \
+        vault write -field=secret_id -f "auth/${approle_mount}/role/genesis/secret-id"
+    )"
+    printf '%s\n' \
+      "export VAULT_ADDR=\"${vault_addr}\"" \
+      "export VAULT_TOKEN=\"${token}\"" \
+      "" \
+      "export GENESIS_DSN=\"postgres://postgres@localhost:5432/genesis\"" \
+      "export GENESIS_VAULT_URL=\"${vault_addr%/}/v1/auth/${approle_mount}/login\"" \
+      "export GENESIS_VAULT_ROLE_ID=\"${genesis_role_id}\"" \
+      "export GENESIS_VAULT_SECRET_ID=\"${genesis_secret_id}\"" \
+      "" \
+      "export PERMESI_DSN=\"postgres://postgres@localhost:5432/permesi\"" \
+      "export PERMESI_VAULT_URL=\"${vault_addr%/}/v1/auth/${approle_mount}/login\"" \
+      "export PERMESI_VAULT_ROLE_ID=\"${permesi_role_id}\"" \
+      "export PERMESI_VAULT_SECRET_ID=\"${permesi_secret_id}\""
+    exit 0
+  fi
   login_url=""
   permesi_role_id=""
   permesi_secret_id=""
@@ -340,7 +665,6 @@ dev-env:
   printf '\n'
   printf '%s\n' \
     "export PERMESI_ADMISSION_PASERK_URL=\"http://localhost:8000/paserk.json\"" \
-    "export PERMESI_ZERO_TOKEN_VALIDATE_URL=\"http://localhost:8000/v1/zero-token/validate\"" \
     "export PERMESI_FRONTEND_BASE_URL=\"http://localhost:8080\"" \
     "export PERMESI_EMAIL_OUTBOX_POLL_SECONDS=\"10\""
 
@@ -352,6 +676,25 @@ vault-envrc:
   just --quiet vault-env > "$tmp"
   mv "$tmp" .envrc
   echo "Wrote .envrc from Vault logs."
+
+vault-info:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  echo "Vault container mounts:"
+  if podman container inspect vault >/dev/null 2>&1; then
+    podman container inspect vault \
+      | jq -r '.[0].Mounts[]? | "\(.Name)\t\(.Destination)\t\(.Source)"'
+  else
+    echo "vault container not running."
+  fi
+  echo ""
+  echo "Vault data volume:"
+  if podman volume inspect permesi-vault-data >/dev/null 2>&1; then
+    podman volume inspect permesi-vault-data \
+      | jq -r '.[0] | "\(.Name)\t\(.Mountpoint)"'
+  else
+    echo "permesi-vault-data volume not found."
+  fi
 
 dev-envrc:
   #!/usr/bin/env zsh
@@ -365,8 +708,23 @@ dev-envrc:
   fi
   echo "Wrote .envrc from Vault logs + dev endpoints."
 
-vault_stop:
+vault-stop:
   podman stop vault || true
+
+vault-reset:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  echo "This will delete the persistent Vault volume and keys file."
+  printf "Type 'delete' to continue: "
+  read -r confirm
+  if [[ "$confirm" != "delete" ]]; then
+    echo "Aborted."
+    exit 1
+  fi
+  just vault-stop
+  podman volume rm permesi-vault-data >/dev/null 2>&1 || true
+  rm -f {{root}}/vault/keys.json
+  echo "Vault data and keys removed."
 
 postgres version="18":
   #!/usr/bin/env zsh
@@ -392,7 +750,7 @@ postgres version="18":
   until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do sleep 0.2; done
   podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/00_init.sql
 
-postgres_stop:
+postgres-stop:
   podman stop postgres-permesi || true
 
 jaeger:
@@ -417,7 +775,7 @@ jaeger:
   -p 9411:9411 \
   jaegertracing/jaeger:latest &
 
-jaeger_stop:
+jaeger-stop:
   podman stop jaeger || true
 
 dev-start:
@@ -469,9 +827,9 @@ dev-start-all:
   start_session
   tmux attach -t "$session"
 
-dev-start-infra: setup-network postgres vault jaeger
+dev-start-infra: setup-network postgres vault-persist-ready jaeger
 
-dev-stop: vault_stop postgres_stop jaeger_stop
+dev-stop: vault-stop postgres-stop jaeger-stop
 
 podman-check:
   #!/usr/bin/env zsh

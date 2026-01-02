@@ -20,12 +20,14 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(health::health))
         .routes(routes!(user_register::register))
         .routes(routes!(user_login::login))
-        .routes(routes!(auth::opaque_signup::opaque_signup_start))
-        .routes(routes!(auth::opaque_signup::opaque_signup_finish))
-        .routes(routes!(auth::opaque_login::opaque_login_start))
-        .routes(routes!(auth::opaque_login::opaque_login_finish))
+        .routes(routes!(auth::opaque::signup::opaque_signup_start))
+        .routes(routes!(auth::opaque::signup::opaque_signup_finish))
+        .routes(routes!(auth::opaque::login::opaque_login_start))
+        .routes(routes!(auth::opaque::login::opaque_login_finish))
         .routes(routes!(auth::verification::verify_email))
-        .routes(routes!(auth::verification::resend_verification));
+        .routes(routes!(auth::verification::resend_verification))
+        .routes(routes!(auth::session::session))
+        .routes(routes!(auth::session::logout));
 
     let mut permesi_tag = Tag::new("permesi");
     permesi_tag.description = Some("Identity and access management API".to_string());
@@ -140,5 +142,7 @@ mod tests {
                 .paths
                 .contains_key("/v1/auth/resend-verification")
         );
+        assert!(spec.paths.paths.contains_key("/v1/auth/session"));
+        assert!(spec.paths.paths.contains_key("/v1/auth/logout"));
     }
 }

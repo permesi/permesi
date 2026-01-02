@@ -1,8 +1,8 @@
 //! Auth handlers and supporting modules.
 
-pub(crate) mod opaque_login;
-pub(crate) mod opaque_signup;
+pub(crate) mod opaque;
 mod rate_limit;
+pub(crate) mod session;
 mod state;
 mod storage;
 mod types;

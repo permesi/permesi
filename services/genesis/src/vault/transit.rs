@@ -216,7 +216,16 @@ pub async fn sign_ed25519(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::{Result, anyhow};
+    use secrecy::SecretString;
     use serde_json::json;
+    use std::net::TcpListener;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn can_bind_localhost() -> bool {
+        TcpListener::bind("127.0.0.1:0").is_ok()
+    }
 
     #[test]
     fn transit_path_trims_mount_slashes() {
@@ -279,5 +288,111 @@ mod tests {
     fn get_required_str_returns_none_for_missing_path() {
         let value = json!({ "data": {} });
         assert!(get_required_str(&value, &["data", "missing"]).is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_ed25519_keys_parses_response() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("GET"))
+            .and(path("/v1/transit/keys/signing-key"))
+            .and(header("X-Vault-Token", "vault-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "type": "ed25519",
+                    "latest_version": 2,
+                    "keys": {
+                        "1": {"public_key": "pk1"},
+                        "2": {"public_key": "pk2"}
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let keyset =
+            fetch_ed25519_keys(&client, &server.uri(), &token, "transit", "signing-key").await?;
+        assert_eq!(keyset.latest_version, 2);
+        assert_eq!(keyset.keys.get(&1), Some(&"pk1".to_string()));
+        assert_eq!(keyset.keys.get(&2), Some(&"pk2".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_ed25519_keys_rejects_wrong_type() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("GET"))
+            .and(path("/v1/transit/keys/signing-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "type": "rsa",
+                    "latest_version": 1,
+                    "keys": {
+                        "1": {"public_key": "pk1"}
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let err = fetch_ed25519_keys(&client, &server.uri(), &token, "transit", "signing-key")
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unexpected transit key type"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sign_ed25519_parses_signature() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+        let payload = b"hello";
+        let input_b64 = BASE64_STANDARD.encode(payload);
+
+        Mock::given(method("POST"))
+            .and(path("/v1/transit/sign/signing-key"))
+            .and(header("X-Vault-Token", "vault-token"))
+            .and(body_json(json!({
+                "input": input_b64,
+                "key_version": 3
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "signature": "vault:v3:YWJj" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let signature = sign_ed25519(
+            &client,
+            &server.uri(),
+            &token,
+            "transit",
+            "signing-key",
+            3,
+            payload,
+        )
+        .await?;
+        assert_eq!(signature.key_version, 3);
+        assert_eq!(signature.signature_base64, "YWJj");
+        Ok(())
     }
 }

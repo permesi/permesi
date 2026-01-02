@@ -1,3 +1,8 @@
+//! Build-time configuration for API and token endpoints. Values are compiled
+//! into the wasm bundle to keep runtime logic simple, so changes require a
+//! rebuild. Configuration values are public; do not store secrets here.
+
+/// Frontend configuration derived from build-time environment variables.
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub api_base_url: String,
@@ -7,6 +12,7 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// Loads config from build-time environment variables.
     pub fn load() -> Self {
         let api_base_url = option_env!("PERMESI_API_BASE_URL")
             .or(option_env!("PERMESI_API_HOST"))

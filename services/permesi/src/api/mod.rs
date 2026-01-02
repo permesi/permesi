@@ -1,9 +1,9 @@
 use crate::{
-    api::handlers::{auth, health},
+    api::handlers::{auth, health, root},
     cli::globals::GlobalArgs,
     vault,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use axum::{
     Extension,
     body::Body,
@@ -19,13 +19,14 @@ use std::{sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     request_id::PropagateRequestIdLayer,
     set_header::SetRequestHeaderLayer,
     trace::TraceLayer,
 };
 use tracing::{Span, info, info_span};
 use ulid::Ulid;
+use url::Url;
 use utoipa_axum::router::OpenApiRouter;
 // Keep these internal to the crate while allowing CLI/server wiring to reference them.
 pub(crate) mod email;
@@ -91,15 +92,17 @@ pub async fn new(
         auth_config.opaque_server_id().to_string(),
         Duration::from_secs(auth_config.opaque_login_ttl_seconds()),
     );
-    let auth_state = Arc::new(
-        auth::AuthState::new(auth_config, opaque_state, Arc::new(auth::NoopRateLimiter))
-            .context("Failed to initialize auth state")?,
-    );
+    let auth_state = Arc::new(auth::AuthState::new(
+        auth_config,
+        opaque_state,
+        Arc::new(auth::NoopRateLimiter),
+    ));
 
     // Background worker polls email_outbox (DB-backed queue) for pending rows,
     // delivers/logs them, and retries failures with exponential backoff.
     email::spawn_outbox_worker(pool.clone(), Arc::new(email::LogEmailSender), email_config);
 
+    let frontend_origin = frontend_origin(auth_state.config().frontend_base_url())?;
     let cors = CorsLayer::new()
         .allow_headers([
             CONTENT_TYPE,
@@ -107,13 +110,14 @@ pub async fn new(
             HeaderName::from_static("x-permesi-zero-token"),
         ])
         .allow_methods([Method::GET, Method::POST])
-        .allow_origin(Any);
+        .allow_origin(AllowOrigin::exact(frontend_origin))
+        .allow_credentials(true);
 
     // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
     let (router, _openapi) = router().split_for_parts();
     let app = router
-        .route("/", get(|| async { "🌱" }))
+        .route("/", get(root::root))
         .route("/health", options(health::health))
         .layer(
             ServiceBuilder::new()
@@ -164,4 +168,17 @@ fn make_span(request: &Request<Body>) -> Span {
         http.route = matched_path,
         request_id
     )
+}
+
+fn frontend_origin(frontend_base_url: &str) -> Result<HeaderValue> {
+    let parsed = Url::parse(frontend_base_url)
+        .with_context(|| format!("Invalid frontend base URL: {frontend_base_url}"))?;
+    let host = parsed.host_str().ok_or_else(|| {
+        anyhow!("Frontend base URL must include a valid host: {frontend_base_url}")
+    })?;
+    let port = parsed
+        .port()
+        .map_or_else(String::new, |port| format!(":{port}"));
+    let origin = format!("{}://{}{}", parsed.scheme(), host, port);
+    HeaderValue::from_str(&origin).context("Failed to build frontend origin header")
 }

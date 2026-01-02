@@ -12,6 +12,7 @@ apps/web/node_modules/
 fly.toml
 db/data
 db/log
+vault/keys.json
 
 # Editor/IDE artifacts
 flycheck_*

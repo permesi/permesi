@@ -1,9 +1,9 @@
 [package]
 name = "permesi"
-version = "0.1.6"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
-authors = ["Team Permesi <team@permesi.dev>"]
+authors.workspace = true
 description = "Identity and Access Management"
 documentation = "https://github.com/permesi/permesi/blob/main/README.md"
 homepage = "https://permesi.dev"
@@ -11,7 +11,7 @@ repository = "https://github.com/permesi/permesi"
 readme = "../../README.md"
 keywords = ["password", "security", "iam", "identity", "access"]
 categories = ["web-programming::http-server"]
-license = "BSD-3-Clause"
+license.workspace = true
 build = "build.rs"
 
 [lints]
@@ -65,11 +65,11 @@ url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
-unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
 test_support = { workspace = true }
+wiremock = "0.6"
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }

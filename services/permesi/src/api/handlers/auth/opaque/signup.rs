@@ -1,5 +1,19 @@
 //! `OPAQUE` signup endpoints.
 
+use crate::api::handlers::{
+    AdmissionVerifier,
+    auth::{
+        rate_limit::{RateLimitAction, RateLimitDecision},
+        state::{AuthState, OpaqueSuite},
+        storage::{SignupOutcome, insert_user_and_verification},
+        types::{
+            OpaqueSignupFinishRequest, OpaqueSignupFinishResponse, OpaqueSignupStartRequest,
+            OpaqueSignupStartResponse,
+        },
+        utils::{decode_base64_field, extract_client_ip, normalize_email, valid_email},
+        zero_token::{require_zero_token, zero_token_error_response},
+    },
+};
 use axum::{
     Json,
     extract::Extension,
@@ -11,19 +25,6 @@ use opaque_ke::{RegistrationRequest, RegistrationUpload, ServerRegistration};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::error;
-
-use super::rate_limit::{RateLimitAction, RateLimitDecision};
-use super::state::{AuthState, OpaqueSuite};
-use super::storage::{SignupOutcome, insert_user_and_verification};
-use super::types::{
-    OpaqueSignupFinishRequest, OpaqueSignupFinishResponse, OpaqueSignupStartRequest,
-    OpaqueSignupStartResponse,
-};
-use super::utils::{
-    decode_base64_field, extract_client_ip, normalize_email, normalize_username, valid_email,
-    valid_username,
-};
-use super::zero_token::{ZeroTokenError, require_zero_token, zero_token_error_response};
 
 #[utoipa::path(
     post,
@@ -42,6 +43,7 @@ use super::zero_token::{ZeroTokenError, require_zero_token, zero_token_error_res
 pub async fn opaque_signup_start(
     headers: HeaderMap,
     auth_state: Extension<Arc<AuthState>>,
+    admission: Extension<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueSignupStartRequest>>,
 ) -> impl IntoResponse {
     let request: OpaqueSignupStartRequest = match payload {
@@ -49,19 +51,12 @@ pub async fn opaque_signup_start(
         None => return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response(),
     };
 
-    let username = request.username.trim().to_string();
-    let email = request.email.trim().to_string();
-
-    let username_normalized = normalize_username(&username);
-    if !valid_username(&username_normalized) {
-        return (StatusCode::BAD_REQUEST, "Invalid username".to_string()).into_response();
-    }
-
-    let email_normalized = normalize_email(&email);
-    if !valid_email(&email_normalized) {
+    let email = normalize_email(&request.email);
+    if !valid_email(&email) {
         return (StatusCode::BAD_REQUEST, "Invalid email".to_string()).into_response();
     }
 
+    // Rate-limit before zero-token verification to keep abuse cheap to reject.
     let client_ip = extract_client_ip(&headers);
     if auth_state
         .rate_limiter()
@@ -72,20 +67,18 @@ pub async fn opaque_signup_start(
     }
     if auth_state
         .rate_limiter()
-        .check_email(&email_normalized, RateLimitAction::Signup)
+        .check_email(&email, RateLimitAction::Signup)
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
     }
 
-    if let Err(err) = require_zero_token(&headers, &auth_state).await {
-        if let ZeroTokenError::Unavailable(ref inner) = err {
-            error!("Zero token validation failed: {inner}");
-        }
+    if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);
         return (status, message).into_response();
     }
 
+    // Decode the OPAQUE registration request before starting the server flow.
     let request_bytes = match decode_base64_field(&request.registration_request) {
         Ok(bytes) => bytes,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
@@ -103,7 +96,7 @@ pub async fn opaque_signup_start(
     let Ok(response) = ServerRegistration::start(
         auth_state.opaque().server_setup(),
         registration_request,
-        email_normalized.as_bytes(),
+        email.as_bytes(),
     ) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -141,6 +134,7 @@ pub async fn opaque_signup_finish(
     headers: HeaderMap,
     pool: Extension<PgPool>,
     auth_state: Extension<Arc<AuthState>>,
+    admission: Extension<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueSignupFinishRequest>>,
 ) -> impl IntoResponse {
     let request: OpaqueSignupFinishRequest = match payload {
@@ -148,19 +142,12 @@ pub async fn opaque_signup_finish(
         None => return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response(),
     };
 
-    let username = request.username.trim().to_string();
-    let email = request.email.trim().to_string();
-
-    let username_normalized = normalize_username(&username);
-    if !valid_username(&username_normalized) {
-        return (StatusCode::BAD_REQUEST, "Invalid username".to_string()).into_response();
-    }
-
-    let email_normalized = normalize_email(&email);
-    if !valid_email(&email_normalized) {
+    let email = normalize_email(&request.email);
+    if !valid_email(&email) {
         return (StatusCode::BAD_REQUEST, "Invalid email".to_string()).into_response();
     }
 
+    // Rate-limit before zero-token verification to keep abuse cheap to reject.
     let client_ip = extract_client_ip(&headers);
     if auth_state
         .rate_limiter()
@@ -171,20 +158,18 @@ pub async fn opaque_signup_finish(
     }
     if auth_state
         .rate_limiter()
-        .check_email(&email_normalized, RateLimitAction::Signup)
+        .check_email(&email, RateLimitAction::Signup)
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
     }
 
-    if let Err(err) = require_zero_token(&headers, &auth_state).await {
-        if let ZeroTokenError::Unavailable(ref inner) = err {
-            error!("Zero token validation failed: {inner}");
-        }
+    if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);
         return (status, message).into_response();
     }
 
+    // Decode the OPAQUE registration record before storing the password file.
     let record_bytes = match decode_base64_field(&request.registration_record) {
         Ok(bytes) => bytes,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
@@ -199,20 +184,16 @@ pub async fn opaque_signup_finish(
             .into_response();
     };
 
+    // The password file is derived server-side; the raw password never leaves the client.
     let password_file = ServerRegistration::finish(registration_upload);
     let opaque_record = password_file.serialize().to_vec();
 
-    let outcome = insert_user_and_verification(
-        &pool,
-        &username,
-        &username_normalized,
-        &email,
-        &email_normalized,
-        &opaque_record,
-        auth_state.config(),
-    )
-    .await;
+    // This inserts the user, stores the registration record, and queues a
+    // verification token (stored hashed, emailed as a link).
+    let outcome =
+        insert_user_and_verification(&pool, &email, &opaque_record, auth_state.config()).await;
 
+    // The response is intentionally vague to avoid account enumeration.
     let message = "If the account can be created, you'll receive a verification email.".to_string();
     match outcome {
         Ok(SignupOutcome::Created | SignupOutcome::Conflict) => (
@@ -235,36 +216,26 @@ pub async fn opaque_signup_finish(
 
 #[cfg(test)]
 mod tests {
-    use super::super::rate_limit::{NoopRateLimiter, RateLimiter};
-    use super::super::state::{AuthConfig, AuthState, OpaqueState};
     use super::{opaque_signup_finish, opaque_signup_start};
+    use crate::api::handlers::auth::opaque::test_support::{admission_verifier, auth_state};
     use anyhow::Result;
-    use axum::extract::Extension;
-    use axum::http::{HeaderMap, StatusCode};
-    use axum::response::IntoResponse;
+    use axum::{
+        extract::Extension,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+    };
     use sqlx::postgres::PgPoolOptions;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    fn auth_state() -> Result<Arc<AuthState>> {
-        let config = AuthConfig::new(
-            "http://genesis.test/v1/zero-token/validate".to_string(),
-            "https://permesi.dev".to_string(),
-        );
-        let opaque = OpaqueState::from_seed(
-            [1u8; 32],
-            "api.permesi.dev".to_string(),
-            Duration::from_secs(30),
-        );
-        let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
-        Ok(Arc::new(AuthState::new(config, opaque, limiter)?))
-    }
 
     #[tokio::test]
     async fn opaque_signup_start_missing_payload() -> Result<()> {
-        let response = opaque_signup_start(HeaderMap::new(), Extension(auth_state()?), None)
-            .await
-            .into_response();
+        let response = opaque_signup_start(
+            HeaderMap::new(),
+            Extension(auth_state()),
+            Extension(admission_verifier()?),
+            None,
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         Ok(())
     }
@@ -275,7 +246,8 @@ mod tests {
         let response = opaque_signup_finish(
             HeaderMap::new(),
             Extension(pool),
-            Extension(auth_state()?),
+            Extension(auth_state()),
+            Extension(admission_verifier()?),
             None,
         )
         .await

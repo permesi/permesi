@@ -34,7 +34,7 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 #### 2. `permesi` (The Core / "The Authority")
 * **Role:** The OIDC Authority.
 * **Responsibility:** OPAQUE signup/login, email verification, and OIDC flows.
-* **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Separately validates short-lived **Zero Tokens** by calling the Genesis validation endpoint for auth POSTs.
+* **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Validates short-lived **Zero Tokens** offline using the PASERK keyset for auth POSTs.
 * **Output:** Issues standard OIDC Access/ID Tokens (JWTs).
 
 #### 3. Database
@@ -102,7 +102,7 @@ flowchart LR
 
 ## User Authentication (OPAQUE + Zero Token)
 
-All auth POSTs require a Genesis zero token (validated online). Admission token verification for other APIs remains offline.
+All auth POSTs require a Genesis zero token (validated offline using the PASERK keyset).
 
 ```mermaid
 sequenceDiagram
@@ -117,15 +117,19 @@ sequenceDiagram
 
     Note over U, P: OPAQUE login
     U->>P: /v1/auth/opaque/login/start + zero token
-    P->>G: /v1/zero-token/validate
-    G-->>P: valid/invalid
+    P->>P: Verify token (PASERK keyset)
     P-->>U: credential_response + login_id
 
     U->>P: /v1/auth/opaque/login/finish + zero token
-    P->>G: /v1/zero-token/validate
-    G-->>P: valid/invalid
+    P->>P: Verify token (PASERK keyset)
     P->>P: OPAQUE finish (no password sent)
-    P-->>U: 204
+    P->>DB: Persist session
+    P-->>U: 204 + Set-Cookie (session)
+
+    Note over U, P: Session hydration
+    U->>P: /v1/auth/session (cookie)
+    P->>DB: Load session
+    P-->>U: 200 session or 204
 ```
 
 Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
@@ -179,7 +183,6 @@ If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also 
 
 `just dev-envrc` emits Vault credentials plus local endpoints:
 - `PERMESI_ADMISSION_PASERK_URL=http://localhost:8000/paserk.json`
-- `PERMESI_ZERO_TOKEN_VALIDATE_URL=http://localhost:8000/v1/zero-token/validate`
 - `PERMESI_FRONTEND_BASE_URL=http://localhost:8080`
 
 ## API Contract (OpenAPI)

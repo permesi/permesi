@@ -75,10 +75,6 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let admission_issuer = matches.get_one::<String>("admission-issuer").cloned();
     let admission_audience = matches.get_one::<String>("admission-audience").cloned();
 
-    let zero_token_validate_url = matches
-        .get_one::<String>("zero-token-validate-url")
-        .cloned()
-        .context("missing required argument: --zero-token-validate-url")?;
     let frontend_base_url = matches
         .get_one::<String>("frontend-base-url")
         .cloned()
@@ -91,6 +87,10 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one::<i64>("email-resend-cooldown-seconds")
         .copied()
         .unwrap_or(60);
+    let session_ttl_seconds = matches
+        .get_one::<i64>("session-ttl-seconds")
+        .copied()
+        .unwrap_or(604_800);
     let email_outbox = parse_email_outbox_args(matches);
     let opaque_kv_mount = matches
         .get_one::<String>("opaque-kv-mount")
@@ -121,10 +121,10 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         admission_paserk_url,
         admission_issuer,
         admission_audience,
-        zero_token_validate_url,
         frontend_base_url,
         email_token_ttl_seconds,
         email_resend_cooldown_seconds,
+        session_ttl_seconds,
         email_outbox_poll_seconds: email_outbox.poll_seconds,
         email_outbox_batch_size: email_outbox.batch_size,
         email_outbox_max_attempts: email_outbox.max_attempts,
