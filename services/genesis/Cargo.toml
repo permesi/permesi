@@ -14,6 +14,16 @@ categories = ["web-programming::http-server"]
 license.workspace = true
 build = "build.rs"
 
+[package.metadata.deb]
+maintainer = "Team Permesi <team@permesi.dev>"
+license-file = ["../../LICENSE"]
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/genesis", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/genesis/README.md", "644"],
+]
+
 [lints]
 workspace = true
 
