@@ -158,6 +158,12 @@ deploy-major:
   @just _bump-workspace major
   @just _deploy-merge-and-tag
 
+deploy-current: check-develop check-clean
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  just test
+  just _deploy-merge-and-tag
+
 web:
   #!/usr/bin/env zsh
   set -euo pipefail

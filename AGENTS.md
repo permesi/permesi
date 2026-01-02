@@ -4,6 +4,7 @@ These notes keep contributors aligned on how this Rust workspace is organized an
 
 ## Project Structure & Module Organization
 - Workspace members: `services/permesi` (core IAM/OIDC), `services/genesis` (edge admission mint), `crates/admission_token` (shared contract + helpers), `apps/web` (Leptos CSR frontend).
+- Workspace releases use a single shared version via `[workspace.package]`; tags apply to the full workspace state.
 - API artifacts live in `docs/openapi/*.json`; diagrams sit in `docs/architecture.mmd`.
 - Each service keeps code under `src/` with `bin/` entrypoints, `cli/` utilities, and `vault/` helpers; SQL/schema assets live in `services/permesi/sql/`.
 - Frontend assets live under `apps/web` with `Trunk.toml` and `public/` for static files; build output is static `dist/` (Cloudflare Pages).
