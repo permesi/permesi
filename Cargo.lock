@@ -2706,6 +2706,7 @@ dependencies = [
  "gloo-net",
  "gloo-timers",
  "hex",
+ "js-sys",
  "leptos",
  "leptos_router",
  "opaque-ke",

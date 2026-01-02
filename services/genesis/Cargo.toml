@@ -19,9 +19,12 @@ maintainer = "Team Permesi <team@permesi.dev>"
 license-file = ["../../LICENSE"]
 section = "net"
 priority = "optional"
+maintainer-scripts = "../../contrib/debian/genesis"
 assets = [
     ["target/release/genesis", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/genesis/README.md", "644"],
+    ["../../contrib/systemd/genesis.service", "lib/systemd/system/genesis.service", "644"],
+    ["../../contrib/systemd/genesis.env.example", "usr/share/doc/genesis/genesis.env.example", "644"],
 ]
 
 [lints]

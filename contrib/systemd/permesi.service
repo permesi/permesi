@@ -1,0 +1,18 @@
+[Unit]
+Description=Permesi IAM service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PERMESI_PORT=8001
+EnvironmentFile=-/etc/permesi/permesi.env
+ExecStart=/usr/bin/permesi
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

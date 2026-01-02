@@ -119,6 +119,12 @@ Legend:
 - CI default: `main` builds use `https://api.permesi.com`, `develop` builds use `https://api.permesi.dev` unless `PERMESI_API_BASE_URL` is set as a GitHub Actions Variable.
 - OPAQUE server identifier: `PERMESI_OPAQUE_SERVER_ID` (default `api.permesi.dev`).
 
+## Runtime config (optional)
+
+The UI can override build-time config by loading `public/config.js`, which sets `window.PERMESI_CONFIG`.
+This keeps the build static but lets deployers change endpoints and client IDs without rebuilding.
+All values are public, so never store secrets in this file.
+
 ## Admission token configuration
 
 - Token host: `PERMESI_TOKEN_BASE_URL=https://genesis.permesi.dev` (or `PERMESI_TOKEN_HOST` / legacy `PERMESI_API_TOKEN_HOST`).

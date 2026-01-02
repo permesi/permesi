@@ -19,9 +19,12 @@ maintainer = "Team Permesi <team@permesi.dev>"
 license-file = ["../../LICENSE"]
 section = "net"
 priority = "optional"
+maintainer-scripts = "../../contrib/debian/permesi"
 assets = [
     ["target/release/permesi", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/permesi/README.md", "644"],
+    ["../../contrib/systemd/permesi.service", "lib/systemd/system/permesi.service", "644"],
+    ["../../contrib/systemd/permesi.env.example", "usr/share/doc/permesi/permesi.env.example", "644"],
 ]
 
 [lints]

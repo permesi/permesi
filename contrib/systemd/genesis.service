@@ -1,0 +1,18 @@
+[Unit]
+Description=Genesis admission token service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=GENESIS_PORT=8000
+EnvironmentFile=-/etc/genesis/genesis.env
+ExecStart=/usr/bin/genesis
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

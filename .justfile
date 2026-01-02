@@ -122,7 +122,7 @@ _bump-workspace bump_kind: check-develop check-clean
   echo "🔍 Verifying tag does not exist for ${new_version}..."
   just check-tag-not-exists "$new_version"
   git add -A
-  git commit -m "chore(release): bump version to ${new_version}"
+  git commit -m "bump version to ${new_version}"
   git push origin develop
 
 _deploy-merge-and-tag:
@@ -145,11 +145,11 @@ _deploy-merge-and-tag:
   echo "🔍 Verifying tag does not exist..."
   just check-tag-not-exists "$new_version"
   echo "🔄 Ensuring develop is up to date..."
-  git pull origin develop
+  git pull --ff-only origin develop
   echo "🔄 Switching to main branch..."
   git checkout main
   echo "🔄 Pulling main..."
-  git pull origin main
+  git pull --ff-only origin main
   echo "🔀 Merging develop into main..."
   if ! git merge develop --no-edit; then
     echo "❌ Merge failed; resolve conflicts manually." >&2
