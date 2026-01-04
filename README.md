@@ -66,6 +66,16 @@ Keyset behavior:
 Missing / planned:
 - Optional revocation mode (DB lookup or cached revocation list). There is no public token introspection endpoint.
 
+## Tenant model (prototype)
+
+Organizations are the tenant boundary in permesi. Each organization owns projects, projects own
+environments, and environments own applications. Org-scoped membership and roles are the source
+of authorization for tenant resources, and environment tiers enforce a single production
+environment per project with non-production blocked until production exists.
+
+More details and the creation flow live in `services/permesi/README.md` under “Organization
+endpoints and authorization”.
+
 ## Trust Boundaries
 
 ```mermaid
@@ -172,14 +182,16 @@ Production readiness checklist:
 
 Default ports: genesis `8000`, permesi `8001`, web `8080`.
 
-1) One command: `just dev-start` (infra + `.envrc` + web).
+1) One command: `just start` (infra + `.envrc` + web).
 2) Run services: `just genesis` and `just permesi` (they auto-source `.envrc`, so direnv is optional).
 
-Alternative: `just dev-start-all` starts a tmux session (`permesi`) with genesis + permesi + web panes, plus a fourth pane for ad hoc commands.
+`just start` uses tmux when available to start a `permesi` session with genesis + permesi + web panes, plus a fourth pane for ad hoc commands.
 If you're already inside tmux, it creates the `permesi` session in the background and prints attach instructions.
 Re-running attaches to the existing session when not inside tmux; stop with `tmux kill-session -t permesi`.
 
 If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also runs `direnv allow` if available).
+
+Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/logs`).
 
 `just dev-envrc` emits Vault credentials plus local endpoints:
 - `PERMESI_ADMISSION_PASERK_URL=http://localhost:8000/paserk.json`

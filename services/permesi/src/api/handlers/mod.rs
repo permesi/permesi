@@ -8,6 +8,9 @@ pub mod user_login;
 
 pub mod root;
 
+pub mod me;
+pub mod orgs;
+
 // common functions for the handlers
 use admission_token::{
     AdmissionTokenClaims, Error as AdmissionError, PaserkKeySet, VerificationOptions,

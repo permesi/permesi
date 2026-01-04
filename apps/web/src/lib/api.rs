@@ -15,11 +15,12 @@ const DEFAULT_TIMEOUT_MS: u32 = 10_000;
 /// Maximum number of error body characters surfaced to the UI.
 const MAX_ERROR_CHARS: usize = 200;
 
-/// Fetches JSON from the configured API base URL with timeout and error mapping.
-pub async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, AppError> {
+/// Fetches JSON with cookies for session-authenticated APIs.
+pub async fn get_json_with_credentials<T: DeserializeOwned>(path: &str) -> Result<T, AppError> {
     let url = build_url(path);
     let response = send_with_timeout(|signal| {
         Request::get(&url)
+            .credentials(RequestCredentials::Include)
             .abort_signal(Some(signal))
             .build()
             .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))

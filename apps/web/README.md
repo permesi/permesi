@@ -105,11 +105,19 @@ Legend:
 ## Current UI state
 
 - Home (`/`) is a placeholder ("Home").
-- Header shows only the "Sign In" link for now (Solid parity).
+- Header shows "Sign In" or "Sign Up" depending on the current route; authenticated sessions see "Sign Out".
 - Login performs OPAQUE (`/v1/auth/opaque/login/start` + `/finish`) and fetches a Genesis zero token for each step; permesi sets an HttpOnly session cookie and the frontend reads `/v1/auth/session` to hydrate state.
 - Signup performs an OPAQUE registration (`/v1/auth/opaque/signup/start` + `/finish`) with Genesis zero tokens and shows a verify-email prompt.
 - Verify email reads the fragment token and POSTs to `/v1/auth/verify-email`; resend is available on the same page (both require zero tokens).
 - Auth is UX-only; real access control must be enforced by the API.
+
+## UX behavior and feedback
+
+Forms validate the minimum required fields before submitting. Login checks that email and password are present, while signup also normalizes the email, enforces matching passwords, and requires a 12-character minimum. Errors render as alert banners with safe copy; configuration and crypto failures are mapped to user-facing strings without exposing sensitive details.
+
+Async actions disable the triggering button and show a spinner below the form. Success states render green alerts in place, such as the signup verification prompt or the resend confirmation. The verify-email page reads the token from the URL fragment, clears it immediately to reduce accidental exposure, and offers a resend option with a generic success message to avoid account enumeration.
+
+Session hydration happens once on app mount by calling `/v1/auth/session`. Navigation switches between sign-in/sign-up and sign-out based on that session signal, and sign-out clears local state after hitting the API. Route guards are strictly a UX convenience; backend authorization remains the source of truth.
 
 ## API base URL configuration
 

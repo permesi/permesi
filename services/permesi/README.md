@@ -66,9 +66,104 @@ Endpoints:
 - `POST /v1/auth/opaque/login/finish`
 - `POST /v1/auth/verify-email`
 - `POST /v1/auth/resend-verification`
+- `GET /v1/me`
+- `PATCH /v1/me`
+- `GET /v1/me/sessions`
+- `DELETE /v1/me/sessions/{sid}`
+- `POST /v1/orgs`
+- `GET /v1/orgs`
+- `GET /v1/orgs/{org_slug}`
+- `PATCH /v1/orgs/{org_slug}`
+- `POST /v1/orgs/{org_slug}/projects`
+- `GET /v1/orgs/{org_slug}/projects`
+- `POST /v1/orgs/{org_slug}/projects/{project_slug}/envs`
+- `GET /v1/orgs/{org_slug}/projects/{project_slug}/envs`
+- `POST /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
+- `GET /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
 
 All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated offline
 using the PASERK keyset (same as Admission Tokens).
+
+### Organization endpoints and authorization
+
+Self-service user operations must use `/v1/me/*` and resolve the user from the session cookie.
+Organization, project, environment, and application routes are scoped by org slug and require
+active membership. Org roles (`owner`, `admin`, `member`, `readonly`) are enforced server-side:
+owner/admin can mutate org resources; member/readonly are read-only. Unauthorized access is
+returned as 404 to avoid resource enumeration.
+
+Environments include a tier (`production` or `non_production`). Each project may have only one
+production environment, and non-production environments are blocked until a production
+environment exists, so callers must create production first.
+
+Organization slugs are normalized to lowercase, URL-safe identifiers and must be 3–63
+characters (`[a-z0-9-]`, no leading/trailing hyphen). If omitted, the slug is derived from the
+name and auto-suffixed (`-2`, `-3`, …) on conflict. Project slugs follow the same rules but are
+unique per org and return conflicts instead of auto-suffixing. Environment slugs are 2–32
+characters with the same URL-safe rules and are unique per project.
+
+Membership status gates authorization: only `active` members may read or mutate org resources.
+Invited or suspended memberships behave as unauthorized for all org/project/env/app routes and
+return 404s to avoid leaking resource existence.
+Soft deletes do not reserve slugs or names: uniqueness is enforced only for rows where
+`deleted_at` is null, so deleted orgs/projects/environments/apps can reuse identifiers.
+
+Tenant model overview:
+
+```mermaid
+flowchart TD
+  Org["Organization (tenant boundary)"]
+  Project["Project"]
+  Env["Environment (tier: production | non_production)"]
+  App["Application (placeholder)"]
+
+  Org --> Project
+  Project --> Env
+  Env --> App
+```
+
+Database hierarchy (core tables + membership):
+
+```mermaid
+erDiagram
+  organizations ||--o{ org_memberships : has
+  users ||--o{ org_memberships : joins
+  organizations ||--o{ org_roles : defines
+  org_memberships ||--o{ org_member_roles : assigns
+  org_roles ||--o{ org_member_roles : grants
+  organizations ||--o{ projects : owns
+  projects ||--o{ environments : contains
+  environments ||--o{ applications : hosts
+```
+
+### How to create an org → project → env → app
+
+1) Authenticate and obtain a session cookie via the OPAQUE login flow.
+2) Create an organization (owner/admin only once created):
+
+   `POST /v1/orgs` with `{ "name": "Acme", "slug": "acme" }`
+
+3) Create a project inside the org (owner/admin required):
+
+   `POST /v1/orgs/acme/projects` with `{ "name": "Payments", "slug": "payments" }`
+
+4) Create the first environment and mark it as production (required before non-production):
+
+   `POST /v1/orgs/acme/projects/payments/envs` with
+   `{ "name": "Production", "slug": "prod", "tier": "production" }`
+
+5) Create non-production environments as needed:
+
+   `POST /v1/orgs/acme/projects/payments/envs` with
+   `{ "name": "Staging", "slug": "stage", "tier": "non_production" }`
+
+6) Create an application under an environment:
+
+   `POST /v1/orgs/acme/projects/payments/envs/prod/apps` with `{ "name": "payments-api" }`
+
+Always use opaque user IDs in paths. Avoid putting emails in URLs because they leak PII into logs
+and proxies, complicate normalization (case/encoding), and make enumeration easier. If a flow
+needs an email, keep it in the request body and apply the same rate limiting and audit controls.
 
 ### Email outbox (transactional)
 
@@ -83,6 +178,17 @@ The default sender is a log-only stub for local dev. To deliver real email, impl
 `EmailSender` (SMTP, SendGrid, etc.) and swap it in where the worker is spawned.
 If you later need higher throughput or multi-service fan-out, consider a broker (NATS JetStream,
 RabbitMQ). For current scale, the DB outbox keeps infrastructure minimal and consistent.
+
+### Token cleanup (pg_cron or system cron)
+
+Expired sessions and verification tokens can be purged by calling `cleanup_expired_tokens()` in
+the permesi database. The helper in `services/permesi/sql/maintenance.sql` schedules a nightly
+pg_cron job when the extension is available; otherwise the script prints a notice and you can
+invoke the function from system cron or manually.
+
+```sql
+SELECT cleanup_expired_tokens();
+```
 
 ### OPAQUE seed (Vault KV v2)
 

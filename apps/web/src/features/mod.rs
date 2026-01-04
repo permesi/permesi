@@ -3,4 +3,5 @@
 //! handling in dedicated feature areas.
 
 pub(crate) mod auth;
+pub(crate) mod me;
 pub(crate) mod users;

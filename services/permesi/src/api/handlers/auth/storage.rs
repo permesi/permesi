@@ -35,9 +35,9 @@ pub(super) struct LoginRecord {
 }
 
 /// Minimal data returned for a valid session cookie.
-pub(super) struct SessionRecord {
-    pub(super) user_id: Uuid,
-    pub(super) email: String,
+pub(crate) struct SessionRecord {
+    pub(crate) user_id: Uuid,
+    pub(crate) email: String,
 }
 
 /// Look up login data by email (used by OPAQUE login start).

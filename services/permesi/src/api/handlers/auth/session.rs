@@ -54,6 +54,26 @@ pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRe
     }
 }
 
+/// Resolve a session cookie into a session record, if present.
+///
+/// Returns `Ok(None)` when the cookie is missing or invalid.
+pub(crate) async fn authenticate_session(
+    headers: &HeaderMap,
+    pool: &PgPool,
+) -> Result<Option<SessionRecord>, StatusCode> {
+    let Some(token) = extract_session_token(headers) else {
+        return Ok(None);
+    };
+    let token_hash = hash_session_token(&token);
+    match lookup_session(pool, &token_hash).await {
+        Ok(record) => Ok(record),
+        Err(err) => {
+            error!("Failed to lookup session: {err}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/v1/auth/logout",

@@ -1,4 +1,4 @@
-use super::handlers::{auth, health, user_login, user_register};
+use super::handlers::{auth, health, me, orgs, user_login, user_register};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -27,7 +27,21 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(auth::verification::verify_email))
         .routes(routes!(auth::verification::resend_verification))
         .routes(routes!(auth::session::session))
-        .routes(routes!(auth::session::logout));
+        .routes(routes!(auth::session::logout))
+        .routes(routes!(me::get_me))
+        .routes(routes!(me::patch_me))
+        .routes(routes!(me::list_sessions))
+        .routes(routes!(me::revoke_session))
+        .routes(routes!(orgs::create_org))
+        .routes(routes!(orgs::list_orgs))
+        .routes(routes!(orgs::get_org))
+        .routes(routes!(orgs::patch_org))
+        .routes(routes!(orgs::create_project))
+        .routes(routes!(orgs::list_projects))
+        .routes(routes!(orgs::create_environment))
+        .routes(routes!(orgs::list_environments))
+        .routes(routes!(orgs::create_application))
+        .routes(routes!(orgs::list_applications));
 
     let mut permesi_tag = Tag::new("permesi");
     permesi_tag.description = Some("Identity and access management API".to_string());
@@ -35,7 +49,30 @@ pub(crate) fn api_router() -> OpenApiRouter {
     let mut auth_tag = Tag::new("auth");
     auth_tag.description = Some("Signup and email verification".to_string());
 
-    router.get_openapi_mut().tags = Some(vec![permesi_tag, auth_tag]);
+    let mut me_tag = Tag::new("me");
+    me_tag.description = Some("Current user self-service endpoints".to_string());
+
+    let mut orgs_tag = Tag::new("orgs");
+    orgs_tag.description = Some("Organization endpoints".to_string());
+
+    let mut projects_tag = Tag::new("projects");
+    projects_tag.description = Some("Project endpoints".to_string());
+
+    let mut environments_tag = Tag::new("environments");
+    environments_tag.description = Some("Environment endpoints".to_string());
+
+    let mut applications_tag = Tag::new("applications");
+    applications_tag.description = Some("Application endpoints".to_string());
+
+    router.get_openapi_mut().tags = Some(vec![
+        permesi_tag,
+        auth_tag,
+        me_tag,
+        orgs_tag,
+        projects_tag,
+        environments_tag,
+        applications_tag,
+    ]);
 
     router
 }
@@ -144,5 +181,25 @@ mod tests {
         );
         assert!(spec.paths.paths.contains_key("/v1/auth/session"));
         assert!(spec.paths.paths.contains_key("/v1/auth/logout"));
+        assert!(spec.paths.paths.contains_key("/v1/me"));
+        assert!(spec.paths.paths.contains_key("/v1/me/sessions"));
+        assert!(spec.paths.paths.contains_key("/v1/me/sessions/{sid}"));
+        assert!(spec.paths.paths.contains_key("/v1/orgs"));
+        assert!(spec.paths.paths.contains_key("/v1/orgs/{org_slug}"));
+        assert!(
+            spec.paths
+                .paths
+                .contains_key("/v1/orgs/{org_slug}/projects")
+        );
+        assert!(
+            spec.paths
+                .paths
+                .contains_key("/v1/orgs/{org_slug}/projects/{project_slug}/envs")
+        );
+        assert!(
+            spec.paths
+                .paths
+                .contains_key("/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps")
+        );
     }
 }

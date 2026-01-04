@@ -81,6 +81,7 @@ uuid = { workspace = true, features = ["v1", "v4", "v7"] }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
+hyper = { workspace = true }
 test_support = { workspace = true }
 wiremock = "0.6"
 

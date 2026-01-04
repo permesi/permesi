@@ -7,20 +7,31 @@ use super::storage::{
     insert_user_and_verification, insert_verification_records,
 };
 use super::utils::{
-    build_verify_url, decode_base64_field, generate_verification_token, hash_verification_token,
-    normalize_email, valid_email,
+    build_verify_url, decode_base64_field, generate_session_token, generate_verification_token,
+    hash_session_token, hash_verification_token, normalize_email, valid_email,
 };
 use super::zero_token::{ZeroTokenError, zero_token_error_response};
 use anyhow::{Context, Result, anyhow};
-use axum::http::StatusCode;
+use axum::{
+    Extension, Router,
+    body::{Body, to_bytes},
+    http::{
+        Request, StatusCode,
+        header::{CONTENT_TYPE, COOKIE},
+    },
+    routing::{delete, get},
+};
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use opaque_ke::{ClientRegistration, ClientRegistrationFinishParameters, Identifiers};
 use opaque_ke::{ServerRegistration, ServerSetup};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
 use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
+use tokio::time::Duration;
+use tower::ServiceExt;
 use uuid::Uuid;
 
 const PERMESI_SCHEMA_SQL: &str =
@@ -338,5 +349,196 @@ async fn resend_verification_respects_cooldown() -> Result<()> {
     let second = enqueue_resend_verification(&db.pool, "dora@example.com", &config).await?;
     assert!(matches!(second, ResendOutcome::Cooldown));
 
+    Ok(())
+}
+
+fn auth_state() -> super::AuthState {
+    let config = AuthConfig::new("https://permesi.dev".to_string())
+        .with_email_token_ttl_seconds(60)
+        .with_resend_cooldown_seconds(300);
+    let opaque_state = super::OpaqueState::from_seed(
+        [0u8; 32],
+        "api.permesi.dev".to_string(),
+        Duration::from_secs(300),
+    );
+    super::AuthState::new(
+        config,
+        opaque_state,
+        std::sync::Arc::new(super::NoopRateLimiter),
+    )
+}
+
+async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
+    let user_id = Uuid::new_v4();
+    let query = r"
+        INSERT INTO users (id, email, opaque_registration_record, status)
+        VALUES ($1, $2, $3, 'active')
+    ";
+    sqlx::query(query)
+        .bind(user_id)
+        .bind(email)
+        .bind(vec![0u8; 16])
+        .execute(pool)
+        .await
+        .context("insert active user")?;
+    Ok(user_id)
+}
+
+async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
+    let token = generate_session_token()?;
+    let hash = hash_session_token(&token);
+    let query = r"
+        INSERT INTO user_sessions (user_id, session_hash, expires_at)
+        VALUES ($1, $2, NOW() + INTERVAL '1 hour')
+    ";
+    sqlx::query(query)
+        .bind(user_id)
+        .bind(hash)
+        .execute(pool)
+        .await
+        .context("insert session")?;
+    Ok(token)
+}
+
+fn app_router(auth_state: super::AuthState, pool: PgPool) -> Router {
+    Router::new()
+        .route(
+            "/v1/me",
+            get(crate::api::handlers::me::get_me).patch(crate::api::handlers::me::patch_me),
+        )
+        .route(
+            "/v1/me/sessions",
+            get(crate::api::handlers::me::list_sessions),
+        )
+        .route(
+            "/v1/me/sessions/:sid",
+            delete(crate::api::handlers::me::revoke_session),
+        )
+        .layer(Extension(std::sync::Arc::new(auth_state)))
+        .layer(Extension(pool))
+}
+
+#[tokio::test]
+async fn me_requires_auth() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+    let app = app_router(auth_state(), db.pool.clone());
+
+    let response = app
+        .oneshot(Request::builder().uri("/v1/me").body(Body::empty())?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+#[tokio::test]
+async fn me_returns_current_user() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let email = "me@example.com";
+    let user_id = insert_active_user(&db.pool, email).await?;
+    let token = insert_session(&db.pool, user_id).await?;
+
+    let app = app_router(auth_state(), db.pool.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/me")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let json: serde_json::Value = serde_json::from_slice(&body)?;
+    let json_email = json
+        .get("email")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let json_id = json
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    assert_eq!(json_email, email);
+    assert_eq!(json_id, user_id.to_string());
+    Ok(())
+}
+
+#[tokio::test]
+async fn me_patch_updates_allowed_fields() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let email = "patch@example.com";
+    let user_id = insert_active_user(&db.pool, email).await?;
+    let token = insert_session(&db.pool, user_id).await?;
+
+    let app = app_router(auth_state(), db.pool.clone());
+    let payload = json!({ "display_name": "Patchy" });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/me")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let row = sqlx::query("SELECT display_name FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await?;
+    let display_name: Option<String> = row.get("display_name");
+    assert_eq!(display_name.as_deref(), Some("Patchy"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn me_ignores_other_user_ids() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let user_a = insert_active_user(&db.pool, "a@example.com").await?;
+    let user_b = insert_active_user(&db.pool, "b@example.com").await?;
+    let token = insert_session(&db.pool, user_a).await?;
+
+    let app = app_router(auth_state(), db.pool.clone());
+    let payload = json!({ "display_name": "User A" });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/me")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let row_a = sqlx::query("SELECT display_name FROM users WHERE id = $1")
+        .bind(user_a)
+        .fetch_one(&db.pool)
+        .await?;
+    let row_b = sqlx::query("SELECT display_name FROM users WHERE id = $1")
+        .bind(user_b)
+        .fetch_one(&db.pool)
+        .await?;
+    let name_a: Option<String> = row_a.get("display_name");
+    let name_b: Option<String> = row_b.get("display_name");
+    assert_eq!(name_a.as_deref(), Some("User A"));
+    assert_eq!(name_b.as_deref(), None);
     Ok(())
 }

@@ -29,7 +29,7 @@ pub(super) fn generate_verification_token() -> Result<String> {
 
 /// Create a new session token for the auth cookie.
 /// The raw value is only returned to set the cookie; the database stores a hash.
-pub(super) fn generate_session_token() -> Result<String> {
+pub(crate) fn generate_session_token() -> Result<String> {
     let mut bytes = [0u8; 32];
     OsRng
         .try_fill_bytes(&mut bytes)
@@ -46,7 +46,7 @@ pub(super) fn hash_verification_token(token: &str) -> Vec<u8> {
 
 /// Hash a session token so raw values never touch the database.
 /// The hash is used for lookups when the cookie is presented.
-pub(super) fn hash_session_token(token: &str) -> Vec<u8> {
+pub(crate) fn hash_session_token(token: &str) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     hasher.finalize().to_vec()

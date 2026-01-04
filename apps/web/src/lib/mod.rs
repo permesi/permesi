@@ -9,8 +9,8 @@ pub(crate) mod config;
 pub(crate) mod errors;
 
 pub(crate) use api::{
-    get_json, get_json_with_base, get_optional_json_with_credentials, post_empty_with_credentials,
-    post_json_with_headers, post_json_with_headers_response,
+    get_json_with_base, get_json_with_credentials, get_optional_json_with_credentials,
+    post_empty_with_credentials, post_json_with_headers, post_json_with_headers_response,
     post_json_with_headers_with_credentials,
 };
 pub(crate) use errors::AppError;
