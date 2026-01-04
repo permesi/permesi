@@ -358,16 +358,6 @@ sandbox-squash message="" base="origin/develop": check-clean
     fi
     git push --force-with-lease origin HEAD
 
-# Fast-forward merge a sandbox branch into develop.
-# Usage: just sandbox-merge [branch]
-sandbox-merge branch="sandbox": check-develop check-clean
-    #!/usr/bin/env bash
-    set -euo pipefail
-    branch="{{branch}}"
-    git pull --ff-only origin develop
-    git merge --ff-only "${branch}"
-    git push origin develop
-
 # Create & push a test tag like t-YYYYMMDD-HHMMSS (skips publish/release in CI)
 # Usage:
 #   just t-deploy
