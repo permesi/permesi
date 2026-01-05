@@ -145,8 +145,62 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install podman
-        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Ensure container runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 1. Ensure Podman and its core dependencies are installed
+          if ! command -v podman >/dev/null 2>&1; then
+            echo "Installing Podman and dependencies..."
+            sudo apt-get update
+            sudo apt-get install -y podman dbus-user-session slirp4netns
+          fi
+
+          # 2. Determine the best runtime directory
+          USER_ID=$(id -u)
+          if [[ -d "/run/user/${USER_ID}" ]]; then
+            export XDG_RUNTIME_DIR="/run/user/${USER_ID}"
+          else
+            export XDG_RUNTIME_DIR="/tmp/podman-run-${USER_ID}"
+            mkdir -p "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
+          fi
+
+          # 3. Configure D-Bus address for netavark/aardvark-dns
+          if [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+          else
+            export DBUS_SESSION_BUS_ADDRESS=""
+          fi
+          
+          # 4. Recover from potential corrupted state
+          echo "Migrating Podman system state..."
+          podman system migrate || true
+
+          # 5. Start podman system service if socket is missing
+          SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
+          if [[ ! -S "$SOCKET_PATH" ]]; then
+            echo "Starting podman system service..."
+            mkdir -p "$(dirname "$SOCKET_PATH")"
+            podman system service --time=0 "unix://${SOCKET_PATH}" &
+            
+            # Wait for socket
+            for _ in {1..30}; do
+              [[ -S "$SOCKET_PATH" ]] && break
+              sleep 0.5
+            done
+          fi
+
+          # 6. Export variables for subsequent steps
+          {
+            echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
+            echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}"
+            echo "DOCKER_HOST=unix://${SOCKET_PATH}"
+          } >> "${GITHUB_ENV}"
+
+          # 7. Verify Podman
+          podman info || { echo "Podman info failed, trying migrate again"; podman system migrate; podman info; }
 
       - name: Login to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}"

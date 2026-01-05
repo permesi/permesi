@@ -679,7 +679,7 @@ images: image-permesi image-genesis
 # ----------------------
 
 image-vault:
-  podman build -f vault.Dockerfile -t permesi-vault:{{ branch }} .
+  podman build -f vault.Dockerfile -t permesi-vault:latest .
 
 vault: image-vault
   #!/usr/bin/env zsh
@@ -688,13 +688,13 @@ vault: image-vault
     echo "vault already running"
     exit 0
   fi
-  podman run --replace --rm --name vault \
+  podman run --replace --rm -d --name vault \
     --network {{net}} \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
     -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
-    permesi-vault:{{ branch }} &
+    permesi-vault:latest
 
 vault-persist: image-vault
   #!/usr/bin/env zsh
@@ -708,7 +708,7 @@ vault-persist: image-vault
     podman stop vault >/dev/null 2>&1 || true
   fi
   podman volume inspect permesi-vault-data >/dev/null 2>&1 || podman volume create permesi-vault-data >/dev/null
-  podman run --replace --rm --name vault \
+  podman run --replace --rm -d --name vault \
     --network {{net}} \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
@@ -716,15 +716,15 @@ vault-persist: image-vault
     -v {{root}}/vault:/workspace/vault:ro \
     -v permesi-vault-data:/vault/data \
     --entrypoint vault \
-    permesi-vault:{{ branch }} \
-    server -config=/vault/config/vault.hcl &
+    permesi-vault:latest \
+    server -config=/vault/config/vault.hcl
 
 vault-wait:
   #!/usr/bin/env zsh
   set -euo pipefail
   for _ in {1..40}; do
     vault_status="$(
-      podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
+      podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true' 2>/dev/null || true
     )"
     if [[ -n "$vault_status" ]] && rg -q '"initialized":' <<<"$vault_status"; then
       exit 0
@@ -1005,7 +1005,7 @@ jaeger:
     echo "jaeger already running"
     exit 0
   fi
-  podman run --replace --rm --name jaeger \
+  podman run --replace --rm -d --name jaeger \
     --network {{net}} \
     -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
     -p 6831:6831/udp \
@@ -1018,10 +1018,13 @@ jaeger:
     -p 14268:14268 \
     -p 14269:14269 \
   -p 9411:9411 \
-  jaegertracing/jaeger:latest &
+  jaegertracing/jaeger:latest
 
 jaeger-stop:
   podman stop jaeger || true
+
+# Restart everything: stop infra and tmux, then start again
+restart: stop start
 
 start:
   #!/usr/bin/env zsh
@@ -1070,7 +1073,25 @@ start:
 
 dev-start-infra: setup-network postgres vault-persist-ready jaeger
 
-stop: vault-stop postgres-stop jaeger-stop
+# Stop all services and the tmux session
+stop: vault-stop postgres-stop jaeger-stop tmux-stop dev-stop
+
+# Kill lingering dev processes and free ports
+dev-stop:
+  #!/usr/bin/env zsh
+  echo "Cleaning up lingering dev processes..."
+  # Kill processes by port to ensure ports are freed (Linux specific)
+  fuser -k 8000/tcp 8001/tcp 8080/tcp 2>/dev/null || true
+  # Specific process names cleanup
+  pkill -f "cargo-watch" || true
+  pkill -f "trunk serve" || true
+  pkill -f "npm run css:watch" || true
+  pkill -f "tailwindcss" || true
+
+# Kill the tmux session if it exists
+tmux-stop:
+  #!/usr/bin/env zsh
+  tmux kill-session -t permesi 2>/dev/null || true
 
 reset:
   #!/usr/bin/env zsh

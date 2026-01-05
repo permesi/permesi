@@ -7,33 +7,6 @@ use crate::features::auth::state::use_auth;
 use crate::routes::NotFoundContent;
 use leptos::prelude::*;
 
-/// Renders children only when authenticated; shows 404 otherwise (GitHub-style).
-/// Shows a spinner while auth state is loading.
-#[component]
-pub fn RequireAuth<F, IV>(children: F) -> impl IntoView
-where
-    F: Fn() -> IV + Send + Sync + 'static,
-    IV: IntoView + 'static,
-{
-    let auth = use_auth();
-
-    view! {
-        {move || {
-            if auth.is_loading.get() {
-                view! {
-                    <div class="flex justify-center items-center min-h-[50vh]">
-                        <Spinner />
-                    </div>
-                }.into_any()
-            } else if auth.is_authenticated.get() {
-                children().into_any()
-            } else {
-                view! { <NotFoundContent /> }.into_any()
-            }
-        }}
-    }
-}
-
 /// Renders children only for elevated platform operators.
 /// Shows 404 to unauthenticated users or non-operators.
 #[component]

@@ -297,7 +297,7 @@ pub fn verify_admin_token(
 }
 
 #[utoipa::path(
-    get,
+    post,
     path = "/v1/auth/admin/bootstrap",
     request_body = AdminBootstrapRequest,
     responses(

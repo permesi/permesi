@@ -2,14 +2,12 @@
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, AppShell, Button, Spinner},
-    features::{
-        auth::RequireAuth,
-        orgs::{
-            client,
-            types::{CreateProjectRequest, ProjectResponse},
-        },
+    components::{Alert, AlertKind, Button, Spinner},
+    features::orgs::{
+        client,
+        types::{CreateProjectRequest, ProjectResponse},
     },
+    routes::paths,
 };
 use leptos::prelude::*;
 use leptos_router::components::A;
@@ -38,80 +36,76 @@ pub fn OrgDetailPage() -> impl IntoView {
     });
 
     view! {
-        <AppShell>
-            <RequireAuth children=move || view! {
-                <div class="space-y-6">
-                    <div class="flex items-center justify-between">
-                        <div class="space-y-1">
-                            <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                                {move || params.get().ok().and_then(|p| p.slug).unwrap_or_else(|| "Organization".to_string())}
-                            </h1>
-                            <p class="text-sm text-gray-500 dark:text-gray-400">
-                                "Manage projects and environments for this organization."
-                            </p>
-                        </div>
-
-                        <CreateProjectModal
-                            org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
-                            on_success=Callback::new(move |_| projects.refetch())
-                        />
-                    </div>
-
-                    <Suspense fallback=move || view! { <Spinner /> }>
-                        {move || match projects.get() {
-                            Some(Ok(list)) if list.is_empty() => {
-                                view! {
-                                    <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                                        <span class="material-symbols-outlined text-4xl text-gray-400">"account_tree"</span>
-                                        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No projects"</h3>
-                                        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Add your first project to this organization."</p>
-                                    </div>
-                                }.into_any()
-                            }
-                            Some(Ok(list)) => {
-                                view! {
-                                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                                        <For
-                                            each=move || list.clone()
-                                            key=|proj| proj.id.clone()
-                                            children=move |proj| {
-                                                let org_slug = params.get().ok().and_then(|p| p.slug).unwrap_or_default();
-                                                view! {
-                                                    <A
-                                                        href=format!("/orgs/{}/projects/{}", org_slug, proj.slug)
-                                                        {..}
-                                                        class="block p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-500 transition-colors shadow-sm"
-                                                    >
-                                                        <div class="flex items-start justify-between">
-                                                            <span class="material-symbols-outlined text-green-600 dark:text-green-400">
-                                                                "account_tree"
-                                                            </span>
-                                                            <span class="text-xs text-gray-400 dark:text-gray-500 uppercase font-mono tracking-wider">
-                                                                {proj.slug}
-                                                            </span>
-                                                        </div>
-                                                        <h2 class="mt-4 text-lg font-medium text-gray-900 dark:text-white truncate">
-                                                            {proj.name}
-                                                        </h2>
-                                                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                            "Created " {proj.created_at}
-                                                        </p>
-                                                    </A>
-                                                }
-                                            }
-                                        />
-                                    </div>
-                                }.into_any()
-                            }
-                            Some(Err(err)) => {
-                                view! { <Alert kind=AlertKind::Error message=err.to_string() /> }.into_any()
-                            }
-                            None => view! { <Spinner /> }.into_any(),
-                        }}
-                    </Suspense>
+        <div class="space-y-6">
+            <div class="flex items-center justify-between">
+                <div class="space-y-1">
+                    <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
+                        {move || params.get().ok().and_then(|p| p.slug).unwrap_or_else(|| "Organization".to_string())}
+                    </h1>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                        "Manage projects and environments for this organization."
+                    </p>
                 </div>
-            } />
-        </AppShell>
+
+                <CreateProjectModal
+                    org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
+                    on_success=Callback::new(move |_| projects.refetch())
+                />
+            </div>
+
+            <Suspense fallback=move || view! { <Spinner /> }>
+                {move || match projects.get() {
+                    Some(Ok(list)) if list.is_empty() => {
+                        view! {
+                            <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
+                                <span class="material-symbols-outlined text-4xl text-gray-400">"account_tree"</span>
+                                <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No projects"</h3>
+                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Add your first project to this organization."</p>
+                            </div>
+                        }.into_any()
+                    }
+                    Some(Ok(list)) => {
+                        view! {
+                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                <For
+                                    each=move || list.clone()
+                                    key=|proj| proj.id.clone()
+                                    children=move |proj| {
+                                        let org_slug = params.get().ok().and_then(|p| p.slug).unwrap_or_default();
+                                        view! {
+                                            <A
+                                                href={paths::project_detail(&org_slug, &proj.slug)}
+                                                {..}
+                                                class="block p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-500 transition-colors shadow-sm"
+                                            >
+                                                <div class="flex items-start justify-between">
+                                                    <span class="material-symbols-outlined text-green-600 dark:text-green-400">
+                                                        "account_tree"
+                                                    </span>
+                                                    <span class="text-xs text-gray-400 dark:text-gray-500 uppercase font-mono tracking-wider">
+                                                        {proj.slug}
+                                                    </span>
+                                                </div>
+                                                <h2 class="mt-4 text-lg font-medium text-gray-900 dark:text-white truncate">
+                                                    {proj.name}
+                                                </h2>
+                                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                    "Created " {proj.created_at}
+                                                </p>
+                                            </A>
+                                        }
+                                    }
+                                />
+                            </div>
+                        }.into_any()
+                    }
+                    Some(Err(err)) => {
+                        view! { <Alert kind=AlertKind::Error message=err.to_string() /> }.into_any()
+                    }
+                    None => view! { <Spinner /> }.into_any(),
+                }}
+            </Suspense>
+        </div>
     }
 }
 

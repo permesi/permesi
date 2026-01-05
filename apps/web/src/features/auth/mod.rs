@@ -15,4 +15,4 @@ pub(crate) mod state;
 pub(crate) mod token;
 pub(crate) mod types;
 
-pub(crate) use guards::{RequireAdmin, RequireAuth};
+pub(crate) use guards::RequireAdmin;

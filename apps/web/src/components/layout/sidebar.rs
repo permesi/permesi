@@ -6,6 +6,7 @@
 //! 3. Platform Admin (Users, Global Settings - Operator only)
 
 use crate::features::auth::state::use_auth;
+use crate::routes::paths;
 use leptos::prelude::*;
 use leptos_router::{components::A, hooks::use_location};
 
@@ -25,16 +26,16 @@ pub fn Sidebar() -> impl IntoView {
                     </h3>
                     <div class="mt-2 space-y-1">
                         <SidebarLink
-                            target="/"
+                            target={paths::DASHBOARD}
                             icon="dashboard"
                             label="Dashboard"
-                            active=move || pathname() == "/"
+                            active=move || pathname() == paths::DASHBOARD
                         />
                         <SidebarLink
-                            target="/me"
+                            target={paths::ME}
                             icon="person"
                             label="My Profile"
-                            active=move || pathname() == "/me"
+                            active=move || pathname() == paths::ME
                         />
                     </div>
                 </div>
@@ -46,10 +47,10 @@ pub fn Sidebar() -> impl IntoView {
                     </h3>
                     <div class="mt-2 space-y-1">
                         <SidebarLink
-                            target="/orgs"
+                            target={paths::ORGS}
                             icon="corporate_fare"
                             label="Organizations"
-                            active=move || pathname().starts_with("/orgs")
+                            active=move || pathname().starts_with(paths::ORGS)
                         />
                     </div>
                 </div>
@@ -62,22 +63,22 @@ pub fn Sidebar() -> impl IntoView {
                         </h3>
                         <div class="mt-2 space-y-1">
                             <SidebarLink
-                                target="/admin"
+                                target={paths::ADMIN}
                                 icon="admin_panel_settings"
                                 label="Admin Overview"
-                                active=move || pathname() == "/admin"
+                                active=move || pathname() == paths::ADMIN
                             />
                             <SidebarLink
-                                target="/users"
+                                target={paths::USERS}
                                 icon="group"
                                 label="Global Users"
-                                active=move || pathname().starts_with("/users")
+                                active=move || pathname().starts_with(paths::USERS)
                             />
                             <SidebarLink
-                                target="/admin/claim"
+                                target={paths::ADMIN_CLAIM}
                                 icon="key"
                                 label="Admin Elevation"
-                                active=move || pathname() == "/admin/claim"
+                                active=move || pathname() == paths::ADMIN_CLAIM
                             />
                         </div>
                     </div>

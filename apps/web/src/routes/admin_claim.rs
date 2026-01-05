@@ -6,13 +6,13 @@
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, AppShell, Button, Spinner},
+    components::{Alert, AlertKind, Button, Spinner},
     features::auth::{
         client::{self, is_token_expired},
         state::use_auth,
         types::{AdminBootstrapRequest, AdminElevateRequest, AdminStatusResponse},
     },
-    routes::{NotFoundContent, NotFoundPage},
+    routes::paths,
 };
 use leptos::{ev::SubmitEvent, prelude::*};
 use leptos_router::components::A;
@@ -36,6 +36,7 @@ pub fn AdminClaimPage() -> impl IntoView {
         let (user_id, token) = status_key.get();
         async move {
             if user_id.is_none() {
+                // Should not happen if AuthLayout works, but safe fallback
                 return Err(AppError::Config("Sign in required.".to_string()));
             }
             client::admin_status(token.as_deref()).await
@@ -147,70 +148,51 @@ pub fn AdminClaimPage() -> impl IntoView {
     };
 
     view! {
-        {move || {
-            if auth.is_loading.get() {
-                view! {
-                    <AppShell>
-                        <Spinner />
-                    </AppShell>
-                }
-                .into_any()
-            } else if !auth.is_authenticated.get() {
-                view! { <NotFoundPage /> }.into_any()
-            } else {
-                view! {
-                    <AppShell>
-                        <div class="max-w-xl mx-auto space-y-6">
-                            <div class="space-y-2">
-                                <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                                    "Admin Claim"
-                                </h1>
-                                <p class="text-sm text-gray-600 dark:text-gray-300">
-                                    "Use a short-lived Vault token to bootstrap or elevate platform admin privileges."
-                                </p>
-                            </div>
+        <div class="max-w-xl mx-auto space-y-6">
+            <div class="space-y-2">
+                <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
+                    "Admin Claim"
+                </h1>
+                <p class="text-sm text-gray-600 dark:text-gray-300">
+                    "Use a short-lived Vault token to bootstrap or elevate platform admin privileges."
+                </p>
+            </div>
 
-                            {move || {
-                                status_resource
-                                    .get()
-                                    .map(|result: Result<AdminStatusResponse, _>| match result {
-                                        Ok(status) if status.operator || status.bootstrap_open => render_admin_forms(
-                                            status,
-                                            vault_token,
-                                            set_vault_token,
-                                            note,
-                                            set_note,
-                                            on_bootstrap_submit,
-                                            on_elevate_submit,
-                                            bootstrap_action.pending().into(),
-                                            elevate_action.pending().into(),
-                                            auth.admin_token,
-                                        ).into_any(),
-                                        Ok(_) => view! { <NotFoundContent /> }.into_any(),
-                                        Err(err) => view! {
-                                            <Alert kind=AlertKind::Error message=err.to_string() />
-                                        }
-                                        .into_any(),
-                                    })
-                                    .unwrap_or_else(|| view! { <Spinner /> }.into_any())
-                            }}
+            {move || {
+                status_resource
+                    .get()
+                    .map(|result: Result<AdminStatusResponse, _>| match result {
+                        Ok(status) => render_admin_forms(
+                            status,
+                            vault_token,
+                            set_vault_token,
+                            note,
+                            set_note,
+                            on_bootstrap_submit,
+                            on_elevate_submit,
+                            bootstrap_action.pending().into(),
+                            elevate_action.pending().into(),
+                            auth.admin_token,
+                        ).into_any(),
+                        Err(err) => view! {
+                            <Alert kind=AlertKind::Error message=err.to_string() />
+                        }
+                        .into_any(),
+                    })
+                    .unwrap_or_else(|| view! { <Spinner /> }.into_any())
+            }}
 
-                            {move || {
-                                error
-                                    .get()
-                                    .map(|err| view! { <Alert kind=AlertKind::Error message=err.to_string() /> })
-                            }}
-                            {move || {
-                                success
-                                    .get()
-                                    .map(|message| view! { <Alert kind=AlertKind::Success message=message /> })
-                            }}
-                        </div>
-                    </AppShell>
-                }
-                .into_any()
-            }
-        }}
+            {move || {
+                error
+                    .get()
+                    .map(|err| view! { <Alert kind=AlertKind::Error message=err.to_string() /> })
+            }}
+            {move || {
+                success
+                    .get()
+                    .map(|message| view! { <Alert kind=AlertKind::Success message=message /> })
+            }}
+        </div>
     }
 }
 
@@ -255,7 +237,7 @@ fn render_admin_forms(
                                 />
                                 <div class="mt-4">
                                     <A
-                                        href="/admin"
+                                        href={paths::ADMIN}
                                         {..}
                                         class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all"
                                     >

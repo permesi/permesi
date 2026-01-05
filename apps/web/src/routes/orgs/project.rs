@@ -2,7 +2,7 @@
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, AppShell, Button, Spinner},
+    components::{Alert, AlertKind, Button, Spinner},
     features::orgs::{
         client,
         types::{CreateEnvironmentRequest, EnvironmentResponse},
@@ -39,74 +39,72 @@ pub fn ProjectDetailPage() -> impl IntoView {
     });
 
     view! {
-        <AppShell>
-            <div class="space-y-6">
-                <div class="flex items-center justify-between">
-                    <div class="space-y-1">
-                        <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                            {move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_else(|| "Project".to_string())}
-                        </h1>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">
-                            "Manage environments and applications for this project."
-                        </p>
-                    </div>
+        <div class="space-y-6">
+            <div class="flex items-center justify-between">
+                <div class="space-y-1">
+                    <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
+                        {move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_else(|| "Project".to_string())}
+                    </h1>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                        "Manage environments and applications for this project."
+                    </p>
+                </div>
 
-                                        <CreateEnvModal
-                                            org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
-                                            project_slug=move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_default()
-                                            on_success=Callback::new(move |_| envs.refetch())
-                                        />                </div>
+                                    <CreateEnvModal
+                                        org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
+                                        project_slug=move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_default()
+                                        on_success=Callback::new(move |_| envs.refetch())
+                                    />                </div>
 
-                <Suspense fallback=move || view! { <Spinner /> }>
-                    {move || match envs.get() {
-                        Some(Ok(list)) if list.is_empty() => {
-                            view! {
-                                <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                                    <span class="material-symbols-outlined text-4xl text-gray-400">"lan"</span>
-                                    <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No environments"</h3>
-                                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Create a production environment to get started."</p>
-                                </div>
-                            }.into_any()
-                        }
-                        Some(Ok(list)) => {
-                            view! {
-                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                    <For
-                                        each=move || list.clone()
-                                        key=|env| env.id.clone()
-                                        children=move |env| {
-                                            let tier_class = if env.tier == "production" {
-                                                "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
-                                            } else {
-                                                "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-                                            };
-                                            view! {
-                                                <div class="p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
-                                                    <div class="flex items-center justify-between mb-4">
-                                                        <span class=format!("text-xs font-semibold px-2.5 py-0.5 rounded-full {}", tier_class)>
-                                                            {env.tier.to_uppercase()}
-                                                        </span>
-                                                        <span class="text-xs font-mono text-gray-400">{env.slug}</span>
-                                                    </div>
-                                                    <h2 class="text-lg font-medium text-gray-900 dark:text-white">{env.name}</h2>
-                                                    <div class="mt-4 pt-4 border-t border-gray-50 dark:border-gray-700">
-                                                        <p class="text-xs text-gray-500">"ID: " {env.id}</p>
-                                                    </div>
+            <Suspense fallback=move || view! { <Spinner /> }>
+                {move || match envs.get() {
+                    Some(Ok(list)) if list.is_empty() => {
+                        view! {
+                            <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
+                                <span class="material-symbols-outlined text-4xl text-gray-400">"lan"</span>
+                                <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No environments"</h3>
+                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Create a production environment to get started."</p>
+                            </div>
+                        }.into_any()
+                    }
+                    Some(Ok(list)) => {
+                        view! {
+                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <For
+                                    each=move || list.clone()
+                                    key=|env| env.id.clone()
+                                    children=move |env| {
+                                        let tier_class = if env.tier == "production" {
+                                            "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
+                                        } else {
+                                            "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                                        };
+                                        view! {
+                                            <div class="p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                                                <div class="flex items-center justify-between mb-4">
+                                                    <span class=format!("text-xs font-semibold px-2.5 py-0.5 rounded-full {}", tier_class)>
+                                                        {env.tier.to_uppercase()}
+                                                    </span>
+                                                    <span class="text-xs font-mono text-gray-400">{env.slug}</span>
                                                 </div>
-                                            }
+                                                <h2 class="text-lg font-medium text-gray-900 dark:text-white">{env.name}</h2>
+                                                <div class="mt-4 pt-4 border-t border-gray-50 dark:border-gray-700">
+                                                    <p class="text-xs text-gray-500">"ID: " {env.id}</p>
+                                                </div>
+                                            </div>
                                         }
-                                    />
-                                </div>
-                            }.into_any()
-                        }
-                        Some(Err(err)) => {
-                            view! { <Alert kind=AlertKind::Error message=err.to_string() /> }.into_any()
-                        }
-                        None => view! { <Spinner /> }.into_any(),
-                    }}
-                </Suspense>
-            </div>
-        </AppShell>
+                                    }
+                                />
+                            </div>
+                        }.into_any()
+                    }
+                    Some(Err(err)) => {
+                        view! { <Alert kind=AlertKind::Error message=err.to_string() /> }.into_any()
+                    }
+                    None => view! { <Spinner /> }.into_any(),
+                }}
+            </Suspense>
+        </div>
     }
 }
 
