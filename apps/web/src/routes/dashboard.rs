@@ -1,7 +1,7 @@
 //! Default landing page for the app. It is intentionally minimal during early
 //! development and does not expose sensitive data.
 
-use crate::components::AppShell;
+use crate::{components::AppShell, features::auth::RequireAuth};
 use leptos::prelude::*;
 
 /// Renders the dashboard page shell.
@@ -9,7 +9,9 @@ use leptos::prelude::*;
 pub fn DashboardPage() -> impl IntoView {
     view! {
         <AppShell>
-            <h1>"Home"</h1>
+            <RequireAuth children=move || view! {
+                <h1>"Home"</h1>
+            } />
         </AppShell>
     }
 }

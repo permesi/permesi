@@ -4,9 +4,12 @@
 use crate::{
     app_lib::AppError,
     components::{Alert, AlertKind, AppShell, Button, Spinner},
-    features::orgs::{
-        client,
-        types::{CreateOrgRequest, OrgResponse},
+    features::{
+        auth::RequireAuth,
+        orgs::{
+            client,
+            types::{CreateOrgRequest, OrgResponse},
+        },
     },
 };
 use leptos::prelude::*;
@@ -19,6 +22,7 @@ pub fn OrgsListPage() -> impl IntoView {
 
     view! {
         <AppShell>
+            <RequireAuth children=move || view! {
             <div class="space-y-6">
                 <div class="flex items-center justify-between">
                     <div class="space-y-1">
@@ -84,6 +88,7 @@ pub fn OrgsListPage() -> impl IntoView {
                     }}
                 </Suspense>
             </div>
+            } />
         </AppShell>
     }
 }

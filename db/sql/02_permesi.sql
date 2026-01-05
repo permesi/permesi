@@ -84,6 +84,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS organizations_slug_active_idx
     ON organizations (slug)
     WHERE deleted_at IS NULL;
 
+CREATE UNIQUE INDEX IF NOT EXISTS organizations_creator_name_active_idx
+    ON organizations (created_by, name)
+    WHERE deleted_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS org_memberships (
     org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

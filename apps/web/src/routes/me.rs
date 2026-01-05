@@ -13,7 +13,7 @@ pub fn MePage() -> impl IntoView {
 
     view! {
         <AppShell>
-            <RequireAuth>
+            <RequireAuth children=move || view! {
                 <div class="block rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-300 dark:bg-neutral-600 space-y-4">
                     <h1 class="text-lg font-semibold text-gray-900 dark:text-white">
                         "Me"
@@ -68,7 +68,7 @@ pub fn MePage() -> impl IntoView {
                         }}
                     </Suspense>
                 </div>
-            </RequireAuth>
+            } />
         </AppShell>
     }
 }

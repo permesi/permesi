@@ -12,7 +12,7 @@ use crate::{
         state::use_auth,
         types::{AdminBootstrapRequest, AdminElevateRequest, AdminStatusResponse},
     },
-    routes::NotFoundPage,
+    routes::{NotFoundContent, NotFoundPage},
 };
 use leptos::{ev::SubmitEvent, prelude::*};
 use leptos_router::components::A;
@@ -186,7 +186,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                                             elevate_action.pending().into(),
                                             auth.admin_token,
                                         ).into_any(),
-                                        Ok(_) => view! { <NotFoundPage /> }.into_any(),
+                                        Ok(_) => view! { <NotFoundContent /> }.into_any(),
                                         Err(err) => view! {
                                             <Alert kind=AlertKind::Error message=err.to_string() />
                                         }

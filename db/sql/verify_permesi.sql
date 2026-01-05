@@ -70,9 +70,22 @@ BEGIN
         -- expected
     END;
 
+    -- Reject duplicate org name for the same creator.
+    BEGIN
+        INSERT INTO organizations (id, slug, name, created_by)
+        VALUES (gen_random_uuid(), org_slug || '-dup', 'Acme', v_user_id);
+        RAISE EXCEPTION 'expected creator+name uniqueness to fail';
+    EXCEPTION WHEN unique_violation THEN
+        -- expected
+    END;
+
     UPDATE organizations SET deleted_at = NOW() WHERE id = org_id;
     INSERT INTO organizations (id, slug, name, created_by)
     VALUES (org_id_reuse, org_slug, 'Acme Reuse', v_user_id);
+
+    -- Different creator CAN have the same org name.
+    INSERT INTO organizations (id, slug, name, created_by)
+    VALUES (gen_random_uuid(), org_slug || '-other', 'Acme Reuse', v_op_id);
 
     -- Memberships: enum enforcement + updated_at bump + FK behavior.
     INSERT INTO org_memberships (org_id, user_id, status)

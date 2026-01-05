@@ -125,6 +125,7 @@ impl EnvironmentTier {
         (status = 201, description = "Organization created.", body = OrgResponse),
         (status = 400, description = "Invalid input.", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
+        (status = 409, description = "Organization with this name already exists for this user.", body = String),
     ),
     tag = "orgs"
 )]
@@ -710,6 +711,12 @@ async fn create_org_with_roles(
         let row = match insert {
             Ok(row) => row,
             Err(err) => {
+                if is_name_unique_violation(&err) {
+                    let _ = tx.rollback().await;
+                    return Err(OrgError::Conflict(
+                        "You already have an organization with this name.",
+                    ));
+                }
                 if is_unique_violation(&err) {
                     let _ = tx.rollback().await;
                     attempt += 1;
@@ -1223,6 +1230,18 @@ fn with_suffix(base: &str, suffix: usize, max_len: usize) -> Option<String> {
 fn is_unique_violation(err: &sqlx::Error) -> bool {
     match err {
         sqlx::Error::Database(db_err) => db_err.code().as_deref() == Some("23505"),
+        _ => false,
+    }
+}
+
+fn is_name_unique_violation(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db_err) => {
+            db_err.code().as_deref() == Some("23505")
+                && db_err
+                    .constraint()
+                    .is_some_and(|c| c == "organizations_creator_name_active_idx")
+        }
         _ => false,
     }
 }
