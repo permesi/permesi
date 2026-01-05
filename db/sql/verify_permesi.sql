@@ -7,6 +7,7 @@ BEGIN;
 DO $$
 DECLARE
     v_user_id uuid := gen_random_uuid();
+    v_op_id uuid := gen_random_uuid();
     suffix text := substr(replace(gen_random_uuid()::text, '-', ''), 1, 8);
     bad_email text := 'owner-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 8) || '@example.com';
     org_id uuid := gen_random_uuid();
@@ -34,6 +35,18 @@ BEGIN
     EXCEPTION WHEN check_violation THEN
         -- expected
     END;
+
+    -- Platform Operators: basic insert + enabled default + cascade delete.
+    INSERT INTO users (id, email, opaque_registration_record, status)
+    VALUES (v_op_id, 'operator-' || suffix || '@example.com', decode('00', 'hex'), 'active');
+
+    INSERT INTO platform_operators (user_id, note)
+    VALUES (v_op_id, 'Initial operator');
+
+    PERFORM 1 FROM platform_operators WHERE user_id = v_op_id AND enabled = TRUE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'expected platform_operator to be enabled by default';
+    END IF;
 
     -- Orgs: active slug uniqueness + soft-delete reuse.
     INSERT INTO organizations (id, slug, name, created_by)
@@ -338,6 +351,13 @@ BEGIN
     EXCEPTION WHEN check_violation THEN
         -- expected
     END;
+
+    -- Cascade deletions: ensure deleting a user removes their operator record.
+    DELETE FROM users WHERE id = v_op_id;
+    PERFORM 1 FROM platform_operators WHERE user_id = v_op_id;
+    IF FOUND THEN
+        RAISE EXCEPTION 'expected platform_operator to be deleted via user cascade';
+    END IF;
 END $$;
 
 ROLLBACK;

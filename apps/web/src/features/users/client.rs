@@ -20,3 +20,18 @@ pub async fn get_user(id: &str) -> Result<UserDetail, AppError> {
 
     get_json_with_credentials(&format!("/v1/users/{trimmed}")).await
 }
+
+/// Updates a user's platform role.
+pub async fn set_user_role(id: &str, role: &str) -> Result<(), AppError> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Config("User id is required.".to_string()));
+    }
+
+    crate::app_lib::post_json_with_headers_with_credentials(
+        &format!("/v1/users/{trimmed}/role"),
+        &serde_json::json!({ "role": role }),
+        &[],
+    )
+    .await
+}

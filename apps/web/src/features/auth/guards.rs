@@ -2,7 +2,9 @@
 //! redirecting unauthenticated users but do not enforce security; the API
 //! must still validate sessions.
 
+use crate::components::ui::ElevationPrompt;
 use crate::features::auth::state::use_auth;
+use crate::routes::NotFoundPage;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -20,4 +22,30 @@ pub fn RequireAuth(children: Children) -> impl IntoView {
     });
 
     view! { {children()} }
+}
+
+/// Renders children only for elevated platform operators.
+#[component]
+pub fn RequireAdmin<F, IV>(children: F) -> impl IntoView
+where
+    F: Fn() -> IV + Send + Sync + 'static,
+    IV: IntoView,
+{
+    let auth = use_auth();
+
+    view! {
+        {move || {
+            if auth.is_loading.get() {
+                view! { <div class="flex justify-center py-12"><crate::components::ui::Spinner /></div> }.into_any()
+            } else if !auth.is_authenticated.get() {
+                ().into_any()
+            } else if !auth.is_operator.get() {
+                view! { <NotFoundPage /> }.into_any()
+            } else if auth.admin_token.get().is_none() {
+                view! { <ElevationPrompt /> }.into_any()
+            } else {
+                children().into_any()
+            }
+        }}
+    }
 }

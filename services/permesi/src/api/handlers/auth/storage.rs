@@ -38,6 +38,7 @@ pub(super) struct LoginRecord {
 pub(crate) struct SessionRecord {
     pub(crate) user_id: Uuid,
     pub(crate) email: String,
+    pub(crate) created_at_unix: i64,
 }
 
 /// Look up login data by email (used by OPAQUE login start).
@@ -216,7 +217,9 @@ pub(super) async fn lookup_session(
 ) -> Result<Option<SessionRecord>> {
     // Only accept active users and unexpired sessions.
     let query = r"
-        SELECT users.id, users.email
+        SELECT users.id,
+               users.email,
+               EXTRACT(EPOCH FROM user_sessions.created_at)::bigint AS created_at_unix
         FROM user_sessions
         JOIN users ON users.id = user_sessions.user_id
         WHERE user_sessions.session_hash = $1
@@ -263,6 +266,7 @@ pub(super) async fn lookup_session(
     Ok(row.map(|row| SessionRecord {
         user_id: row.get("id"),
         email: row.get("email"),
+        created_at_unix: row.get("created_at_unix"),
     }))
 }
 

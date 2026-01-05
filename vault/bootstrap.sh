@@ -180,6 +180,11 @@ path "auth/token/renew-self" { capabilities = ["update"] }
 path "sys/leases/renew"      { capabilities = ["update"] }
 EOF
 
+# Policy for platform operators (admin claim/elevation).
+vault policy write permesi-operators - <<EOF
+path "auth/token/lookup-self" { capabilities = ["read"] }
+EOF
+
 vault write "auth/${VAULT_APPROLE_MOUNT}/role/permesi" token_policies=permesi token_ttl=1h token_max_ttl=4h >/dev/null
 vault write "auth/${VAULT_APPROLE_MOUNT}/role/genesis" token_policies=genesis token_ttl=1h token_max_ttl=4h >/dev/null
 
@@ -188,9 +193,13 @@ PERMESI_SECRET_ID=$(vault write -field=secret_id -f "auth/${VAULT_APPROLE_MOUNT}
 GENESIS_ROLE_ID=$(vault read -field=role_id "auth/${VAULT_APPROLE_MOUNT}/role/genesis/role-id")
 GENESIS_SECRET_ID=$(vault write -field=secret_id -f "auth/${VAULT_APPROLE_MOUNT}/role/genesis/secret-id")
 
+# Generate a long-lived operator token for dev use.
+OPERATOR_TOKEN=$(vault token create -policy=permesi-operators -period=24h -field=token)
+
 cat <<EOF
 Vault dev server ready on ${VAULT_LISTEN_ADDRESS}
 Root token: ${VAULT_DEV_ROOT_TOKEN_ID}
+Operator Token: ${OPERATOR_TOKEN}
 
 AppRole mount: ${VAULT_APPROLE_MOUNT}
 Login URL: ${VAULT_ADDR%/}/v1/auth/${VAULT_APPROLE_MOUNT}/login

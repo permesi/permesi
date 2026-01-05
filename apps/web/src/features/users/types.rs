@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct UserSummary {
     pub id: String,
     pub email: String,
+    pub display_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -15,4 +16,8 @@ pub struct UserDetail {
     pub id: String,
     pub email: String,
     pub display_name: Option<String>,
+    pub locale: Option<String>,
+    pub role: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }

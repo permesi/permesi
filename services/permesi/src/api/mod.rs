@@ -63,6 +63,7 @@ pub async fn new(
     globals: &GlobalArgs,
     admission: Arc<handlers::AdmissionVerifier>,
     auth_config: auth::AuthConfig,
+    admin_config: auth::AdminConfig,
     email_config: email::EmailWorkerConfig,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
@@ -97,6 +98,10 @@ pub async fn new(
         opaque_state,
         Arc::new(auth::NoopRateLimiter),
     ));
+    let admin_state = Arc::new(
+        auth::AdminState::new(admin_config, pool.clone())
+            .context("Failed to initialize admin state")?,
+    );
 
     // Background worker polls email_outbox (DB-backed queue) for pending rows,
     // delivers/logs them, and retries failures with exponential backoff.
@@ -110,6 +115,7 @@ pub async fn new(
             HeaderName::from_static("x-permesi-zero-token"),
         ])
         .allow_methods([Method::GET, Method::POST])
+        .expose_headers([AUTHORIZATION])
         .allow_origin(AllowOrigin::exact(frontend_origin))
         .allow_credentials(true);
 
@@ -131,6 +137,7 @@ pub async fn new(
                 .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
                 .layer(Extension(auth_state.clone()))
+                .layer(Extension(admin_state.clone()))
                 .layer(Extension(admission.clone()))
                 .layer(Extension(globals.clone()))
                 .layer(Extension(pool.clone())),

@@ -1,7 +1,7 @@
 //! Authenticated self-service endpoints.
 //!
 //! Flow Overview:
-//! 1) Authenticate via session cookie.
+//! 1) Authenticate via bearer token or session cookie.
 //! 2) Resolve the current user from the database.
 //! 3) Apply allow-listed updates and session management.
 

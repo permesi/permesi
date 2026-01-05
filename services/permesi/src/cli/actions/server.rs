@@ -14,6 +14,9 @@ pub struct Args {
     pub vault_role_id: String,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
+    pub vault_addr: Option<String>,
+    pub vault_namespace: Option<String>,
+    pub vault_policy: String,
     pub admission_paserk: Option<String>,
     pub admission_paserk_path: Option<String>,
     pub admission_paserk_url: Option<String>,
@@ -32,6 +35,8 @@ pub struct Args {
     pub opaque_kv_path: String,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
+    pub platform_admin_ttl_seconds: i64,
+    pub platform_recent_auth_seconds: i64,
 }
 
 /// Execute the server action.
@@ -67,7 +72,7 @@ pub async fn execute(args: Args) -> Result<()> {
         ))
     };
 
-    let mut globals = GlobalArgs::new(args.vault_url);
+    let mut globals = GlobalArgs::new(args.vault_url.clone());
 
     // If vault wrapped token try to unwrap, otherwise use secret-id.
     let vault_token: String = if let Some(wrapped) = &args.vault_wrapped_token {
@@ -113,6 +118,17 @@ pub async fn execute(args: Args) -> Result<()> {
         .with_opaque_server_id(args.opaque_server_id)
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
+    let vault_addr = match args.vault_addr {
+        Some(addr) => addr,
+        None => vault_base_url(&args.vault_url)?,
+    };
+
+    let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
+        .with_vault_namespace(args.vault_namespace)
+        .with_vault_policy(args.vault_policy)
+        .with_admin_ttl_seconds(args.platform_admin_ttl_seconds)
+        .with_recent_auth_seconds(args.platform_recent_auth_seconds);
+
     let email_config = api::email::EmailWorkerConfig::new()
         .with_poll_interval_seconds(args.email_outbox_poll_seconds)
         .with_batch_size(args.email_outbox_batch_size)
@@ -126,7 +142,19 @@ pub async fn execute(args: Args) -> Result<()> {
         &globals,
         admission_verifier,
         auth_config,
+        admin_config,
         email_config,
     )
     .await
+}
+
+fn vault_base_url(url: &str) -> Result<String> {
+    let parsed = Url::parse(url).context("Invalid Vault URL")?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("Vault URL missing host"))?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("Vault URL missing port"))?;
+    Ok(format!("{}://{}:{}", parsed.scheme(), host, port))
 }

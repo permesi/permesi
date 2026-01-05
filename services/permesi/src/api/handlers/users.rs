@@ -266,14 +266,16 @@ async fn fetch_user_summaries(pool: &PgPool) -> Result<Vec<UserSummary>, sqlx::E
 async fn fetch_user_detail(pool: &PgPool, user_id: Uuid) -> Result<Option<UserDetail>, sqlx::Error> {
     let query = r#"
         SELECT
-            id::text AS id,
-            email,
-            display_name,
-            locale,
-            to_char(created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-            to_char(updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
-        FROM users
-        WHERE id = $1
+            u.id::text AS id,
+            u.email,
+            u.display_name,
+            u.locale,
+            r.role,
+            to_char(u.created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+            to_char(u.updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+        FROM users u
+        LEFT JOIN user_roles r ON r.user_id = u.id
+        WHERE u.id = $1
         LIMIT 1
     "#;
     let row = sqlx::query(query).bind(user_id).fetch_optional(pool).await?;
@@ -282,6 +284,7 @@ async fn fetch_user_detail(pool: &PgPool, user_id: Uuid) -> Result<Option<UserDe
         email: row.get("email"),
         display_name: row.get("display_name"),
         locale: row.get("locale"),
+        role: row.get("role"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))

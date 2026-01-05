@@ -4,4 +4,5 @@
 
 pub(crate) mod auth;
 pub(crate) mod me;
+pub(crate) mod orgs;
 pub(crate) mod users;

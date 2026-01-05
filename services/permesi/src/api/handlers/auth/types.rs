@@ -58,6 +58,61 @@ pub struct ResendVerificationRequest {
 pub struct SessionResponse {
     pub user_id: String,
     pub email: String,
+    pub is_operator: bool,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct AdminStatusResponse {
+    pub bootstrap_open: bool,
+    pub operator: bool,
+    pub cooldown_seconds: u64,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AdminBootstrapRequest {
+    pub vault_token: String,
+    pub note: Option<String>,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AdminElevateRequest {
+    pub vault_token: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct AdminElevateResponse {
+    pub admin_token: String,
+    pub expires_at: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct AdminInfraResponse {
+    pub database: DatabaseStats,
+    pub vault: VaultStatus,
+    pub platform: PlatformStats,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct DatabaseStats {
+    pub status: String,
+    pub pool_size: u32,
+    pub active_connections: u32,
+    pub idle_connections: u32,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct VaultStatus {
+    pub status: String,
+    pub version: String,
+    pub sealed: bool,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct PlatformStats {
+    pub operator_count: i64,
+    pub recent_attempts_count: i64,
 }
 
 #[cfg(test)]

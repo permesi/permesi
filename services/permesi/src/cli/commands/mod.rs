@@ -153,7 +153,8 @@ fn with_vault_args(command: Command) -> Command {
 fn with_auth_args(command: Command) -> Command {
     let command = with_auth_email_args(command);
     let command = with_auth_outbox_args(command);
-    with_auth_opaque_args(command)
+    let command = with_auth_opaque_args(command);
+    with_admin_args(command)
 }
 
 fn with_auth_email_args(command: Command) -> Command {
@@ -265,6 +266,45 @@ fn with_auth_opaque_args(command: Command) -> Command {
                 .env("PERMESI_OPAQUE_LOGIN_TTL_SECONDS")
                 .default_value("300")
                 .value_parser(clap::value_parser!(u64)),
+        )
+}
+
+fn with_admin_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("vault-addr")
+                .long("vault-addr")
+                .help("Vault base address for admin step-up lookups")
+                .env("VAULT_ADDR"),
+        )
+        .arg(
+            Arg::new("vault-namespace")
+                .long("vault-namespace")
+                .help("Vault namespace for admin step-up lookups")
+                .env("VAULT_NAMESPACE"),
+        )
+        .arg(
+            Arg::new("vault-policy")
+                .long("vault-policy")
+                .help("Vault policy required for operator elevation")
+                .env("PERMESI_VAULT_POLICY")
+                .default_value("permesi-operators"),
+        )
+        .arg(
+            Arg::new("platform-admin-ttl-seconds")
+                .long("platform-admin-ttl-seconds")
+                .help("Admin elevation token TTL in seconds")
+                .env("PLATFORM_ADMIN_TTL_SECONDS")
+                .default_value("43200")
+                .value_parser(clap::value_parser!(i64)),
+        )
+        .arg(
+            Arg::new("platform-recent-auth-seconds")
+                .long("platform-recent-auth-seconds")
+                .help("Maximum session age for bootstrap in seconds")
+                .env("PLATFORM_RECENT_AUTH_SECONDS")
+                .default_value("3600")
+                .value_parser(clap::value_parser!(i64)),
         )
 }
 

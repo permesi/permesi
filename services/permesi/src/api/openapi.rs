@@ -28,6 +28,10 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(auth::verification::resend_verification))
         .routes(routes!(auth::session::session))
         .routes(routes!(auth::session::logout))
+        .routes(routes!(auth::admin::admin_status))
+        .routes(routes!(auth::admin::admin_infra))
+        .routes(routes!(auth::admin::admin_bootstrap))
+        .routes(routes!(auth::admin::admin_elevate))
         .routes(routes!(me::get_me))
         .routes(routes!(me::patch_me))
         .routes(routes!(me::list_sessions))
@@ -181,6 +185,9 @@ mod tests {
         );
         assert!(spec.paths.paths.contains_key("/v1/auth/session"));
         assert!(spec.paths.paths.contains_key("/v1/auth/logout"));
+        assert!(spec.paths.paths.contains_key("/v1/auth/admin/status"));
+        assert!(spec.paths.paths.contains_key("/v1/auth/admin/bootstrap"));
+        assert!(spec.paths.paths.contains_key("/v1/auth/admin/elevate"));
         assert!(spec.paths.paths.contains_key("/v1/me"));
         assert!(spec.paths.paths.contains_key("/v1/me/sessions"));
         assert!(spec.paths.paths.contains_key("/v1/me/sessions/{sid}"));

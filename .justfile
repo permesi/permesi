@@ -358,16 +358,6 @@ sandbox-squash message="" base="origin/develop": check-clean
     fi
     git push --force-with-lease origin HEAD
 
-# Fast-forward merge a sandbox branch into develop.
-# Usage: just sandbox-merge [branch]
-sandbox-merge branch="sandbox": check-develop check-clean
-    #!/usr/bin/env bash
-    set -euo pipefail
-    branch="{{branch}}"
-    git pull --ff-only origin develop
-    git merge --ff-only "${branch}"
-    git push origin develop
-
 # Create & push a test tag like t-YYYYMMDD-HHMMSS (skips publish/release in CI)
 # Usage:
 #   just t-deploy
@@ -845,9 +835,17 @@ vault-env:
         vault \
         vault write -field=secret_id -f "auth/${approle_mount}/role/genesis/secret-id"
     )"
+    operator_token="$(
+      podman exec \
+        -e VAULT_ADDR="$vault_addr" \
+        -e VAULT_TOKEN="$token" \
+        vault \
+        vault token create -policy=permesi-operators -period=24h -field=token
+    )"
     printf '%s\n' \
       "export VAULT_ADDR=\"${vault_addr}\"" \
       "export VAULT_TOKEN=\"${token}\"" \
+      "export PERMESI_OPERATOR_TOKEN=\"${operator_token}\"" \
       "" \
       "export GENESIS_DSN=\"postgres://postgres@localhost:5432/genesis\"" \
       "export GENESIS_VAULT_URL=\"${vault_addr%/}/v1/auth/${approle_mount}/login\"" \
@@ -872,13 +870,14 @@ vault-env:
     permesi_secret_id="$(printf '%s\n' "$logs" | rg "permesi SecretID:" | tail -n 1 | sed -E 's/.*permesi SecretID:[[:space:]]*//')"
     genesis_role_id="$(printf '%s\n' "$logs" | rg "genesis RoleID:" | tail -n 1 | sed -E 's/.*genesis RoleID:[[:space:]]*//')"
     genesis_secret_id="$(printf '%s\n' "$logs" | rg "genesis SecretID:" | tail -n 1 | sed -E 's/.*genesis SecretID:[[:space:]]*//')"
-    if [[ -n "$login_url" && -n "$permesi_role_id" && -n "$permesi_secret_id" && -n "$genesis_role_id" && -n "$genesis_secret_id" ]]; then
+    operator_token="$(printf '%s\n' "$logs" | rg "Operator Token:" | tail -n 1 | sed -E 's/.*Operator Token:[[:space:]]*//')"
+    if [[ -n "$login_url" && -n "$permesi_role_id" && -n "$permesi_secret_id" && -n "$genesis_role_id" && -n "$genesis_secret_id" && -n "$operator_token" ]]; then
       break
     fi
     sleep 0.5
   done
 
-  if [[ -z "$login_url" || -z "$permesi_role_id" || -z "$permesi_secret_id" || -z "$genesis_role_id" || -z "$genesis_secret_id" ]]; then
+  if [[ -z "$login_url" || -z "$permesi_role_id" || -z "$permesi_secret_id" || -z "$genesis_role_id" || -z "$genesis_secret_id" || -z "$operator_token" ]]; then
     echo "Missing values in vault logs. Run: just vault" >&2
     exit 1
   fi
@@ -888,6 +887,7 @@ vault-env:
   printf '%s\n' \
     "export VAULT_ADDR=\"${vault_addr}\"" \
     "export VAULT_TOKEN=\"dev-root\"" \
+    "export PERMESI_OPERATOR_TOKEN=\"${operator_token}\"" \
     "" \
     "export GENESIS_DSN=\"postgres://postgres@localhost:5432/genesis\"" \
     "export GENESIS_VAULT_URL=\"${login_url}\"" \
@@ -989,7 +989,6 @@ postgres version="18":
       postgres:{{ version }} \
       postgres -c config_file=/etc/postgresql/config/postgresql.conf
   until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do sleep 0.2; done
-  podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/00_init.sql
 
 postgres-stop:
   podman stop postgres-permesi || true
@@ -1080,6 +1079,19 @@ reset:
   podman rm -f vault postgres-permesi jaeger >/dev/null 2>&1 || true
   just vault-reset
   rm -rf {{root}}/db/data {{root}}/db/logs
+
+# Generate a fresh platform operator token for admin claim/elevation.
+operator-token:
+    #!/usr/bin/env zsh
+    set -euo pipefail
+    keys="{{root}}/vault/keys.json"
+    if [[ ! -f "$keys" ]]; then
+        echo "❌ Vault keys not found. Is Vault initialized? Run: just vault-init" >&2
+        exit 1
+    fi
+    root_token=$(jq -r '.root_token' "$keys")
+    podman exec -e VAULT_TOKEN="$root_token" -e VAULT_ADDR="http://127.0.0.1:8200" \
+        vault vault token create -policy=permesi-operators -period=24h -field=token
 
 podman-check:
   #!/usr/bin/env zsh

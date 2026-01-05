@@ -2,7 +2,7 @@
 
 use crate::{
     components::{Alert, AlertKind, AppShell, Spinner},
-    features::{auth::guards::RequireAuth, me::client},
+    features::{auth::RequireAuth, me::client},
 };
 use leptos::prelude::*;
 

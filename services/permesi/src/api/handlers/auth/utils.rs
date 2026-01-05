@@ -77,7 +77,17 @@ pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
 }
 
 /// Extract a client IP for rate limiting from common proxy headers.
+/// Prioritizes Cloudflare's `CF-Connecting-IP` when available.
 pub(super) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(cf_ip) = headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(cf_ip.to_string());
+    }
+
     let forwarded = headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
@@ -93,6 +103,16 @@ pub(super) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<Strin
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// Extract a country code from Cloudflare's `CF-IPCountry` header.
+pub(super) fn extract_country_code(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("cf-ipcountry")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| value.len() == 2)
+        .map(str::to_uppercase)
 }
 
 #[cfg(test)]
@@ -202,6 +222,14 @@ mod tests {
     }
 
     #[test]
+    fn extract_client_ip_prefers_cloudflare() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", HeaderValue::from_static("1.1.1.1"));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("2.2.2.2"));
+        assert_eq!(extract_client_ip(&headers), Some("1.1.1.1".to_string()));
+    }
+
+    #[test]
     fn is_unique_violation_matches_sqlstate() {
         let err = sqlx::Error::Database(Box::new(TestDbError {
             code: Some("23505"),
@@ -239,5 +267,21 @@ mod tests {
     fn extract_client_ip_none_when_missing() {
         let headers = HeaderMap::new();
         assert_eq!(extract_client_ip(&headers), None);
+    }
+
+    #[test]
+    fn extract_country_code_parses_cloudflare_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-ipcountry", HeaderValue::from_static("es"));
+        assert_eq!(extract_country_code(&headers), Some("ES".to_string()));
+    }
+
+    #[test]
+    fn extract_country_code_none_when_missing_or_invalid() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(extract_country_code(&headers), None);
+
+        headers.insert("cf-ipcountry", HeaderValue::from_static("UNKNOWN"));
+        assert_eq!(extract_country_code(&headers), None);
     }
 }

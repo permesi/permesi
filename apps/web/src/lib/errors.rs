@@ -2,10 +2,11 @@
 //! handling consistent across features without exposing sensitive payloads, and
 //! the enum stays lightweight for reactive UI state.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Uniform error type surfaced by API helpers and route actions.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AppError {
     Config(String),
     Network(String),

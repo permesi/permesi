@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 leptos = { version = "0.8", features = ["csr"] }
 leptos_router = { version = "0.8" }
 gloo-net = { version = "0.6", features = ["json"] }
-gloo-timers = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
 base64 = { workspace = true }
 opaque-ke = { workspace = true }

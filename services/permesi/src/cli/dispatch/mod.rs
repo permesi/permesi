@@ -34,6 +34,67 @@ fn parse_email_outbox_args(matches: &clap::ArgMatches) -> EmailOutboxArgs {
     }
 }
 
+struct AdmissionArgs {
+    path: Option<String>,
+    paserk: Option<String>,
+    url: Option<String>,
+    issuer: Option<String>,
+    audience: Option<String>,
+}
+
+fn parse_admission_args(matches: &clap::ArgMatches) -> Result<AdmissionArgs> {
+    let path = matches.get_one::<String>("admission-paserk-path").cloned();
+    let paserk = matches.get_one::<String>("admission-paserk").cloned();
+    let url = matches.get_one::<String>("admission-paserk-url").cloned();
+
+    if path.is_none() && paserk.is_none() && url.is_none() {
+        anyhow::bail!(
+            "missing required argument: --admission-paserk-path, --admission-paserk, or --admission-paserk-url"
+        );
+    }
+
+    Ok(AdmissionArgs {
+        path,
+        paserk,
+        url,
+        issuer: matches.get_one::<String>("admission-issuer").cloned(),
+        audience: matches.get_one::<String>("admission-audience").cloned(),
+    })
+}
+
+struct AuthArgs {
+    frontend_base_url: String,
+    email_token_ttl_seconds: i64,
+    email_resend_cooldown_seconds: i64,
+    session_ttl_seconds: i64,
+}
+
+fn parse_auth_args(matches: &clap::ArgMatches) -> Result<AuthArgs> {
+    let frontend_base_url = matches
+        .get_one::<String>("frontend-base-url")
+        .cloned()
+        .context("missing required argument: --frontend-base-url")?;
+    let email_token_ttl_seconds = matches
+        .get_one::<i64>("email-token-ttl-seconds")
+        .copied()
+        .unwrap_or(1800);
+    let email_resend_cooldown_seconds = matches
+        .get_one::<i64>("email-resend-cooldown-seconds")
+        .copied()
+        .unwrap_or(60);
+    let session_ttl_seconds = matches
+        .get_one::<i64>("session-ttl-seconds")
+        .copied()
+        .unwrap_or(604_800);
+
+    Ok(AuthArgs {
+        frontend_base_url,
+        email_token_ttl_seconds,
+        email_resend_cooldown_seconds,
+        session_ttl_seconds,
+    })
+}
+
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
 pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
@@ -54,44 +115,21 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
+    let vault_addr = matches.get_one::<String>("vault-addr").cloned();
+    let vault_namespace = matches.get_one::<String>("vault-namespace").cloned();
+    let vault_policy = matches
+        .get_one::<String>("vault-policy")
+        .cloned()
+        .unwrap_or_else(|| "permesi-operators".to_string());
 
     if vault_secret_id.is_none() && vault_wrapped_token.is_none() {
         anyhow::bail!("missing required argument: --vault-secret-id or --vault-wrapped-token");
     }
 
-    let admission_paserk_path = matches.get_one::<String>("admission-paserk-path").cloned();
-    let admission_paserk = matches.get_one::<String>("admission-paserk").cloned();
-    let admission_paserk_url = matches.get_one::<String>("admission-paserk-url").cloned();
-
-    if admission_paserk_path.is_none()
-        && admission_paserk.is_none()
-        && admission_paserk_url.is_none()
-    {
-        anyhow::bail!(
-            "missing required argument: --admission-paserk-path, --admission-paserk, or --admission-paserk-url"
-        );
-    }
-
-    let admission_issuer = matches.get_one::<String>("admission-issuer").cloned();
-    let admission_audience = matches.get_one::<String>("admission-audience").cloned();
-
-    let frontend_base_url = matches
-        .get_one::<String>("frontend-base-url")
-        .cloned()
-        .context("missing required argument: --frontend-base-url")?;
-    let email_token_ttl_seconds = matches
-        .get_one::<i64>("email-token-ttl-seconds")
-        .copied()
-        .unwrap_or(1800);
-    let email_resend_cooldown_seconds = matches
-        .get_one::<i64>("email-resend-cooldown-seconds")
-        .copied()
-        .unwrap_or(60);
-    let session_ttl_seconds = matches
-        .get_one::<i64>("session-ttl-seconds")
-        .copied()
-        .unwrap_or(604_800);
+    let admission = parse_admission_args(matches)?;
+    let auth = parse_auth_args(matches)?;
     let email_outbox = parse_email_outbox_args(matches);
+
     let opaque_kv_mount = matches
         .get_one::<String>("opaque-kv-mount")
         .cloned()
@@ -108,6 +146,14 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one::<u64>("opaque-login-ttl-seconds")
         .copied()
         .unwrap_or(300);
+    let platform_admin_ttl_seconds = matches
+        .get_one::<i64>("platform-admin-ttl-seconds")
+        .copied()
+        .unwrap_or(43200);
+    let platform_recent_auth_seconds = matches
+        .get_one::<i64>("platform-recent-auth-seconds")
+        .copied()
+        .unwrap_or(3600);
 
     Ok(Action::Server(Args {
         port,
@@ -116,15 +162,18 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_role_id,
         vault_secret_id,
         vault_wrapped_token,
-        admission_paserk,
-        admission_paserk_path,
-        admission_paserk_url,
-        admission_issuer,
-        admission_audience,
-        frontend_base_url,
-        email_token_ttl_seconds,
-        email_resend_cooldown_seconds,
-        session_ttl_seconds,
+        vault_addr,
+        vault_namespace,
+        vault_policy,
+        admission_paserk: admission.paserk,
+        admission_paserk_path: admission.path,
+        admission_paserk_url: admission.url,
+        admission_issuer: admission.issuer,
+        admission_audience: admission.audience,
+        frontend_base_url: auth.frontend_base_url,
+        email_token_ttl_seconds: auth.email_token_ttl_seconds,
+        email_resend_cooldown_seconds: auth.email_resend_cooldown_seconds,
+        session_ttl_seconds: auth.session_ttl_seconds,
         email_outbox_poll_seconds: email_outbox.poll_seconds,
         email_outbox_batch_size: email_outbox.batch_size,
         email_outbox_max_attempts: email_outbox.max_attempts,
@@ -134,5 +183,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         opaque_kv_path,
         opaque_server_id,
         opaque_login_ttl_seconds,
+        platform_admin_ttl_seconds,
+        platform_recent_auth_seconds,
     }))
 }

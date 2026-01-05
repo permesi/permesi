@@ -18,8 +18,8 @@ persistent path by default.
 ## Dev-only Vault (no persistence)
 
 Use this when you do not need data to survive restarts. It starts in dev mode, auto-unseals,
-and wipes data when the container stops. The dev root token and AppRole IDs are printed to the
-container logs (inspect with `podman logs vault`).
+and wipes data when the container stops. The dev root token, AppRole IDs, and **Operator Token**
+are printed to the container logs (inspect with `podman logs vault`).
 
 ## Persistent dev Vault (recommended)
 
@@ -34,12 +34,26 @@ This is what `just dev-start` uses.
 
 To reset a persistent Vault, stop the container and remove the data volume plus `vault/keys.json`.
 
-Persistent bootstrapping prints the AppRole `role_id` / `secret_id` values to the terminal.
-Re-run `just vault-bootstrap` to print them again. In dev-only mode, they are printed to logs:
+Persistent bootstrapping prints the AppRole `role_id` / `secret_id` and the **Operator Token**
+values to the terminal. Re-run `just vault-bootstrap` to print them again. In dev-only mode,
+they are printed to logs:
 
 ```sh
-podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID|permesi SecretID"
+podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID|permesi SecretID|Operator Token"
 ```
+
+## Operator Token (Admin Claim)
+
+To test the **Platform Operator** claim flow (bootstrapping the first admin or elevating privileges), 
+you need a Vault token with the `permesi-operators` policy. The root token (`dev-root`) will **not** work.
+
+The bootstrap scripts automatically generate a long-lived (24h) token with this policy.
+
+- **Persistent**: Printed to stdout when `just vault-persist-ready` or `just vault-bootstrap` finishes.
+- **Dev-only**: Printed to `podman logs vault`.
+- **Environment**: Available as `$PERMESI_OPERATOR_TOKEN` in your shell if you run `just dev-envrc` (or `just start`).
+
+Copy this token into the "Vault token" field at `/admin/claim` to become an operator.
 
 ## What gets provisioned
 
@@ -56,6 +70,7 @@ podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID
 - **Database creds (Postgres)**: mounted at `${VAULT_DATABASE_MOUNT}` (default `database`)
   - Connections: `genesis` (DB `${VAULT_POSTGRES_DATABASE_GENESIS}`), `permesi` (DB `${VAULT_POSTGRES_DATABASE_PERMESI}`)
   - Roles (Vault database roles): `genesis`, `permesi`
+- **Operator Policy**: `permesi-operators` (used for admin claim/elevation).
 
 Note: Postgres roles/users are created **on-demand** when credentials are requested:
 `vault read database/creds/genesis` or `vault read database/creds/permesi`.

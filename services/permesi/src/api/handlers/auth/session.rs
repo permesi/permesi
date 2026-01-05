@@ -1,11 +1,11 @@
-//! Session endpoints for cookie-based auth.
+//! Session endpoints for cookie and bearer auth.
 
 use axum::{
     Json,
     extract::Extension,
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{InvalidHeaderValue, SET_COOKIE},
+        header::{AUTHORIZATION, InvalidHeaderValue, SET_COOKIE},
     },
     response::IntoResponse,
 };
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tracing::error;
 
 use super::{
+    admin_storage::operator_enabled,
     state::AuthState,
     storage::{SessionRecord, delete_session, lookup_session},
     types::SessionResponse,
@@ -39,10 +40,16 @@ pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRe
     // Only the hash is stored; never compare raw tokens against the database.
     let token_hash = hash_session_token(&token);
     match lookup_session(&pool, &token_hash).await {
-        Ok(Some(SessionRecord { user_id, email })) => {
+        Ok(Some(SessionRecord {
+            user_id,
+            email,
+            created_at_unix: _,
+        })) => {
+            let is_operator = operator_enabled(&pool, user_id).await.unwrap_or(false);
             let response = SessionResponse {
                 user_id: user_id.to_string(),
                 email,
+                is_operator,
             };
             (StatusCode::OK, Json(response)).into_response()
         }
@@ -131,6 +138,9 @@ fn clear_session_cookie(
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(token) = extract_bearer_token(headers) {
+        return Some(token);
+    }
     let header = headers.get(axum::http::header::COOKIE)?;
     let value = header.to_str().ok()?;
     for pair in value.split(';') {
@@ -143,4 +153,18 @@ fn extract_session_token(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let trimmed = value.trim();
+    let token = trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))?
+        .trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
 }

@@ -8,6 +8,7 @@ use leptos::prelude::*;
 pub enum AlertKind {
     Error,
     Success,
+    Info,
 }
 
 /// Renders a styled alert banner.
@@ -19,6 +20,9 @@ pub fn Alert(kind: AlertKind, message: String) -> impl IntoView {
         }
         AlertKind::Success => {
             "rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-400 dark:bg-emerald-900/30 dark:text-emerald-200"
+        }
+        AlertKind::Info => {
+            "rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-200"
         }
     };
 

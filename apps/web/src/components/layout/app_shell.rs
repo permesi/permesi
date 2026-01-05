@@ -2,51 +2,72 @@
 //! header markup and the mobile menu toggle so routes can focus on content.
 //! Navigation remains client-side; backend routes must enforce access control.
 
+use crate::components::layout::Sidebar;
 use crate::features::auth::{client, state::use_auth};
 use leptos::{prelude::*, task::spawn_local};
-use leptos_router::{components::A, hooks::use_location};
+use leptos_router::{
+    components::A,
+    hooks::{use_location, use_navigate},
+};
 
-fn breadcrumb_label(path: &str) -> String {
+fn breadcrumbs(path: &str) -> Vec<String> {
     if path == "/" || path.is_empty() {
-        return "Dashboard".to_string();
+        return vec!["Dashboard".to_string()];
     }
 
     match path {
-        "/login" => return "Sign In".to_string(),
-        "/signup" => return "Sign Up".to_string(),
-        "/verify-email" => return "Verify Email".to_string(),
-        "/health" => return "Health".to_string(),
-        "/me" => return "Me".to_string(),
-        "/users" => return "Users".to_string(),
+        "/login" => return vec!["Sign In".to_string()],
+        "/signup" => return vec!["Sign Up".to_string()],
+        "/verify-email" => return vec!["Verify Email".to_string()],
+        "/health" => return vec!["Health".to_string()],
+        "/me" => return vec!["Me".to_string()],
+        "/users" => return vec!["Users".to_string()],
+        "/admin" => return vec!["Admin".to_string()],
+        "/admin/claim" => return vec!["Admin".to_string(), "Claim".to_string()],
         _ => {}
+    }
+
+    if let Some(rest) = path.strip_prefix("/orgs/") {
+        if !rest.is_empty() {
+            let mut segments = vec!["Organizations".to_string()];
+            let parts: Vec<&str> = rest.split('/').collect();
+            if let Some(org_slug) = parts.get(0) {
+                segments.push(org_slug.to_string());
+            }
+            if parts.get(1) == Some(&"projects") {
+                segments.push("Projects".to_string());
+                if let Some(project_slug) = parts.get(2) {
+                    segments.push(project_slug.to_string());
+                }
+            }
+            return segments;
+        }
     }
 
     if let Some(rest) = path.strip_prefix("/users/") {
         if !rest.is_empty() {
-            return "User".to_string();
+            return vec!["Users".to_string(), "User".to_string()];
         }
     }
 
-    let trimmed = path.trim_matches('/');
-    if trimmed.is_empty() {
-        return "Dashboard".to_string();
-    }
-
-    trimmed
+    path.trim_matches('/')
         .split('/')
-        .last()
-        .unwrap_or("Page")
-        .split('-')
-        .filter(|segment| !segment.is_empty())
+        .filter(|s| !s.is_empty())
         .map(|segment| {
-            let mut chars = segment.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
+            segment
+                .split('-')
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    let mut chars = s.chars();
+                    match chars.next() {
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect()
 }
 
 /// Wraps routes with a header and main content container.
@@ -60,7 +81,12 @@ pub fn AppShell(children: Children) -> impl IntoView {
     let is_authenticated = auth.is_authenticated;
     let location = use_location();
     let on_login = move || location.pathname.get() == "/login";
-    let breadcrumb = Signal::derive(move || breadcrumb_label(&location.pathname.get()));
+    let breadcrumb_segments = Signal::derive(move || breadcrumbs(&location.pathname.get()));
+    let admin_href = Signal::derive(move || {
+        auth.admin_token
+            .get()
+            .map_or("/admin/claim".to_string(), |_| "/admin".to_string())
+    });
     let user_info = Signal::derive(move || {
         auth.session
             .get()
@@ -68,8 +94,8 @@ pub fn AppShell(children: Children) -> impl IntoView {
     });
 
     view! {
-        <div class="min-h-screen flex flex-col">
-            <header class="border-b border-gray-200 bg-[#f6f8fa] dark:bg-gray-900">
+        <div class="min-h-screen flex flex-col bg-white dark:bg-gray-900">
+            <header class="border-b border-gray-200 bg-[#f6f8fa] dark:bg-gray-900 z-30">
                 <div class="w-full flex flex-wrap items-center gap-4 px-4 py-3">
                     <A
                         href="/"
@@ -82,10 +108,18 @@ pub fn AppShell(children: Children) -> impl IntoView {
                             "Permesi"
                         </span>
                         <Show when=move || is_authenticated.get()>
-                            <span class="text-sm text-gray-400 dark:text-gray-500">"/"</span>
-                            <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
-                                {move || breadcrumb.get()}
-                            </span>
+                            <For
+                                each=move || breadcrumb_segments.get().into_iter().enumerate()
+                                key=|(i, _)| *i
+                                children=move |(_, segment)| {
+                                    view! {
+                                        <span class="text-sm text-gray-400 dark:text-gray-500">"/"</span>
+                                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                                            {segment}
+                                        </span>
+                                    }
+                                }
+                            />
                         </Show>
                     </A>
                     <button
@@ -152,6 +186,21 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                     }
                                 >
                                     <div class="flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
+                                        <Show when=move || auth.is_operator.get()>
+                                            <A
+                                                href=move || admin_href.get()
+                                                {..}
+                                                class="flex items-center text-gray-500 hover:text-black dark:text-gray-400 dark:hover:text-white"
+                                                on:click=move |_| set_menu_open.set(false)
+                                            >
+                                                <span class="material-symbols-outlined text-xl">
+                                                    "settings"
+                                                </span>
+                                            </A>
+                                            <span class="hidden md:inline text-gray-300 dark:text-gray-600">
+                                                "|"
+                                            </span>
+                                        </Show>
                                         {move || {
                                             user_info
                                                 .get()
@@ -175,9 +224,11 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                             type="button"
                                             class="inline-flex items-center gap-1 text-sm font-medium text-gray-700 hover:text-black dark:text-gray-200 dark:hover:text-white cursor-pointer"
                                             on:click=move |_| {
+                                                let navigate = use_navigate();
                                                 spawn_local(async move {
                                                     let _ = client::logout().await;
                                                     auth.clear_session();
+                                                    navigate("/", Default::default());
                                                 });
                                                 set_menu_open.set(false);
                                             }
@@ -194,13 +245,18 @@ pub fn AppShell(children: Children) -> impl IntoView {
                     </div>
                 </div>
             </header>
-            <main class="flex-1">
-                <div class="w-full">
+
+            <div class="flex flex-1 overflow-hidden">
+                <Show when=move || is_authenticated.get()>
+                    <Sidebar />
+                </Show>
+
+                <main class="flex-1 overflow-y-auto">
                     <div class="max-w-screen-xl mx-auto px-4 py-6">
                         {children()}
                     </div>
-                </div>
-            </main>
+                </main>
+            </div>
         </div>
     }
 }

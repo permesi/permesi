@@ -1,6 +1,7 @@
 pub mod database;
 pub mod kv;
 pub mod renew;
+pub mod step_up;
 pub mod transit;
 
 use crate::api::APP_USER_AGENT;

@@ -142,10 +142,12 @@ sequenceDiagram
     P-->>U: 200 session or 204
 ```
 
-Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
+ Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
+
+### Admin Rate Limiting
+Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against Vault token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
 
 ### Auth endpoints (quick scan)
-
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/v1/auth/opaque/signup/start` | OPAQUE registration start; requires zero token |
@@ -196,6 +198,15 @@ Cleanup: `just stop` to stop containers, and `just reset` to remove the infra co
 `just dev-envrc` emits Vault credentials plus local endpoints:
 - `PERMESI_ADMISSION_PASERK_URL=http://localhost:8000/paserk.json`
 - `PERMESI_FRONTEND_BASE_URL=http://localhost:8080`
+- `PERMESI_OPERATOR_TOKEN` (used for `/admin/claim`)
+
+### Testing Admin Claim (Platform Operator)
+To test bootstrapping the first admin or elevating privileges, you need a Vault token with the `permesi-operators` policy.
+The dev bootstrap automatically generates one and prints it to stdout (or exports it via `just dev-envrc`).
+
+1. Copy the **Operator Token** from startup logs or run `echo $PERMESI_OPERATOR_TOKEN`.
+2. Navigate to `http://localhost:8080/admin/claim`.
+3. Paste the token and submit to claim the operator role.
 
 ## API Contract (OpenAPI)
 

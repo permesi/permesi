@@ -1,6 +1,6 @@
 //! Login route that implements the client-side OPAQUE exchange. It keeps passwords
 //! local, uses zero-token headers for permesi calls, and hydrates session state
-//! via cookie-based auth after a successful login.
+//! via cookie-based auth while capturing the bearer token for future requests.
 //!
 //! Flow Overview: Start OPAQUE with the server, finish the exchange, then fetch
 //! the session and redirect to the home route.
@@ -13,7 +13,7 @@ use crate::{
         opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
         state::use_auth,
         token,
-        types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest},
+        types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, UserSession},
     },
 };
 use base64::Engine;
@@ -27,6 +27,12 @@ use rand::rngs::OsRng;
 struct LoginInput {
     email: String,
     password: String,
+}
+
+#[derive(Clone)]
+struct LoginResult {
+    session: UserSession,
+    session_token: Option<String>,
 }
 
 /// Renders the login form and drives the OPAQUE login flow.
@@ -88,20 +94,28 @@ pub fn LoginPage() -> impl IntoView {
             };
             let zero_token = token::fetch_zero_token().await?;
             // Finish login so the server can mint the session cookie.
-            client::opaque_login_finish(&finish_request, &zero_token).await?;
-            // Hydrate auth state by fetching the session established via cookie.
-            let session = client::fetch_session().await?.ok_or_else(|| {
-                AppError::Config("Login succeeded but no session found.".to_string())
-            })?;
-            Ok(session)
+            let session_token = client::opaque_login_finish(&finish_request, &zero_token).await?;
+            // Hydrate auth state by fetching the session established via cookie or bearer token.
+            let session = client::fetch_session(session_token.as_deref())
+                .await?
+                .ok_or_else(|| {
+                    AppError::Config("Login succeeded but no session found.".to_string())
+                })?;
+            Ok(LoginResult {
+                session,
+                session_token,
+            })
         }
     });
 
     Effect::new(move |_| {
         if let Some(result) = login_action.value().get() {
             match result {
-                Ok(session) => {
-                    auth.set_session(session);
+                Ok(login) => {
+                    auth.set_session(login.session);
+                    if let Some(token) = login.session_token {
+                        auth.set_session_token(token);
+                    }
                     navigate("/", Default::default());
                 }
                 Err(err) => set_error.set(Some(err)),

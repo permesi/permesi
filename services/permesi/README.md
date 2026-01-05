@@ -238,3 +238,11 @@ Maintenance:
 ## Missing / Planned
 
 - Optional revocation mode (DB lookup or cached revocation list) for stricter enforcement.
+
+## Admin Rate Limiting
+
+Endpoints under `/v1/auth/admin/*` (bootstrap and elevation) are strictly rate-limited to prevent brute-force attacks on Vault tokens.
+
+- **Attempt Limit**: 3 attempts per user and 10 attempts per IP within a rolling 10-minute window.
+- **Failure Cooldown**: 3 consecutive failed attempts (invalid Vault tokens) trigger a **15-minute cooldown** for the user.
+- **Response**: `429 Too Many Requests` is returned when limits are exceeded. The `/v1/auth/admin/status` endpoint includes a `cooldown_seconds` field to help the UI surface the remaining time.

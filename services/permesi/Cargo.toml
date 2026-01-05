@@ -39,6 +39,7 @@ axum = { version = "0.8", features = ["tracing"] }
 base64 = { workspace = true }
 base64ct = { version = "1.8.1", features = ["alloc"] }
 clap = { workspace = true, features = ["env"] }
+ed25519-dalek = { workspace = true }
 once_cell = { workspace = true }
 opaque-ke = { workspace = true }
 opentelemetry = { workspace = true }
@@ -52,14 +53,18 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
     "ipnetwork",
     "uuid",
+    "chrono",
 ] }
 temp-env = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tower = { workspace = true }
@@ -80,7 +85,6 @@ utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
 
 [dev-dependencies]
-ed25519-dalek = { workspace = true }
 hyper = { workspace = true }
 test_support = { workspace = true }
 wiremock = "0.6"
