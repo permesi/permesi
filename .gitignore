@@ -22,3 +22,10 @@ flycheck*.rs
 # test artifacts
 /tests/tmp/
 *.db
+
+# docs
+docs/book/
+docs/mermaid.min.js
+docs/mermaid-init.js
+docs/svg-pan-zoom.min.js
+.bin/

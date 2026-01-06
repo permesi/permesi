@@ -6,10 +6,7 @@ use crate::components::layout::Sidebar;
 use crate::features::auth::{client, state::use_auth};
 use crate::routes::paths;
 use leptos::{prelude::*, task::spawn_local};
-use leptos_router::{
-    components::A,
-    hooks::{use_location, use_navigate},
-};
+use leptos_router::{components::A, hooks::use_location};
 
 fn breadcrumbs(path: &str) -> Vec<String> {
     // Strip the /console prefix for breadcrumb matching
@@ -208,11 +205,12 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                             type="button"
                                             class="inline-flex items-center gap-1 text-sm font-medium text-gray-700 hover:text-black dark:text-gray-200 dark:hover:text-white cursor-pointer"
                                             on:click=move |_| {
-                                                let navigate = use_navigate();
                                                 spawn_local(async move {
                                                     let _ = client::logout().await;
                                                     auth.clear_session();
-                                                    navigate("/", Default::default());
+                                                    if let Some(window) = web_sys::window() {
+                                                        let _ = window.location().set_href("/");
+                                                    }
                                                 });
                                                 set_menu_open.set(false);
                                             }

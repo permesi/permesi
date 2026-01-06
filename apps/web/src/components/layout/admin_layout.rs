@@ -1,6 +1,6 @@
 use crate::components::ui::{ElevationPrompt, Spinner};
 use crate::features::auth::{client, state::use_auth};
-use crate::routes::{NotFoundPage, paths};
+use crate::routes::{NotFoundContent, paths};
 use leptos::prelude::*;
 use leptos_router::components::Outlet;
 use leptos_router::hooks::use_location;
@@ -44,7 +44,7 @@ pub fn AdminLayout() -> impl IntoView {
                                 }
                             }
                             // Deny access with a 404 UX if not allowed or on error.
-                            Some(_) => view! { <NotFoundPage /> }.into_any(),
+                            Some(_) => view! { <NotFoundContent /> }.into_any(),
                             // Loading state (should be handled by Suspense).
                             None => {
                                 view! {

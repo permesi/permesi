@@ -559,6 +559,39 @@ permesi:
   cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
 
 # ----------------------
+# Documentation (mdBook)
+# ----------------------
+
+docs: docs-build
+
+docs-setup:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  # mdbook
+  if [[ ! -x {{root}}/.bin/bin/mdbook ]]; then
+    echo "Installing mdbook via cargo..."
+    cargo install mdbook --root {{root}}/.bin
+  fi
+  # mdbook-mermaid
+  if [[ ! -x {{root}}/.bin/bin/mdbook-mermaid ]]; then
+    echo "Installing mdbook-mermaid via cargo..."
+    cargo install mdbook-mermaid --root {{root}}/.bin
+  fi
+  if [[ ! -f docs/svg-pan-zoom.min.js ]]; then
+    curl -sSL https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js -o docs/svg-pan-zoom.min.js
+  fi
+  {{root}}/.bin/bin/mdbook-mermaid install docs
+
+docs-build: docs-setup
+  {{root}}/.bin/bin/mdbook build docs
+
+docs-serve: docs-setup
+  {{root}}/.bin/bin/mdbook serve docs
+
+docs-clean:
+  rm -rf docs/book {{root}}/.bin
+
+# ----------------------
 # OpenAPI spec generation
 # ----------------------
 
@@ -567,12 +600,12 @@ openapi:
   just openapi-genesis
 
 openapi-permesi:
-  mkdir -p docs/openapi
-  cargo run -p permesi --bin openapi > docs/openapi/permesi.json
+  mkdir -p docs/src/openapi
+  cargo run -p permesi --bin openapi > docs/src/openapi/permesi.json
 
 openapi-genesis:
-  mkdir -p docs/openapi
-  cargo run -p genesis --bin openapi > docs/openapi/genesis.json
+  mkdir -p docs/src/openapi
+  cargo run -p genesis --bin openapi > docs/src/openapi/genesis.json
 
 # ----------------------
 # API helpers

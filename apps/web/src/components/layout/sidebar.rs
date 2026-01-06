@@ -2,7 +2,7 @@
 //!
 //! Organized by domain hierarchy:
 //! 1. Personal (Dashboard, Profile)
-//! 2. Tenancy (Organizations, Projects)
+//! 2. Workspace (Organizations, Projects)
 //! 3. Platform Admin (Users, Global Settings - Operator only)
 
 use crate::features::auth::state::use_auth;
@@ -40,10 +40,10 @@ pub fn Sidebar() -> impl IntoView {
                     </div>
                 </div>
 
-                // --- Section: Tenancy ---
+                // --- Section: Workspace ---
                 <div>
                     <h3 class="px-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        "Tenancy"
+                        "Workspace"
                     </h3>
                     <div class="mt-2 space-y-1">
                         <SidebarLink
@@ -73,12 +73,6 @@ pub fn Sidebar() -> impl IntoView {
                                 icon="group"
                                 label="Global Users"
                                 active=move || pathname().starts_with(paths::USERS)
-                            />
-                            <SidebarLink
-                                target={paths::ADMIN_CLAIM}
-                                icon="key"
-                                label="Admin Elevation"
-                                active=move || pathname() == paths::ADMIN_CLAIM
                             />
                         </div>
                     </div>

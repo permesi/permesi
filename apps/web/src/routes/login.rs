@@ -15,10 +15,11 @@ use crate::{
         token,
         types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, UserSession},
     },
+    routes::paths,
 };
 use base64::Engine;
-use leptos::{ev::SubmitEvent, prelude::*};
-use leptos_router::hooks::use_navigate;
+use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
+use leptos_router::{components::A, hooks::use_navigate};
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
 use rand::rngs::OsRng;
 
@@ -108,6 +109,7 @@ pub fn LoginPage() -> impl IntoView {
         }
     });
 
+    let navigate_for_effect = navigate.clone();
     Effect::new(move |_| {
         if let Some(result) = login_action.value().get() {
             match result {
@@ -116,7 +118,7 @@ pub fn LoginPage() -> impl IntoView {
                     if let Some(token) = login.session_token {
                         auth.set_session_token(token);
                     }
-                    navigate("/", Default::default());
+                    navigate_for_effect("/", Default::default());
                 }
                 Err(err) => set_error.set(Some(err)),
             }
@@ -144,62 +146,120 @@ pub fn LoginPage() -> impl IntoView {
     };
 
     view! {
-        <form class="max-w-sm mx-auto" on:submit=on_submit>
-            <div class="mb-5">
-                <label
-                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                    for="email"
-                >
-                    "Your email"
-                </label>
-                <input
-                    id="email"
-                    type="email"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                    autocomplete="email"
-                    placeholder="name@inbox.im"
-                    required
-                    on:input=move |event| set_email.set(event_target_value(&event))
-                />
-            </div>
-            <div class="mb-5">
-                <label
-                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                    for="password"
-                >
-                    "Your password"
-                </label>
-                <input
-                    id="password"
-                    type="password"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                    autocomplete="current-password"
-                    required
-                    on:input=move |event| set_password.set(event_target_value(&event))
-                />
-            </div>
-            <Button button_type="submit" disabled=login_action.pending()>
-                "Submit"
-            </Button>
-            {move || {
-                login_action
-                    .pending()
-                    .get()
-                    .then_some(view! { <div class="mt-4"><Spinner /></div> })
-            }}
-            {move || {
-                error
-                    .get()
-                    .map(|err| {
-                        let message = format_error(&err);
-                        view! {
-                            <div class="mt-4">
-                                <Alert kind=AlertKind::Error message=message />
+        {
+            move || {
+                if auth.is_authenticated.get() {
+                    let user_email = Signal::derive(move || {
+                        auth.session.get().map(|s| s.email).unwrap_or_default()
+                    });
+                    view! {
+                        <div class="max-w-sm mx-auto text-center space-y-6 py-8">
+                            <div class="flex justify-center">
+                                <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-full">
+                                    <span class="material-symbols-outlined text-4xl text-blue-600 dark:text-blue-400">
+                                        "account_circle"
+                                    </span>
+                                </div>
                             </div>
-                        }
-                    })
-            }}
-        </form>
+                            <div class="space-y-2">
+                                <h2 class="text-xl font-bold text-gray-900 dark:text-white">
+                                    "Already Signed In"
+                                </h2>
+                                <p class="text-gray-500 dark:text-gray-400">
+                                    "You are currently signed in as "
+                                    <span class="font-medium text-gray-900 dark:text-gray-200">
+                                        {move || user_email.get()}
+                                    </span> "."
+                                </p>
+                            </div>
+                            <div class="flex flex-col gap-3">
+                                <A
+                                    href={paths::DASHBOARD}
+                                    {..}
+                                    class="w-full inline-flex justify-center items-center px-5 py-2.5 text-sm font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-all shadow-sm"
+                                >
+                                    "Go to Dashboard"
+                                </A>
+                                                            <button
+                                                                on:click=move |_| {
+                                                                    spawn_local(async move {
+                                                                        let _ = client::logout().await;
+                                                                        auth.clear_session();
+                                                                        if let Some(window) = web_sys::window() {
+                                                                            let _ = window.location().set_href("/");
+                                                                        }
+                                                                    });
+                                                                }
+                                                                class="w-full inline-flex justify-center items-center px-5 py-2.5 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 hover:text-blue-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700 transition-all"
+                                                            >
+                                                                "Sign Out"
+                                                            </button>                            </div>
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    view! {
+                        <form class="max-w-sm mx-auto" on:submit=on_submit>
+                            <div class="mb-5">
+                                <label
+                                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
+                                    for="email"
+                                >
+                                    "Your email"
+                                </label>
+                                <input
+                                    id="email"
+                                    type="email"
+                                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
+                                    autocomplete="email"
+                                    placeholder="name@inbox.im"
+                                    required
+                                    on:input=move |event| set_email.set(event_target_value(&event))
+                                />
+                            </div>
+                            <div class="mb-5">
+                                <label
+                                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
+                                    for="password"
+                                >
+                                    "Your password"
+                                </label>
+                                <input
+                                    id="password"
+                                    type="password"
+                                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
+                                    autocomplete="current-password"
+                                    required
+                                    on:input=move |event| set_password.set(event_target_value(&event))
+                                />
+                            </div>
+                            <Button button_type="submit" disabled=login_action.pending()>
+                                "Submit"
+                            </Button>
+                            {move || {
+                                login_action
+                                    .pending()
+                                    .get()
+                                    .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                            }}
+                            {move || {
+                                error
+                                    .get()
+                                    .map(|err| {
+                                        let message = format_error(&err);
+                                        view! {
+                                            <div class="mt-4">
+                                                <Alert kind=AlertKind::Error message=message />
+                                            </div>
+                                        }
+                                    })
+                            }}
+                        </form>
+                    }
+                        .into_any()
+                }
+            }
+        }
     }
 }
 
