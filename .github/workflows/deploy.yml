@@ -119,6 +119,13 @@ jobs:
           npm run css:build
           trunk build --release
 
+      - name: Upload Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/web/dist
+          if-no-files-found: error
+
       - name: Package frontend dist
         shell: bash
         run: |
@@ -135,6 +142,16 @@ jobs:
             permesi_${{ env.VERSION }}_amd64.deb
             genesis_${{ env.VERSION }}_amd64.deb
             permesi-web-dist-${{ env.VERSION }}.tar.gz
+
+  deploy-frontend:
+    name: Deploy Frontend
+    needs: build
+    uses: ./.github/workflows/frontend.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    secrets: inherit
 
   package:
     name: Package GHCR

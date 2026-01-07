@@ -1,3 +1,39 @@
+//! # Genesis (Edge Admission Mint)
+//!
+//! `genesis` is a specialized HTTP service that sits at the network edge. Its primary
+//! responsibility is to issue short-lived **Admission Tokens** (signed via Vault Transit)
+//! to clients after they pass basic noise filters (rate limits, `PoW`, etc.).
+//!
+//! These tokens allow `permesi` (the core IAM) to verify requests offline without
+//! calling the edge service on every request, maintaining the "Split-Trust" architecture.
+//!
+//! ## Database & Retention
+//!
+//! The service persists minted token IDs (`jti`) and request metadata (IP, Country, User-Agent)
+//! in `PostgreSQL`. This store is used for:
+//!
+//! 1. **Auditing:** Tracking who requested tokens and from where.
+//! 2. **Revocation:** Providing a data source for short-term token invalidation.
+//!
+//! ### Time-Ordered Storage (`UUIDv7`)
+//!
+//! Tokens use **`UUIDv7`** for their primary identifiers. `UUIDv7` is time-ordered (like ULID)
+//! but native in `PostgreSQL` 18. This allows for:
+//! - Efficient B-Tree indexing (sequential inserts).
+//! - Direct extraction of the creation timestamp from the ID.
+//! - High-performance range scans for cleanup.
+//!
+//! ### Partitioning & Pruning
+//!
+//! To prevent table bloat from millions of short-lived tokens, `genesis` uses time-based
+//! range partitioning.
+//!
+//! - **Strategy:** Daily partitions.
+//! - **Pruning:** Whole partitions are dropped instead of row-by-row `DELETE` operations.
+//! - **Maintenance:** Handled via `pg_cron` or the `genesis_tokens_rollover(retention_days, future_days)` function.
+//!
+//! For production setup details, see the `sql/partitioning.sql` file.
+
 pub mod api;
 pub mod cli;
 pub mod vault;

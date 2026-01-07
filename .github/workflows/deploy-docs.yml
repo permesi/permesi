@@ -1,0 +1,48 @@
+---
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - sandbox
+    paths:
+      - docs/**
+      - crates/**
+      - services/**
+      - .justfile
+      - .github/workflows/deploy-docs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate OpenAPI specs
+        run: |
+          mkdir -p docs/openapi
+          cargo run -p permesi --bin openapi > docs/openapi/permesi.json
+          cargo run -p genesis --bin openapi > docs/openapi/genesis.json
+
+      - name: Build Redoc Page
+        run: |
+          mkdir -p docs/redoc
+          cp apps/web/public/logo.svg docs/redoc/logo.svg
+          cp docs/openapi/*.json docs/redoc/
+          # index.html is already in docs/redoc if it was committed,
+          # but just in case we are running this fresh:
+          # (Actually we assume it is committed in docs/redoc/index.html)
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/redoc

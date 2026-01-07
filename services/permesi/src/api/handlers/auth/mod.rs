@@ -1,4 +1,23 @@
 //! Auth handlers and supporting modules.
+//!
+//! This module coordinates authentication (`OPAQUE`), session management, and
+//! administrative elevation.
+//!
+//! ## Admin Rate Limiting
+//!
+//! Administrative endpoints (`/v1/auth/admin/*`) are strictly rate-limited to
+//! prevent brute-force attacks on Vault tokens used for bootstrapping and elevation.
+//!
+//! - **Attempt Limit:** 3 attempts per user and 10 attempts per IP within 10 minutes.
+//! - **Failure Cooldown:** 3 consecutive failures trigger a 15-minute cooldown.
+//!
+//! ## `OPAQUE` Seed (Vault KV v2)
+//!
+//! The server's `OPAQUE` state is derived from a 32-byte seed stored in Vault.
+//! All instances of `permesi` must share this seed to ensure that user
+//! registration records remain valid across the cluster.
+//!
+//! > **Warning:** Rotating this seed invalidates all existing user registrations.
 
 pub(crate) mod admin;
 mod admin_rate_limit;

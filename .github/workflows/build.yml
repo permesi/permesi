@@ -129,6 +129,16 @@ jobs:
           path: apps/web/dist
           if-no-files-found: error
 
+  deploy-frontend:
+    name: Deploy Frontend
+    needs: frontend-build
+    uses: ./.github/workflows/frontend.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    secrets: inherit
+
   package:
     name: Package GHCR
     needs: [build, frontend-build]

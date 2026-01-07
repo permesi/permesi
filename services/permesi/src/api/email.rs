@@ -6,9 +6,16 @@
 //! The sender decides how to deliver (SMTP, API, etc.) and returns `Ok`/`Err`.
 //! The worker then updates the outbox row to `sent` or `failed`.
 //!
-//! This is a lightweight transactional outbox (DB-backed queue) to keep API
-//! latency low. Failed rows are retried with exponential backoff and jitter
-//! until a max attempt threshold is reached, then marked `failed`.
+//! ### Consistency & Scalability
+//!
+//! This is a lightweight transactional outbox (DB-backed queue) used to keep API
+//! latency low and ensure atomicity between user creation and email enqueuing.
+//!
+//! - **Throughput:** For current scale, the DB outbox keeps infrastructure minimal.
+//!   If higher throughput or multi-service fan-out is needed, the `EmailSender`
+//!   trait can be implemented to publish to a broker (e.g., NATS `JetStream`, `RabbitMQ`).
+//! - **Retries:** Failed rows are retried with exponential backoff and jitter
+//!   until a max attempt threshold is reached, then marked `failed`.
 //!
 //! The default sender for local dev is `LogEmailSender`, which logs and returns `Ok(())`.
 //! Poll interval and retry/backoff settings are configurable via `EmailWorkerConfig`.

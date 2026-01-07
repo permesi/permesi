@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Permesi API Documentation</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700" rel="stylesheet">
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: 'Roboto', sans-serif;
+      }
+      #header {
+        display: flex;
+        align-items: center;
+        padding: 10px 20px;
+        background-color: #ffffff;
+        border-bottom: 1px solid #e1e1e1;
+        height: 60px;
+        box-sizing: border-box;
+      }
+      #logo {
+        height: 40px;
+        margin-right: 20px;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+      }
+      label {
+        margin-right: 10px;
+        font-weight: bold;
+        color: #333;
+      }
+      select {
+        padding: 8px;
+        font-size: 14px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+      }
+      #redoc-container {
+        height: calc(100vh - 60px);
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="header">
+      <img id="logo" src="logo.svg" alt="Permesi Logo">
+      <div class="controls">
+        <label for="api-selector">Select API:</label>
+        <select id="api-selector">
+          <option value="./permesi.json">Permesi API</option>
+          <option value="./genesis.json">Genesis API</option>
+        </select>
+      </div>
+    </div>
+    
+    <div id="redoc-container"></div>
+
+    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"> </script>
+    <script>
+      const selector = document.getElementById('api-selector');
+      const container = document.getElementById('redoc-container');
+      
+      function loadSpec(url) {
+          Redoc.init(url, {
+              scrollYOffset: 0,
+              hideDownloadButton: true,
+              theme: {
+                  colors: {
+                      primary: {
+                          main: '#32329f'
+                      }
+                  }
+              }
+          }, container);
+      }
+
+      // Initial load based on URL or default
+      let initialSpec = './permesi.json';
+      const urlParams = new URLSearchParams(window.location.search);
+      const specParam = urlParams.get('spec');
+      
+      if (specParam && specParam.includes('genesis')) {
+          initialSpec = './genesis.json';
+      }
+      
+      selector.value = initialSpec;
+      loadSpec(initialSpec);
+
+      selector.addEventListener('change', (e) => {
+        const newUrl = e.target.value;
+        loadSpec(newUrl);
+        
+        // Update URL param
+        const url = new URL(window.location);
+        const specName = newUrl.includes('genesis') ? 'genesis.json' : 'permesi.json';
+        url.searchParams.set('spec', specName);
+        window.history.pushState({}, '', url);
+      });
+    </script>
+  </body>
+</html>

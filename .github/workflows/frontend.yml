@@ -1,29 +1,22 @@
----
+--- 
 name: Frontend Deploy
 
 on:
-  workflow_run:
-    workflows: ["Test & Build"]
-    types:
-      - completed
+  workflow_call:
 
 jobs:
   integrity:
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
-    if: github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
       id-token: write
       attestations: write
-      artifact-metadata: write
     steps:
       - name: 'Integrity: Download Dist Artifact'
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: apps/web/dist
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 'Integrity: Generate SHA256SUMS'
         working-directory: apps/web/dist
@@ -80,26 +73,26 @@ jobs:
           node-version: 24
 
       - name: 'Deploy: Cloudflare Pages (develop)'
-        if: github.event.workflow_run.head_branch == 'develop'
+        if: github.ref_name == 'develop'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler pages deploy dist --project-name permesi --branch develop
 
       - name: 'Deploy: Cloudflare Pages (main)'
-        if: github.event.workflow_run.head_branch == 'main'
+        if: github.ref_name == 'main'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler pages deploy dist --project-name permesi --branch main
 
       - name: 'Deploy: Cloudflare Pages (preview)'
-        if: github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_branch != 'develop'
+        if: github.ref_name != 'main' && github.ref_name != 'develop'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         shell: bash
         run: |-
-          branch="${{ github.event.workflow_run.head_branch }}"
+          branch="${{ github.ref_name }}"
           branch="${branch//\//-}"
           npx wrangler pages deploy dist --project-name permesi --branch "${branch}"

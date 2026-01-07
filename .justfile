@@ -559,58 +559,36 @@ permesi:
   cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
 
 # ----------------------
-# Documentation (mdBook)
+# ----------------------
+# Documentation (Redoc)
 # ----------------------
 
-docs: docs-build
-
-docs-setup:
-  #!/usr/bin/env zsh
-  set -euo pipefail
-  # mdbook
-  if [[ ! -x {{root}}/.bin/bin/mdbook ]]; then
-    echo "Installing mdbook via cargo..."
-    cargo install mdbook --root {{root}}/.bin
-  fi
-  # mdbook-mermaid
-  if [[ ! -x {{root}}/.bin/bin/mdbook-mermaid ]]; then
-    echo "Installing mdbook-mermaid via cargo..."
-    cargo install mdbook-mermaid --root {{root}}/.bin
-  fi
-  if [[ ! -f docs/svg-pan-zoom.min.js ]]; then
-    curl -sSL https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js -o docs/svg-pan-zoom.min.js
-  fi
-  {{root}}/.bin/bin/mdbook-mermaid install docs
-
-docs-build: docs-setup
-  {{root}}/.bin/bin/mdbook build docs
-
-docs-serve: docs-setup
-  {{root}}/.bin/bin/mdbook serve docs
+docs:
+    mkdir -p docs/redoc
+    cp apps/web/public/logo.svg docs/redoc/logo.svg
+    cp docs/openapi/*.json docs/redoc/
+    @echo "Redoc generated at docs/redoc/index.html"
 
 docs-clean:
-  rm -rf docs/book {{root}}/.bin
+    rm -rf docs/redoc
 
-# ----------------------
 # OpenAPI spec generation
 # ----------------------
-
 openapi:
   just openapi-permesi
   just openapi-genesis
 
 openapi-permesi:
-  mkdir -p docs/src/openapi
-  cargo run -p permesi --bin openapi > docs/src/openapi/permesi.json
+  mkdir -p docs/openapi
+  cargo run -p permesi --bin openapi > docs/openapi/permesi.json
 
 openapi-genesis:
-  mkdir -p docs/src/openapi
-  cargo run -p genesis --bin openapi > docs/src/openapi/genesis.json
+  mkdir -p docs/openapi
+  cargo run -p genesis --bin openapi > docs/openapi/genesis.json
 
 # ----------------------
 # API helpers
 # ----------------------
-
 genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
@@ -1166,3 +1144,4 @@ podman-check:
     exit 1
   fi
   echo "podman remote API is reachable."
+
