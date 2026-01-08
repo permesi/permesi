@@ -577,47 +577,36 @@ mod tests {
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use std::net::TcpListener;
     use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
-    use tokio::sync::OnceCell;
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const SCHEMA_SQL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/sql/schema.sql"));
 
-    static TEST_CONTAINER: OnceCell<PostgresContainer> = OnceCell::const_new();
-
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()
     }
 
-    async fn get_test_pool() -> Result<PgPool> {
-        let container = TEST_CONTAINER
-            .get_or_try_init(|| async {
-                let network = TestNetwork::new("permesi-admin-test");
-                let postgres = PostgresContainer::start(network.name()).await?;
-                postgres.wait_until_ready().await?;
-                Ok::<PostgresContainer, anyhow::Error>(postgres)
-            })
-            .await?;
+    async fn get_test_pool() -> Result<(PgPool, PostgresContainer)> {
+        let network = TestNetwork::new("permesi-admin-test");
+        let postgres = PostgresContainer::start(network.name()).await?;
+        postgres.wait_until_ready().await?;
 
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(std::time::Duration::from_secs(30))
-            .connect(&container.admin_dsn())
+            .connect(&postgres.admin_dsn())
             .await?;
 
         sqlx::Executor::execute(&pool, SCHEMA_SQL)
             .await
             .context("failed to execute schema SQL")?;
 
-        Ok(pool)
+        Ok((pool, postgres))
     }
-
-    static TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
     async fn validate_vault_token_requires_policy() -> Result<()> {
-        let _guard = TEST_MUTEX.lock().await;
         if !can_bind_localhost() {
             eprintln!("Skipping test: cannot bind localhost");
             return Ok(());
@@ -627,7 +616,7 @@ mod tests {
             return Ok(());
         }
 
-        let pool = get_test_pool().await?;
+        let (pool, _container) = get_test_pool().await?;
         sqlx::query("TRUNCATE users, platform_operators, admin_attempts CASCADE")
             .execute(&pool)
             .await?;
@@ -655,7 +644,6 @@ mod tests {
 
     #[tokio::test]
     async fn validate_vault_token_calls_vault_each_time() -> Result<()> {
-        let _guard = TEST_MUTEX.lock().await;
         if !can_bind_localhost() {
             eprintln!("Skipping test: cannot bind localhost");
             return Ok(());
@@ -665,7 +653,7 @@ mod tests {
             return Ok(());
         }
 
-        let pool = get_test_pool().await?;
+        let (pool, _container) = get_test_pool().await?;
         sqlx::query("TRUNCATE users, platform_operators, admin_attempts CASCADE")
             .execute(&pool)
             .await?;

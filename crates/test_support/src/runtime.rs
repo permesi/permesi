@@ -204,7 +204,8 @@ fn set_docker_host(path: &Path) {
 }
 
 fn start_podman_service() -> Result<Option<PathBuf>, String> {
-    let socket_path = env::temp_dir().join(format!("permesi-podman-{}.sock", std::process::id()));
+    let dir = env::var("XDG_RUNTIME_DIR").map_or_else(|_| env::temp_dir(), PathBuf::from);
+    let socket_path = dir.join(format!("permesi-podman-{}.sock", std::process::id()));
     if socket_path.exists() {
         let _ = fs::remove_file(&socket_path);
     }

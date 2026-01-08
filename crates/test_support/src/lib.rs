@@ -35,13 +35,13 @@ mod tests {
     #[test]
     fn unique_name_includes_prefix() {
         let name = unique_name("test");
-        assert!(name.starts_with("test-"));
-        assert!(name.len() > "test-".len());
+        assert!(name.starts_with("permesi-test-test-"));
+        assert!(name.len() > "permesi-test-test-".len());
     }
 
     #[test]
     fn test_network_name_includes_prefix() {
         let network = TestNetwork::new("net");
-        assert!(network.name().starts_with("net-"));
+        assert!(network.name().starts_with("permesi-test-net-"));
     }
 }
