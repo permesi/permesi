@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.2.8"
+    "version": "0.2.9"
   },
   "paths": {
     "/health": {
@@ -767,6 +767,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Lists organizations the authenticated user is an active member of.\nSoft-deleted orgs are excluded, and membership scoping avoids leaking org existence across tenants.\nThe response uses only public `OrgResponse` fields.",
         "operationId": "list_orgs",
         "responses": {
           "200": {
@@ -791,6 +792,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Creates a new organization for the authenticated user and returns an `OrgResponse`.\nOn success, the creator is enrolled as an active member and granted the `owner` role.\nThe slug is normalized and collision-resolved on insert; creator name conflicts return `409`.\nThe response intentionally omits membership state and roles.",
         "operationId": "create_org",
         "requestBody": {
           "content": {
@@ -844,6 +846,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Fetches organization details by slug for the authenticated caller.\nReturns `404` for non-members or inactive memberships to reduce cross-tenant enumeration.\nConverts `OrgContext` to `OrgResponse`, excluding roles and membership status.",
         "operationId": "get_org",
         "parameters": [
           {
@@ -879,6 +882,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Updates an organization's name and/or slug and returns the updated `OrgResponse`.\nRequires `OrgContext::can_manage`; otherwise it returns `404` to avoid leaking org existence.\nThe slug is normalized and uniqueness conflicts map to `409`, and roles are never returned.",
         "operationId": "patch_org",
         "parameters": [
           {
@@ -936,6 +940,7 @@
         "tags": [
           "projects"
         ],
+        "summary": "Lists active (non-deleted) projects for an organization as `ProjectResponse` DTOs.\nOnly active org members can list; non-members receive `404` to avoid tenant leakage.\nThe response returns only project fields, not nested org membership or roles.",
         "operationId": "list_projects",
         "parameters": [
           {
@@ -974,6 +979,7 @@
         "tags": [
           "projects"
         ],
+        "summary": "Creates a project under an organization and returns a `ProjectResponse`.\nCallers must pass `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\nThe slug is normalized and uniqueness violations are mapped to `409`.\nThe response omits any org membership or role information.",
         "operationId": "create_project",
         "parameters": [
           {
@@ -1041,6 +1047,7 @@
         "tags": [
           "environments"
         ],
+        "summary": "Lists active (non-deleted) environments for a project as `EnvironmentResponse` DTOs.\nRequires org membership and hides project existence from non-members via `404`.\nThe response returns only environment fields, not project/org membership details.",
         "operationId": "list_environments",
         "parameters": [
           {
@@ -1088,6 +1095,7 @@
         "tags": [
           "environments"
         ],
+        "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\n`storage::insert_environment` enforces a single `production` tier and gates `non_production`.\nThe response includes only environment DTO fields.",
         "operationId": "create_environment",
         "parameters": [
           {
@@ -1164,6 +1172,7 @@
         "tags": [
           "applications"
         ],
+        "summary": "Lists active (non-deleted) applications for an environment as `ApplicationResponse` DTOs.\nReturns `404` when the org/project/env cannot be resolved for the current principal.\nThe response returns only app fields, not environment or org membership data.",
         "operationId": "list_applications",
         "parameters": [
           {
@@ -1220,6 +1229,7 @@
         "tags": [
           "applications"
         ],
+        "summary": "Creates an application within an environment and returns an `ApplicationResponse`.\nRequires `OrgContext::can_manage` and returns `404` when the org/project/env is inaccessible.\nThe response includes only app fields, not environment or membership details.",
         "operationId": "create_application",
         "parameters": [
           {
