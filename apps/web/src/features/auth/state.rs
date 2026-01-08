@@ -71,6 +71,17 @@ impl AuthContext {
     pub fn clear_admin_token(&self) {
         self.admin_token.set(None);
     }
+
+    /// Refetches the session from the server to update roles/flags.
+    pub fn refresh_session(&self) {
+        let auth = self.clone();
+        let token = self.session_token.get_untracked();
+        spawn_local(async move {
+            if let Ok(Some(session)) = client::fetch_session(token.as_deref()).await {
+                auth.set_session(session);
+            }
+        });
+    }
 }
 
 /// Provides auth context and hydrates the session once on mount.

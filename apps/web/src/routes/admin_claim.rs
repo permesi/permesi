@@ -76,6 +76,7 @@ pub fn AdminClaimPage() -> impl IntoView {
         }
     });
 
+    let auth_for_bootstrap = auth.clone();
     Effect::new(move |_| {
         if let Some(result) = bootstrap_action.value().get() {
             match result {
@@ -89,6 +90,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                     }
                     set_note.set(String::new());
                     status_resource.refetch();
+                    auth_for_bootstrap.refresh_session();
                 }
                 Err(err) => {
                     set_error.set(Some(err));
@@ -110,6 +112,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                     set_success.set(None);
                     set_error.set(None);
                     set_vault_token.set(String::new());
+                    auth_for_elevate.refresh_session();
                 }
                 Err(err) => {
                     set_error.set(Some(err));

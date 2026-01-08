@@ -29,3 +29,12 @@ docs/mermaid.min.js
 docs/mermaid-init.js
 docs/svg-pan-zoom.min.js
 .bin/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+tfplan

@@ -132,7 +132,7 @@ _require-tag-signing:
         exit 1
     fi
 
-_bump bump_kind: check-develop check-clean _require-bump-tools clean update test
+_bump bump_kind: check-develop check-clean _require-bump-tools
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -196,6 +196,11 @@ _bump bump_kind: check-develop check-clean _require-bump-tools clean update test
     git commit -m "bump version to ${new_version}"
     git push origin develop
     echo "✅ Version bumped and pushed to develop"
+
+    if git rev-parse --verify sandbox >/dev/null 2>&1; then
+        echo "🔄 Resetting sandbox branch to origin/develop..."
+        git branch -f sandbox origin/develop
+    fi
 
 # Bump version and commit (patch level)
 bump:
@@ -281,7 +286,7 @@ _deploy-merge-and-tag: _require-tag-signing
     echo "   - develop branch: bumped and pushed"
     echo "   - main branch: merged and pushed"
     echo "   - tag $new_version: created and pushed"
-    echo "🔗 Monitor release: https://github.com/nbari/pg_exporter/actions"
+    echo "🔗 Monitor release: https://github.com/nbari/permesi/actions"
 
 # Deploy: merge to main, tag, and push everything
 deploy: bump _deploy-merge-and-tag
@@ -385,10 +390,9 @@ t-deploy message="CI test": check-develop check-clean _require-tag-signing test
     echo "🧹 To remove it:"
     echo "   git push origin :refs/tags/${tag} && git tag -d ${tag}"
 
-web:
+web: web-clean
   #!/usr/bin/env zsh
   set -euo pipefail
-  just web-clean
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
   npm run css:watch &
@@ -410,13 +414,12 @@ web:
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
     trunk serve
 
-web-build:
+web-build: web-node-setup
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v trunk >/dev/null 2>&1; then
     just web-setup
   fi
-  just web-node-setup
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
   : "${PERMESI_API_HOST:=http://localhost:8001}"
@@ -434,13 +437,12 @@ web-build:
     exit 1
   fi
 
-web-clean:
+web-clean: web-node-setup
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v trunk >/dev/null 2>&1; then
     just web-setup
   fi
-  just web-node-setup
   rm -rf {{root}}/.tmp/xdg-cache
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
@@ -481,18 +483,16 @@ web-node-setup:
     npm install
   fi
 
-web-css-watch:
+web-css-watch: web-node-setup
   #!/usr/bin/env zsh
   set -euo pipefail
-  just web-node-setup
   cd {{root}}/apps/web
   npm run css:build
   npm run css:watch
 
-web-css-build:
+web-css-build: web-node-setup
   #!/usr/bin/env zsh
   set -euo pipefail
-  just web-node-setup
   cd {{root}}/apps/web
   npm run css:build
 
@@ -574,9 +574,7 @@ docs-clean:
 
 # OpenAPI spec generation
 # ----------------------
-openapi:
-  just openapi-permesi
-  just openapi-genesis
+openapi: openapi-permesi openapi-genesis
 
 openapi-permesi:
   mkdir -p docs/openapi
@@ -689,25 +687,40 @@ images: image-permesi image-genesis
 # Local dependencies
 # ----------------------
 
-image-vault:
-  podman build -f vault.Dockerfile -t permesi-vault:latest .
-
-vault: image-vault
+vault: vault-stop
   #!/usr/bin/env zsh
   set -euo pipefail
+  
+  # Ensure clean slate for ephemeral dev
+  rm -rf {{root}}/vault/contrib/terraform/.terraform \
+         {{root}}/vault/contrib/terraform/terraform.tfstate \
+         {{root}}/vault/contrib/terraform/terraform.tfstate.backup
+  
   if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
     echo "vault already running"
     exit 0
   fi
+  
+  # Start ephemeral vault (memory backend)
   podman run --replace --rm -d --name vault \
     --network {{net}} \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
     -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
-    permesi-vault:latest
+    hashicorp/vault:latest
+  
+  # Create a temporary keys file for vault-tf-apply to consume
+  mkdir -p {{root}}/vault
+  echo '{"root_token": "dev-root"}' > {{root}}/vault/keys.json
+  
+  echo "Waiting for Vault..."
+  just vault-wait
+  
+  echo "Applying Terraform configuration..."
+  just vault-tf-apply
 
-vault-persist: image-vault
+vault-persist:
   #!/usr/bin/env zsh
   set -euo pipefail
   if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
@@ -727,7 +740,7 @@ vault-persist: image-vault
     -v {{root}}/vault:/workspace/vault:ro \
     -v permesi-vault-data:/vault/data \
     --entrypoint vault \
-    permesi-vault:latest \
+    hashicorp/vault:latest \
     server -config=/vault/config/vault.hcl
 
 vault-wait:
@@ -793,7 +806,8 @@ vault-unseal:
   podman exec vault sh -c "VAULT_ADDR=http://127.0.0.1:8200 vault operator unseal '${unseal_key}'" >/dev/null
   echo "Vault unsealed."
 
-vault-bootstrap:
+
+vault-tf-apply:
   #!/usr/bin/env zsh
   set -euo pipefail
   keys="{{root}}/vault/keys.json"
@@ -801,18 +815,80 @@ vault-bootstrap:
     echo "Missing ${keys}. Run: just vault-init" >&2
     exit 1
   fi
+  if ! command -v terraform >/dev/null 2>&1; then
+      echo "❌ Terraform not found. Install terraform to use this recipe." >&2
+      exit 1
+  fi
+  
   token="$(jq -r '.root_token' "$keys")"
-  podman exec \
-    -e VAULT_ADDR=http://127.0.0.1:8200 \
-    -e VAULT_TOKEN="$token" \
-    vault \
-    sh /workspace/vault/bootstrap-persist.sh
+  cd {{root}}/vault/contrib/terraform
+  
+  export VAULT_ADDR="http://127.0.0.1:8200"
+  export VAULT_TOKEN="$token"
+  
+  echo "Resource initialization (terraform init)..."
+  terraform init >/dev/null
+  
+  echo "Applying Terraform configuration..."
+  terraform apply -auto-approve -var="database_password=postgres"
+  
+  echo "✅ Vault configured via Terraform."
+  echo "🔑 Operator Token: $(just --quiet operator-token)"
 
-vault-persist-ready: vault-persist vault-init vault-unseal vault-bootstrap
+vault-tf-env:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  cd {{root}}/vault/contrib/terraform
+  
+  if [[ ! -f "terraform.tfstate" ]]; then
+      echo "❌ No Terraform state found. Run: just vault-tf-apply" >&2
+      exit 1
+  fi
+  
+  # Extract values from Terraform output
+  vals=$(terraform output -json)
+  permesi_role_id=$(echo "$vals" | jq -r '.permesi_role_id.value')
+  permesi_secret_id=$(echo "$vals" | jq -r '.permesi_secret_id.value')
+  genesis_role_id=$(echo "$vals" | jq -r '.genesis_role_id.value')
+  genesis_secret_id=$(echo "$vals" | jq -r '.genesis_secret_id.value')
+  
+  vault_addr="http://127.0.0.1:8200"
+  
+  # Generate a fresh operator token (requires Vault to be running)
+  operator_token=$(just --quiet operator-token)
+  
+  # If root token exists, export it too for convenience, though strictly we use AppRole
+  root_token=""
+  if [[ -f "{{root}}/vault/keys.json" ]]; then
+      root_token=$(jq -r '.root_token' "{{root}}/vault/keys.json")
+  fi
+
+  printf '%s\n' \
+    "export VAULT_ADDR=\"${vault_addr}\"" \
+    "export VAULT_TOKEN=\"${root_token}\"" \
+    "export PERMESI_OPERATOR_TOKEN=\"${operator_token}\"" \
+    "" \
+    "export GENESIS_DSN=\"postgres://postgres@localhost:5432/genesis\"" \
+    "export GENESIS_VAULT_URL=\"${vault_addr}/v1/auth/approle/login\"" \
+    "export GENESIS_VAULT_ROLE_ID=\"${genesis_role_id}\"" \
+    "export GENESIS_VAULT_SECRET_ID=\"${genesis_secret_id}\"" \
+    "" \
+    "export PERMESI_DSN=\"postgres://postgres@localhost:5432/permesi\"" \
+    "export PERMESI_VAULT_URL=\"${vault_addr}/v1/auth/approle/login\"" \
+    "export PERMESI_VAULT_ROLE_ID=\"${permesi_role_id}\"" \
+    "export PERMESI_VAULT_SECRET_ID=\"${permesi_secret_id}\""
+
+vault-persist-ready: vault-persist vault-init vault-unseal vault-tf-apply
 
 vault-env:
   #!/usr/bin/env zsh
   set -e
+  # If we have Terraform state, prefer the Terraform env generator
+  if [[ -f "{{root}}/vault/contrib/terraform/terraform.tfstate" ]]; then
+      just vault-tf-env
+      exit 0
+  fi
+  
   keys="{{root}}/vault/keys.json"
   if [[ -f "$keys" ]]; then
     vault_addr="${VAULT_ADDR:-http://127.0.0.1:8200}"
@@ -963,20 +1039,23 @@ dev-envrc:
 vault-stop:
   podman stop vault || true
 
-vault-reset:
+vault-reset: vault-stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  echo "This will delete the persistent Vault volume and keys file."
+  echo "This will delete the persistent Vault volume, keys file, and Terraform state."
   printf "Type 'delete' to continue: "
   read -r confirm
   if [[ "$confirm" != "delete" ]]; then
     echo "Aborted."
     exit 1
   fi
-  just vault-stop
   podman volume rm permesi-vault-data >/dev/null 2>&1 || true
   rm -f {{root}}/vault/keys.json
-  echo "Vault data and keys removed."
+  rm -rf {{root}}/vault/contrib/terraform/.terraform \
+         {{root}}/vault/contrib/terraform/.terraform.lock.hcl \
+         {{root}}/vault/contrib/terraform/terraform.tfstate \
+         {{root}}/vault/contrib/terraform/terraform.tfstate.backup
+  echo "Vault keys and Terraform state removed."
 
 postgres version="18":
   #!/usr/bin/env zsh
@@ -1104,10 +1183,9 @@ tmux-stop:
   #!/usr/bin/env zsh
   tmux kill-session -t permesi 2>/dev/null || true
 
-reset:
+reset: stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  just stop
   podman rm -f vault postgres-permesi jaeger >/dev/null 2>&1 || true
   just vault-reset
   rm -rf {{root}}/db/data {{root}}/db/logs

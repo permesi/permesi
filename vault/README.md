@@ -1,75 +1,69 @@
 # Vault (dev)
 
-Local dev Vault runs as a container built from `vault.Dockerfile` with two modes:
-- **Dev-only (in-memory)**: `just vault` runs Vault in dev mode and bootstraps via `vault/bootstrap.sh`.
-- **Persistent (recommended)**: `just vault-persist-ready` runs Vault in server mode with `vault/config.hcl`
-  and bootstraps via `vault/bootstrap-persist.sh`.
+Local dev Vault runs as a container using the `hashicorp/vault:latest` image and is configured using **Terraform** from the host.
 
-The bootstrap scripts provision the auth + secrets engines that `services/permesi` and
-`services/genesis` expect (AppRole, transit, and database creds). `just dev-start` uses the
-persistent path by default.
+- **Dev-only (in-memory)**: `just vault` runs Vault in dev mode and configures it via Terraform.
+- **Persistent (recommended)**: `just vault-persist-ready` runs Vault in server mode with `vault/config.hcl` and configures it via Terraform.
+
+The Terraform configuration in `vault/contrib/terraform` provisions the auth + secrets engines that `services/permesi` and `services/genesis` expect (AppRole, transit, and database creds). `just dev-start` uses the persistent path by default.
+
+## Prerequisites
+
+- **Terraform**: Required to provision the Vault instance.
+- **Podman**: Required to run the Vault container.
 
 ## Quick start
 
 - Start Postgres: `just postgres` (creates the `genesis` and `permesi` databases if missing)
-- Start persistent Vault + bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
+- Start persistent Vault + Terraform bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
 - Start dev-only Vault (no persistence): `just vault`
 
 ## Dev-only Vault (no persistence)
 
-Use this when you do not need data to survive restarts. It starts in dev mode, auto-unseals,
-and wipes data when the container stops. The dev root token, AppRole IDs, and **Operator Token**
-are printed to the container logs (inspect with `podman logs vault`).
+Use this when you do not need data to survive restarts. It starts in dev mode, auto-unseals, and wipes data when the container stops. The root token is fixed to `dev-root`. The AppRole IDs and **Operator Token** are retrieved from Terraform state.
 
 ## Persistent dev Vault (recommended)
 
-The persistent mode keeps Vault data in a Podman volume and stores init keys in a gitignored file.
-This is what `just dev-start` uses.
+The persistent mode keeps Vault data in a Podman volume and stores init keys in a gitignored file. This is what `just dev-start` uses.
 
-- Start + init + unseal + bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
+- Start + init + unseal + Terraform bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
 - Stop Vault: `just vault-stop`
-- Reset data + keys (prompts): `just vault-reset`
+- Reset data + keys + TF state (prompts): `just vault-reset`
 - Keys file (keep safe): `vault/keys.json` (gitignored)
 - Data volume: `permesi-vault-data`
 
-To reset a persistent Vault, stop the container and remove the data volume plus `vault/keys.json`.
+To reset a persistent Vault, stop the container and remove the data volume plus `vault/keys.json` and the Terraform state files.
 
-Persistent bootstrapping prints the AppRole `role_id` / `secret_id` and the **Operator Token**
-values to the terminal. Re-run `just vault-bootstrap` to print them again. In dev-only mode,
-they are printed to logs:
-
-```sh
-podman logs vault | rg "Login URL|genesis RoleID|genesis SecretID|permesi RoleID|permesi SecretID|Operator Token"
-```
+Persistent bootstrapping outputs the AppRole `role_id` / `secret_id` and the **Operator Token** values to the terminal. They are also available in your environment if you use `just dev-envrc`.
 
 ## Operator Token (Admin Claim)
 
 To test the **Platform Operator** claim flow (bootstrapping the first admin or elevating privileges), 
 you need a Vault token with the `permesi-operators` policy. The root token (`dev-root`) will **not** work.
 
-The bootstrap scripts automatically generate a long-lived (24h) token with this policy.
+The Terraform setup provisions the policy, and the `just` recipes generate a long-lived (24h) token with this policy.
 
-- **Persistent**: Printed to stdout when `just vault-persist-ready` or `just vault-bootstrap` finishes.
-- **Dev-only**: Printed to `podman logs vault`.
 - **Environment**: Available as `$PERMESI_OPERATOR_TOKEN` in your shell if you run `just dev-envrc` (or `just start`).
 
 Copy this token into the "Vault token" field at `/admin/claim` to become an operator.
 
-## What gets provisioned
+## What gets provisioned (via Terraform)
 
-- **AppRole auth**: mounted at `auth/${VAULT_APPROLE_MOUNT}` (default `auth/approle`)
+The resources are defined in `vault/contrib/terraform/`:
+
+- **AppRole auth**: mounted at `auth/approle`
   - Roles: `permesi`, `genesis`
   - Policies: `permesi`, `genesis`
-- **Transit (permesi)**: mounted at `${VAULT_TRANSIT_MOUNT}` (default `transit/permesi`)
-  - Key: `${VAULT_TRANSIT_KEY}` (default `users`, type `chacha20-poly1305`)
-- **Transit (genesis)**: mounted at `${VAULT_GENESIS_TRANSIT_MOUNT}` (default `transit/genesis`)
-  - Key: `${VAULT_GENESIS_TRANSIT_KEY}` (default `genesis-signing`)
-- **KV v2 (OPAQUE seed)**: mounted at `${VAULT_KV_MOUNT}` (default `kv`)
-  - Secret: `${VAULT_OPAQUE_SECRET_PATH}` (default `permesi/opaque`)
+- **Transit (permesi)**: mounted at `transit/permesi`
+  - Key: `users` (type `chacha20-poly1305`)
+- **Transit (genesis)**: mounted at `transit/genesis`
+  - Key: `genesis-signing` (type `ed25519`)
+- **KV v2 (OPAQUE seed)**: mounted at `kv`
+  - Secret: `permesi/opaque`
   - Field: `opaque_seed_b64` (base64-encoded 32 bytes)
-- **Database creds (Postgres)**: mounted at `${VAULT_DATABASE_MOUNT}` (default `database`)
-  - Connections: `genesis` (DB `${VAULT_POSTGRES_DATABASE_GENESIS}`), `permesi` (DB `${VAULT_POSTGRES_DATABASE_PERMESI}`)
-  - Roles (Vault database roles): `genesis`, `permesi`
+- **Database creds (Postgres)**: mounted at `database`
+  - Connections: `genesis`, `permesi`
+  - Roles: `genesis`, `permesi`
 - **Operator Policy**: `permesi-operators` (used for admin claim/elevation).
 
 Note: Postgres roles/users are created **on-demand** when credentials are requested:
@@ -78,13 +72,21 @@ Note: Postgres roles/users are created **on-demand** when credentials are reques
 ## Common commands
 
 - Root login: `VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root vault status`
-- AppRole login (example): `vault write auth/approle/login role_id=<ROLE_ID> secret_id=<SECRET_ID>`
-- Fetch DB creds: `vault read database/creds/genesis`
-- Read OPAQUE seed: `vault kv get ${VAULT_KV_MOUNT}/${VAULT_OPAQUE_SECRET_PATH}`
-- Print dev exports from Vault logs: `just vault-env`
-- Write dev exports into `.envrc` (overwrites it): `just vault-envrc`
-- Print Vault exports plus local dev endpoints: `just dev-env`
+- Write dev exports into `.envrc`: `just vault-envrc`
 - Write Vault exports plus local dev endpoints into `.envrc`: `just dev-envrc` (runs `direnv allow` if available)
+
+## Terraform usage
+
+You can run Terraform manually if you need to inspect or modify the configuration:
+
+```bash
+cd vault/contrib/terraform
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=$(jq -r .root_token ../keys.json)
+terraform apply
+```
+
+## Transit key retention (optional)
 
 ## Transit key retention (optional)
 

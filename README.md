@@ -171,6 +171,7 @@ Production readiness checklist:
 
 - `cargo build -p permesi`
 - `cargo build -p genesis`
+- **Terraform** (v1.5+): Required for provisioning local Vault infrastructure.
 
 ## Web Console
 
