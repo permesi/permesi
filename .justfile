@@ -197,16 +197,6 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
     git push origin develop
     echo "✅ Version bumped and pushed to develop"
 
-    if git rev-parse --verify sandbox >/dev/null 2>&1; then
-        echo "🔄 Resetting sandbox branch to origin/develop..."
-        git fetch origin
-        git branch -f sandbox origin/develop
-        # Track origin/sandbox so "git push" works without arguments
-        git branch --set-upstream-to=origin/sandbox sandbox
-        git push --force origin sandbox:sandbox
-        echo "✅ Sandbox reset to origin/develop (pushed to origin/sandbox for CI)"
-    fi
-
 # Bump version and commit (patch level)
 bump:
     @just _bump patch
@@ -292,6 +282,16 @@ _deploy-merge-and-tag: _require-tag-signing
     echo "   - main branch: merged and pushed"
     echo "   - tag $new_version: created and pushed"
     echo "🔗 Monitor release: https://github.com/nbari/permesi/actions"
+
+    if git rev-parse --verify sandbox >/dev/null 2>&1; then
+        echo "🔄 Resetting sandbox branch to origin/develop..."
+        git fetch origin
+        git branch -f sandbox origin/develop
+        # Track origin/sandbox so "git push" works without arguments
+        git branch --set-upstream-to=origin/sandbox sandbox
+        git push --force origin sandbox:sandbox
+        echo "✅ Sandbox reset to origin/develop (pushed to origin/sandbox for CI)"
+    fi
 
 # Deploy: merge to main, tag, and push everything
 deploy: bump _deploy-merge-and-tag
@@ -830,19 +830,19 @@ vault-tf-apply:
 
     export VAULT_ADDR="http://127.0.0.1:8200"
     export VAULT_TOKEN="$token"
-    
+
     echo "Resource initialization (terraform init)..."
     terraform init >/dev/null
-    
+
     # Force rotation of SecretIDs on every apply to ensure fresh credentials
     # and recover from any state/volume desyncs.
     echo "Tainting SecretIDs to force rotation..."
     terraform taint vault_approle_auth_backend_role_secret_id.permesi >/dev/null 2>&1 || true
     terraform taint vault_approle_auth_backend_role_secret_id.genesis >/dev/null 2>&1 || true
-    
+
     echo "Applying Terraform configuration..."
     terraform apply -auto-approve -var="database_password=postgres"
-    
+
     echo "✅ Vault configured via Terraform."  echo "🔑 Operator Token: $(just --quiet operator-token)"
 
 vault-tf-env:

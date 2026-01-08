@@ -36,16 +36,16 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(me::patch_me))
         .routes(routes!(me::list_sessions))
         .routes(routes!(me::revoke_session))
-        .routes(routes!(orgs::create_org))
-        .routes(routes!(orgs::list_orgs))
-        .routes(routes!(orgs::get_org))
-        .routes(routes!(orgs::patch_org))
-        .routes(routes!(orgs::create_project))
-        .routes(routes!(orgs::list_projects))
-        .routes(routes!(orgs::create_environment))
-        .routes(routes!(orgs::list_environments))
-        .routes(routes!(orgs::create_application))
-        .routes(routes!(orgs::list_applications));
+        .routes(routes!(orgs::organizations::create_org))
+        .routes(routes!(orgs::organizations::list_orgs))
+        .routes(routes!(orgs::organizations::get_org))
+        .routes(routes!(orgs::organizations::patch_org))
+        .routes(routes!(orgs::projects::create_project))
+        .routes(routes!(orgs::projects::list_projects))
+        .routes(routes!(orgs::environments::create_environment))
+        .routes(routes!(orgs::environments::list_environments))
+        .routes(routes!(orgs::applications::create_application))
+        .routes(routes!(orgs::applications::list_applications));
 
     let mut permesi_tag = Tag::new("permesi");
     permesi_tag.description = Some("Identity and access management API".to_string());
