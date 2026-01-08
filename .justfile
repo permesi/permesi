@@ -199,7 +199,12 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
 
     if git rev-parse --verify sandbox >/dev/null 2>&1; then
         echo "🔄 Resetting sandbox branch to origin/develop..."
+        git fetch origin
         git branch -f sandbox origin/develop
+        # Track origin/sandbox so "git push" works without arguments
+        git branch --set-upstream-to=origin/sandbox sandbox
+        git push --force origin sandbox:sandbox
+        echo "✅ Sandbox reset to origin/develop (pushed to origin/sandbox for CI)"
     fi
 
 # Bump version and commit (patch level)
@@ -690,17 +695,17 @@ images: image-permesi image-genesis
 vault: vault-stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  
+
   # Ensure clean slate for ephemeral dev
   rm -rf {{root}}/vault/contrib/terraform/.terraform \
          {{root}}/vault/contrib/terraform/terraform.tfstate \
          {{root}}/vault/contrib/terraform/terraform.tfstate.backup
-  
+
   if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
     echo "vault already running"
     exit 0
   fi
-  
+
   # Start ephemeral vault (memory backend)
   podman run --replace --rm -d --name vault \
     --network {{net}} \
@@ -709,14 +714,14 @@ vault: vault-stop
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
     -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
     hashicorp/vault:latest
-  
+
   # Create a temporary keys file for vault-tf-apply to consume
   mkdir -p {{root}}/vault
   echo '{"root_token": "dev-root"}' > {{root}}/vault/keys.json
-  
+
   echo "Waiting for Vault..."
   just vault-wait
-  
+
   echo "Applying Terraform configuration..."
   just vault-tf-apply
 
@@ -819,44 +824,49 @@ vault-tf-apply:
       echo "❌ Terraform not found. Install terraform to use this recipe." >&2
       exit 1
   fi
-  
+
   token="$(jq -r '.root_token' "$keys")"
   cd {{root}}/vault/contrib/terraform
-  
-  export VAULT_ADDR="http://127.0.0.1:8200"
-  export VAULT_TOKEN="$token"
-  
-  echo "Resource initialization (terraform init)..."
-  terraform init >/dev/null
-  
-  echo "Applying Terraform configuration..."
-  terraform apply -auto-approve -var="database_password=postgres"
-  
-  echo "✅ Vault configured via Terraform."
-  echo "🔑 Operator Token: $(just --quiet operator-token)"
+
+    export VAULT_ADDR="http://127.0.0.1:8200"
+    export VAULT_TOKEN="$token"
+    
+    echo "Resource initialization (terraform init)..."
+    terraform init >/dev/null
+    
+    # Force rotation of SecretIDs on every apply to ensure fresh credentials
+    # and recover from any state/volume desyncs.
+    echo "Tainting SecretIDs to force rotation..."
+    terraform taint vault_approle_auth_backend_role_secret_id.permesi >/dev/null 2>&1 || true
+    terraform taint vault_approle_auth_backend_role_secret_id.genesis >/dev/null 2>&1 || true
+    
+    echo "Applying Terraform configuration..."
+    terraform apply -auto-approve -var="database_password=postgres"
+    
+    echo "✅ Vault configured via Terraform."  echo "🔑 Operator Token: $(just --quiet operator-token)"
 
 vault-tf-env:
   #!/usr/bin/env zsh
   set -euo pipefail
   cd {{root}}/vault/contrib/terraform
-  
+
   if [[ ! -f "terraform.tfstate" ]]; then
       echo "❌ No Terraform state found. Run: just vault-tf-apply" >&2
       exit 1
   fi
-  
+
   # Extract values from Terraform output
   vals=$(terraform output -json)
   permesi_role_id=$(echo "$vals" | jq -r '.permesi_role_id.value')
   permesi_secret_id=$(echo "$vals" | jq -r '.permesi_secret_id.value')
   genesis_role_id=$(echo "$vals" | jq -r '.genesis_role_id.value')
   genesis_secret_id=$(echo "$vals" | jq -r '.genesis_secret_id.value')
-  
+
   vault_addr="http://127.0.0.1:8200"
-  
+
   # Generate a fresh operator token (requires Vault to be running)
   operator_token=$(just --quiet operator-token)
-  
+
   # If root token exists, export it too for convenience, though strictly we use AppRole
   root_token=""
   if [[ -f "{{root}}/vault/keys.json" ]]; then
@@ -888,7 +898,7 @@ vault-env:
       just vault-tf-env
       exit 0
   fi
-  
+
   keys="{{root}}/vault/keys.json"
   if [[ -f "$keys" ]]; then
     vault_addr="${VAULT_ADDR:-http://127.0.0.1:8200}"
@@ -1049,7 +1059,17 @@ vault-reset: vault-stop
     echo "Aborted."
     exit 1
   fi
-  podman volume rm permesi-vault-data >/dev/null 2>&1 || true
+  # Robust volume removal
+  if podman volume inspect permesi-vault-data >/dev/null 2>&1; then
+    echo "Removing Vault data volume..."
+    if ! podman volume rm permesi-vault-data; then
+      echo "❌ Failed to remove volume 'permesi-vault-data'. It may be in use by another container." >&2
+      exit 1
+    fi
+  else
+    echo "Vault data volume not found (already deleted)."
+  fi
+
   rm -f {{root}}/vault/keys.json
   rm -rf {{root}}/vault/contrib/terraform/.terraform \
          {{root}}/vault/contrib/terraform/.terraform.lock.hcl \
@@ -1164,12 +1184,12 @@ start:
 dev-start-infra: setup-network postgres vault-persist-ready jaeger
 
 # Stop all services and the tmux session
-stop: vault-stop postgres-stop jaeger-stop tmux-stop dev-stop
+stop: tmux-stop dev-stop
 
-# Kill lingering dev processes and free ports
-dev-stop:
+# Kill lingering dev processes, containers, and free ports
+dev-stop: vault-stop postgres-stop jaeger-stop
   #!/usr/bin/env zsh
-  echo "Cleaning up lingering dev processes..."
+  echo "Cleaning up lingering dev processes and test containers..."
   # Kill processes by port to ensure ports are freed (Linux specific)
   fuser -k 8000/tcp 8001/tcp 8080/tcp 2>/dev/null || true
   # Specific process names cleanup
@@ -1177,6 +1197,8 @@ dev-stop:
   pkill -f "trunk serve" || true
   pkill -f "npm run css:watch" || true
   pkill -f "tailwindcss" || true
+  # Cleanup any leaked testcontainers (permesi-test-*)
+  podman ps -a --format "{{{{.Names}}}}" | grep -E "^permesi-test-" | xargs -r podman rm -f
 
 # Kill the tmux session if it exists
 tmux-stop:
@@ -1186,7 +1208,6 @@ tmux-stop:
 reset: stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  podman rm -f vault postgres-permesi jaeger >/dev/null 2>&1 || true
   just vault-reset
   rm -rf {{root}}/db/data {{root}}/db/logs
 
@@ -1222,4 +1243,3 @@ podman-check:
     exit 1
   fi
   echo "podman remote API is reachable."
-

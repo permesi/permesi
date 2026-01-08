@@ -120,8 +120,31 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
 
     let auth_for_fetch = auth.clone();
     spawn_local(async move {
-        if let Ok(Some(session)) = client::fetch_session(None).await {
-            auth_for_fetch.set_session(session);
+        let storage = web_sys::window()
+            .and_then(|w| w.local_storage().ok())
+            .flatten();
+        let should_fetch = storage
+            .as_ref()
+            .and_then(|s| s.get_item("permesi_logged_in").ok().flatten())
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        if should_fetch {
+            match client::fetch_session(None).await {
+                Ok(Some(session)) => {
+                    auth_for_fetch.set_session(session);
+                }
+                Ok(None) => {
+                    // Session is invalid or expired; clear the marker.
+                    if let Some(s) = storage {
+                        let _ = s.remove_item("permesi_logged_in");
+                    }
+                }
+                Err(_) => {
+                    // Network error or timeout; keep the marker so we retry next time,
+                    // but we can't set the session now.
+                }
+            }
         }
         auth_for_fetch.is_loading.set(false);
     });

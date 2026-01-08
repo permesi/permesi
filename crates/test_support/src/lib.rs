@@ -25,7 +25,7 @@ impl TestNetwork {
 }
 
 pub(crate) fn unique_name(prefix: &str) -> String {
-    format!("{prefix}-{}", Uuid::new_v4().simple())
+    format!("permesi-test-{prefix}-{}", Uuid::new_v4().simple())
 }
 
 #[cfg(test)]

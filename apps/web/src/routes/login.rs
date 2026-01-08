@@ -118,6 +118,12 @@ pub fn LoginPage() -> impl IntoView {
                     if let Some(token) = login.session_token {
                         auth.set_session_token(token);
                     }
+                    if let Some(storage) = web_sys::window()
+                        .and_then(|w| w.local_storage().ok())
+                        .flatten()
+                    {
+                        let _ = storage.set_item("permesi_logged_in", "true");
+                    }
                     navigate_for_effect("/", Default::default());
                 }
                 Err(err) => set_error.set(Some(err)),
@@ -185,6 +191,12 @@ pub fn LoginPage() -> impl IntoView {
                                                                     spawn_local(async move {
                                                                         let _ = client::logout().await;
                                                                         auth.clear_session();
+                                                                        if let Some(storage) = web_sys::window()
+                                                                            .and_then(|w| w.local_storage().ok())
+                                                                            .flatten()
+                                                                        {
+                                                                            let _ = storage.remove_item("permesi_logged_in");
+                                                                        }
                                                                         if let Some(window) = web_sys::window() {
                                                                             let _ = window.location().set_href("/");
                                                                         }
