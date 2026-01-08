@@ -101,6 +101,7 @@ jobs:
           PERMESI_CLIENT_ID: ${{ vars.PERMESI_CLIENT_ID }}
           PERMESI_API_BASE_URL: ${{ vars.PERMESI_API_BASE_URL }}
           PERMESI_TOKEN_BASE_URL: ${{ vars.PERMESI_TOKEN_BASE_URL }}
+          PERMESI_OPAQUE_SERVER_ID: ${{ vars.PERMESI_OPAQUE_SERVER_ID }}
         run: |
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             domain="permesi.com"
@@ -109,9 +110,11 @@ jobs:
           fi
           api_base="${PERMESI_API_BASE_URL:-https://api.${domain}}"
           token_base="${PERMESI_TOKEN_BASE_URL:-https://genesis.${domain}}"
+          opaque_id="${PERMESI_OPAQUE_SERVER_ID:-api.${domain}}"
           client_id="${PERMESI_CLIENT_ID:-00000000-0000-0000-0000-000000000000}"
           echo "PERMESI_API_BASE_URL=${api_base}" >> "$GITHUB_ENV"
           echo "PERMESI_TOKEN_BASE_URL=${token_base}" >> "$GITHUB_ENV"
+          echo "PERMESI_OPAQUE_SERVER_ID=${opaque_id}" >> "$GITHUB_ENV"
           echo "PERMESI_CLIENT_ID=${client_id}" >> "$GITHUB_ENV"
 
       - name: Build CSS

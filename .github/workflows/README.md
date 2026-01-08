@@ -25,4 +25,4 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 - **`build.yml`**: Compiles the Rust services and builds the Leptos frontend.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: Orchestrates full workspace releases, including Debian packages and container images.
+- **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow.

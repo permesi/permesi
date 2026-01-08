@@ -3,10 +3,21 @@ name: Frontend Deploy
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: Runner label; defaults to CI_RUNNER or self-hosted.
+        type: string
+        required: false
+        default: ''
+      deploy_branch:
+        description: Cloudflare Pages branch; defaults to github.ref_name.
+        type: string
+        required: false
+        default: ''
 
 jobs:
   integrity:
-    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     permissions:
       contents: read
       id-token: write
@@ -56,7 +67,7 @@ jobs:
           if-no-files-found: error
 
   deploy:
-    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     needs: integrity
     permissions:
       contents: read
@@ -72,27 +83,22 @@ jobs:
         with:
           node-version: 24
 
-      - name: 'Deploy: Cloudflare Pages (develop)'
-        if: github.ref_name == 'develop'
-        working-directory: apps/web
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler pages deploy dist --project-name permesi --branch develop
+      - name: 'Deploy: Resolve Cloudflare Branch'
+        shell: bash
+        run: |
+          branch="${{ inputs.deploy_branch }}"
+          if [[ -z "$branch" ]]; then
+            branch="${GITHUB_REF_NAME}"
+          fi
+          if [[ "$branch" != "main" && "$branch" != "develop" ]]; then
+            branch="${branch//\//-}"
+          fi
+          echo "DEPLOY_BRANCH=${branch}" >> "$GITHUB_ENV"
+          echo "Deploying to Cloudflare Pages branch: ${branch}"
 
-      - name: 'Deploy: Cloudflare Pages (main)'
-        if: github.ref_name == 'main'
-        working-directory: apps/web
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler pages deploy dist --project-name permesi --branch main
-
-      - name: 'Deploy: Cloudflare Pages (preview)'
-        if: github.ref_name != 'main' && github.ref_name != 'develop'
+      - name: 'Deploy: Cloudflare Pages'
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         shell: bash
-        run: |-
-          branch="${{ github.ref_name }}"
-          branch="${branch//\//-}"
-          npx wrangler pages deploy dist --project-name permesi --branch "${branch}"
+        run: npx wrangler pages deploy dist --project-name permesi --branch "$DEPLOY_BRANCH"
