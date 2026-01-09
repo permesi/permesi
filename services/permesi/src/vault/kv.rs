@@ -92,7 +92,7 @@ mod tests {
         let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed_bytes);
 
         Mock::given(method("GET"))
-            .and(path("/v1/kv/data/opaque"))
+            .and(path("/v1/secret/permesi/data/opaque"))
             .and(header("X-Vault-Token", "vault-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {"data": {"opaque_seed_b64": seed_b64}}
@@ -103,7 +103,7 @@ mod tests {
         let mut globals = GlobalArgs::new(server.uri());
         globals.set_token(SecretString::from("vault-token".to_string()));
 
-        let seed = read_opaque_seed(&globals, "kv", "opaque").await?;
+        let seed = read_opaque_seed(&globals, "secret/permesi", "opaque").await?;
         assert_eq!(seed, seed_bytes);
         Ok(())
     }
@@ -117,7 +117,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/kv/data/opaque"))
+            .and(path("/v1/secret/permesi/data/opaque"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {"data": {}}
             })))
@@ -125,7 +125,7 @@ mod tests {
             .await;
 
         let globals = GlobalArgs::new(server.uri());
-        let result = read_opaque_seed(&globals, "kv", "opaque").await;
+        let result = read_opaque_seed(&globals, "secret/permesi", "opaque").await;
         let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
         assert!(err.to_string().contains("opaque seed missing"));
         Ok(())
@@ -142,7 +142,7 @@ mod tests {
         let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed_bytes);
 
         Mock::given(method("GET"))
-            .and(path("/v1/kv/data/opaque"))
+            .and(path("/v1/secret/permesi/data/opaque"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": {"data": {"opaque_seed_b64": seed_b64}}
             })))
@@ -150,7 +150,7 @@ mod tests {
             .await;
 
         let globals = GlobalArgs::new(server.uri());
-        let result = read_opaque_seed(&globals, "kv", "opaque").await;
+        let result = read_opaque_seed(&globals, "secret/permesi", "opaque").await;
         let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
         assert!(err.to_string().contains("opaque seed length"));
         Ok(())

@@ -1,0 +1,13 @@
+# Local/dev example only.
+#
+# This file is intentionally named `terraform.tfvars.example` so it is not
+# picked up automatically by Terraform or checked into state. For real usage,
+# prefer `TF_VAR_*` environment variables (see README.md) or create your own
+# local `terraform.tfvars` (gitignored).
+
+database_host               = "postgres-permesi"
+database_sslmode            = "disable"
+permesi_database_username   = "vault_permesi"
+permesi_database_password   = "vault_permesi"
+genesis_database_username   = "vault_genesis"
+genesis_database_password   = "vault_genesis"

@@ -27,9 +27,11 @@ Permesi provides production-ready artifacts for every release. You do not need t
 Permesi requires a Postgres 18 instance. You can find the initialization schemas in the repository under `db/sql/`.
 
 1.  **Initialize Schema**: Run the scripts in order:
-    - `00_init.sql`: Creates the databases (`permesi`, `genesis`).
+    - `00_init.sql`: Creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`).
     - `01_genesis.sql`: Genesis service schema.
     - `02_permesi.sql`: Permesi service schema.
+
+    The `00_init.sql` script is tuned for local dev containers (it includes dev-default passwords and access hardening). For production, create equivalent roles with strong passwords and match the privileges to your organization’s security posture.
 2.  **Connectivity**: Ensure the services can reach the DB via a standard DSN:
     `postgres://<user>:<pass>@<host>:<port>/permesi`
 
@@ -45,10 +47,155 @@ Using Terraform is the recommended way to ensure your configuration is consisten
 ```bash
 cd vault/contrib/terraform
 terraform init
-terraform apply -var="database_password=YOUR_POSTGRES_PASSWORD"
+terraform apply
 ```
 
 Refer to the `vault/README.md` for details on the specific resources provisioned.
+
+### Vault Proxy (AppRole SecretID minting)
+
+If you want fully automated AppRole SecretID minting on service restart, run a Vault Agent in
+API proxy mode with a tightly scoped policy that can only `update`:
+`auth/approle/role/permesi/secret-id` and `auth/approle/role/genesis/secret-id`.
+
+Use a **local-only** listener (or a Unix socket) so the proxy cannot be accessed over the network.
+If you must expose it remotely, use TLS and strict firewall rules.
+
+Example (tuned) proxy config:
+
+```hcl
+vault {
+  address     = "https://<vault-server>:8200"
+  client_cert = "/etc/vault.d/ssl/proxy.pem"
+  client_key  = "/etc/vault.d/ssl/proxy.key"
+  reload      = true
+}
+
+auto_auth {
+  method "cert" {
+    # The name of the auth method as configured in Vault
+    name = "proxy"
+  }
+
+  sink "file" {
+    config = {
+      path = "/run/vault-proxy/token"
+      mode = 0400
+    }
+  }
+}
+
+listener "tcp" {
+  address     = "127.0.0.1:8100"
+  tls_disable = true
+}
+
+api_proxy {
+  use_auto_auth_token = "force"
+}
+
+log_level = "info"
+log_file  = "/var/log/vault.log"
+```
+
+With this in place, your service can fetch a fresh SecretID on restart (example):
+`curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/permesi/secret-id`.
+
+### Quadlet example (systemd)
+
+Below is a tuned Quadlet setup that mints fresh SecretIDs via `ExecStartPre` and writes a
+runtime-only environment file. This keeps static config in `/root/permesi.env` and
+`/root/genesis.env`, while short-lived SecretIDs live in `/run/permesi/secrets.env`.
+
+`/root/permesi.env` (static, long-lived values):
+```
+PERMESI_DSN=postgres://postgres@localhost:5432/permesi
+PERMESI_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
+PERMESI_VAULT_ROLE_ID=<permesi_role_id>
+```
+
+`/root/genesis.env` (static, long-lived values):
+```
+GENESIS_DSN=postgres://postgres@localhost:5432/genesis
+GENESIS_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
+GENESIS_VAULT_ROLE_ID=<genesis_role_id>
+```
+
+`/root/pre-start.sh` (writes the SecretIDs to tmpfs, used by both services):
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 077
+install -d -m 0700 /run/permesi
+
+genesis_secret_id="$(
+  curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/genesis/secret-id \
+    | jq -er '.data.secret_id'
+)"
+permesi_secret_id="$(
+  curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/permesi/secret-id \
+    | jq -er '.data.secret_id'
+)"
+
+cat > /run/permesi/secrets.env <<EOF
+GENESIS_VAULT_SECRET_ID=${genesis_secret_id}
+PERMESI_VAULT_SECRET_ID=${permesi_secret_id}
+EOF
+
+chmod 0600 /run/permesi/secrets.env
+```
+
+Quadlet unit (`permesi.container`):
+```
+[Unit]
+Description=permesi
+After=network.target
+Wants=network.target
+Requires=vault.service
+
+[Container]
+Image=ghcr.io/permesi/permesi:latest
+Network=host
+AutoUpdate=registry
+EnvironmentFile=/root/permesi.env
+EnvironmentFile=/run/permesi/secrets.env
+
+[Service]
+Restart=always
+ExecStartPre=/root/pre-start.sh
+
+[Install]
+WantedBy=default.target
+```
+
+Quadlet unit (`genesis.container`):
+```
+[Unit]
+Description=genesis
+After=network.target
+Wants=network.target
+Requires=vault.service
+
+[Container]
+Image=ghcr.io/permesi/genesis:latest
+Network=host
+AutoUpdate=registry
+EnvironmentFile=/root/genesis.env
+EnvironmentFile=/run/permesi/secrets.env
+
+[Service]
+Restart=always
+ExecStartPre=/root/pre-start.sh
+
+[Install]
+WantedBy=default.target
+```
+
+Notes:
+- Bind the Vault proxy to `127.0.0.1` (or a Unix socket), and keep its policy limited to
+  `auth/approle/role/*/secret-id`.
+- Keep `/root/permesi.env`, `/root/genesis.env`, and `/root/pre-start.sh` owned by root and `0600`/`0700` permissions.
 
 ### Manual Configuration Recipe (Reference)
 
@@ -64,7 +211,7 @@ vault secrets enable -path=transit/permesi transit
 vault secrets enable -path=transit/genesis transit
 
 # Enable KV v2 for OPAQUE server seeds
-vault secrets enable -path=kv kv-v2
+vault secrets enable -path=secret/permesi kv-v2
 
 # (Optional) Enable Database engine if using Vault-managed DB credentials
 vault secrets enable database
@@ -89,7 +236,7 @@ Permesi requires a persistent 32-byte base64-encoded seed for the OPAQUE protoco
 ```bash
 # Generate a seed and store it
 SEED=$(head -c 32 /dev/urandom | base64)
-vault kv put kv/permesi/opaque opaque_seed_b64="$SEED"
+vault kv put secret/permesi/opaque opaque_seed_b64="$SEED"
 ```
 
 ### D. Define Service Policies
@@ -101,7 +248,7 @@ vault policy write permesi - <<EOF
 path "transit/permesi/encrypt/users" { capabilities = ["update"] }
 path "transit/permesi/decrypt/users" { capabilities = ["update"] }
 path "transit/permesi/keys/users"    { capabilities = ["read"] }
-path "kv/data/permesi/opaque"        { capabilities = ["read"] }
+path "secret/permesi/data/opaque"        { capabilities = ["read"] }
 path "database/creds/permesi"        { capabilities = ["read"] } # Only if using DB engine
 path "auth/token/renew-self"         { capabilities = ["update"] }
 path "sys/leases/renew"              { capabilities = ["update"] }

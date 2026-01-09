@@ -577,8 +577,10 @@ docs:
 docs-clean:
     rm -rf docs/redoc
 
+# ----------------------
 # OpenAPI spec generation
 # ----------------------
+
 openapi: openapi-permesi openapi-genesis
 
 openapi-permesi:
@@ -592,6 +594,7 @@ openapi-genesis:
 # ----------------------
 # API helpers
 # ----------------------
+
 genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
@@ -830,18 +833,15 @@ vault-tf-apply:
 
     export VAULT_ADDR="http://127.0.0.1:8200"
     export VAULT_TOKEN="$token"
+    export TF_VAR_database_host="${TF_VAR_database_host:-postgres-permesi}"
+    export TF_VAR_permesi_database_password="${TF_VAR_permesi_database_password:-vault_permesi}"
+    export TF_VAR_genesis_database_password="${TF_VAR_genesis_database_password:-vault_genesis}"
 
     echo "Resource initialization (terraform init)..."
     terraform init >/dev/null
 
-    # Force rotation of SecretIDs on every apply to ensure fresh credentials
-    # and recover from any state/volume desyncs.
-    echo "Tainting SecretIDs to force rotation..."
-    terraform taint vault_approle_auth_backend_role_secret_id.permesi >/dev/null 2>&1 || true
-    terraform taint vault_approle_auth_backend_role_secret_id.genesis >/dev/null 2>&1 || true
-
     echo "Applying Terraform configuration..."
-    terraform apply -auto-approve -var="database_password=postgres"
+    terraform apply -auto-approve
 
     echo "✅ Vault configured via Terraform."  echo "🔑 Operator Token: $(just --quiet operator-token)"
 
@@ -858,16 +858,44 @@ vault-tf-env:
   # Extract values from Terraform output
   vals=$(terraform output -json)
   permesi_role_id=$(echo "$vals" | jq -r '.permesi_role_id.value')
-  permesi_secret_id=$(echo "$vals" | jq -r '.permesi_secret_id.value')
   genesis_role_id=$(echo "$vals" | jq -r '.genesis_role_id.value')
-  genesis_secret_id=$(echo "$vals" | jq -r '.genesis_secret_id.value')
 
   vault_addr="http://127.0.0.1:8200"
+  approle_mount="${VAULT_APPROLE_MOUNT:-approle}"
 
-  # Generate a fresh operator token (requires Vault to be running)
-  operator_token=$(just --quiet operator-token)
+  token=""
+  if [[ -f "{{root}}/vault/keys.json" ]]; then
+      token=$(jq -r '.root_token' "{{root}}/vault/keys.json")
+  elif [[ -n "${VAULT_TOKEN:-}" ]]; then
+      token="${VAULT_TOKEN}"
+  fi
+  if [[ -z "$token" ]]; then
+      echo "❌ Missing VAULT_TOKEN (or {{root}}/vault/keys.json) to generate AppRole SecretIDs." >&2
+      exit 1
+  fi
 
-  # If root token exists, export it too for convenience, though strictly we use AppRole
+  permesi_secret_id="$(
+    podman exec \
+      -e VAULT_ADDR="$vault_addr" \
+      -e VAULT_TOKEN="$token" \
+      vault \
+      vault write -field=secret_id -f "auth/${approle_mount}/role/permesi/secret-id"
+  )"
+  genesis_secret_id="$(
+    podman exec \
+      -e VAULT_ADDR="$vault_addr" \
+      -e VAULT_TOKEN="$token" \
+      vault \
+      vault write -field=secret_id -f "auth/${approle_mount}/role/genesis/secret-id"
+  )"
+  operator_token="$(
+    podman exec \
+      -e VAULT_ADDR="$vault_addr" \
+      -e VAULT_TOKEN="$token" \
+      vault \
+      vault token create -policy=permesi-operators -period=24h -field=token
+  )"
+
   root_token=""
   if [[ -f "{{root}}/vault/keys.json" ]]; then
       root_token=$(jq -r '.root_token' "{{root}}/vault/keys.json")
@@ -875,16 +903,16 @@ vault-tf-env:
 
   printf '%s\n' \
     "export VAULT_ADDR=\"${vault_addr}\"" \
-    "export VAULT_TOKEN=\"${root_token}\"" \
+    "$([[ -n "${root_token}" ]] && printf 'export VAULT_TOKEN="%s"' "${root_token}")" \
     "export PERMESI_OPERATOR_TOKEN=\"${operator_token}\"" \
     "" \
     "export GENESIS_DSN=\"postgres://postgres@localhost:5432/genesis\"" \
-    "export GENESIS_VAULT_URL=\"${vault_addr}/v1/auth/approle/login\"" \
+    "export GENESIS_VAULT_URL=\"${vault_addr%/}/v1/auth/${approle_mount}/login\"" \
     "export GENESIS_VAULT_ROLE_ID=\"${genesis_role_id}\"" \
     "export GENESIS_VAULT_SECRET_ID=\"${genesis_secret_id}\"" \
     "" \
     "export PERMESI_DSN=\"postgres://postgres@localhost:5432/permesi\"" \
-    "export PERMESI_VAULT_URL=\"${vault_addr}/v1/auth/approle/login\"" \
+    "export PERMESI_VAULT_URL=\"${vault_addr%/}/v1/auth/${approle_mount}/login\"" \
     "export PERMESI_VAULT_ROLE_ID=\"${permesi_role_id}\"" \
     "export PERMESI_VAULT_SECRET_ID=\"${permesi_secret_id}\""
 

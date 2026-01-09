@@ -134,8 +134,29 @@ impl PostgresContainer {
     }
 
     #[must_use]
+    pub fn vault_connection_url_for_db(&self, db_name: &str) -> String {
+        format!(
+            "postgresql://{{{{username}}}}:{{{{password}}}}@{}:{}/{}?sslmode=disable",
+            self.container_name, POSTGRES_PORT, db_name
+        )
+    }
+
+    #[must_use]
     pub fn container_name(&self) -> &str {
         &self.container_name
+    }
+
+    #[must_use]
+    pub fn host_port(&self) -> u16 {
+        self.host_port
+    }
+
+    #[must_use]
+    pub fn admin_dsn_for_db(&self, db_name: &str) -> String {
+        format!(
+            "postgres://{}:{}@127.0.0.1:{}/{}?sslmode=disable",
+            self.config.user, self.config.password, self.host_port, db_name
+        )
     }
 
     #[must_use]

@@ -10,14 +10,26 @@ variable "database_port" {
   default = 5432
 }
 
-# Postgres username for Vault to connect with
-variable "database_username" {
+# Permesi Postgres root user for Vault to connect with
+variable "permesi_database_username" {
   type    = string
-  default = "postgres"
+  default = "vault_permesi"
 }
 
-# Postgres password for Vault to connect with
-variable "database_password" {
+# Permesi Postgres root password for Vault to connect with
+variable "permesi_database_password" {
+  type      = string
+  sensitive = true
+}
+
+# Genesis Postgres root user for Vault to connect with
+variable "genesis_database_username" {
+  type    = string
+  default = "vault_genesis"
+}
+
+# Genesis Postgres root password for Vault to connect with
+variable "genesis_database_password" {
   type      = string
   sensitive = true
 }

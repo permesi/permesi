@@ -5,7 +5,7 @@ Local dev Vault runs as a container using the `hashicorp/vault:latest` image and
 - **Dev-only (in-memory)**: `just vault` runs Vault in dev mode and configures it via Terraform.
 - **Persistent (recommended)**: `just vault-persist-ready` runs Vault in server mode with `vault/config.hcl` and configures it via Terraform.
 
-The Terraform configuration in `vault/contrib/terraform` provisions the auth + secrets engines that `services/permesi` and `services/genesis` expect (AppRole, transit, and database creds). `just dev-start` uses the persistent path by default.
+The Terraform configuration in `vault/contrib/terraform` provisions the auth + secrets engines that `services/permesi` and `services/genesis` expect (AppRole, transit, and database creds). `just start` uses the persistent path by default.
 
 ## Prerequisites
 
@@ -14,9 +14,12 @@ The Terraform configuration in `vault/contrib/terraform` provisions the auth + s
 
 ## Quick start
 
-- Start Postgres: `just postgres` (creates the `genesis` and `permesi` databases if missing)
-- Start persistent Vault + Terraform bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
+- Start Postgres: `just postgres` (creates the `genesis`/`permesi` databases, Vault root DB roles `vault_genesis`/`vault_permesi`, and runtime roles `genesis_runtime`/`permesi_runtime`)
+- Start persistent Vault + Terraform bootstrap: `just vault-persist-ready` (also used by `just start`)
 - Start dev-only Vault (no persistence): `just vault`
+- Stop all dev services: `just stop`
+- Restart everything: `just restart`
+- Reset everything (Vault + Postgres data): `just reset` (deletes the databases; use for a clean slate)
 
 ## Dev-only Vault (no persistence)
 
@@ -24,9 +27,9 @@ Use this when you do not need data to survive restarts. It starts in dev mode, a
 
 ## Persistent dev Vault (recommended)
 
-The persistent mode keeps Vault data in a Podman volume and stores init keys in a gitignored file. This is what `just dev-start` uses.
+The persistent mode keeps Vault data in a Podman volume and stores init keys in a gitignored file. This is what `just start` uses.
 
-- Start + init + unseal + Terraform bootstrap: `just vault-persist-ready` (also used by `just dev-start`)
+- Start + init + unseal + Terraform bootstrap: `just vault-persist-ready` (also used by `just start`)
 - Stop Vault: `just vault-stop`
 - Reset data + keys + TF state (prompts): `just vault-reset`
 - Keys file (keep safe): `vault/keys.json` (gitignored)
@@ -58,12 +61,14 @@ The resources are defined in `vault/contrib/terraform/`:
   - Key: `users` (type `chacha20-poly1305`)
 - **Transit (genesis)**: mounted at `transit/genesis`
   - Key: `genesis-signing` (type `ed25519`)
-- **KV v2 (OPAQUE seed)**: mounted at `kv`
-  - Secret: `permesi/opaque`
+- **KV v2 (OPAQUE seed)**: mounted at `secret/permesi`
+  - Secret: `opaque`
   - Field: `opaque_seed_b64` (base64-encoded 32 bytes)
 - **Database creds (Postgres)**: mounted at `database`
   - Connections: `genesis`, `permesi`
   - Roles: `genesis`, `permesi`
+  - Root users (managed outside Vault): `vault_genesis`, `vault_permesi` (rotated by Vault)
+  - Runtime roles (managed in Postgres): `genesis_runtime`, `permesi_runtime` (grants live here; Vault-minted users are members)
 - **Operator Policy**: `permesi-operators` (used for admin claim/elevation).
 
 Note: Postgres roles/users are created **on-demand** when credentials are requested:

@@ -126,6 +126,13 @@ pub struct VaultContainer {
     client: reqwest::Client,
 }
 
+#[derive(Debug, Clone)]
+pub struct DatabaseCredentials {
+    pub lease_id: String,
+    pub username: String,
+    pub password: String,
+}
+
 impl VaultContainer {
     /// Start a Vault dev-mode container in the specified network.
     ///
@@ -407,6 +414,81 @@ impl VaultContainer {
         )
         .await
         .context("Failed to create database role")?;
+        Ok(())
+    }
+
+    /// Create a database role with explicit revocation statements.
+    ///
+    /// # Errors
+    /// Returns an error if the Vault API request fails.
+    pub async fn create_database_role_with_revocation(
+        &self,
+        role_name: &str,
+        db_name: &str,
+        creation_statements: &[String],
+        revocation_statements: &[String],
+        default_ttl: &str,
+        max_ttl: &str,
+    ) -> Result<()> {
+        self.request(
+            Method::POST,
+            &format!("/v1/database/roles/{role_name}"),
+            Some(json!({
+                "db_name": db_name,
+                "creation_statements": creation_statements,
+                "revocation_statements": revocation_statements,
+                "default_ttl": default_ttl,
+                "max_ttl": max_ttl
+            })),
+            None,
+        )
+        .await
+        .context("Failed to create database role with revocation statements")?;
+        Ok(())
+    }
+
+    /// Read dynamic database credentials for the given role.
+    ///
+    /// # Errors
+    /// Returns an error if the Vault API request fails or the response is missing fields.
+    pub async fn read_database_creds(&self, role_name: &str) -> Result<DatabaseCredentials> {
+        let response = self
+            .request(
+                Method::GET,
+                &format!("/v1/database/creds/{role_name}"),
+                None,
+                None,
+            )
+            .await
+            .context("Failed to read database creds")?;
+
+        let lease_id = read_response_str(&response, &["lease_id"])
+            .context("Missing lease_id in database creds response")?;
+        let username = read_response_str(&response, &["data", "username"])
+            .context("Missing username in database creds response")?;
+        let password = read_response_str(&response, &["data", "password"])
+            .context("Missing password in database creds response")?;
+
+        Ok(DatabaseCredentials {
+            lease_id,
+            username,
+            password,
+        })
+    }
+
+    /// Revoke a Vault lease by ID.
+    ///
+    /// # Errors
+    /// Returns an error if the Vault API request fails.
+    pub async fn revoke_lease(&self, lease_id: &str) -> Result<()> {
+        self.request(
+            Method::POST,
+            "/v1/sys/leases/revoke",
+            Some(json!({ "lease_id": lease_id })),
+            None,
+        )
+        .await
+        .context("Failed to revoke lease")?;
         Ok(())
     }
 

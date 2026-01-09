@@ -12,10 +12,15 @@ resource "vault_database_secret_backend_connection" "permesi" {
   name          = "permesi"
   allowed_roles = ["permesi"]
 
+  rotation_period = 86400
+  root_rotation_statements = [
+    "ALTER ROLE \"${var.permesi_database_username}\" WITH PASSWORD '{{password}}';",
+  ]
+
   postgresql {
     connection_url          = "postgresql://{{username}}:{{password}}@${var.database_host}:${var.database_port}/permesi?sslmode=${var.database_sslmode}"
-    username                = var.database_username
-    password                = var.database_password
+    username                = var.permesi_database_username
+    password                = var.permesi_database_password
     max_connection_lifetime = 120
   }
 }
@@ -27,23 +32,20 @@ resource "vault_database_secret_backend_role" "permesi" {
   default_ttl = 3600
   max_ttl     = 14400
 
-  # SECURITY NOTE: "GRANT ALL" allows the app to perform migrations (DDL).
-  # In a strict least-privilege production environment, consider splitting this
-  # into a migration role (DDL) and a runtime role (SELECT, INSERT, UPDATE, DELETE only).
+  # SECURITY NOTE: Dynamic users should not be able to create schemas/tables.
+  # Local dev enforces this by revoking `CREATE` on the `public` schema (see `db/sql/00_init.sql`).
   creation_statements = [
     "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
-    "GRANT ALL PRIVILEGES ON DATABASE permesi TO \"{{name}}\";",
-    "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO \"{{name}}\";",
-    "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO \"{{name}}\";",
+    "GRANT permesi_runtime TO \"{{name}}\";",
+  ]
+
+  renew_statements = [
+    "ALTER ROLE \"{{name}}\" WITH VALID UNTIL '{{expiration}}';",
   ]
 
   revocation_statements = [
     "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.usename = '{{name}}';",
-    "REVOKE ALL PRIVILEGES ON DATABASE permesi FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM \"{{name}}\";",
-    "REASSIGN OWNED BY \"{{name}}\" TO postgres;",
+    "REVOKE permesi_runtime FROM \"{{name}}\";",
     "DROP ROLE IF EXISTS \"{{name}}\";",
   ]
 }
@@ -56,10 +58,15 @@ resource "vault_database_secret_backend_connection" "genesis" {
   name          = "genesis"
   allowed_roles = ["genesis"]
 
+  rotation_period = 86400
+  root_rotation_statements = [
+    "ALTER ROLE \"${var.genesis_database_username}\" WITH PASSWORD '{{password}}';",
+  ]
+
   postgresql {
     connection_url          = "postgresql://{{username}}:{{password}}@${var.database_host}:${var.database_port}/genesis?sslmode=${var.database_sslmode}"
-    username                = var.database_username
-    password                = var.database_password
+    username                = var.genesis_database_username
+    password                = var.genesis_database_password
     max_connection_lifetime = 120
   }
 }
@@ -71,23 +78,20 @@ resource "vault_database_secret_backend_role" "genesis" {
   default_ttl = 3600
   max_ttl     = 14400
 
-  # SECURITY NOTE: "GRANT ALL" allows the app to perform migrations (DDL).
-  # In a strict least-privilege production environment, consider splitting this
-  # into a migration role (DDL) and a runtime role (SELECT, INSERT, UPDATE, DELETE only).
+  # SECURITY NOTE: Dynamic users should not be able to create schemas/tables.
+  # Local dev enforces this by revoking `CREATE` on the `public` schema (see `db/sql/00_init.sql`).
   creation_statements = [
     "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
-    "GRANT ALL PRIVILEGES ON DATABASE genesis TO \"{{name}}\";",
-    "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO \"{{name}}\";",
-    "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO \"{{name}}\";",
+    "GRANT genesis_runtime TO \"{{name}}\";",
+  ]
+
+  renew_statements = [
+    "ALTER ROLE \"{{name}}\" WITH VALID UNTIL '{{expiration}}';",
   ]
 
   revocation_statements = [
     "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.usename = '{{name}}';",
-    "REVOKE ALL PRIVILEGES ON DATABASE genesis FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM \"{{name}}\";",
-    "REASSIGN OWNED BY \"{{name}}\" TO postgres;",
+    "REVOKE genesis_runtime FROM \"{{name}}\";",
     "DROP ROLE IF EXISTS \"{{name}}\";",
   ]
 }

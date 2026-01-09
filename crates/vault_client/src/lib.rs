@@ -458,6 +458,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn renew_token_errors_on_failure_status() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/token/renew-self"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errors": ["nope"]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = renew_token(USER_AGENT, &server.uri(), &token, None).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("nope"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_token_errors_on_missing_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/token/renew-self"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let result = renew_token(USER_AGENT, &server.uri(), &token, None).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("no lease_duration"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn renew_db_token_returns_lease_duration() -> Result<()> {
         if !can_bind_localhost() {
             eprintln!("Skipping test: cannot bind localhost");
@@ -482,6 +528,50 @@ mod tests {
         let lease_duration =
             renew_db_token(USER_AGENT, &server.uri(), &token, "lease-1", 120).await?;
         assert_eq!(lease_duration, 120);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_db_token_errors_on_failure_status() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/leases/renew"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errors": ["nope"]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = renew_db_token(USER_AGENT, &server.uri(), &token, "lease-1", 120).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("nope"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_db_token_errors_on_missing_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("vault-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/leases/renew"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        let result = renew_db_token(USER_AGENT, &server.uri(), &token, "lease-1", 120).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("no lease_duration"));
         Ok(())
     }
 

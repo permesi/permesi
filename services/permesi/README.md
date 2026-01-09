@@ -194,15 +194,15 @@ SELECT cleanup_expired_tokens();
 
 OPAQUE server setup is derived from a 32-byte seed stored in Vault KV v2:
 
-- Mount: `--opaque-kv-mount` / `PERMESI_OPAQUE_KV_MOUNT` (default: `kv`)
-- Path: `--opaque-kv-path` / `PERMESI_OPAQUE_KV_PATH` (default: `permesi/opaque`)
+- Mount: `--opaque-kv-mount` / `PERMESI_OPAQUE_KV_MOUNT` (default: `secret/permesi`)
+- Path: `--opaque-kv-path` / `PERMESI_OPAQUE_KV_PATH` (default: `opaque`)
 - Field: `opaque_seed_b64` (base64-encoded 32 bytes)
 
 The dev bootstrap (`vault/bootstrap.sh`) seeds this automatically for local runs.
 
 Creation:
 - Generate 32 random bytes and store the base64 value as `opaque_seed_b64`.
-- Example: `OPAQUE_SEED_B64=$(openssl rand -base64 32)` and `vault kv put kv/permesi/opaque opaque_seed_b64="$OPAQUE_SEED_B64"`.
+- Example: `OPAQUE_SEED_B64=$(openssl rand -base64 32)` and `vault kv put secret/permesi/opaque opaque_seed_b64="$OPAQUE_SEED_B64"`.
 - All `permesi` instances must read the same seed so existing registrations remain valid.
 
 Rotation:
