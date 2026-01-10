@@ -98,14 +98,19 @@ jobs:
           if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
             echo "postgres-permesi already running"
           else
-            podman run --replace --rm -d --name postgres-permesi \
+            podman run --replace -d --name postgres-permesi \
               -e POSTGRES_USER=postgres \
               -e POSTGRES_HOST_AUTH_METHOD=trust \
-              -p 5432:5432 \
               -v "${GITHUB_WORKSPACE}/db/sql:/db/sql:ro" \
               -v postgres-permesi-data:/var/lib/postgresql/data \
               postgres:18 \
               postgres
+
+            if ! podman ps -a --format '{{.Names}}' | grep -q '^postgres-permesi$'; then
+              echo "Postgres container failed to create"
+              podman ps -a
+              exit 1
+            fi
           fi
 
           ready=0
@@ -129,4 +134,6 @@ jobs:
 
       - name: Stop postgres container
         if: always()
-        run: podman stop postgres-permesi || true
+        run: |
+          podman stop postgres-permesi || true
+          podman rm postgres-permesi || true
