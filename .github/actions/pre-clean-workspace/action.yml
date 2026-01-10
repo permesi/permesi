@@ -1,0 +1,9 @@
+name: Pre-clean workspace
+description: Remove stale workspace data on self-hosted runners.
+runs:
+  using: composite
+  steps:
+    - name: Pre-clean workspace (self-hosted)
+      if: ${{ contains(runner.labels, 'self-hosted') }}
+      shell: bash
+      run: sudo rm -rf "${GITHUB_WORKSPACE}/db/data" || true

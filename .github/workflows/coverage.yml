@@ -12,9 +12,7 @@ jobs:
     name: Coverage
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - name: Pre-clean workspace (self-hosted)
-        if: ${{ vars.CI_RUNNER == '' || vars.CI_RUNNER == 'self-hosted' }}
-        run: sudo rm -rf "${GITHUB_WORKSPACE}/db/data" || true
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
