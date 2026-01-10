@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.2.11"
+    "version": "0.2.13"
   },
   "paths": {
     "/health": {
@@ -157,8 +157,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Bootstrap succeeded."
+          "200": {
+            "description": "Bootstrap succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBootstrapResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request.",
@@ -400,6 +407,222 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/password/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a password change by storing the new registration record and revoking sessions.",
+        "operationId": "opaque_password_finish",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaquePasswordFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password updated"
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/password/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a password change registration flow for the authenticated user.",
+        "operationId": "opaque_password_start",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaquePasswordStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OPAQUE password change started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaquePasswordStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/reauth/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a password re-auth flow and refresh the session auth timestamp.",
+        "operationId": "opaque_reauth_finish",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueReauthFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Re-auth success"
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/reauth/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a password re-auth flow for the current session user.",
+        "operationId": "opaque_reauth_start",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueReauthStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OPAQUE re-auth started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueLoginStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
           },
           "429": {
             "description": "Rate limited",
@@ -1331,6 +1554,21 @@
         },
         "additionalProperties": false
       },
+      "AdminBootstrapResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "bootstrap_complete"
+        ],
+        "properties": {
+          "bootstrap_complete": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "AdminElevateRequest": {
         "type": "object",
         "required": [
@@ -1682,6 +1920,65 @@
             "type": "string"
           },
           "login_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaquePasswordFinishRequest": {
+        "type": "object",
+        "required": [
+          "registration_record"
+        ],
+        "properties": {
+          "registration_record": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaquePasswordStartRequest": {
+        "type": "object",
+        "required": [
+          "registration_request"
+        ],
+        "properties": {
+          "registration_request": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaquePasswordStartResponse": {
+        "type": "object",
+        "required": [
+          "registration_response"
+        ],
+        "properties": {
+          "registration_response": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaqueReauthFinishRequest": {
+        "type": "object",
+        "required": [
+          "login_id",
+          "credential_finalization"
+        ],
+        "properties": {
+          "credential_finalization": {
+            "type": "string"
+          },
+          "login_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaqueReauthStartRequest": {
+        "type": "object",
+        "required": [
+          "credential_request"
+        ],
+        "properties": {
+          "credential_request": {
             "type": "string"
           }
         }
