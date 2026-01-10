@@ -45,6 +45,32 @@ pub struct OpaqueLoginFinishRequest {
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct OpaqueReauthStartRequest {
+    pub credential_request: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct OpaqueReauthFinishRequest {
+    pub login_id: String,
+    pub credential_finalization: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct OpaquePasswordStartRequest {
+    pub registration_request: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct OpaquePasswordStartResponse {
+    pub registration_response: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct OpaquePasswordFinishRequest {
+    pub registration_record: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct VerifyEmailRequest {
     pub token: String,
 }
@@ -73,6 +99,12 @@ pub struct AdminStatusResponse {
 pub struct AdminBootstrapRequest {
     pub vault_token: String,
     pub note: Option<String>,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct AdminBootstrapResponse {
+    pub ok: bool,
+    pub bootstrap_complete: bool,
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
@@ -145,6 +177,28 @@ mod tests {
         let value = serde_json::to_value(&request)?;
         let decoded: ResendVerificationRequest = serde_json::from_value(value)?;
         assert_eq!(decoded.email, "bob@example.com");
+        Ok(())
+    }
+
+    #[test]
+    fn opaque_reauth_start_request_round_trips() -> Result<()> {
+        let request = OpaqueReauthStartRequest {
+            credential_request: "opaque".to_string(),
+        };
+        let value = serde_json::to_value(&request)?;
+        let decoded: OpaqueReauthStartRequest = serde_json::from_value(value)?;
+        assert_eq!(decoded.credential_request, "opaque");
+        Ok(())
+    }
+
+    #[test]
+    fn opaque_password_finish_request_round_trips() -> Result<()> {
+        let request = OpaquePasswordFinishRequest {
+            registration_record: "record".to_string(),
+        };
+        let value = serde_json::to_value(&request)?;
+        let decoded: OpaquePasswordFinishRequest = serde_json::from_value(value)?;
+        assert_eq!(decoded.registration_record, "record");
         Ok(())
     }
 }

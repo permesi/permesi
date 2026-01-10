@@ -27,7 +27,7 @@ pub async fn require_auth(headers: &HeaderMap, pool: &PgPool) -> Result<Principa
             user_id: record.user_id,
             email: record.email,
             session_issued_at_unix: record.created_at_unix,
-            session_auth_time_unix: None,
+            session_auth_time_unix: Some(record.auth_time_unix),
         }),
         Ok(None) => Err(StatusCode::UNAUTHORIZED),
         Err(status) => Err(status),

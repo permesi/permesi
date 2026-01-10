@@ -1,4 +1,4 @@
--- Genesis schema bootstrap for dev containers.
+-- Genesis schema bootstrap.
 -- Requires PostgreSQL 18+ for uuidv7().
 -- Idempotent: safe to run multiple times.
 
@@ -26,11 +26,12 @@ CREATE TABLE IF NOT EXISTS tokens (
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
--- Bootstrap partition; replace with time-based partitions in production.
+-- Bootstrap partition; remove once partition maintenance is active.
+-- Keeping this long-term will accumulate rows outside retention.
 CREATE TABLE IF NOT EXISTS tokens_default PARTITION OF tokens DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_tokens_country ON tokens(country);
 CREATE INDEX IF NOT EXISTS idx_tokens_ip ON tokens(ip_address);
 
 -- Optional: schedule partition maintenance if pg_cron is available.
-\ir /db/sql/partitioning.sql
+\ir partitioning.sql

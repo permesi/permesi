@@ -44,6 +44,22 @@ cargo run -p permesi --bin permesi -- \
   --vault-wrapped-token "$PERMESI_WRAPPED_TOKEN"
 ```
 
+## Database schema
+
+The base schema lives in `services/permesi/sql/schema.sql` and mirrors `db/sql/02_permesi.sql`
+for local containers. Load it into Postgres with:
+
+```sh
+psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f services/permesi/sql/schema.sql
+```
+
+`db/sql/verify_permesi.sql` is a transactional smoke test that rolls back all changes. Run it
+after loading the schema to verify constraints and defaults:
+
+```sh
+psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f db/sql/verify_permesi.sql
+```
+
 ## OPAQUE auth + email verification
 
 `permesi` uses OPAQUE for signup/login. Passwords never leave the client; the database stores only
@@ -64,6 +80,10 @@ Endpoints:
 - `POST /v1/auth/opaque/signup/finish`
 - `POST /v1/auth/opaque/login/start`
 - `POST /v1/auth/opaque/login/finish`
+- `POST /v1/auth/opaque/reauth/start`
+- `POST /v1/auth/opaque/reauth/finish`
+- `POST /v1/auth/opaque/password/start`
+- `POST /v1/auth/opaque/password/finish`
 - `POST /v1/auth/verify-email`
 - `POST /v1/auth/resend-verification`
 - `GET /v1/me`
@@ -82,7 +102,8 @@ Endpoints:
 - `GET /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
 
 All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated offline
-using the PASERK keyset (same as Admission Tokens).
+using the PASERK keyset (same as Admission Tokens). Password changes require a recent re-auth
+(default 10 minutes) and revoke all sessions once the new registration record is stored.
 
 ### Organization endpoints and authorization
 

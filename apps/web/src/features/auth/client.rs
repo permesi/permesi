@@ -11,10 +11,12 @@ use crate::{
         post_json_with_headers_with_credentials_response,
     },
     features::auth::types::{
-        AdminBootstrapRequest, AdminElevateRequest, AdminElevateResponse, AdminInfraResponse,
-        AdminStatusResponse, OpaqueLoginFinishRequest, OpaqueLoginStartRequest,
-        OpaqueLoginStartResponse, OpaqueSignupFinishRequest, OpaqueSignupStartRequest,
-        OpaqueSignupStartResponse, ResendVerificationRequest, UserSession, VerifyEmailRequest,
+        AdminBootstrapRequest, AdminBootstrapResponse, AdminElevateRequest, AdminElevateResponse,
+        AdminInfraResponse, AdminStatusResponse, OpaqueLoginFinishRequest, OpaqueLoginStartRequest,
+        OpaqueLoginStartResponse, OpaquePasswordFinishRequest, OpaquePasswordStartRequest,
+        OpaquePasswordStartResponse, OpaqueReauthFinishRequest, OpaqueReauthStartRequest,
+        OpaqueSignupFinishRequest, OpaqueSignupStartRequest, OpaqueSignupStartResponse,
+        ResendVerificationRequest, UserSession, VerifyEmailRequest,
     },
 };
 
@@ -62,6 +64,58 @@ pub async fn opaque_login_finish(
     )
     .await?;
     Ok(extract_bearer_token(&response))
+}
+
+/// Starts OPAQUE re-auth to refresh the session auth timestamp.
+/// Requires a zero-token header and must never log the credential request.
+pub async fn opaque_reauth_start(
+    request: &OpaqueReauthStartRequest,
+    zero_token: &str,
+) -> Result<OpaqueLoginStartResponse, AppError> {
+    let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
+    post_json_with_headers_with_credentials_response(
+        "/v1/auth/opaque/reauth/start",
+        request,
+        &headers,
+    )
+    .await
+}
+
+/// Finishes OPAQUE re-auth after the password proof.
+/// The request must include credentials so the session cookie is present.
+pub async fn opaque_reauth_finish(
+    request: &OpaqueReauthFinishRequest,
+    zero_token: &str,
+) -> Result<(), AppError> {
+    let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
+    post_json_with_headers_with_credentials("/v1/auth/opaque/reauth/finish", request, &headers)
+        .await
+}
+
+/// Starts OPAQUE password change and returns the registration response.
+/// Requires a zero-token header and must never log the registration payload.
+pub async fn opaque_password_start(
+    request: &OpaquePasswordStartRequest,
+    zero_token: &str,
+) -> Result<OpaquePasswordStartResponse, AppError> {
+    let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
+    post_json_with_headers_with_credentials_response(
+        "/v1/auth/opaque/password/start",
+        request,
+        &headers,
+    )
+    .await
+}
+
+/// Finishes OPAQUE password change after sending the registration record.
+/// The request must include credentials so the server can clear cookies.
+pub async fn opaque_password_finish(
+    request: &OpaquePasswordFinishRequest,
+    zero_token: &str,
+) -> Result<(), AppError> {
+    let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
+    post_json_with_headers_with_credentials("/v1/auth/opaque/password/finish", request, &headers)
+        .await
 }
 
 /// Verifies an email token after the user follows the link.
@@ -114,9 +168,10 @@ pub async fn admin_infra(token: Option<&str>) -> Result<AdminInfraResponse, AppE
 pub async fn admin_bootstrap(
     token: Option<&str>,
     request: &AdminBootstrapRequest,
-) -> Result<(), AppError> {
+) -> Result<AdminBootstrapResponse, AppError> {
     let headers = auth_headers(token);
-    post_json_with_headers_with_credentials("/v1/auth/admin/bootstrap", request, &headers).await
+    post_json_with_headers_with_credentials_response("/v1/auth/admin/bootstrap", request, &headers)
+        .await
 }
 
 /// Exchanges a Vault token for a short-lived admin elevation token.

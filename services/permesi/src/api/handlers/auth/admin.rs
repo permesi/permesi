@@ -30,8 +30,8 @@ use super::{
     admin_token::AdminTokenSigner,
     principal::{Principal, require_auth},
     types::{
-        AdminBootstrapRequest, AdminElevateRequest, AdminElevateResponse, AdminInfraResponse,
-        AdminStatusResponse, DatabaseStats, PlatformStats,
+        AdminBootstrapRequest, AdminBootstrapResponse, AdminElevateRequest, AdminElevateResponse,
+        AdminInfraResponse, AdminStatusResponse, DatabaseStats, PlatformStats,
     },
     utils::{extract_client_ip, extract_country_code},
 };
@@ -301,7 +301,7 @@ pub fn verify_admin_token(
     path = "/v1/auth/admin/bootstrap",
     request_body = AdminBootstrapRequest,
     responses(
-        (status = 204, description = "Bootstrap succeeded."),
+        (status = 200, description = "Bootstrap succeeded.", body = AdminBootstrapResponse),
         (status = 400, description = "Invalid request.", body = String),
         (status = 401, description = "Missing or invalid session."),
         (status = 404, description = "Bootstrap closed."),
@@ -382,7 +382,11 @@ pub async fn admin_bootstrap(
     match bootstrap_operator(&pool, principal.user_id, note).await {
         Ok(BootstrapOutcome::Inserted) => {
             admin_state.rate_limiter().record_success(attempt_id).await;
-            StatusCode::NO_CONTENT.into_response()
+            let response = AdminBootstrapResponse {
+                ok: true,
+                bootstrap_complete: true,
+            };
+            (StatusCode::OK, Json(response)).into_response()
         }
         Ok(BootstrapOutcome::Closed) => StatusCode::NOT_FOUND.into_response(),
         Err(err) => {
@@ -676,6 +680,101 @@ mod tests {
         let state = AdminState::new(config, pool)?;
         let _ = validate_vault_token(&state, Uuid::new_v4(), "token").await;
         let _ = validate_vault_token(&state, Uuid::new_v4(), "token").await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bootstrap_happy_path() -> Result<()> {
+        use crate::api::handlers::auth::{
+            admin::admin_bootstrap,
+            types::AdminBootstrapRequest,
+            utils::{generate_session_token, hash_session_token},
+        };
+        use axum::{Extension, Json, http::header::AUTHORIZATION, response::IntoResponse};
+        use std::sync::Arc;
+
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        if let Err(err) = runtime::ensure_container_runtime() {
+            eprintln!("Skipping integration test: {err}");
+            return Ok(());
+        }
+
+        let (pool, _container) = get_test_pool().await?;
+        sqlx::query("TRUNCATE users, platform_operators, admin_attempts, user_sessions CASCADE")
+            .execute(&pool)
+            .await?;
+
+        // 1. Setup User & Session
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email, status, opaque_registration_record) VALUES ($1, 'admin@example.com', 'active', $2)")
+            .bind(user_id)
+            .bind(vec![0u8; 16])
+            .execute(&pool)
+            .await?;
+
+        let token = generate_session_token()?;
+        let hash = hash_session_token(&token);
+
+        sqlx::query("INSERT INTO user_sessions (user_id, session_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 hour')")
+            .bind(user_id)
+            .bind(hash)
+            .execute(&pool)
+            .await?;
+
+        // 2. Setup Mock Vault
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/auth/token/lookup-self"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "policies": ["permesi-operators"],
+                    "ttl": 43200
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let config = AdminConfig::new(server.uri());
+        let state = Arc::new(AdminState::new(config, pool.clone())?);
+
+        // 3. Prepare Request
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
+
+        let payload = AdminBootstrapRequest {
+            vault_token: "s.validtoken".to_string(),
+            note: Some("Initial bootstrap".to_string()),
+        };
+
+        // 4. Call Handler
+        let response = admin_bootstrap(
+            headers,
+            Extension(pool.clone()),
+            Extension(state),
+            Some(Json(payload)),
+        )
+        .await
+        .into_response();
+
+        // 5. Assertions
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        // Verify DB update
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM platform_operators")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(count, 1);
+
+        let enabled: bool =
+            sqlx::query_scalar("SELECT enabled FROM platform_operators WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await?;
+        assert!(enabled);
+
         Ok(())
     }
 }

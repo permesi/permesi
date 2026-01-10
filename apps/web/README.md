@@ -130,7 +130,8 @@ sequenceDiagram
   
   1. **Vault Step-up**: The operator provides a Vault token which is exchanged for a short-lived, signed PASETO admin token. The Vault token is never persisted or stored in the browser; it is only used once to mint the admin token.
   2. **PASETO Admin Token**: Subsequent administrative requests use this token in the `Authorization: Bearer` header. The backend verifies the signature offline using its internal signing key.
-  3. **Memory Storage**: The admin token is stored in memory (`RwSignal`) and is automatically cleared upon expiration or logout, ensuring no persistent administrative privileges.
+  3. **In-Memory Only**: The admin token is kept strictly in-memory. Reloading the page or closing the tab clears the elevation state, requiring re-entry of a Vault token for security.
+  4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the Vault token once creates the first operator and immediately issues an elevated admin token.
   
   ## Current UI state
 - Home (`/`) is a placeholder ("Home").

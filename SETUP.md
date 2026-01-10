@@ -104,24 +104,31 @@ With this in place, your service can fetch a fresh SecretID on restart (example)
 ### Quadlet example (systemd)
 
 Below is a tuned Quadlet setup that mints fresh SecretIDs via `ExecStartPre` and writes a
-runtime-only environment file. This keeps static config in `/root/permesi.env` and
-`/root/genesis.env`, while short-lived SecretIDs live in `/run/permesi/secrets.env`.
+runtime-only environment file per service. This keeps static config in `/root/permesi.env`
+and `/root/genesis.env`, while short-lived SecretIDs live in service-specific tmpfs paths.
 
-`/root/permesi.env` (static, long-lived values):
+`/root/permesi.env` (static, long-lived values; required values shown first):
 ```
 PERMESI_DSN=postgres://postgres@localhost:5432/permesi
 PERMESI_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
 PERMESI_VAULT_ROLE_ID=<permesi_role_id>
+PERMESI_ADMISSION_PASERK_URL=https://genesis.example.com/paserk.json
+PERMESI_ADMISSION_ISS=https://genesis.example.com
+PERMESI_ADMISSION_AUD=permesi
+PERMESI_FRONTEND_BASE_URL=https://permesi.example.com
 ```
+The admission and frontend settings are optional but recommended for typical deployments.
+For reference: Issuer (`ISS`) identifies the token issuer, and audience (`AUD`) is the expected
+intended recipient of the token.
 
-`/root/genesis.env` (static, long-lived values):
+`/root/genesis.env` (static, long-lived values; required values shown first):
 ```
 GENESIS_DSN=postgres://postgres@localhost:5432/genesis
 GENESIS_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
 GENESIS_VAULT_ROLE_ID=<genesis_role_id>
 ```
 
-`/root/pre-start.sh` (writes the SecretIDs to tmpfs, used by both services):
+`/root/permesi-pre-start.sh` (writes the SecretID to tmpfs, permesi only):
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
@@ -129,21 +136,36 @@ set -euo pipefail
 umask 077
 install -d -m 0700 /run/permesi
 
-genesis_secret_id="$(
-  curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/genesis/secret-id \
-    | jq -er '.data.secret_id'
-)"
 permesi_secret_id="$(
   curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/permesi/secret-id \
     | jq -er '.data.secret_id'
 )"
 
 cat > /run/permesi/secrets.env <<EOF
-GENESIS_VAULT_SECRET_ID=${genesis_secret_id}
 PERMESI_VAULT_SECRET_ID=${permesi_secret_id}
 EOF
 
 chmod 0600 /run/permesi/secrets.env
+```
+
+`/root/genesis-pre-start.sh` (writes the SecretID to tmpfs, genesis only):
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 077
+install -d -m 0700 /run/genesis
+
+genesis_secret_id="$(
+  curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/genesis/secret-id \
+    | jq -er '.data.secret_id'
+)"
+
+cat > /run/genesis/secrets.env <<EOF
+GENESIS_VAULT_SECRET_ID=${genesis_secret_id}
+EOF
+
+chmod 0600 /run/genesis/secrets.env
 ```
 
 Quadlet unit (`permesi.container`):
@@ -163,7 +185,7 @@ EnvironmentFile=/run/permesi/secrets.env
 
 [Service]
 Restart=always
-ExecStartPre=/root/pre-start.sh
+ExecStartPre=/root/permesi-pre-start.sh
 
 [Install]
 WantedBy=default.target
@@ -182,11 +204,11 @@ Image=ghcr.io/permesi/genesis:latest
 Network=host
 AutoUpdate=registry
 EnvironmentFile=/root/genesis.env
-EnvironmentFile=/run/permesi/secrets.env
+EnvironmentFile=/run/genesis/secrets.env
 
 [Service]
 Restart=always
-ExecStartPre=/root/pre-start.sh
+ExecStartPre=/root/genesis-pre-start.sh
 
 [Install]
 WantedBy=default.target
@@ -195,7 +217,8 @@ WantedBy=default.target
 Notes:
 - Bind the Vault proxy to `127.0.0.1` (or a Unix socket), and keep its policy limited to
   `auth/approle/role/*/secret-id`.
-- Keep `/root/permesi.env`, `/root/genesis.env`, and `/root/pre-start.sh` owned by root and `0600`/`0700` permissions.
+- Keep `/root/permesi.env`, `/root/genesis.env`, and the pre-start scripts owned by root and
+  `0600`/`0700` permissions.
 
 ### Manual Configuration Recipe (Reference)
 
@@ -232,6 +255,8 @@ vault write transit/genesis/keys/genesis-signing/config auto_rotate_period=30d
 
 ### C. Configure OPAQUE Seed
 Permesi requires a persistent 32-byte base64-encoded seed for the OPAQUE protocol.
+If this seed changes, all existing OPAQUE registrations will no longer validate; users
+will need to re-register or reset their credentials.
 
 ```bash
 # Generate a seed and store it
@@ -248,8 +273,8 @@ vault policy write permesi - <<EOF
 path "transit/permesi/encrypt/users" { capabilities = ["update"] }
 path "transit/permesi/decrypt/users" { capabilities = ["update"] }
 path "transit/permesi/keys/users"    { capabilities = ["read"] }
-path "secret/permesi/data/opaque"        { capabilities = ["read"] }
-path "database/creds/permesi"        { capabilities = ["read"] } # Only if using DB engine
+path "secret/permesi/data/opaque"    { capabilities = ["read"] }
+path "database/creds/permesi"        { capabilities = ["read"] }
 path "auth/token/renew-self"         { capabilities = ["update"] }
 path "sys/leases/renew"              { capabilities = ["update"] }
 EOF
@@ -260,7 +285,7 @@ EOF
 vault policy write genesis - <<EOF
 path "transit/genesis/sign/genesis-signing" { capabilities = ["update"] }
 path "transit/genesis/keys/genesis-signing" { capabilities = ["read"] }
-path "database/creds/genesis"               { capabilities = ["read"] } # Only if using DB engine
+path "database/creds/genesis"               { capabilities = ["read"] }
 path "auth/token/renew-self"                { capabilities = ["update"] }
 path "sys/leases/renew"                     { capabilities = ["update"] }
 EOF

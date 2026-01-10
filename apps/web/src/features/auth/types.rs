@@ -52,6 +52,42 @@ pub struct OpaqueLoginFinishRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Payload for starting OPAQUE re-auth; contains the credential request.
+/// The request contains protocol transcripts and must never be logged.
+pub struct OpaqueReauthStartRequest {
+    pub credential_request: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Payload for completing OPAQUE re-auth; contains the finalization message.
+/// The message contains protocol transcripts and must never be logged.
+pub struct OpaqueReauthFinishRequest {
+    pub login_id: String,
+    pub credential_finalization: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Payload for starting OPAQUE password change; contains the registration request.
+/// The request contains protocol transcripts and must never be logged.
+pub struct OpaquePasswordStartRequest {
+    pub registration_request: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Response for OPAQUE password change start; contains the registration response.
+/// The response contains protocol transcripts and must never be logged.
+pub struct OpaquePasswordStartResponse {
+    pub registration_response: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Payload for completing OPAQUE password change; contains the registration record.
+/// The record contains protocol transcripts and must never be logged.
+pub struct OpaquePasswordFinishRequest {
+    pub registration_record: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Payload for verifying an email token; the token must never be logged.
 pub struct VerifyEmailRequest {
     pub token: String,
@@ -83,6 +119,12 @@ pub struct AdminStatusResponse {
 pub struct AdminBootstrapRequest {
     pub vault_token: String,
     pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminBootstrapResponse {
+    pub ok: bool,
+    pub bootstrap_complete: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

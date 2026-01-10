@@ -63,7 +63,13 @@ SELECT pg_advisory_unlock(hashtext('permesi-initdb'));
 REVOKE USAGE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ALTER SCHEMA public OWNER TO vault_genesis;
-REASSIGN OWNED BY postgres TO vault_genesis;
+DO $$
+BEGIN
+    REASSIGN OWNED BY postgres TO vault_genesis;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Skipping REASSIGN OWNED in genesis: %', SQLERRM;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- Genesis runtime role
@@ -96,7 +102,13 @@ ALTER DEFAULT PRIVILEGES FOR ROLE vault_genesis IN SCHEMA public
 REVOKE USAGE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ALTER SCHEMA public OWNER TO vault_permesi;
-REASSIGN OWNED BY postgres TO vault_permesi;
+DO $$
+BEGIN
+    REASSIGN OWNED BY postgres TO vault_permesi;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Skipping REASSIGN OWNED in permesi: %', SQLERRM;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- Permesi runtime role

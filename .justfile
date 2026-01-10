@@ -427,6 +427,8 @@ web-build: web-node-setup
   fi
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
+  mkdir -p dist
+  rm -rf dist/.stage
   : "${PERMESI_API_HOST:=http://localhost:8001}"
   : "${PERMESI_TOKEN_HOST:=http://localhost:8000}"
   : "${PERMESI_API_TOKEN_HOST:=${PERMESI_TOKEN_HOST}}"
@@ -482,11 +484,7 @@ web-node-setup:
     exit 1
   fi
   cd {{root}}/apps/web
-  if [[ -f package-lock.json ]]; then
-    npm ci
-  else
-    npm install
-  fi
+  npm install
 
 web-css-watch: web-node-setup
   #!/usr/bin/env zsh
@@ -528,7 +526,11 @@ genesis:
   if [[ -f {{root}}/.envrc ]]; then
     source {{root}}/.envrc
   fi
-  cargo watch -x 'run -p genesis --bin genesis -- --port 8000 -vvv'
+  if ! command -v vault >/dev/null 2>&1; then
+    echo "vault CLI not found; install it or set GENESIS_VAULT_SECRET_ID manually before running." >&2
+    exit 1
+  fi
+  cargo watch --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis -- --port 8000 -vvv'
 
 permesi:
   #!/usr/bin/env zsh
@@ -561,7 +563,11 @@ permesi:
   raise SystemExit(1)
   PY
   fi
-  cargo watch -x 'run -p permesi --bin permesi -- --port 8001 -vvv'
+  if ! command -v vault >/dev/null 2>&1; then
+    echo "vault CLI not found; install it or set PERMESI_VAULT_SECRET_ID manually before running." >&2
+    exit 1
+  fi
+  cargo watch --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi -- --port 8001 -vvv'
 
 # ----------------------
 # ----------------------
@@ -585,11 +591,11 @@ openapi: openapi-permesi openapi-genesis
 
 openapi-permesi:
   mkdir -p docs/openapi
-  cargo run -p permesi --bin openapi > docs/openapi/permesi.json
+  cargo run -p permesi --bin permesi-openapi > docs/openapi/permesi.json
 
 openapi-genesis:
   mkdir -p docs/openapi
-  cargo run -p genesis --bin openapi > docs/openapi/genesis.json
+  cargo run -p genesis --bin genesis-openapi > docs/openapi/genesis.json
 
 # ----------------------
 # API helpers
@@ -1134,6 +1140,12 @@ postgres-stop:
 db-verify:
   #!/usr/bin/env zsh
   set -euo pipefail
+  podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
+
+db-bootstrap:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
   podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
 jaeger:

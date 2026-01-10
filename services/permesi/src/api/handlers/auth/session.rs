@@ -44,6 +44,7 @@ pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRe
             user_id,
             email,
             created_at_unix: _,
+            auth_time_unix: _,
         })) => {
             let is_operator = operator_enabled(&pool, user_id).await.unwrap_or(false);
             let response = SessionResponse {
@@ -126,7 +127,10 @@ pub(super) fn session_cookie(
     HeaderValue::from_str(&cookie)
 }
 
-fn clear_session_cookie(
+/// Build a cookie header that clears the auth session.
+///
+/// Use this when a flow revokes all sessions so the client drops the cookie.
+pub(crate) fn clear_session_cookie(
     auth_config: &super::state::AuthConfig,
 ) -> Result<HeaderValue, InvalidHeaderValue> {
     let secure = auth_config.session_cookie_secure();
@@ -137,7 +141,8 @@ fn clear_session_cookie(
     HeaderValue::from_str(&cookie)
 }
 
-fn extract_session_token(headers: &HeaderMap) -> Option<String> {
+/// Extract a session token from Authorization or Cookie headers.
+pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
     if let Some(token) = extract_bearer_token(headers) {
         return Some(token);
     }

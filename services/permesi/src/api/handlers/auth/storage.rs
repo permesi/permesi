@@ -39,6 +39,7 @@ pub(crate) struct SessionRecord {
     pub(crate) user_id: Uuid,
     pub(crate) email: String,
     pub(crate) created_at_unix: i64,
+    pub(crate) auth_time_unix: i64,
 }
 
 /// Look up login data by email (used by OPAQUE login start).
@@ -219,7 +220,8 @@ pub(super) async fn lookup_session(
     let query = r"
         SELECT users.id,
                users.email,
-               EXTRACT(EPOCH FROM user_sessions.created_at)::bigint AS created_at_unix
+               EXTRACT(EPOCH FROM user_sessions.created_at)::bigint AS created_at_unix,
+               EXTRACT(EPOCH FROM user_sessions.auth_time)::bigint AS auth_time_unix
         FROM user_sessions
         JOIN users ON users.id = user_sessions.user_id
         WHERE user_sessions.session_hash = $1
@@ -267,7 +269,88 @@ pub(super) async fn lookup_session(
         user_id: row.get("id"),
         email: row.get("email"),
         created_at_unix: row.get("created_at_unix"),
+        auth_time_unix: row.get("auth_time_unix"),
     }))
+}
+
+/// Update the auth timestamp for the current session after a successful re-auth.
+pub(super) async fn update_session_auth_time(
+    pool: &PgPool,
+    user_id: Uuid,
+    token_hash: &[u8],
+) -> Result<bool> {
+    let query = r"
+        UPDATE user_sessions
+        SET auth_time = NOW()
+        WHERE user_id = $1
+          AND session_hash = $2
+          AND expires_at > NOW()
+        RETURNING id
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "UPDATE",
+        db.statement = query
+    );
+    let row = sqlx::query(query)
+        .bind(user_id)
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .instrument(span)
+        .await
+        .context("failed to update session auth time")?;
+    Ok(row.is_some())
+}
+
+/// Replace the OPAQUE registration record and revoke all sessions for the user.
+pub(super) async fn rotate_password_and_clear_sessions(
+    pool: &PgPool,
+    user_id: Uuid,
+    opaque_record: &[u8],
+) -> Result<bool> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("begin password rotation transaction")?;
+
+    let query = "UPDATE users SET opaque_registration_record = $1 WHERE id = $2";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "UPDATE",
+        db.statement = query
+    );
+    let result = sqlx::query(query)
+        .bind(opaque_record)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .instrument(span)
+        .await
+        .context("failed to update registration record")?;
+    if result.rows_affected() == 0 {
+        let _ = tx.rollback().await;
+        return Ok(false);
+    }
+
+    let query = "DELETE FROM user_sessions WHERE user_id = $1";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "DELETE",
+        db.statement = query
+    );
+    sqlx::query(query)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .instrument(span)
+        .await
+        .context("failed to delete user sessions")?;
+
+    tx.commit()
+        .await
+        .context("commit password rotation transaction")?;
+    Ok(true)
 }
 
 pub(super) async fn delete_session(pool: &PgPool, token_hash: &[u8]) -> Result<()> {

@@ -129,12 +129,24 @@ Schema lives in `services/genesis/sql/schema.sql`:
 The default schema seeds a `__test_only__` client marked non-reserved for local testing; remove or
 flip it to reserved in production deployments.
 
+Load the schema with:
+
+```sh
+psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/schema.sql
+```
+
+That file `\ir`-includes `services/genesis/sql/partitioning.sql`, so it will attempt to set up
+pg_cron-based partition maintenance when the extension is available. If you want to manage
+partitioning separately, run `partitioning.sql` manually and omit the include.
+
 `TOKEN_EXPIRATION` is currently 120 seconds.
 
 Production bootstrap:
 
-- Apply `services/genesis/sql/schema.sql` (idempotent base schema).
-- Apply `services/genesis/sql/partitioning.sql` if you want pg_cron-managed partitions.
+- Apply `services/genesis/sql/schema.sql` (idempotent base schema). It includes
+  `partitioning.sql`, so pg_cron jobs are created when available.
+- If you prefer to manage partitions separately, run `services/genesis/sql/partitioning.sql`
+  on its own and omit the include.
 
 `db/sql/` is used for local dev containers and is not intended as a production schema source.
 

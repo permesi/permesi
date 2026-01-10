@@ -192,7 +192,13 @@ Default ports: genesis `8000`, permesi `8001`, web `8080`.
 If you're already inside tmux, it creates the `permesi` session in the background and prints attach instructions.
 Re-running attaches to the existing session when not inside tmux; stop with `tmux kill-session -t permesi`.
 
+Because AppRole SecretIDs are single-use (`secret_id_num_uses=1`), `just genesis` and `just permesi` fetch a fresh
+SecretID before each `cargo watch` run using the Vault CLI. Make sure `vault` is installed and authenticated (via
+`VAULT_ADDR`/`VAULT_TOKEN` or your Vault token helper).
+
 If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also runs `direnv allow` if available).
+If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
+to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
 
 Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/logs`).
 
@@ -218,8 +224,8 @@ This repo treats the OpenAPI specs as versioned artifacts, checked in under:
 
 Regenerate them from code:
 
-- `cargo run -p permesi --bin openapi > docs/openapi/permesi.json`
-- `cargo run -p genesis --bin openapi > docs/openapi/genesis.json`
+- `cargo run -p permesi --bin permesi-openapi > docs/openapi/permesi.json`
+- `cargo run -p genesis --bin genesis-openapi > docs/openapi/genesis.json`
 
 ## Containers
 

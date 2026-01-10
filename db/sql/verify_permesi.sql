@@ -273,6 +273,22 @@ BEGIN
         -- expected
     END;
 
+    -- Reject auth_time earlier than created_at.
+    BEGIN
+        INSERT INTO user_sessions (id, user_id, session_hash, created_at, auth_time, expires_at)
+        VALUES (
+            gen_random_uuid(),
+            v_user_id,
+            decode(repeat('01', 32), 'hex'),
+            NOW(),
+            NOW() - INTERVAL '1 minute',
+            NOW() + INTERVAL '1 hour'
+        );
+        RAISE EXCEPTION 'expected auth_time >= created_at check to fail';
+    EXCEPTION WHEN check_violation THEN
+        -- expected
+    END;
+
     -- Reject verification token hashes that are too short.
     BEGIN
         INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at)
@@ -366,6 +382,7 @@ BEGIN
     END;
 
     -- Cascade deletions: ensure deleting a user removes their operator record.
+    DELETE FROM organizations WHERE created_by = v_op_id;
     DELETE FROM users WHERE id = v_op_id;
     PERFORM 1 FROM platform_operators WHERE user_id = v_op_id;
     IF FOUND THEN

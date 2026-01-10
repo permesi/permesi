@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.2.4"
+    "version": "0.2.11"
   },
   "paths": {
     "/health": {
@@ -157,8 +157,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Bootstrap succeeded."
+          "200": {
+            "description": "Bootstrap succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBootstrapResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request.",
@@ -400,6 +407,222 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/password/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a password change by storing the new registration record and revoking sessions.",
+        "operationId": "opaque_password_finish",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaquePasswordFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password updated"
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/password/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a password change registration flow for the authenticated user.",
+        "operationId": "opaque_password_start",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaquePasswordStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OPAQUE password change started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaquePasswordStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/reauth/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a password re-auth flow and refresh the session auth timestamp.",
+        "operationId": "opaque_reauth_finish",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueReauthFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Re-auth success"
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/auth/opaque/reauth/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a password re-auth flow for the current session user.",
+        "operationId": "opaque_reauth_start",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueReauthStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OPAQUE re-auth started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueLoginStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
           },
           "429": {
             "description": "Rate limited",
@@ -767,6 +990,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Lists organizations the authenticated user is an active member of.\nSoft-deleted orgs are excluded, and membership scoping avoids leaking org existence across tenants.\nThe response uses only public `OrgResponse` fields.",
         "operationId": "list_orgs",
         "responses": {
           "200": {
@@ -791,6 +1015,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Creates a new organization for the authenticated user and returns an `OrgResponse`.\nOn success, the creator is enrolled as an active member and granted the `owner` role.\nThe slug is normalized and collision-resolved on insert; creator name conflicts return `409`.\nThe response intentionally omits membership state and roles.",
         "operationId": "create_org",
         "requestBody": {
           "content": {
@@ -844,6 +1069,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Fetches organization details by slug for the authenticated caller.\nReturns `404` for non-members or inactive memberships to reduce cross-tenant enumeration.\nConverts `OrgContext` to `OrgResponse`, excluding roles and membership status.",
         "operationId": "get_org",
         "parameters": [
           {
@@ -879,6 +1105,7 @@
         "tags": [
           "orgs"
         ],
+        "summary": "Updates an organization's name and/or slug and returns the updated `OrgResponse`.\nRequires `OrgContext::can_manage`; otherwise it returns `404` to avoid leaking org existence.\nThe slug is normalized and uniqueness conflicts map to `409`, and roles are never returned.",
         "operationId": "patch_org",
         "parameters": [
           {
@@ -936,6 +1163,7 @@
         "tags": [
           "projects"
         ],
+        "summary": "Lists active (non-deleted) projects for an organization as `ProjectResponse` DTOs.\nOnly active org members can list; non-members receive `404` to avoid tenant leakage.\nThe response returns only project fields, not nested org membership or roles.",
         "operationId": "list_projects",
         "parameters": [
           {
@@ -974,6 +1202,7 @@
         "tags": [
           "projects"
         ],
+        "summary": "Creates a project under an organization and returns a `ProjectResponse`.\nCallers must pass `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\nThe slug is normalized and uniqueness violations are mapped to `409`.\nThe response omits any org membership or role information.",
         "operationId": "create_project",
         "parameters": [
           {
@@ -1041,6 +1270,7 @@
         "tags": [
           "environments"
         ],
+        "summary": "Lists active (non-deleted) environments for a project as `EnvironmentResponse` DTOs.\nRequires org membership and hides project existence from non-members via `404`.\nThe response returns only environment fields, not project/org membership details.",
         "operationId": "list_environments",
         "parameters": [
           {
@@ -1088,6 +1318,7 @@
         "tags": [
           "environments"
         ],
+        "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\n`storage::insert_environment` enforces a single `production` tier and gates `non_production`.\nThe response includes only environment DTO fields.",
         "operationId": "create_environment",
         "parameters": [
           {
@@ -1164,6 +1395,7 @@
         "tags": [
           "applications"
         ],
+        "summary": "Lists active (non-deleted) applications for an environment as `ApplicationResponse` DTOs.\nReturns `404` when the org/project/env cannot be resolved for the current principal.\nThe response returns only app fields, not environment or org membership data.",
         "operationId": "list_applications",
         "parameters": [
           {
@@ -1220,6 +1452,7 @@
         "tags": [
           "applications"
         ],
+        "summary": "Creates an application within an environment and returns an `ApplicationResponse`.\nRequires `OrgContext::can_manage` and returns `404` when the org/project/env is inaccessible.\nThe response includes only app fields, not environment or membership details.",
         "operationId": "create_application",
         "parameters": [
           {
@@ -1320,6 +1553,21 @@
           }
         },
         "additionalProperties": false
+      },
+      "AdminBootstrapResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "bootstrap_complete"
+        ],
+        "properties": {
+          "bootstrap_complete": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
       },
       "AdminElevateRequest": {
         "type": "object",
@@ -1672,6 +1920,65 @@
             "type": "string"
           },
           "login_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaquePasswordFinishRequest": {
+        "type": "object",
+        "required": [
+          "registration_record"
+        ],
+        "properties": {
+          "registration_record": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaquePasswordStartRequest": {
+        "type": "object",
+        "required": [
+          "registration_request"
+        ],
+        "properties": {
+          "registration_request": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaquePasswordStartResponse": {
+        "type": "object",
+        "required": [
+          "registration_response"
+        ],
+        "properties": {
+          "registration_response": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaqueReauthFinishRequest": {
+        "type": "object",
+        "required": [
+          "login_id",
+          "credential_finalization"
+        ],
+        "properties": {
+          "credential_finalization": {
+            "type": "string"
+          },
+          "login_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OpaqueReauthStartRequest": {
+        "type": "object",
+        "required": [
+          "credential_request"
+        ],
+        "properties": {
+          "credential_request": {
             "type": "string"
           }
         }

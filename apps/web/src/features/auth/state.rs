@@ -1,7 +1,7 @@
 //! Auth session state and context for the frontend. The provider hydrates the
 //! session once on mount using cookie-based API calls and exposes derived auth
-//! signals for guards and routes. Session and admin tokens are stored in memory
-//! when present, while cookies remain `HttpOnly`.
+//! signals for guards and routes. Session tokens stay in memory, and admin
+//! elevation tokens are also kept in-memory only for security.
 
 use crate::features::auth::{
     client,
@@ -55,7 +55,7 @@ impl AuthContext {
         self.session_token.set(Some(token));
     }
 
-    /// Stores the admin elevation token.
+    /// Stores the admin elevation token (in-memory only).
     pub fn set_admin_token(&self, token: AdminElevateResponse) {
         self.admin_token.set(Some(token));
     }
@@ -98,6 +98,9 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
     Effect::new(move |_| {
         if let Some(token) = auth.admin_token.get() {
             let expires_at_ms = js_sys::Date::parse(&token.expires_at);
+            if expires_at_ms.is_nan() {
+                return;
+            }
             let now_ms = js_sys::Date::now();
             let diff = expires_at_ms - now_ms;
 

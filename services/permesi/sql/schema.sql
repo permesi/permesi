@@ -1,4 +1,5 @@
--- psql -U <user> -d permesi -f schema.sql
+-- Permesi schema bootstrap.
+-- Keep this file in sync with the matching schema under db/sql and services/permesi/sql.
 
 CREATE EXTENSION IF NOT EXISTS citext;
 
@@ -249,6 +250,8 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     session_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(session_hash) = 32),
+    auth_time TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        CHECK (auth_time >= created_at),
     expires_at TIMESTAMPTZ NOT NULL
         CHECK (expires_at > created_at),
     last_seen_at TIMESTAMPTZ
