@@ -28,8 +28,8 @@ jobs:
       - name: Generate OpenAPI specs
         run: |
           mkdir -p docs/openapi
-          cargo run -p permesi --bin openapi > docs/openapi/permesi.json
-          cargo run -p genesis --bin openapi > docs/openapi/genesis.json
+          cargo run -p permesi --bin permesi-openapi > docs/openapi/permesi.json
+          cargo run -p genesis --bin genesis-openapi > docs/openapi/genesis.json
 
       - name: Build Redoc Page
         run: |
