@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admission_token"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -1283,7 +1283,7 @@ dependencies = [
 
 [[package]]
 name = "genesis"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -2655,7 +2655,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permesi"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -2704,7 +2704,7 @@ dependencies = [
 
 [[package]]
 name = "permesi_web"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -4122,7 +4122,7 @@ dependencies = [
 
 [[package]]
 name = "test_support"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -4789,7 +4789,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault_client"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "reqwest",
