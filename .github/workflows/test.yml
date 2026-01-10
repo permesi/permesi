@@ -98,22 +98,31 @@ jobs:
           if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
             echo "postgres-permesi already running"
           else
-            mkdir -p db/log/postgres
             podman run --replace --rm -d --name postgres-permesi \
               -e POSTGRES_USER=postgres \
               -e POSTGRES_HOST_AUTH_METHOD=trust \
-              -e PGDATA=/db/data/18 \
               -p 5432:5432 \
-              -v "${GITHUB_WORKSPACE}/db:/db" \
-              -v "${GITHUB_WORKSPACE}/db/config/postgres:/etc/postgresql/config" \
-              -v "${GITHUB_WORKSPACE}/db/sql/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro" \
+              -v "${GITHUB_WORKSPACE}/db/sql:/db/sql:ro" \
+              -v postgres-permesi-data:/var/lib/postgresql/data \
               postgres:18 \
-              postgres -c config_file=/etc/postgresql/config/postgresql.conf
+              postgres
           fi
 
-          until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do
+          ready=0
+          for _ in {1..150}; do
+            if podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; then
+              ready=1
+              break
+            fi
             sleep 0.2
           done
+
+          if [[ "$ready" -ne 1 ]]; then
+            echo "Postgres failed to become ready"
+            podman ps -a
+            podman logs postgres-permesi || true
+            exit 1
+          fi
 
           podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
           podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql

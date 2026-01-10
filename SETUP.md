@@ -64,6 +64,23 @@ terraform apply
 
 Refer to the `vault/README.md` for details on the specific resources provisioned.
 
+### AppRole login sanity check (CLI)
+
+To verify your AppRole credentials and the login endpoint, run:
+
+```sh
+export VAULT_ADDR="https://vault.example.com:8200"
+vault write -format=json auth/approle/login \
+  role_id="$PERMESI_ROLE_ID" \
+  secret_id="$PERMESI_SECRET_ID"
+```
+
+If you use wrapped SecretIDs, unwrap first:
+
+```sh
+vault unwrap -format=json "$PERMESI_WRAPPED_TOKEN"
+```
+
 ### Vault Proxy (AppRole SecretID minting)
 
 If you want fully automated AppRole SecretID minting on service restart, run a Vault Agent in
