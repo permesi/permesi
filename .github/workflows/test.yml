@@ -51,66 +51,12 @@ jobs:
       - format
       - lint
       - check
+      - db-schema
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Ensure container runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # 1. Ensure Podman and its core dependencies are installed
-          if ! command -v podman >/dev/null 2>&1; then
-            echo "Installing Podman and dependencies..."
-            sudo apt-get update
-            sudo apt-get install -y podman dbus-user-session slirp4netns
-          fi
-
-          # 2. Determine the best runtime directory
-          USER_ID=$(id -u)
-          if [[ -d "/run/user/${USER_ID}" ]]; then
-            export XDG_RUNTIME_DIR="/run/user/${USER_ID}"
-          else
-            export XDG_RUNTIME_DIR="/tmp/podman-run-${USER_ID}"
-            mkdir -p "$XDG_RUNTIME_DIR"
-            chmod 700 "$XDG_RUNTIME_DIR"
-          fi
-
-          # 3. Configure D-Bus address for netavark/aardvark-dns
-          if [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
-            export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
-          else
-            export DBUS_SESSION_BUS_ADDRESS=""
-          fi
-          
-          # 4. Recover from potential corrupted state
-          echo "Migrating Podman system state..."
-          podman system migrate || true
-
-          # 5. Start podman system service if socket is missing
-          SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
-          if [[ ! -S "$SOCKET_PATH" ]]; then
-            echo "Starting podman system service..."
-            mkdir -p "$(dirname "$SOCKET_PATH")"
-            podman system service --time=0 "unix://${SOCKET_PATH}" &
-            
-            # Wait for socket
-            for _ in {1..30}; do
-              [[ -S "$SOCKET_PATH" ]] && break
-              sleep 0.5
-            done
-          fi
-
-          # 6. Export variables for subsequent steps
-          {
-            echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
-            echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}"
-            echo "DOCKER_HOST=unix://${SOCKET_PATH}"
-          } >> "${GITHUB_ENV}"
-
-          # 7. Verify Podman
-          podman info || { echo "Podman info failed, trying migrate again"; podman system migrate; podman info; }
+      - uses: ./.github/actions/ensure-container-runtime
 
       - name: test
         run: cargo test --workspace --lib --bins
@@ -122,66 +68,56 @@ jobs:
       - format
       - lint
       - check
+      - db-schema
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Ensure container runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # 1. Ensure Podman and its core dependencies are installed
-          if ! command -v podman >/dev/null 2>&1; then
-            echo "Installing Podman and dependencies..."
-            sudo apt-get update
-            sudo apt-get install -y podman dbus-user-session slirp4netns
-          fi
-
-          # 2. Determine the best runtime directory
-          USER_ID=$(id -u)
-          if [[ -d "/run/user/${USER_ID}" ]]; then
-            export XDG_RUNTIME_DIR="/run/user/${USER_ID}"
-          else
-            export XDG_RUNTIME_DIR="/tmp/podman-run-${USER_ID}"
-            mkdir -p "$XDG_RUNTIME_DIR"
-            chmod 700 "$XDG_RUNTIME_DIR"
-          fi
-
-          # 3. Configure D-Bus address for netavark/aardvark-dns
-          if [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
-            export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
-          else
-            export DBUS_SESSION_BUS_ADDRESS=""
-          fi
-          
-          # 4. Recover from potential corrupted state
-          echo "Migrating Podman system state..."
-          podman system migrate || true
-
-          # 5. Start podman system service if socket is missing
-          SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
-          if [[ ! -S "$SOCKET_PATH" ]]; then
-            echo "Starting podman system service..."
-            mkdir -p "$(dirname "$SOCKET_PATH")"
-            podman system service --time=0 "unix://${SOCKET_PATH}" &
-            
-            # Wait for socket
-            for _ in {1..30}; do
-              [[ -S "$SOCKET_PATH" ]] && break
-              sleep 0.5
-            done
-          fi
-
-          # 6. Export variables for subsequent steps
-          {
-            echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
-            echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}"
-            echo "DOCKER_HOST=unix://${SOCKET_PATH}"
-          } >> "${GITHUB_ENV}"
-
-          # 7. Verify Podman
-          podman info || { echo "Podman info failed, trying migrate again"; podman system migrate; podman info; }
+      - uses: ./.github/actions/ensure-container-runtime
 
       - name: integration
         run: cargo test --workspace --tests
+
+  db-schema:
+    name: DB Schema
+    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    needs:
+      - format
+      - lint
+      - check
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/ensure-container-runtime
+
+      - name: DB schema verify
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
+            echo "postgres-permesi already running"
+          else
+            mkdir -p db/log/postgres
+            podman run --replace --rm -d --name postgres-permesi \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_HOST_AUTH_METHOD=trust \
+              -e PGDATA=/db/data/18 \
+              -p 5432:5432 \
+              -v "${GITHUB_WORKSPACE}/db:/db" \
+              -v "${GITHUB_WORKSPACE}/db/config/postgres:/etc/postgresql/config" \
+              -v "${GITHUB_WORKSPACE}/db/sql/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro" \
+              postgres:18 \
+              postgres -c config_file=/etc/postgresql/config/postgresql.conf
+          fi
+
+          until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do
+            sleep 0.2
+          done
+
+          podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
+          podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
+
+      - name: Stop postgres container
+        if: always()
+        run: podman stop postgres-permesi || true

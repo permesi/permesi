@@ -73,6 +73,17 @@ mod tests {
         Ok(())
     }
 
+    fn assert_no_seed_client(path: &Path, canonical: &str) -> Result<()> {
+        let expected = format!("values(0,'{TEST_CLIENT_NAME}','{TEST_CLIENT_UUID}',false)")
+            .to_ascii_lowercase();
+        ensure!(
+            !canonical.contains(&expected),
+            "Seed client should not appear in {}",
+            path.display()
+        );
+        Ok(())
+    }
+
     // Look for `is_reserved boolean not null default true` in the canonicalized SQL.
     fn assert_reserved_default(path: &Path, canonical: &str) -> Result<()> {
         // canonicalize_sql strips whitespace/lowercases, so the expected snippet is compact.
@@ -86,11 +97,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_sql_seeds_test_only_client() -> Result<()> {
-        // Guard prod schema seed values against accidental drift.
+    fn schema_sql_has_no_test_seed() -> Result<()> {
+        // Guard prod schema from accidentally including the test seed.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql/schema.sql");
         let canonical = canonical_sql(&path)?;
-        assert_seed_client(&path, &canonical)?;
+        assert_no_seed_client(&path, &canonical)?;
         assert_reserved_default(&path, &canonical)
     }
 
@@ -101,5 +112,13 @@ mod tests {
         let canonical = canonical_sql(&path)?;
         assert_seed_client(&path, &canonical)?;
         assert_reserved_default(&path, &canonical)
+    }
+
+    #[test]
+    fn seed_sql_seeds_test_only_client() -> Result<()> {
+        // Guard the optional seed file for local/dev setups.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql/seed_test_client.sql");
+        let canonical = canonical_sql(&path)?;
+        assert_seed_client(&path, &canonical)
     }
 }

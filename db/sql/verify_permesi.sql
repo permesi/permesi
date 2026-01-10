@@ -6,22 +6,22 @@ BEGIN;
 -- Constraint checks live inside a DO block so we can assert failures explicitly.
 DO $$
 DECLARE
-    v_user_id uuid := gen_random_uuid();
-    v_op_id uuid := gen_random_uuid();
-    suffix text := substr(replace(gen_random_uuid()::text, '-', ''), 1, 8);
-    bad_email text := 'owner-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 8) || '@example.com';
-    org_id uuid := gen_random_uuid();
-    org_id_reuse uuid := gen_random_uuid();
-    org_slug text := 'org-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 12);
-    project_id uuid := gen_random_uuid();
-    project_id_reuse uuid := gen_random_uuid();
-    project_slug text := 'proj-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 12);
-    env_id uuid := gen_random_uuid();
-    env_id_reuse uuid := gen_random_uuid();
-    env_slug text := 'prod-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 12);
-    app_id uuid := gen_random_uuid();
-    app_id_reuse uuid := gen_random_uuid();
-    app_name text := 'app-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 12);
+    v_user_id uuid := uuidv4();
+    v_op_id uuid := uuidv4();
+    suffix text := substr(replace(uuidv4()::text, '-', ''), 1, 8);
+    bad_email text := 'owner-' || substr(replace(uuidv4()::text, '-', ''), 1, 8) || '@example.com';
+    org_id uuid := uuidv4();
+    org_id_reuse uuid := uuidv4();
+    org_slug text := 'org-' || substr(replace(uuidv4()::text, '-', ''), 1, 12);
+    project_id uuid := uuidv4();
+    project_id_reuse uuid := uuidv4();
+    project_slug text := 'proj-' || substr(replace(uuidv4()::text, '-', ''), 1, 12);
+    env_id uuid := uuidv4();
+    env_id_reuse uuid := uuidv4();
+    env_slug text := 'prod-' || substr(replace(uuidv4()::text, '-', ''), 1, 12);
+    app_id uuid := uuidv4();
+    app_id_reuse uuid := uuidv4();
+    app_name text := 'app-' || substr(replace(uuidv4()::text, '-', ''), 1, 12);
 BEGIN
     -- Users: lowercase enforcement + basic insert.
     INSERT INTO users (id, email, opaque_registration_record, status)
@@ -30,7 +30,7 @@ BEGIN
     -- Reject uppercase email normalization (users.email).
     BEGIN
         INSERT INTO users (id, email, opaque_registration_record)
-        VALUES (gen_random_uuid(), upper(bad_email), decode('00', 'hex'));
+        VALUES (uuidv4(), upper(bad_email), decode('00', 'hex'));
         RAISE EXCEPTION 'expected lowercase email check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -55,7 +55,7 @@ BEGIN
     -- Reject blank organization name.
     BEGIN
         INSERT INTO organizations (id, slug, name, created_by)
-        VALUES (gen_random_uuid(), org_slug || '-blank', '', v_user_id);
+        VALUES (uuidv4(), org_slug || '-blank', '', v_user_id);
         RAISE EXCEPTION 'expected organization name non-empty check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -64,7 +64,7 @@ BEGIN
     -- Reject duplicate active org slug.
     BEGIN
         INSERT INTO organizations (id, slug, name, created_by)
-        VALUES (gen_random_uuid(), org_slug, 'Acme Duplicate', v_user_id);
+        VALUES (uuidv4(), org_slug, 'Acme Duplicate', v_user_id);
         RAISE EXCEPTION 'expected active org slug uniqueness to fail';
     EXCEPTION WHEN unique_violation THEN
         -- expected
@@ -73,7 +73,7 @@ BEGIN
     -- Reject duplicate org name for the same creator.
     BEGIN
         INSERT INTO organizations (id, slug, name, created_by)
-        VALUES (gen_random_uuid(), org_slug || '-dup', 'Acme', v_user_id);
+        VALUES (uuidv4(), org_slug || '-dup', 'Acme', v_user_id);
         RAISE EXCEPTION 'expected creator+name uniqueness to fail';
     EXCEPTION WHEN unique_violation THEN
         -- expected
@@ -85,7 +85,7 @@ BEGIN
 
     -- Different creator CAN have the same org name.
     INSERT INTO organizations (id, slug, name, created_by)
-    VALUES (gen_random_uuid(), org_slug || '-other', 'Acme Reuse', v_op_id);
+    VALUES (uuidv4(), org_slug || '-other', 'Acme Reuse', v_op_id);
 
     -- Memberships: enum enforcement + updated_at bump + FK behavior.
     INSERT INTO org_memberships (org_id, user_id, status)
@@ -111,7 +111,7 @@ BEGIN
     -- Reject invalid membership status enum value.
     BEGIN
         INSERT INTO org_memberships (org_id, user_id, status)
-        VALUES (org_id_reuse, gen_random_uuid(), 'actve'::org_membership_status);
+        VALUES (org_id_reuse, uuidv4(), 'actve'::org_membership_status);
         RAISE EXCEPTION 'expected invalid enum value to fail';
     EXCEPTION WHEN invalid_text_representation THEN
         -- expected
@@ -144,7 +144,7 @@ BEGIN
     -- Reject blank project name.
     BEGIN
         INSERT INTO projects (id, org_id, slug, name)
-        VALUES (gen_random_uuid(), org_id_reuse, project_slug || '-blank', '');
+        VALUES (uuidv4(), org_id_reuse, project_slug || '-blank', '');
         RAISE EXCEPTION 'expected project name non-empty check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -153,7 +153,7 @@ BEGIN
     -- Reject duplicate active project slug within org.
     BEGIN
         INSERT INTO projects (id, org_id, slug, name)
-        VALUES (gen_random_uuid(), org_id_reuse, project_slug, 'Payments Duplicate');
+        VALUES (uuidv4(), org_id_reuse, project_slug, 'Payments Duplicate');
         RAISE EXCEPTION 'expected active project slug uniqueness to fail';
     EXCEPTION WHEN unique_violation THEN
         -- expected
@@ -170,7 +170,7 @@ BEGIN
     -- Reject blank environment name.
     BEGIN
         INSERT INTO environments (id, project_id, slug, name, tier)
-        VALUES (gen_random_uuid(), project_id_reuse, env_slug || '-blank', '', 'non_production');
+        VALUES (uuidv4(), project_id_reuse, env_slug || '-blank', '', 'non_production');
         RAISE EXCEPTION 'expected environment name non-empty check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -179,7 +179,7 @@ BEGIN
     -- Reject second production-tier environment for a project.
     BEGIN
         INSERT INTO environments (id, project_id, slug, name, tier)
-        VALUES (gen_random_uuid(), project_id_reuse, 'live', 'Live', 'production');
+        VALUES (uuidv4(), project_id_reuse, 'live', 'Live', 'production');
         RAISE EXCEPTION 'expected single production env to fail';
     EXCEPTION WHEN unique_violation THEN
         -- expected
@@ -188,7 +188,7 @@ BEGIN
     -- Reject duplicate active environment slug within project.
     BEGIN
         INSERT INTO environments (id, project_id, slug, name, tier)
-        VALUES (gen_random_uuid(), project_id_reuse, env_slug, 'Dup', 'non_production');
+        VALUES (uuidv4(), project_id_reuse, env_slug, 'Dup', 'non_production');
         RAISE EXCEPTION 'expected active env slug uniqueness to fail';
     EXCEPTION WHEN unique_violation THEN
         -- expected
@@ -205,7 +205,7 @@ BEGIN
     -- Reject blank application name.
     BEGIN
         INSERT INTO applications (id, environment_id, name)
-        VALUES (gen_random_uuid(), env_id_reuse, '');
+        VALUES (uuidv4(), env_id_reuse, '');
         RAISE EXCEPTION 'expected application name non-empty check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -214,7 +214,7 @@ BEGIN
     -- Reject duplicate active application name within environment.
     BEGIN
         INSERT INTO applications (id, environment_id, name)
-        VALUES (gen_random_uuid(), env_id_reuse, app_name);
+        VALUES (uuidv4(), env_id_reuse, app_name);
         RAISE EXCEPTION 'expected active app name uniqueness to fail';
     EXCEPTION WHEN unique_violation THEN
         -- expected
@@ -228,7 +228,7 @@ BEGIN
     -- Reject session hashes with incorrect length.
     BEGIN
         INSERT INTO user_sessions (id, user_id, session_hash, expires_at)
-        VALUES (gen_random_uuid(), v_user_id, decode('00', 'hex'), NOW() + INTERVAL '1 hour');
+        VALUES (uuidv4(), v_user_id, decode('00', 'hex'), NOW() + INTERVAL '1 hour');
         RAISE EXCEPTION 'expected session hash length check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -236,7 +236,7 @@ BEGIN
 
     INSERT INTO user_sessions (id, user_id, session_hash, expires_at)
     VALUES (
-        gen_random_uuid(),
+        uuidv4(),
         v_user_id,
         decode(repeat('00', 32), 'hex'),
         NOW() + INTERVAL '1 hour'
@@ -246,7 +246,7 @@ BEGIN
     BEGIN
         INSERT INTO user_sessions (id, user_id, session_hash, created_at, expires_at)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             v_user_id,
             decode(repeat('00', 32), 'hex'),
             NOW(),
@@ -261,7 +261,7 @@ BEGIN
     BEGIN
         INSERT INTO user_sessions (id, user_id, session_hash, created_at, expires_at, last_seen_at)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             v_user_id,
             decode(repeat('00', 32), 'hex'),
             NOW(),
@@ -277,7 +277,7 @@ BEGIN
     BEGIN
         INSERT INTO user_sessions (id, user_id, session_hash, created_at, auth_time, expires_at)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             v_user_id,
             decode(repeat('01', 32), 'hex'),
             NOW(),
@@ -292,7 +292,7 @@ BEGIN
     -- Reject verification token hashes that are too short.
     BEGIN
         INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at)
-        VALUES (gen_random_uuid(), v_user_id, decode('00', 'hex'), NOW() + INTERVAL '1 hour');
+        VALUES (uuidv4(), v_user_id, decode('00', 'hex'), NOW() + INTERVAL '1 hour');
         RAISE EXCEPTION 'expected token hash length check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -300,7 +300,7 @@ BEGIN
 
     INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at)
     VALUES (
-        gen_random_uuid(),
+        uuidv4(),
         v_user_id,
         decode(repeat('00', 32), 'hex'),
         NOW() + INTERVAL '1 hour'
@@ -310,7 +310,7 @@ BEGIN
     BEGIN
         INSERT INTO email_verification_tokens (id, user_id, token_hash, created_at, expires_at)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             v_user_id,
             decode(repeat('00', 32), 'hex'),
             NOW(),
@@ -325,7 +325,7 @@ BEGIN
     BEGIN
         INSERT INTO email_verification_tokens (id, user_id, token_hash, created_at, expires_at, consumed_at)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             v_user_id,
             decode(repeat('00', 32), 'hex'),
             NOW(),
@@ -339,12 +339,12 @@ BEGIN
 
     -- Email outbox: lowercase enforcement + timestamps + attempts bound.
     INSERT INTO email_outbox (id, to_email, template, payload_json)
-    VALUES (gen_random_uuid(), 'notify-' || suffix || '@example.com', 'verify', '{}'::jsonb);
+    VALUES (uuidv4(), 'notify-' || suffix || '@example.com', 'verify', '{}'::jsonb);
 
     -- Reject uppercase to_email in outbox entries.
     BEGIN
         INSERT INTO email_outbox (id, to_email, template, payload_json)
-        VALUES (gen_random_uuid(), upper('notify-' || suffix || '@example.com'), 'verify', '{}'::jsonb);
+        VALUES (uuidv4(), upper('notify-' || suffix || '@example.com'), 'verify', '{}'::jsonb);
         RAISE EXCEPTION 'expected email_outbox to_email lowercase check to fail';
     EXCEPTION WHEN check_violation THEN
         -- expected
@@ -354,7 +354,7 @@ BEGIN
     BEGIN
         INSERT INTO email_outbox (id, to_email, template, payload_json, created_at, sent_at)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             'notify-' || suffix || '@example.com',
             'verify',
             '{}'::jsonb,
@@ -370,7 +370,7 @@ BEGIN
     BEGIN
         INSERT INTO email_outbox (id, to_email, template, payload_json, attempts)
         VALUES (
-            gen_random_uuid(),
+            uuidv4(),
             'notify-' || suffix || '@example.com',
             'verify',
             '{}'::jsonb,

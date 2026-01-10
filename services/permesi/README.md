@@ -53,6 +53,13 @@ for local containers. Load it into Postgres with:
 psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f services/permesi/sql/schema.sql
 ```
 
+The schema enables `citext`, so the role running it must have `CREATE EXTENSION` privileges on
+the database.
+
+Vault-managed DB credentials also require bootstrap roles and grants. The canonical SQL for those
+roles lives in `db/sql/00_init.sql`; run it (with production passwords) against your Postgres
+instance before enabling the Vault database secrets engine.
+
 `db/sql/verify_permesi.sql` is a transactional smoke test that rolls back all changes. Run it
 after loading the schema to verify constraints and defaults:
 

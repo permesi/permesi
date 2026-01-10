@@ -7,7 +7,7 @@ This guide describes how to set up the Permesi IAM stack. It remains agnostic of
 - **Postgres 18**: The primary data store.
 - **HashiCorp Vault**: Used for secret storage and cryptographic operations (Transit engine).
 - **Terraform**: Required to provision and configure the Vault instance.
-- **Container Runtime**: (Podman or Docker) To run the pre-built service images.
+- **Container Runtime**: Podman, to run the pre-built service images.
 - **Web Server**: (Nginx, HAProxy, or similar) To serve the static frontend assets.
 
 ---
@@ -24,15 +24,27 @@ Permesi provides production-ready artifacts for every release. You do not need t
 
 ## 3. Database Configuration (Postgres 18)
 
-Permesi requires a Postgres 18 instance. You can find the initialization schemas in the repository under `db/sql/`.
+Permesi requires a Postgres 18 instance. You can find the initialization schemas in the repository under `db/sql/` and the production-ready service schemas under `services/*/sql/`.
 
-1.  **Initialize Schema**: Run the scripts in order:
-    - `00_init.sql`: Creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`).
-    - `01_genesis.sql`: Genesis service schema.
-    - `02_permesi.sql`: Permesi service schema.
+1.  **Create Vault database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`).
 
-    The `00_init.sql` script is tuned for local dev containers (it includes dev-default passwords and access hardening). For production, create equivalent roles with strong passwords and match the privileges to your organization’s security posture.
-2.  **Connectivity**: Ensure the services can reach the DB via a standard DSN:
+    This file ships with dev-default passwords. For production, edit the passwords first (or use the file as a template for your own bootstrap SQL), then run:
+
+    ```sh
+    psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_init.sql
+    ```
+
+2.  **Load service schemas**:
+
+    ```sh
+    psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/schema.sql
+    psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f services/permesi/sql/schema.sql
+    ```
+
+    The Genesis schema can optionally seed a test-only client. To enable it, apply
+    `services/genesis/sql/seed_test_client.sql` after the schema.
+
+3.  **Connectivity**: Ensure the services can reach the DB via a standard DSN:
     `postgres://<user>:<pass>@<host>:<port>/permesi`
 
 ---

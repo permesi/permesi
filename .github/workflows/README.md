@@ -26,3 +26,23 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
 - **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow.
+
+## Composite Actions
+
+### `ensure-container-runtime`
+
+Some CI jobs need a working container runtime so they can run Postgres in Podman (for example, the
+DB schema verification job). GitHub-hosted runners already include Docker, but this repo uses
+Podman and also runs on self-hosted runners where Podman may not be installed or configured.
+
+The `./.github/actions/ensure-container-runtime` composite action centralizes that setup so we
+don’t duplicate it across multiple workflows and jobs. It:
+
+- Installs Podman and its dependencies when missing.
+- Sets `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` so rootless Podman can use netavark.
+- Starts the Podman system service if the socket is missing.
+- Exports `DOCKER_HOST` for compatibility with tools that expect a Docker socket.
+- Runs `podman info` to validate the runtime.
+
+If a future workflow needs containers, add this action as a step instead of copying the setup
+script.

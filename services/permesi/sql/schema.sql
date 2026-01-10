@@ -21,7 +21,7 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     email CITEXT NOT NULL UNIQUE
         CHECK (email::text = LOWER(TRIM(email::text)))
         CHECK (email <> '')
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS user_roles (
 );
 
 CREATE TABLE IF NOT EXISTS role_audit_log (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     actor_id UUID REFERENCES users(id),
     target_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     previous_role TEXT,
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS platform_operators (
 );
 
 CREATE TABLE IF NOT EXISTS organizations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     slug TEXT NOT NULL
         CHECK (slug = LOWER(slug))
         CHECK (slug ~ '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'),
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS org_member_roles (
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     slug TEXT NOT NULL
         CHECK (slug = LOWER(slug))
@@ -140,7 +140,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS projects_org_slug_active_idx
     WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS environments (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     slug TEXT NOT NULL
         CHECK (slug = LOWER(slug))
@@ -162,7 +162,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS environments_project_primary_production_idx
     WHERE tier = 'production' AND deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS applications (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     environment_id UUID NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
     name TEXT NOT NULL
         CHECK (name <> ''),
@@ -247,7 +247,7 @@ CREATE TRIGGER update_org_memberships_updated_at
     EXECUTE FUNCTION touch_updated_at();
 
 CREATE TABLE IF NOT EXISTS user_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     session_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(session_hash) = 32),
     auth_time TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -263,7 +263,7 @@ CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
 CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions (expires_at);
 
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash BYTEA NOT NULL CHECK (octet_length(token_hash) >= 32),
     expires_at TIMESTAMPTZ NOT NULL
@@ -281,7 +281,7 @@ CREATE INDEX IF NOT EXISTS email_verification_tokens_expires_at_idx
     ON email_verification_tokens (expires_at);
 
 CREATE TABLE IF NOT EXISTS email_outbox (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     to_email CITEXT NOT NULL
         CHECK (to_email::text = LOWER(TRIM(to_email::text)))
         CHECK (to_email <> '')
@@ -303,7 +303,7 @@ CREATE INDEX IF NOT EXISTS email_outbox_next_attempt_idx ON email_outbox (status
 CREATE INDEX IF NOT EXISTS email_outbox_created_at_idx ON email_outbox (created_at);
 
 CREATE TABLE IF NOT EXISTS admin_attempts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     ip_address INET,
     country_code CHAR(2),

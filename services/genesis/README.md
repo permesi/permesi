@@ -126,13 +126,23 @@ Schema lives in `services/genesis/sql/schema.sql`:
 - `clients(id, name, uuid, is_reserved)` maps a stable client UUID to a small integer id; by default
   clients are reserved and must be explicitly marked non-reserved for production use
 - `tokens(id uuidv7, client_id, created_at, ip_address, country, user_agent, metadata)` stores minted token IDs plus request metadata; `metadata` is JSONB for dynamic fields
-The default schema seeds a `__test_only__` client marked non-reserved for local testing; remove or
-flip it to reserved in production deployments.
+The schema can optionally seed a `__test_only__` client marked non-reserved for local testing.
+For production, leave the seed disabled (the default).
 
 Load the schema with:
 
 ```sh
 psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/schema.sql
+```
+
+Vault-managed DB credentials require bootstrap roles and grants. The canonical SQL for those roles
+lives in `db/sql/00_init.sql`; run it (with production passwords) against your Postgres instance
+before enabling the Vault database secrets engine.
+
+If you want the test-only seed client, apply the seed file after the schema:
+
+```sh
+psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/seed_test_client.sql
 ```
 
 That file `\ir`-includes `services/genesis/sql/partitioning.sql`, so it will attempt to set up
