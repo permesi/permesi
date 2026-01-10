@@ -94,15 +94,18 @@ jobs:
       - name: DB schema verify
         run: |
           set -euo pipefail
+          VOLUME_NAME="postgres-permesi-data-${GITHUB_RUN_ID}"
 
           if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
             echo "postgres-permesi already running"
           else
+            podman volume create "${VOLUME_NAME}"
             podman run --replace -d --name postgres-permesi \
+              -e PGDATA=/var/lib/postgresql/data \
               -e POSTGRES_USER=postgres \
               -e POSTGRES_HOST_AUTH_METHOD=trust \
               -v "${GITHUB_WORKSPACE}/db/sql:/db/sql:ro" \
-              -v postgres-permesi-data:/var/lib/postgresql/data \
+              -v "${VOLUME_NAME}:/var/lib/postgresql" \
               postgres:18 \
               postgres
 
@@ -135,5 +138,7 @@ jobs:
       - name: Stop postgres container
         if: always()
         run: |
+          VOLUME_NAME="postgres-permesi-data-${GITHUB_RUN_ID}"
           podman stop postgres-permesi || true
           podman rm postgres-permesi || true
+          podman volume rm "${VOLUME_NAME}" || true
