@@ -4,13 +4,22 @@
 //! stores a new registration record. The flow is split into start/finish to keep
 //! the protocol transcript on the client and to enforce a recent re-auth check.
 //!
-//! Flow Overview: start performs the server-side registration step for the
-//! current user, and finish stores the new registration record after a recent
-//! re-auth check.
+//! ### Flow Overview
 //!
-//! Security boundaries: the caller must have a valid session, supply a zero-token,
-//! pass a recent re-auth check, and the handler revokes all sessions once the
-//! registration record is replaced.
+//! The change password process is a combined re-authentication and rotation:
+//! 1. `POST /v1/auth/opaque/reauth/start`: Initiate authentication with current password.
+//! 2. `POST /v1/auth/opaque/reauth/finish`: Verify current password proof and grant temporary elevation.
+//! 3. `POST /v1/auth/opaque/password/start`: Initiate registration of the new password.
+//! 4. `POST /v1/auth/opaque/password/finish`: Commit the new registration record.
+//!
+//! ### Security Invariants
+//!
+//! - **Plaintext Isolation**: Plaintext passwords (current or new) never touch the server.
+//! - **Session Gating**: Only the authenticated user can change their own password.
+//! - **Recent Re-auth**: The finish step requires that the user successfully proved knowledge
+//!   of their *current* password within `PASSWORD_RECENT_AUTH_SECONDS`.
+//! - **Global Revocation**: All active sessions for the user are revoked upon successful rotation.
+//! - **Zero Token Enforcement**: Every step is gated by a valid admission token.
 
 use crate::api::handlers::{
     AdmissionVerifier,

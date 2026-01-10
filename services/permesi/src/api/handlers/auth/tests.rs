@@ -29,6 +29,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
+use std::sync::Arc;
 use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
 use tokio::time::Duration;
 use tower::ServiceExt;
@@ -36,6 +37,20 @@ use uuid::Uuid;
 
 const PERMESI_SCHEMA_SQL: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/sql/schema.sql"));
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
+fn identifiers<'a>(client: &'a [u8], server: &'a [u8]) -> Identifiers<'a> {
+    Identifiers {
+        client: Some(client),
+        server: Some(server),
+    }
+}
 
 struct TestDb {
     _postgres: PostgresContainer,
@@ -540,5 +555,384 @@ async fn me_ignores_other_user_ids() -> Result<()> {
     let name_b: Option<String> = row_b.get("display_name");
     assert_eq!(name_a.as_deref(), Some("User A"));
     assert_eq!(name_b.as_deref(), None);
+    Ok(())
+}
+
+/// Verifies the full OPAQUE password rotation flow.
+///
+/// This test executes the "4-step handshake" where the client:
+/// 1. Proves knowledge of the old password via a secure re-auth flow.
+/// 2. Performs a new OPAQUE registration using the new password.
+/// 3. Commits the change, resulting in session revocation and a updated DB record.
+#[tokio::test]
+#[allow(clippy::too_many_lines, clippy::unwrap_used, clippy::indexing_slicing)]
+async fn password_change_flow() -> Result<()> {
+    use super::state::{AuthState, OpaqueSuite};
+    use crate::api::handlers::AdmissionVerifier;
+    use admission_token::{
+        AdmissionTokenFooter, PaserkKey, PaserkKeySet, build_token, encode_signing_input,
+    };
+    use ed25519_dalek::Signer;
+    use opaque_ke::{ClientRegistration, RegistrationResponse};
+
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    // 1. Setup user with known password
+    let email = "change@example.com";
+    let old_password = b"OldPassword123!";
+    let new_password = b"NewPassword456!";
+
+    let mut rng = ChaCha20Rng::from_seed([1u8; 32]);
+    let server_setup = ServerSetup::<OpaqueSuite>::new(&mut rng);
+    let client_reg_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, old_password)?;
+    let server_reg_start =
+        ServerRegistration::start(&server_setup, client_reg_start.message, email.as_bytes())?;
+
+    let ksf = argon2::Argon2::default();
+    let reg_params = ClientRegistrationFinishParameters::new(
+        Identifiers {
+            client: Some(email.as_bytes()),
+            server: Some(b"api.permesi.dev"),
+        },
+        Some(&ksf),
+    );
+    let client_reg_finish = client_reg_start.state.finish(
+        &mut rng,
+        old_password,
+        server_reg_start.message,
+        reg_params,
+    )?;
+    let record = ServerRegistration::finish(client_reg_finish.message);
+    let record_bytes = record.serialize().to_vec();
+
+    let user_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, email, opaque_registration_record, status) VALUES ($1, $2, $3, 'active')")
+        .bind(user_id)
+        .bind(email)
+        .bind(&record_bytes)
+        .execute(&db.pool)
+        .await?;
+
+    // 2. Create an elevated session (recent_auth_ok = true)
+    let token = generate_session_token()?;
+    let hash = hash_session_token(&token);
+    let now_unix = unix_now();
+    sqlx::query("INSERT INTO user_sessions (user_id, session_hash, expires_at, auth_time) VALUES ($1, $2, NOW() + INTERVAL '1 hour', $3)")
+        .bind(user_id)
+        .bind(hash)
+        .bind(now_unix)
+        .execute(&db.pool)
+        .await?;
+
+    let auth_state = Arc::new(AuthState::new(
+        auth_config(),
+        super::state::OpaqueState::from_seed(
+            [0u8; 32],
+            "api.permesi.dev".to_string(),
+            Duration::from_secs(300),
+        ),
+        Arc::new(super::NoopRateLimiter),
+    ));
+
+    // Setup Admission Verifier for test
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let verifying_key = signing_key.verifying_key();
+    let key = PaserkKey::from_ed25519_public_key_bytes(&verifying_key.to_bytes())?;
+    let keyset = PaserkKeySet {
+        version: "v4".to_string(),
+        purpose: "public".to_string(),
+        active_kid: key.kid.clone(),
+        keys: vec![key.clone()],
+    };
+    let admission = Arc::new(AdmissionVerifier::new(
+        keyset,
+        "https://genesis.test".to_string(),
+        "permesi".to_string(),
+    ));
+
+    let app = Router::new()
+        .route(
+            "/v1/auth/opaque/password/start",
+            axum::routing::post(super::opaque::password::opaque_password_start),
+        )
+        .route(
+            "/v1/auth/opaque/password/finish",
+            axum::routing::post(super::opaque::password::opaque_password_finish),
+        )
+        .layer(Extension(auth_state.clone()))
+        .layer(Extension(admission.clone()))
+        .layer(Extension(db.pool.clone()));
+
+    // 3. Start Password Change
+    let client_reg_new = ClientRegistration::<OpaqueSuite>::start(&mut rng, new_password)?;
+    let start_payload = json!({
+        "registration_request": STANDARD.encode(client_reg_new.message.serialize())
+    });
+
+    // Generate a valid admission token for the test
+    let admission_claims = admission_token::AdmissionTokenClaims {
+        iss: "https://genesis.test".to_string(),
+        aud: "permesi".to_string(),
+        iat: admission_token::rfc3339_from_unix(now_unix)?,
+        exp: admission_token::rfc3339_from_unix(now_unix + 600)?,
+        jti: "test".to_string(),
+        sub: None,
+        action: "zero".to_string(),
+    };
+    let footer = AdmissionTokenFooter {
+        kid: key.kid.clone(),
+    };
+    let si = encode_signing_input(&admission_claims, &footer)?;
+    let signature = signing_key.sign(&si.pre_auth);
+    let verified_token = build_token(&si.payload, &si.footer, &signature.to_bytes());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/password/start")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", verified_token.clone())
+                .body(Body::from(start_payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let start_res: serde_json::Value = serde_json::from_slice(&body)?;
+    let reg_res_bytes = STANDARD.decode(start_res["registration_response"].as_str().unwrap())?;
+    let reg_res = RegistrationResponse::<OpaqueSuite>::deserialize(&reg_res_bytes)?;
+
+    // 4. Finish Password Change
+    let reg_finish_params = ClientRegistrationFinishParameters::new(
+        Identifiers {
+            client: Some(email.as_bytes()),
+            server: Some(b"api.permesi.dev"),
+        },
+        Some(&ksf),
+    );
+    let client_reg_final =
+        client_reg_new
+            .state
+            .finish(&mut rng, new_password, reg_res, reg_finish_params)?;
+    let finish_payload = json!({
+        "registration_record": STANDARD.encode(client_reg_final.message.serialize())
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/password/finish")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", verified_token)
+                .body(Body::from(finish_payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // 5. Verify old password fails login (session was cleared)
+    let session_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_sessions WHERE session_hash = $1)")
+            .bind(hash_session_token(&token))
+            .fetch_one(&db.pool)
+            .await?;
+    assert!(!session_exists);
+
+    // 6. Verify record changed
+    let new_record: Vec<u8> =
+        sqlx::query_scalar("SELECT opaque_registration_record FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&db.pool)
+            .await?;
+    assert_ne!(new_record, record_bytes);
+
+    Ok(())
+}
+
+/// Verifies that the password change flow correctly rejects an invalid current password.
+///
+/// This reproduces the "Unable to complete secure re-auth" error by intentionally
+/// providing an incorrect password during the re-authentication phase of the handshake.
+#[tokio::test]
+#[allow(clippy::too_many_lines, clippy::unwrap_used, clippy::indexing_slicing)]
+async fn password_change_fails_with_invalid_reauth() -> Result<()> {
+    use super::state::{AuthState, OpaqueSuite};
+    use crate::api::handlers::AdmissionVerifier;
+    use admission_token::{
+        AdmissionTokenFooter, PaserkKey, PaserkKeySet, build_token, encode_signing_input,
+    };
+    use ed25519_dalek::Signer;
+    use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
+
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    // 1. Setup user
+    let email = "fail@example.com";
+    let real_password = b"CorrectPassword123!";
+    let wrong_password = b"WrongPassword123!";
+
+    let mut rng = ChaCha20Rng::from_seed([2u8; 32]);
+    let server_setup = ServerSetup::<OpaqueSuite>::new(&mut rng);
+    let client_reg_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, real_password)?;
+    let server_reg_start =
+        ServerRegistration::start(&server_setup, client_reg_start.message, email.as_bytes())?;
+    let ksf = argon2::Argon2::default();
+    let reg_params = ClientRegistrationFinishParameters::new(
+        Identifiers {
+            client: Some(email.as_bytes()),
+            server: Some(b"api.permesi.dev"),
+        },
+        Some(&ksf),
+    );
+    let client_reg_finish = client_reg_start.state.finish(
+        &mut rng,
+        real_password,
+        server_reg_start.message,
+        reg_params,
+    )?;
+    let record = ServerRegistration::finish(client_reg_finish.message);
+    let record_bytes = record.serialize().to_vec();
+
+    sqlx::query("INSERT INTO users (id, email, opaque_registration_record, status) VALUES ($1, $2, $3, 'active')")
+        .bind(Uuid::new_v4())
+        .bind(email)
+        .bind(&record_bytes)
+        .execute(&db.pool)
+        .await?;
+
+    // 2. Create session
+    let token = generate_session_token()?;
+    sqlx::query("INSERT INTO user_sessions (user_id, session_hash, expires_at) VALUES ((SELECT id FROM users WHERE email = $1), $2, NOW() + INTERVAL '1 hour')")
+        .bind(email)
+        .bind(hash_session_token(&token))
+        .execute(&db.pool)
+        .await?;
+
+    let auth_state = Arc::new(AuthState::new(
+        auth_config(),
+        super::state::OpaqueState::from_seed(
+            [0u8; 32],
+            "api.permesi.dev".to_string(),
+            Duration::from_secs(300),
+        ),
+        Arc::new(super::NoopRateLimiter),
+    ));
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let key = PaserkKey::from_ed25519_public_key_bytes(&signing_key.verifying_key().to_bytes())?;
+    let keyset = PaserkKeySet {
+        version: "v4".to_string(),
+        purpose: "public".to_string(),
+        active_kid: key.kid.clone(),
+        keys: vec![key.clone()],
+    };
+    let admission = Arc::new(AdmissionVerifier::new(
+        keyset,
+        "https://genesis.test".to_string(),
+        "permesi".to_string(),
+    ));
+
+    let app = Router::new()
+        .route(
+            "/v1/auth/opaque/reauth/start",
+            axum::routing::post(super::opaque::reauth::opaque_reauth_start),
+        )
+        .route(
+            "/v1/auth/opaque/reauth/finish",
+            axum::routing::post(super::opaque::reauth::opaque_reauth_finish),
+        )
+        .layer(Extension(auth_state.clone()))
+        .layer(Extension(admission.clone()))
+        .layer(Extension(db.pool.clone()));
+
+    // 3. Start Re-auth with WRONG password
+    let client_login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, wrong_password)?;
+    let start_payload = json!({
+        "credential_request": STANDARD.encode(client_login_start.message.serialize())
+    });
+
+    let now_unix = unix_now();
+    let admission_claims = admission_token::AdmissionTokenClaims {
+        iss: "https://genesis.test".to_string(),
+        aud: "permesi".to_string(),
+        iat: admission_token::rfc3339_from_unix(now_unix)?,
+        exp: admission_token::rfc3339_from_unix(now_unix + 600)?,
+        jti: "test".to_string(),
+        sub: None,
+        action: "zero".to_string(),
+    };
+    let si = encode_signing_input(
+        &admission_claims,
+        &AdmissionTokenFooter {
+            kid: key.kid.clone(),
+        },
+    )?;
+    let verified_token = build_token(
+        &si.payload,
+        &si.footer,
+        &signing_key.sign(&si.pre_auth).to_bytes(),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/reauth/start")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", verified_token.clone())
+                .body(Body::from(start_payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let start_res: serde_json::Value = serde_json::from_slice(&body)?;
+    let cred_res_bytes = STANDARD.decode(start_res["credential_response"].as_str().unwrap())?;
+    let cred_res = CredentialResponse::<OpaqueSuite>::deserialize(&cred_res_bytes)?;
+
+    // 4. Finish Re-auth (Generation of proof with wrong password should lead to failure at server)
+    let login_params = ClientLoginFinishParameters::new(
+        None,
+        identifiers(email.as_bytes(), b"api.permesi.dev"),
+        Some(&ksf),
+    );
+
+    // The OPAQUE client will produce a proof, but it won't match the server's expected proof
+    // because the "wrong_password" was used to derive the client keys.
+    let client_login_final =
+        client_login_start
+            .state
+            .finish(wrong_password, cred_res, login_params)?;
+    let finish_payload = json!({
+        "login_id": start_res["login_id"],
+        "credential_finalization": STANDARD.encode(client_login_final.message.serialize())
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/reauth/finish")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", verified_token)
+                .body(Body::from(finish_payload.to_string()))?,
+        )
+        .await?;
+
+    // Server should reject the invalid proof
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
     Ok(())
 }

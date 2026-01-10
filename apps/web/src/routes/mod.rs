@@ -18,7 +18,7 @@ pub(crate) use admin_claim::AdminClaimPage;
 pub(crate) use dashboard::DashboardPage;
 pub(crate) use health::HealthPage;
 pub(crate) use login::LoginPage;
-pub(crate) use me::MePage;
+pub(crate) use me::{MePage, MeSecurityPage};
 pub(crate) use not_found::{NotFoundContent, NotFoundPage};
 pub(crate) use orgs::{OrgDetailPage, OrgsListPage, ProjectDetailPage};
 pub(crate) use signup::SignUpPage;
@@ -44,6 +44,7 @@ pub mod paths {
     // Protected routes under /console prefix
     pub const DASHBOARD: &str = "/console/dashboard";
     pub const ME: &str = "/console/me";
+    pub const ME_SECURITY: &str = "/console/me/security";
     pub const ADMIN: &str = "/console/admin";
     pub const ADMIN_CLAIM: &str = "/console/admin/claim";
     pub const ORGS: &str = "/console/orgs";
@@ -81,6 +82,7 @@ pub fn AppRoutes() -> impl IntoView {
             <ParentRoute path=path!("console") view=|| view! { <AuthLayout/> }>
                 <Route path=path!("dashboard") view=DashboardPage />
                 <Route path=path!("me") view=MePage />
+                <Route path=path!("me/security") view=MeSecurityPage />
 
                 // Admin subtree (nested)
                 <ParentRoute path=path!("admin") view=|| view! { <AdminLayout/> }>

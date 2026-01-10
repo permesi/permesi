@@ -133,6 +133,16 @@ sequenceDiagram
   3. **In-Memory Only**: The admin token is kept strictly in-memory. Reloading the page or closing the tab clears the elevation state, requiring re-entry of a Vault token for security.
   4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the Vault token once creates the first operator and immediately issues an elevated admin token.
   
+  ## Password Change Flow (OPAQUE)
+  
+  Users can change their password without the plaintext ever reaching the server. This uses a 4-step OPAQUE handshake that combines re-authentication with a fresh registration.
+  
+  1. **Secure Re-auth**: The user provides their *current* password. The client and server perform a re-authentication exchange.
+  2. **Grant Elevation**: On success, the server grants a short-lived (10 min) elevation to the session, allowing sensitive changes.
+  3. **New Registration**: The user provides a *new* password. The client initiates a registration flow.
+  4. **Commit Record**: The client seals the new password into a registration record and commits it to the server.
+  5. **Revocation**: The server replaces the old record and immediately revokes all active sessions for the user to ensure security.
+  
   ## Current UI state
 - Home (`/`) is a placeholder ("Home").
 - Header shows "Sign In" or "Sign Up" depending on the current route; authenticated sessions see "Sign Out".

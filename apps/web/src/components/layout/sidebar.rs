@@ -16,6 +16,19 @@ pub fn Sidebar() -> impl IntoView {
     let location = use_location();
     let pathname = move || location.pathname.get();
 
+    let (is_profile_open, set_profile_open) = signal(false);
+
+    // Auto-expand if navigating to any profile sub-route
+    Effect::new(move |_| {
+        if pathname().starts_with("/console/me") {
+            set_profile_open.set(true);
+        }
+    });
+
+    let toggle_profile = move |_| {
+        set_profile_open.update(|open| *open = !*open);
+    };
+
     view! {
         <aside class="w-64 flex-shrink-0 hidden md:flex flex-col border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-y-auto">
             <nav class="flex-1 px-4 py-6 space-y-8">
@@ -31,12 +44,97 @@ pub fn Sidebar() -> impl IntoView {
                             label="Dashboard"
                             active=move || pathname() == paths::DASHBOARD
                         />
-                        <SidebarLink
-                            target={paths::ME}
-                            icon="person"
-                            label="My Profile"
-                            active=move || pathname() == paths::ME
-                        />
+
+                        // My Profile Parent (Collapsible)
+                        <div>
+                            <button
+                                on:click=toggle_profile
+                                class="w-full group flex items-center justify-between px-2 py-2 text-sm font-medium rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
+                                class:text-gray-900=move || is_profile_open.get()
+                                class:dark:text-white=move || is_profile_open.get()
+                                aria-expanded=move || if is_profile_open.get() { "true" } else { "false" }
+                            >
+                                <div class="flex items-center">
+                                    <span class="material-symbols-outlined mr-3 text-xl text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
+                                        "person"
+                                    </span>
+                                    "My Profile"
+                                </div>
+                                <span
+                                    class="material-symbols-outlined text-base text-gray-400 transition-transform duration-200"
+                                    class:rotate-180=move || is_profile_open.get()
+                                >
+                                    "expand_more"
+                                </span>
+                            </button>
+
+                            // Nested Children
+                            <div
+                                class="mt-1 space-y-1 overflow-hidden transition-all duration-300 ease-in-out"
+                                class:max-h-0=move || !is_profile_open.get()
+                                class:max-h-40=move || is_profile_open.get()
+                                class:opacity-0=move || !is_profile_open.get()
+                                class:opacity-100=move || is_profile_open.get()
+                            >
+                                // Overview Child
+                                <A
+                                    href=move || paths::ME.to_string()
+                                    {..}
+                                    attr:class="group flex items-center pl-10 pr-2 py-2 text-sm font-medium rounded-md transition-colors"
+                                    class:text-blue-600=move || pathname() == paths::ME
+                                    class:bg-blue-50=move || pathname() == paths::ME
+                                    class:dark:bg-blue-900=move || pathname() == paths::ME
+                                    class:dark:text-blue-400=move || pathname() == paths::ME
+                                    class:text-gray-500=move || pathname() != paths::ME
+                                    class:dark:text-gray-400=move || pathname() != paths::ME
+                                    class:hover:bg-gray-50=move || pathname() != paths::ME
+                                    class:dark:hover:bg-gray-800=move || pathname() != paths::ME
+                                    class:hover:text-gray-900=move || pathname() != paths::ME
+                                    class:dark:hover:text-white=move || pathname() != paths::ME
+                                >
+                                    <span
+                                        class="material-symbols-outlined mr-3 text-lg transition-colors"
+                                        class:text-blue-600=move || pathname() == paths::ME
+                                        class:dark:text-blue-400=move || pathname() == paths::ME
+                                        class:text-gray-400=move || pathname() != paths::ME
+                                        class:group-hover:text-gray-900=move || pathname() != paths::ME
+                                        class:dark:group-hover:text-white=move || pathname() != paths::ME
+                                    >
+                                        "badge"
+                                    </span>
+                                    "Overview"
+                                </A>
+
+                                // Security Child
+                                <A
+                                    href=move || paths::ME_SECURITY.to_string()
+                                    {..}
+                                    attr:class="group flex items-center pl-10 pr-2 py-2 text-sm font-medium rounded-md transition-colors"
+                                    class:text-blue-600=move || pathname() == paths::ME_SECURITY
+                                    class:bg-blue-50=move || pathname() == paths::ME_SECURITY
+                                    class:dark:bg-blue-900=move || pathname() == paths::ME_SECURITY
+                                    class:dark:text-blue-400=move || pathname() == paths::ME_SECURITY
+                                    class:text-gray-500=move || pathname() != paths::ME_SECURITY
+                                    class:dark:text-gray-400=move || pathname() != paths::ME_SECURITY
+                                    class:hover:bg-gray-50=move || pathname() != paths::ME_SECURITY
+                                    class:dark:hover:bg-gray-800=move || pathname() != paths::ME_SECURITY
+                                    class:hover:text-gray-900=move || pathname() != paths::ME_SECURITY
+                                    class:dark:hover:text-white=move || pathname() != paths::ME_SECURITY
+                                >
+                                    <span
+                                        class="material-symbols-outlined mr-3 text-lg transition-colors"
+                                        class:text-blue-600=move || pathname() == paths::ME_SECURITY
+                                        class:dark:text-blue-400=move || pathname() == paths::ME_SECURITY
+                                        class:text-gray-400=move || pathname() != paths::ME_SECURITY
+                                        class:group-hover:text-gray-900=move || pathname() != paths::ME_SECURITY
+                                        class:dark:group-hover:text-white=move || pathname() != paths::ME_SECURITY
+                                    >
+                                        "encrypted"
+                                    </span>
+                                    "Security"
+                                </A>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
