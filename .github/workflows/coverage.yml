@@ -12,9 +12,10 @@ jobs:
     name: Coverage
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
+      - name: Pre-clean workspace (self-hosted)
+        if: ${{ vars.CI_RUNNER == '' || vars.CI_RUNNER == 'self-hosted' }}
+        run: sudo rm -rf "${GITHUB_WORKSPACE}/db/data" || true
       - uses: actions/checkout@v6
-        with:
-          clean: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
