@@ -12,8 +12,8 @@ jobs:
     name: Coverage
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview

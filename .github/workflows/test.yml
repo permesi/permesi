@@ -12,8 +12,8 @@ jobs:
     name: Format
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Format
@@ -23,8 +23,8 @@ jobs:
     name: Clippy
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Clippy
@@ -34,8 +34,8 @@ jobs:
     name: Check
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check
@@ -56,8 +56,8 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: ./.github/actions/ensure-container-runtime
@@ -74,8 +74,8 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: ./.github/actions/ensure-container-runtime
@@ -91,8 +91,8 @@ jobs:
       - lint
       - check
     steps:
-      - uses: ./.github/actions/pre-clean-workspace
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: ./.github/actions/ensure-container-runtime
