@@ -13,6 +13,8 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Format
@@ -23,6 +25,8 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Clippy
@@ -33,6 +37,8 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check
@@ -54,6 +60,8 @@ jobs:
       - db-schema
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: ./.github/actions/ensure-container-runtime
@@ -71,6 +79,8 @@ jobs:
       - db-schema
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: ./.github/actions/ensure-container-runtime
