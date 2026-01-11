@@ -1737,6 +1737,13 @@
             "format": "int32",
             "minimum": 0
           },
+          "permesi_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "pool_size": {
             "type": "integer",
             "format": "int32",
