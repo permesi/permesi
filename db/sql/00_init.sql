@@ -22,14 +22,14 @@ SELECT pg_advisory_lock(hashtext('permesi-initdb'));
 SELECT format(
     'CREATE ROLE %I WITH LOGIN PASSWORD %L CREATEROLE',
     'vault_permesi',
-    'vault_permesi'
+    'change-me'
 )
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_permesi')\gexec
 
 SELECT format(
     'CREATE ROLE %I WITH LOGIN PASSWORD %L CREATEROLE',
     'vault_genesis',
-    'vault_genesis'
+    'change-me'
 )
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_genesis')\gexec
 

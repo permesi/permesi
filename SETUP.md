@@ -28,7 +28,8 @@ Permesi requires a Postgres 18 instance. You can find the initialization schemas
 
 1.  **Create Vault database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`).
 
-    This file ships with dev-default passwords. For production, edit the passwords first (or use the file as a template for your own bootstrap SQL), then run:
+    This file ships with a `change-me` placeholder password. For production, edit the passwords
+    first (or use the file as a template for your own bootstrap SQL), then run:
 
     ```sh
     psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_init.sql
