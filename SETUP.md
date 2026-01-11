@@ -175,52 +175,9 @@ vault unwrap -format=json "$PERMESI_WRAPPED_TOKEN"
 
 ### Vault Proxy (AppRole SecretID minting)
 
-If you want fully automated AppRole SecretID minting on service restart, run a Vault Agent in
-API proxy mode with a tightly scoped policy that can only `update`:
-`auth/approle/role/permesi/secret-id` and `auth/approle/role/genesis/secret-id`.
-
-Use a **local-only** listener (or a Unix socket) so the proxy cannot be accessed over the network.
-If you must expose it remotely, use TLS and strict firewall rules.
-
-Example (tuned) proxy config:
-
-```hcl
-vault {
-  address     = "https://<vault-server>:8200"
-  client_cert = "/etc/vault.d/ssl/proxy.pem"
-  client_key  = "/etc/vault.d/ssl/proxy.key"
-  reload      = true
-}
-
-auto_auth {
-  method "cert" {
-    # The name of the auth method as configured in Vault
-    name = "proxy"
-  }
-
-  sink "file" {
-    config = {
-      path = "/run/vault-proxy/token"
-      mode = 0400
-    }
-  }
-}
-
-listener "tcp" {
-  address     = "127.0.0.1:8100"
-  tls_disable = true
-}
-
-api_proxy {
-  use_auto_auth_token = "force"
-}
-
-log_level = "info"
-log_file  = "/var/log/vault.log"
-```
-
-With this in place, your service can fetch a fresh SecretID on restart (example):
-`curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/permesi/secret-id`.
+For automated SecretID minting on service restart, use a local-only **vault proxy**. The proxy
+uses its own AppRole credentials to authenticate, then forwards requests and injects its token.
+See **Vault proxy (AppRole) refresher** below for a copy/paste config that uses a Unix socket.
 
 ### Quadlet example (systemd)
 
@@ -257,8 +214,10 @@ set -euo pipefail
 umask 077
 install -d -m 0700 /run/permesi
 
+vault_proxy_socket="/run/vault/proxy.sock"
 permesi_secret_id="$(
-  curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/permesi/secret-id \
+  curl --unix-socket "${vault_proxy_socket}" -fsS -X POST \
+    http://localhost/v1/auth/approle/role/permesi/secret-id \
     | jq -er '.data.secret_id'
 )"
 
@@ -277,8 +236,10 @@ set -euo pipefail
 umask 077
 install -d -m 0700 /run/genesis
 
+vault_proxy_socket="/run/vault/proxy.sock"
 genesis_secret_id="$(
-  curl -fsS -X POST http://127.0.0.1:8100/v1/auth/approle/role/genesis/secret-id \
+  curl --unix-socket "${vault_proxy_socket}" -fsS -X POST \
+    http://localhost/v1/auth/approle/role/genesis/secret-id \
     | jq -er '.data.secret_id'
 )"
 
@@ -296,6 +257,7 @@ Description=permesi
 After=network.target
 Wants=network.target
 Requires=vault.service
+Requires=vault-proxy.service
 
 [Container]
 Image=ghcr.io/permesi/permesi:latest
@@ -319,6 +281,7 @@ Description=genesis
 After=network.target
 Wants=network.target
 Requires=vault.service
+Requires=vault-proxy.service
 
 [Container]
 Image=ghcr.io/permesi/genesis:latest
@@ -336,10 +299,188 @@ WantedBy=default.target
 ```
 
 Notes:
-- Bind the Vault proxy to `127.0.0.1` (or a Unix socket), and keep its policy limited to
+- Bind the Vault proxy to a Unix socket (recommended) or `127.0.0.1`, and keep its policy limited to
   `auth/approle/role/*/secret-id`.
 - Keep `/root/permesi.env`, `/root/genesis.env`, and the pre-start scripts owned by root and
   `0600`/`0700` permissions.
+- `GENESIS_VAULT_URL` / `PERMESI_VAULT_URL` must point to the **main Vault login endpoint**
+  (`/v1/auth/approle/login`). The proxy is only used by the pre-start scripts to mint
+  SecretIDs; services still authenticate directly with Vault.
+
+#### Vault proxy (AppRole) refresher
+
+The proxy is a Vault **proxy** process using AppRole to authenticate. It needs its own **vault-proxy
+RoleID** and **vault-proxy SecretID** (separate from the service AppRoles). Terraform creates the
+policy and AppRole; you fetch the RoleID and generate a SecretID. If you are not using Terraform,
+create the `vault-proxy` policy and AppRole manually before continuing.
+
+Each service still has its own AppRole **RoleID** (set in `/root/permesi.env` and `/root/genesis.env`).
+The proxy only mints **SecretIDs** for those service roles at runtime. Do not reuse the proxy
+RoleID/SecretID for the services.
+
+Quick setup outline (Terraform users):
+
+1. Fetch the `vault-proxy` RoleID:
+
+   ```sh
+   cd vault/contrib/terraform
+   terraform output -raw vault_proxy_role_id > /etc/vault/proxy-role-id
+   chown vault:vault /etc/vault/proxy-role-id
+   chmod 0400 /etc/vault/proxy-role-id
+   ```
+
+2. Generate the `vault-proxy` SecretID:
+
+   ```sh
+   vault write -field=secret_id -f auth/approle/role/vault-proxy/secret-id > /etc/vault/proxy-secret-id
+   chown vault:vault /etc/vault/proxy-secret-id
+   chmod 0400 /etc/vault/proxy-secret-id
+   ```
+
+3. Configure the proxy to read those files and auto-renew its token:
+
+   ```hcl
+   # /etc/vault/proxy.hcl
+   vault { address = "https://vault.example.com:8200" }
+
+   auto_auth {
+     method "approle" {
+       mount_path = "auth/approle"
+       config = {
+         role_id_file_path   = "/etc/vault/proxy-role-id"
+         secret_id_file_path = "/etc/vault/proxy-secret-id"
+         remove_secret_id_file_after_reading = false
+       }
+     }
+   }
+
+   listener "unix" {
+     address = "/run/vault/proxy.sock"
+     mode = "0600"
+   }
+
+   cache { use_auto_auth_token = true }
+   api_proxy { use_auto_auth_token = true }
+   ```
+
+   Example systemd unit:
+
+   ```ini
+   [Unit]
+   Description=Vault Proxy (Permesi)
+   After=network.target
+   Wants=network.target
+
+   [Service]
+   User=vault
+   Group=vault
+   ExecStart=/usr/bin/vault proxy -config=/etc/vault/proxy.hcl
+   RuntimeDirectory=vault
+   RuntimeDirectoryMode=0750
+   Restart=always
+   RestartSec=2s
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+The proxy renews its token automatically; you only replace the SecretID when it expires based on
+your AppRole settings.
+The proxy policy is intentionally minimal, so `auth/token/lookup-self` will return `permission denied`;
+use SecretID minting as the health check instead.
+
+Note: `vault-proxy` should use a **multi-use SecretID** (for example `secret_id_num_uses=100`).
+If it is set to single-use, the proxy will succeed once and then get 403s on restart.
+
+#### Vault proxy rotation (recommended)
+
+To avoid lockouts on proxy restarts, rotate the **vault-proxy SecretID** on a schedule. Terraform
+creates a dedicated `vault-proxy-rotate` policy that only allows minting SecretIDs for the
+`vault-proxy` AppRole. Create a periodic token with that policy and store it on disk.
+
+Create the rotation token (example):
+
+```sh
+vault policy read vault-proxy-rotate
+vault token create -policy=vault-proxy-rotate -period=24h -orphan -field=token \
+  > /etc/vault/proxy-rotate.token
+chmod 0400 /etc/vault/proxy-rotate.token
+```
+
+Keep `/etc/vault/proxy-rotate.token` root-owned and readable only by root.
+If the rotation script fails with `No such file or directory`, create this token first.
+
+Rotation script (`/usr/local/sbin/vault-proxy-rotate.sh`):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+VAULT_ADDR="https://vault.example.com:8200"
+token_path="/etc/vault/proxy-rotate.token"
+if [[ ! -f "${token_path}" ]]; then
+  echo "Missing ${token_path}. Create it with: vault token create -policy=vault-proxy-rotate ..." >&2
+  exit 1
+fi
+VAULT_TOKEN="$(cat "${token_path}")"
+
+umask 077
+new_secret_id="$(
+  curl -fsS -H "X-Vault-Token: ${VAULT_TOKEN}" \
+    -X POST "${VAULT_ADDR}/v1/auth/approle/role/vault-proxy/secret-id" \
+    | jq -er '.data.secret_id'
+)"
+
+install -o vault -g vault -m 0600 /dev/null /etc/vault/proxy-secret-id.new
+printf '%s' "${new_secret_id}" > /etc/vault/proxy-secret-id.new
+chmod 0400 /etc/vault/proxy-secret-id.new
+mv /etc/vault/proxy-secret-id.new /etc/vault/proxy-secret-id
+systemctl restart vault-proxy
+```
+
+Systemd unit (`/etc/systemd/system/vault-proxy-rotate.service`):
+
+```ini
+[Unit]
+Description=Rotate Vault proxy SecretID (Permesi)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vault-proxy-rotate.sh
+```
+
+Systemd timer (`/etc/systemd/system/vault-proxy-rotate.timer`):
+
+```ini
+[Unit]
+Description=Rotate Vault proxy SecretID (weekly)
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable the timer:
+
+```sh
+systemctl daemon-reload
+systemctl enable --now vault-proxy-rotate.timer
+```
+
+Sanity check (the proxy user must read the AppRole files):
+
+```sh
+sudo -u vault head -c 8 /etc/vault/proxy-role-id && echo
+sudo -u vault wc -c /etc/vault/proxy-secret-id
+```
+
+If your infrastructure supports auth methods like **TLS cert**, **Kubernetes**, or cloud
+auth (AWS/GCP/Azure), prefer those for the proxy and avoid SecretIDs entirely.
 
 ### Manual Configuration Recipe (Reference)
 

@@ -17,7 +17,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header::CONTENT_LENGTH},
     response::IntoResponse,
 };
-use sqlx::Row;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
@@ -230,6 +230,7 @@ pub async fn admin_infra(
     } else {
         "unhealthy"
     };
+    let permesi_size_bytes = database_size_bytes(&pool, "permesi").await;
     let database = DatabaseStats {
         status: db_status.to_string(),
         pool_size: pool.size(),
@@ -237,6 +238,7 @@ pub async fn admin_infra(
             .size()
             .saturating_sub(u32::try_from(pool.num_idle()).unwrap_or(0)),
         idle_connections: u32::try_from(pool.num_idle()).unwrap_or(0),
+        permesi_size_bytes,
     };
 
     let vault = match admin_state.vault_client().health().await {
@@ -271,6 +273,20 @@ pub async fn admin_infra(
         platform,
     };
     (StatusCode::OK, Json(response)).into_response()
+}
+
+/// Returns the size of a database in bytes, or `None` when unavailable.
+async fn database_size_bytes(pool: &PgPool, name: &str) -> Option<i64> {
+    sqlx::query_scalar(
+        "SELECT pg_database_size(datname)
+         FROM pg_database
+         WHERE datname = $1
+           AND has_database_privilege(datname, 'CONNECT')",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .ok()?
 }
 
 /// Validates an admin elevation token and return the operator's user id.

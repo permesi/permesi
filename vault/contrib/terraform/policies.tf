@@ -12,3 +12,13 @@ resource "vault_policy" "operators" {
   name   = "permesi-operators"
   policy = file("${path.module}/policies/operator-policy.hcl")
 }
+
+resource "vault_policy" "vault_proxy" {
+  name   = "vault-proxy"
+  policy = file("${path.module}/policies/vault-proxy-policy.hcl")
+}
+
+resource "vault_policy" "vault_proxy_rotate" {
+  name   = "vault-proxy-rotate"
+  policy = file("${path.module}/policies/vault-proxy-rotate-policy.hcl")
+}

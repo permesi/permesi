@@ -108,6 +108,10 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
                         <span class="text-gray-500">"Active / Idle"</span>
                         <span class="font-medium dark:text-white">{data.database.active_connections} " / " {data.database.idle_connections}</span>
                     </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">"Permesi Size"</span>
+                        <span class="font-medium dark:text-white">{format_bytes(data.database.permesi_size_bytes)}</span>
+                    </div>
                 </div>
             </div>
 
@@ -152,5 +156,26 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
                 </div>
             </div>
         </div>
+    }
+}
+
+fn format_bytes(value: Option<i64>) -> String {
+    let Some(bytes) = value else {
+        return "unavailable".to_string();
+    };
+    if bytes < 0 {
+        return "unavailable".to_string();
+    }
+    let units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    while size >= 1024.0 && unit_index < units.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.2} {}", units[unit_index])
     }
 }

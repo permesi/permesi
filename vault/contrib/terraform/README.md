@@ -64,6 +64,7 @@ Terraform state is sensitive in this module. It can contain values such as the P
    service user can write to that path (for example, create `/var/log/vault` and `chown` it
    to the Vault user) before applying.
 
+
 ## Post-Deployment
 
 ### 1. Retrieve Service Credentials

@@ -132,6 +132,7 @@ pub struct DatabaseStats {
     pub pool_size: u32,
     pub active_connections: u32,
     pub idle_connections: u32,
+    pub permesi_size_bytes: Option<i64>,
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
