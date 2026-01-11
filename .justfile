@@ -1127,7 +1127,7 @@ postgres version="18":
       -p 5432:5432 \
       -v {{root}}/db:/db \
       -v {{root}}/db/config/postgres:/etc/postgresql/config \
-      -v {{root}}/db/sql/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
+      -v {{root}}/db/sql/container-entrypoint.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
       --userns keep-id:uid={{ uid }},gid={{ gid }} \
       --user {{ uid }}:{{ gid }} \
       postgres:{{ version }} \

@@ -121,7 +121,7 @@ Claim defaults (optional):
 
 ## Database & Retention
 
-Schema lives in `services/genesis/sql/schema.sql`:
+Schema lives in `db/sql/01_genesis.sql`:
 
 - `clients(id, name, uuid, is_reserved)` maps a stable client UUID to a small integer id; by default
   clients are reserved and must be explicitly marked non-reserved for production use
@@ -129,23 +129,25 @@ Schema lives in `services/genesis/sql/schema.sql`:
 The schema can optionally seed a `__test_only__` client marked non-reserved for local testing.
 For production, leave the seed disabled (the default).
 
-Load the schema with:
+Load the schema with (only if you did not run `db/sql/00_init.sql`):
 
 ```sh
-psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/schema.sql
+psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f db/sql/01_genesis.sql
 ```
 
 Vault-managed DB credentials require bootstrap roles and grants. The canonical SQL for those roles
-lives in `db/sql/00_init.sql`; run it (with production passwords) against your Postgres instance
-before enabling the Vault database secrets engine.
+lives in `db/sql/00_init.sql`; it also applies the Genesis schema and the dev seed client. For
+production, update the passwords and remove the seed include before running it, or apply the
+schema directly as shown above.
 
-If you want the test-only seed client, apply the seed file after the schema:
+If you want the test-only seed client (the dev default in `db/sql/00_init.sql`), apply the seed
+file after the schema:
 
 ```sh
-psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/seed_test_client.sql
+psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f db/sql/seed_test_client.sql
 ```
 
-That file `\ir`-includes `services/genesis/sql/partitioning.sql`, so it will attempt to set up
+That file `\ir`-includes `db/sql/partitioning.sql`, so it will attempt to set up
 pg_cron-based partition maintenance when the extension is available. If you want to manage
 partitioning separately, run `partitioning.sql` manually and omit the include.
 
@@ -153,12 +155,13 @@ partitioning separately, run `partitioning.sql` manually and omit the include.
 
 Production bootstrap:
 
-- Apply `services/genesis/sql/schema.sql` (idempotent base schema). It includes
+- Apply `db/sql/01_genesis.sql` (idempotent base schema) unless you already ran `db/sql/00_init.sql`.
+  It includes
   `partitioning.sql`, so pg_cron jobs are created when available.
-- If you prefer to manage partitions separately, run `services/genesis/sql/partitioning.sql`
+- If you prefer to manage partitions separately, run `db/sql/partitioning.sql`
   on its own and omit the include.
 
-`db/sql/` is used for local dev containers and is not intended as a production schema source.
+`db/sql/` is the single source of truth for dev, containers, and bare-metal production schemas.
 
 ### Why UUIDv7?
 
@@ -167,7 +170,7 @@ UUIDv7 is time-ordered like ULID but native in PostgreSQL 18 (`uuidv7()`), so we
 Tokens include a `created_at` column and are range-partitioned by time. For long-term retention,
 drop whole partitions instead of deleting rows to avoid bloat.
 
-`services/genesis/sql/partitioning.sql` provides a pg_cron-based maintenance function that:
+`db/sql/partitioning.sql` provides a pg_cron-based maintenance function that:
 
 - Creates daily partitions ahead of time
 - Drops partitions older than the retention window
@@ -196,13 +199,13 @@ Why this approach:
 pg_cron setup (one-time):
 
 - Ensure `pg_cron` is installed and add it to `shared_preload_libraries`, then restart Postgres.
-- Run `services/genesis/sql/partitioning.sql` in the `genesis` database.
+- Run `db/sql/partitioning.sql` in the `genesis` database.
 - Verify the job exists: `SELECT * FROM cron.job WHERE jobname = 'genesis_tokens_rollover';`
 
 Production checklist:
 
-- Apply `services/genesis/sql/schema.sql`.
-- Apply `services/genesis/sql/partitioning.sql`.
+- Apply `db/sql/01_genesis.sql`.
+- Apply `db/sql/partitioning.sql`.
 - Verify partitions exist: `\dt tokens_*` (psql) or query `pg_inherits`.
 - Drop the default partition once rollover is active:
   `DROP TABLE IF EXISTS tokens_default;`

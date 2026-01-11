@@ -35,8 +35,10 @@ use tokio::time::Duration;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const PERMESI_SCHEMA_SQL: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/sql/schema.sql"));
+const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../db/sql/02_permesi.sql"
+));
 
 fn unix_now() -> i64 {
     std::time::SystemTime::now()

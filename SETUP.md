@@ -24,26 +24,27 @@ Permesi provides production-ready artifacts for every release. You do not need t
 
 ## 3. Database Configuration (Postgres 18)
 
-Permesi requires a Postgres 18 instance. You can find the initialization schemas in the repository under `db/sql/` and the production-ready service schemas under `services/*/sql/`.
+Permesi requires a Postgres 18 instance. You can find the initialization and service schemas in the repository under `db/sql/`.
 
-1.  **Create Vault database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`).
+1.  **Create Vault database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`). It also applies the service schemas and the test seed client.
 
     This file ships with a `change-me` placeholder password. For production, edit the passwords
-    first (or use the file as a template for your own bootstrap SQL), then run:
+    and remove the `seed_test_client.sql` include (or use the file as a template for your own
+    bootstrap SQL), then run:
 
     ```sh
     psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_init.sql
     ```
 
-2.  **Load service schemas**:
+2.  **Load service schemas** (only if you did not run `db/sql/00_init.sql`):
 
     ```sh
-    psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/schema.sql
-    psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f services/permesi/sql/schema.sql
+    psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f db/sql/01_genesis.sql
+    psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f db/sql/02_permesi.sql
     ```
 
     The Genesis schema can optionally seed a test-only client. To enable it, apply
-    `services/genesis/sql/seed_test_client.sql` after the schema.
+    `db/sql/seed_test_client.sql` after the schema.
 
 3.  **Connectivity**: Ensure the services can reach the DB via a standard DSN:
     `postgres://<user>:<pass>@<host>:<port>/permesi`

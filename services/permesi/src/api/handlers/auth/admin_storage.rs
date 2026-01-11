@@ -134,7 +134,10 @@ mod tests {
     use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
     use uuid::Uuid;
 
-    const SCHEMA_SQL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/sql/schema.sql"));
+    const SCHEMA_SQL: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../db/sql/02_permesi.sql"
+    ));
 
     async fn get_test_pool() -> Result<(PgPool, PostgresContainer)> {
         let network = TestNetwork::new("permesi-admin-storage-test");

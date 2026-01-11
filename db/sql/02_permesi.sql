@@ -1,5 +1,5 @@
 -- Permesi schema bootstrap.
--- Keep this file in sync with the matching schema under db/sql and services/permesi/sql.
+-- Canonical source: db/sql/02_permesi.sql
 
 CREATE EXTENSION IF NOT EXISTS citext;
 

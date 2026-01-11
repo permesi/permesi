@@ -96,29 +96,47 @@ mod tests {
         Ok(())
     }
 
+    fn assert_contains_include(path: &Path, canonical: &str, include: &str) -> Result<()> {
+        ensure!(
+            canonical.contains(include),
+            "Expected include {include} is missing in {}",
+            path.display()
+        );
+        Ok(())
+    }
+
     #[test]
-    fn schema_sql_has_no_test_seed() -> Result<()> {
-        // Guard prod schema from accidentally including the test seed.
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql/schema.sql");
+    fn schema_sql_integrity() -> Result<()> {
+        // Ensure the base genesis schema is pure and has correct defaults.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/01_genesis.sql");
         let canonical = canonical_sql(&path)?;
         assert_no_seed_client(&path, &canonical)?;
         assert_reserved_default(&path, &canonical)
     }
 
     #[test]
-    fn dev_sql_seeds_test_only_client() -> Result<()> {
-        // Guard dev/bootstrap schema seed values against accidental drift.
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/01_genesis.sql");
+    fn seed_sql_integrity() -> Result<()> {
+        // Ensure the test-only seed client is present in the seed file.
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/seed_test_client.sql");
         let canonical = canonical_sql(&path)?;
-        assert_seed_client(&path, &canonical)?;
-        assert_reserved_default(&path, &canonical)
+        assert_seed_client(&path, &canonical)
     }
 
     #[test]
-    fn seed_sql_seeds_test_only_client() -> Result<()> {
-        // Guard the optional seed file for local/dev setups.
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql/seed_test_client.sql");
+    fn init_sql_includes_schemas_and_seed() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/00_init.sql");
         let canonical = canonical_sql(&path)?;
-        assert_seed_client(&path, &canonical)
+        assert_contains_include(&path, &canonical, r"\ir01_genesis.sql")?;
+        assert_contains_include(&path, &canonical, r"\ir02_permesi.sql")?;
+        assert_contains_include(&path, &canonical, r"\irseed_test_client.sql")
+    }
+
+    #[test]
+    fn container_entrypoint_targets_init_sql() -> Result<()> {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/container-entrypoint.sql");
+        let canonical = canonical_sql(&path)?;
+        assert_contains_include(&path, &canonical, r"\i/db/sql/00_init.sql")
     }
 }

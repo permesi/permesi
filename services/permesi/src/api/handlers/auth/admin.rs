@@ -585,7 +585,10 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const SCHEMA_SQL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/sql/schema.sql"));
+    const SCHEMA_SQL: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../db/sql/02_permesi.sql"
+    ));
 
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()

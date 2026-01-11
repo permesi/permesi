@@ -18,7 +18,7 @@ These guidelines are mandatory for contributors and for any AI coding agent oper
 - Workspace releases use a single shared version via `[workspace.package]`; tags apply to the full workspace state.
 - API artifacts live in `docs/openapi/*.json`; diagrams sit in `docs/architecture.mmd`.
 - Each service keeps code under `src/` with `bin/` entrypoints, `cli/` utilities, and `vault/` helpers.
-- SQL/schema assets live in `services/permesi/sql/`.
+- SQL/schema assets live in `db/sql/`.
 - Frontend assets live under `apps/web` with `Trunk.toml` and `public/`; build output is static `dist/` (Cloudflare Pages).
 
 ## Documentation Requirements

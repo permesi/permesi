@@ -13,7 +13,7 @@ Vault AppRole + transit + database secrets, runs the Genesis binary, then exerci
 
 ## What The Test Does
 - Creates a shared container network (via testcontainers).
-- Starts Postgres 18 and applies `db/sql/01_genesis.sql`, which seeds the default client UUID.
+- Starts Postgres 18 and applies `db/sql/01_genesis.sql` plus `db/sql/seed_test_client.sql`, which seeds the default client UUID.
 - Starts Vault in dev mode and configures:
   - AppRole auth and a policy for transit + database + renew endpoints.
   - Transit mount/key (defaults to `transit/genesis` + `genesis-signing`).
@@ -24,7 +24,7 @@ Vault AppRole + transit + database secrets, runs the Genesis binary, then exerci
 
 ## Defaults And Inputs
 Test defaults (unless overridden by env vars):
-- Client UUID: `00000000-0000-0000-0000-000000000000` (seeded in `db/sql/01_genesis.sql`).
+- Client UUID: `00000000-0000-0000-0000-000000000000` (seeded in `db/sql/seed_test_client.sql`).
 - Transit mount: `transit/genesis` (override with `GENESIS_TRANSIT_MOUNT`).
 - Transit key name: `genesis-signing`.
 - Database engine mount: `database`.
@@ -124,7 +124,7 @@ Database role (`/v1/database/roles/genesis`):
 ```
 
 ## Schema Applied In Tests
-The helper loads `db/sql/01_genesis.sql` and splits statements by `;`.
+The helper loads `db/sql/01_genesis.sql` and `db/sql/seed_test_client.sql` and splits statements by `;`.
 It skips the `\\ir /db/sql/partitioning.sql` include (not needed for tests).
 Key items in the schema:
 - `clients` table with a seeded UUID `00000000-0000-0000-0000-000000000000`.

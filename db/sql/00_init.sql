@@ -1,7 +1,7 @@
 -- Postgres init for local dev.
 --
--- This file is mounted into `/docker-entrypoint-initdb.d/` (so it runs on first init),
--- and also executed explicitly by the `just postgres` recipe (so it's safe to re-run).
+-- This file is executed via a shim in `/docker-entrypoint-initdb.d/` (so it runs on first init),
+-- and also executed explicitly by the `just db-bootstrap` recipe (so it's safe to re-run).
 --
 -- `CREATE DATABASE` can't run inside a transaction block, so we use `psql`'s `\gexec` to
 -- conditionally emit and execute the statement.
@@ -57,7 +57,8 @@ SELECT pg_advisory_unlock(hashtext('permesi-initdb'));
 
 -- Bootstrap genesis schema (idempotent, safe to re-run).
 \connect genesis
-\ir /db/sql/01_genesis.sql
+\ir 01_genesis.sql
+\ir seed_test_client.sql
 
 -- Lock down the default schema so dynamic Vault users can't create objects.
 REVOKE USAGE ON SCHEMA public FROM PUBLIC;
@@ -96,7 +97,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE vault_genesis IN SCHEMA public
 
 -- Bootstrap permesi schema.
 \connect permesi
-\ir /db/sql/02_permesi.sql
+\ir 02_permesi.sql
 
 -- Lock down the default schema so dynamic Vault users can't create objects.
 REVOKE USAGE ON SCHEMA public FROM PUBLIC;

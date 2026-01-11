@@ -17,6 +17,10 @@ const GENESIS_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/01_genesis.sql"
 ));
+const GENESIS_SEED_SQL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../db/sql/seed_test_client.sql"
+));
 
 #[derive(Debug)]
 pub struct GenesisVaultConfig {
@@ -40,6 +44,13 @@ pub async fn apply_genesis_schema(postgres: &PostgresContainer) -> Result<()> {
             .execute(&mut connection)
             .await
             .with_context(|| format!("Failed to execute schema statement {}", index + 1))?;
+    }
+
+    for (index, statement) in split_sql_statements(GENESIS_SEED_SQL).iter().enumerate() {
+        sqlx::query(statement)
+            .execute(&mut connection)
+            .await
+            .with_context(|| format!("Failed to execute seed statement {}", index + 1))?;
     }
 
     Ok(())

@@ -45,20 +45,19 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 ## Production bootstrap (no containers)
 
-To bootstrap Postgres without the local container flow, run the SQL directly:
+To bootstrap Postgres without the local container flow, run the SQL directly. `db/sql/` is the
+single source of truth for dev containers and bare-metal setups:
 
 ```sh
-# 1) Create Vault root users, runtime roles, and grants (edit passwords first).
+# 1) Create Vault root users, runtime roles, grants, and load schemas (edit passwords first).
 psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_init.sql
-
-# 2) Load service schemas.
-psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f services/genesis/sql/schema.sql
-psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f services/permesi/sql/schema.sql
 ```
 
 `db/sql/00_init.sql` uses dev defaults (`vault_genesis` / `vault_permesi` with the same password).
-For production, update those passwords before running it, or use it as a template for your own
-bootstrap script.
+For production, update those passwords and remove the `seed_test_client.sql` include before
+running it, or use it as a template for your own bootstrap script. If you choose not to run
+`db/sql/00_init.sql`, load the service schemas directly with `db/sql/01_genesis.sql` and
+`db/sql/02_permesi.sql`.
 
 ## Cryptography
 

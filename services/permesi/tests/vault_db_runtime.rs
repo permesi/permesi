@@ -15,6 +15,10 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/02_permesi.sql"
 ));
+const GENESIS_SEED_SQL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../db/sql/seed_test_client.sql"
+));
 
 #[tokio::test]
 async fn vault_runtime_roles_survive_revocation() -> Result<()> {
@@ -284,6 +288,7 @@ async fn bootstrap_genesis(postgres: &PostgresContainer) -> Result<()> {
         .await
         .context("Failed to connect to genesis DB for schema setup")?;
     apply_schema(&mut genesis, GENESIS_SCHEMA_SQL).await?;
+    apply_schema(&mut genesis, GENESIS_SEED_SQL).await?;
     sqlx::query("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
         .execute(&mut genesis)
         .await

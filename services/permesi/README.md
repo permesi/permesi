@@ -46,19 +46,21 @@ cargo run -p permesi --bin permesi -- \
 
 ## Database schema
 
-The base schema lives in `services/permesi/sql/schema.sql` and mirrors `db/sql/02_permesi.sql`
-for local containers. Load it into Postgres with:
+The base schema lives in `db/sql/02_permesi.sql`. Load it into Postgres with (only if you did not
+run `db/sql/00_init.sql`):
 
 ```sh
-psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f services/permesi/sql/schema.sql
+psql "$PERMESI_DSN" -v ON_ERROR_STOP=1 -f db/sql/02_permesi.sql
 ```
 
 The schema enables `citext`, so the role running it must have `CREATE EXTENSION` privileges on
 the database.
 
+`db/sql/` is the single source of truth for dev, containers, and bare-metal production schemas.
+
 Vault-managed DB credentials also require bootstrap roles and grants. The canonical SQL for those
-roles lives in `db/sql/00_init.sql`; run it (with production passwords) against your Postgres
-instance before enabling the Vault database secrets engine.
+roles lives in `db/sql/00_init.sql`; it also applies the Permesi schema. For production, update the
+passwords before running it, or apply the schema directly as shown above.
 
 `db/sql/verify_permesi.sql` is a transactional smoke test that rolls back all changes. Run it
 after loading the schema to verify constraints and defaults:
@@ -210,7 +212,7 @@ RabbitMQ). For current scale, the DB outbox keeps infrastructure minimal and con
 ### Token cleanup (pg_cron or system cron)
 
 Expired sessions and verification tokens can be purged by calling `cleanup_expired_tokens()` in
-the permesi database. The helper in `services/permesi/sql/maintenance.sql` schedules a nightly
+the permesi database. The helper in `db/sql/maintenance.sql` schedules a nightly
 pg_cron job when the extension is available; otherwise the script prints a notice and you can
 invoke the function from system cron or manually.
 
