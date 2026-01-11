@@ -49,6 +49,18 @@ Permesi requires a Postgres 18 instance. You can find the initialization and ser
 3.  **Connectivity**: Ensure the services can reach the DB via a standard DSN:
     `postgres://<user>:<pass>@<host>:<port>/permesi`
 
+### Reset / Uninstall (dev/test only)
+
+If you need to remove everything created by the bootstrap SQL (databases, schemas, roles),
+run the reset script against the `postgres` database as a superuser:
+
+```sh
+psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/reset_all.sql
+```
+
+This terminates active connections, drops the `genesis` and `permesi` databases, and removes
+the Vault root and runtime roles. It is destructive and cannot be undone.
+
 ---
 
 ## 4. Vault Configuration (Terraform)
