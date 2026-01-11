@@ -105,6 +105,15 @@ mod tests {
         Ok(())
     }
 
+    fn assert_not_contains(path: &Path, canonical: &str, needle: &str) -> Result<()> {
+        ensure!(
+            !canonical.contains(needle),
+            "Unexpected content {needle} found in {}",
+            path.display()
+        );
+        Ok(())
+    }
+
     #[test]
     fn schema_sql_integrity() -> Result<()> {
         // Ensure the base genesis schema is pure and has correct defaults.
@@ -138,5 +147,30 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/container-entrypoint.sql");
         let canonical = canonical_sql(&path)?;
         assert_contains_include(&path, &canonical, r"\i/db/sql/00_init.sql")
+    }
+
+    #[test]
+    fn cron_jobs_sql_centralizes_scheduling() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/cron_jobs.sql");
+        let canonical = canonical_sql(&path)?;
+        assert_contains_include(&path, &canonical, "schedule_in_database")?;
+        assert_contains_include(&path, &canonical, "genesis_tokens_rollover")?;
+        assert_contains_include(&path, &canonical, "cleanup_expired_tokens")
+    }
+
+    #[test]
+    fn maintenance_sql_does_not_register_cron_jobs() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/maintenance.sql");
+        let canonical = canonical_sql(&path)?;
+        assert_not_contains(&path, &canonical, "pg_cron")?;
+        assert_not_contains(&path, &canonical, "cron.schedule")
+    }
+
+    #[test]
+    fn partitioning_sql_does_not_register_cron_jobs() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/sql/partitioning.sql");
+        let canonical = canonical_sql(&path)?;
+        assert_not_contains(&path, &canonical, "pg_cron")?;
+        assert_not_contains(&path, &canonical, "cron.schedule")
     }
 }

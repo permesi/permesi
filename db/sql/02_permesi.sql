@@ -315,10 +315,14 @@ CREATE INDEX IF NOT EXISTS idx_admin_attempts_user_time ON admin_attempts (user_
 CREATE INDEX IF NOT EXISTS idx_admin_attempts_ip_time ON admin_attempts (ip_address, created_at);
 
 CREATE OR REPLACE FUNCTION cleanup_expired_tokens()
-RETURNS void AS $$
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
     DELETE FROM user_sessions WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
 END;
-$$ LANGUAGE plpgsql;
+$$;

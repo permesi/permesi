@@ -1,8 +1,13 @@
--- Partition maintenance for tokens using pg_cron.
+-- Partition maintenance helpers for tokens.
 -- Run this in the genesis database after creating the schema.
+-- Scheduling is centralized in db/sql/cron_jobs.sql (run against postgres).
 
 CREATE OR REPLACE FUNCTION genesis_tokens_rollover(retention_days int, premake_days int)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     d date;
     part_name text;
@@ -51,25 +56,5 @@ BEGIN
 
     PERFORM pg_advisory_unlock(hashtext('genesis_tokens_rollover'));
     RAISE NOTICE 'genesis_tokens_rollover: completed';
-END;
-$$;
-
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron')
-        AND position(
-            'pg_cron' IN coalesce(current_setting('shared_preload_libraries', true), '')
-        ) > 0 THEN
-        CREATE EXTENSION IF NOT EXISTS pg_cron;
-        IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'genesis_tokens_rollover') THEN
-            PERFORM cron.schedule(
-                'genesis_tokens_rollover',
-                '5 0 * * *',
-                $cron$SELECT genesis_tokens_rollover(7, 2);$cron$
-            );
-        END IF;
-    ELSE
-        RAISE NOTICE 'pg_cron not available or not preloaded; skipping cron.schedule';
-    END IF;
 END;
 $$;

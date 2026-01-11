@@ -36,9 +36,9 @@ Terraform state is sensitive in this module. It can contain values such as the P
    ```bash
    export TF_VAR_database_host="db.internal"
    export TF_VAR_permesi_database_username="vault_permesi"
-   export TF_VAR_permesi_database_password="secure_password"
+   export TF_VAR_permesi_database_password="change-me"
    export TF_VAR_genesis_database_username="vault_genesis"
-   export TF_VAR_genesis_database_password="secure_password"
+   export TF_VAR_genesis_database_password="change-me"
    ```
 
    **Option B: `terraform.tfvars` file**
@@ -46,9 +46,9 @@ Terraform state is sensitive in this module. It can contain values such as the P
    ```hcl
    database_host     = "localhost"
    permesi_database_username = "vault_permesi"
-   permesi_database_password = "secure_password"
+   permesi_database_password = "change-me"
    genesis_database_username = "vault_genesis"
-   genesis_database_password = "secure_password"
+   genesis_database_password = "change-me"
    # Local/dev only; for production use "verify-full" (or at least "verify-ca").
    database_sslmode  = "disable"
    ```
@@ -58,6 +58,11 @@ Terraform state is sensitive in this module. It can contain values such as the P
    terraform init
    terraform apply
    ```
+
+4. **Vault audit log path**:
+   This module enables a file audit device at `/var/log/vault/audit.log`. Ensure the Vault
+   service user can write to that path (for example, create `/var/log/vault` and `chown` it
+   to the Vault user) before applying.
 
 ## Post-Deployment
 

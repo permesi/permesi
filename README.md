@@ -59,6 +59,10 @@ running it, or use it as a template for your own bootstrap script. If you choose
 `db/sql/00_init.sql`, load the service schemas directly with `db/sql/01_genesis.sql` and
 `db/sql/02_permesi.sql`.
 
+For scheduled maintenance, `db/sql/cron_jobs.sql` is the only place where pg_cron jobs are
+registered (run it against the `postgres` database). Application schemas never install or
+schedule pg_cron jobs directly.
+
 ## Cryptography
 
 - **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.

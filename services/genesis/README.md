@@ -147,19 +147,16 @@ file after the schema:
 psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f db/sql/seed_test_client.sql
 ```
 
-That file `\ir`-includes `db/sql/partitioning.sql`, so it will attempt to set up
-pg_cron-based partition maintenance when the extension is available. If you want to manage
-partitioning separately, run `partitioning.sql` manually and omit the include.
+That file `\ir`-includes `db/sql/partitioning.sql`, which defines the partition maintenance
+function. Scheduling is centralized in `db/sql/cron_jobs.sql` (run against `postgres`).
 
 `TOKEN_EXPIRATION` is currently 120 seconds.
 
 Production bootstrap:
 
 - Apply `db/sql/01_genesis.sql` (idempotent base schema) unless you already ran `db/sql/00_init.sql`.
-  It includes
-  `partitioning.sql`, so pg_cron jobs are created when available.
-- If you prefer to manage partitions separately, run `db/sql/partitioning.sql`
-  on its own and omit the include.
+  It includes `partitioning.sql`, which defines the rollover function.
+- Register pg_cron jobs via `db/sql/cron_jobs.sql` (see `SETUP.md`).
 
 `db/sql/` is the single source of truth for dev, containers, and bare-metal production schemas.
 
@@ -170,7 +167,7 @@ UUIDv7 is time-ordered like ULID but native in PostgreSQL 18 (`uuidv7()`), so we
 Tokens include a `created_at` column and are range-partitioned by time. For long-term retention,
 drop whole partitions instead of deleting rows to avoid bloat.
 
-`db/sql/partitioning.sql` provides a pg_cron-based maintenance function that:
+`db/sql/partitioning.sql` provides a maintenance function that:
 
 - Creates daily partitions ahead of time
 - Drops partitions older than the retention window
@@ -198,9 +195,10 @@ Why this approach:
 
 pg_cron setup (one-time):
 
-- Ensure `pg_cron` is installed and add it to `shared_preload_libraries`, then restart Postgres.
+- See `SETUP.md` for the canonical `pg_cron` setup steps.
 - Run `db/sql/partitioning.sql` in the `genesis` database.
-- Verify the job exists: `SELECT * FROM cron.job WHERE jobname = 'genesis_tokens_rollover';`
+- Register cron jobs via `db/sql/cron_jobs.sql` (run against `postgres`).
+- Verify the job exists (in `postgres`): `SELECT * FROM cron.job WHERE jobname = 'genesis_tokens_rollover';`
 
 Production checklist:
 

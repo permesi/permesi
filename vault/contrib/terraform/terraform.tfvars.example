@@ -6,8 +6,10 @@
 # local `terraform.tfvars` (gitignored).
 
 database_host               = "postgres-permesi"
+# For TLS, use "require", "verify-ca", or "verify-full" (recommended for production).
+# When using verify-ca/verify-full, ensure the Postgres CA cert is available to Vault.
 database_sslmode            = "disable"
 permesi_database_username   = "vault_permesi"
-permesi_database_password   = "vault_permesi"
+permesi_database_password   = "change-me"
 genesis_database_username   = "vault_genesis"
-genesis_database_password   = "vault_genesis"
+genesis_database_password   = "change-me"

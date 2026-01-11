@@ -49,6 +49,84 @@ Permesi requires a Postgres 18 instance. You can find the initialization and ser
 3.  **Connectivity**: Ensure the services can reach the DB via a standard DSN:
     `postgres://<user>:<pass>@<host>:<port>/permesi`
 
+4.  **Load pg_cron jobs** (see the pg_cron setup section below):
+
+    ```sh
+    psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/cron_jobs.sql
+    ```
+
+5.  **Verify the setup**:
+
+    ```sh
+    psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/check.sql
+    ```
+
+6.  **Verify Vault DB connectivity** (after Terraform applies):
+
+    ```sh
+    export VAULT_ADDR="https://vault.example.com:8200"
+    export VAULT_TOKEN="your-root-token"
+    vault read database/creds/permesi
+    vault read database/creds/genesis
+    ```
+
+    These reads are safe in production; they only request short-lived credentials.
+
+### pg_cron setup (one-time)
+
+Permesi uses `pg_cron` for scheduled maintenance tasks when available:
+
+- Genesis partition rollover (`genesis_tokens_rollover()` from `db/sql/partitioning.sql`)
+- Permesi token cleanup (`cleanup_expired_tokens()` from `db/sql/02_permesi.sql`)
+- Job registration is centralized in `db/sql/cron_jobs.sql` (run against `postgres`)
+
+To enable `pg_cron` (copy/paste recipe):
+
+1. Install the extension package for your Postgres version:
+
+```sh
+# Debian/Ubuntu
+sudo apt-get update
+sudo apt-get install postgresql-18-cron
+
+# RHEL/Fedora
+sudo dnf install postgresql18-contrib
+
+# macOS (Homebrew)
+brew install postgresql@18
+```
+
+2. Enable `pg_cron` in `postgresql.conf` and restart Postgres (cron is centralized in the
+   `postgres` database):
+
+```
+shared_preload_libraries = 'pg_cron'
+cron.database_name = 'postgres'
+```
+
+3. Restart Postgres (example):
+
+```sh
+sudo systemctl restart postgresql
+```
+
+4. Ensure the maintenance functions exist (run after schemas are loaded). The Genesis schema
+   already includes `db/sql/partitioning.sql`; only run it separately if you opted out of the
+   include:
+
+```sh
+psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f db/sql/partitioning.sql
+```
+
+5. Register cron jobs from the `postgres` database:
+
+```sh
+psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/cron_jobs.sql
+```
+
+If `pg_cron` is not enabled, you can run the maintenance functions from system cron or manually.
+For a one-off cleanup in Permesi, run `db/sql/maintenance.sql` against the `permesi` database.
+
 ### Reset / Uninstall (dev/test only)
 
 If you need to remove everything created by the bootstrap SQL (databases, schemas, roles),

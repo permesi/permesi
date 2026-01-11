@@ -212,9 +212,13 @@ RabbitMQ). For current scale, the DB outbox keeps infrastructure minimal and con
 ### Token cleanup (pg_cron or system cron)
 
 Expired sessions and verification tokens can be purged by calling `cleanup_expired_tokens()` in
-the permesi database. The helper in `db/sql/maintenance.sql` schedules a nightly
-pg_cron job when the extension is available; otherwise the script prints a notice and you can
-invoke the function from system cron or manually.
+the permesi database. Use `db/sql/maintenance.sql` as a manual helper, or schedule the call via
+pg_cron as described in `SETUP.md`.
+
+`db/sql/maintenance.sql` is a manual helper that invokes the cleanup once. Scheduling is
+centralized in `db/sql/cron_jobs.sql` (run against `postgres`).
+
+See `SETUP.md` for the canonical `pg_cron` setup steps.
 
 ```sql
 SELECT cleanup_expired_tokens();
