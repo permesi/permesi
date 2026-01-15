@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.2.19"
+    "version": "0.2.20"
   },
   "paths": {
     "/health": {
@@ -302,6 +302,256 @@
         "responses": {
           "204": {
             "description": "Session cleared"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/recovery": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify a recovery code during MFA challenge and issue a bootstrap session.",
+        "operationId": "mfa_recovery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaRecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recovery accepted"
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/totp/enroll/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish TOTP enrollment. Requires bootstrap or full session.",
+        "operationId": "totp_enroll_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaTotpEnrollFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Enrollment finished"
+          },
+          "400": {
+            "description": "Invalid code"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/totp/enroll/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start TOTP enrollment. Requires bootstrap or full session.",
+        "operationId": "totp_enroll_start",
+        "responses": {
+          "200": {
+            "description": "Enrollment started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaTotpEnrollStartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/totp/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify TOTP during challenge. Requires challenge session.",
+        "operationId": "totp_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaTotpVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Verification successful"
+          },
+          "400": {
+            "description": "Invalid code"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/authenticate/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finishes the `WebAuthn` authentication flow and upgrades the session.",
+        "operationId": "authenticate_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebauthnAuthenticateFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Authentication successful"
+          },
+          "400": {
+            "description": "Invalid authentication response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/authenticate/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Starts the authentication flow for a `WebAuthn` security key.",
+        "operationId": "authenticate_start",
+        "responses": {
+          "200": {
+            "description": "Authentication challenge generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebauthnAuthenticateStartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "No security keys registered"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/register/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finishes the registration of a new `WebAuthn` security key.",
+        "description": "Side Effects:\n- Enables MFA (`MfaState::Enabled`) for the user if not already enabled.\n- Logs an audit event.",
+        "operationId": "register_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebauthnRegisterFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Security key registered successfully"
+          },
+          "400": {
+            "description": "Invalid registration response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/register/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Starts the registration of a new `WebAuthn` security key.",
+        "operationId": "register_start",
+        "responses": {
+          "200": {
+            "description": "Registration challenge generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebauthnRegisterStartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
           }
         }
       }
@@ -925,6 +1175,106 @@
           },
           "401": {
             "description": "Missing or invalid session cookie."
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/recovery-codes": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "regenerate_recovery_codes",
+        "responses": {
+          "200": {
+            "description": "Recovery codes regenerated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          },
+          "409": {
+            "description": "MFA not enabled."
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/security-keys": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "list_security_keys",
+        "responses": {
+          "200": {
+            "description": "List of registered security keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecurityKeySummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/totp": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "disable_totp",
+        "responses": {
+          "204": {
+            "description": "TOTP disabled."
+          },
+          "401": {
+            "description": "Unauthorized or recent auth required."
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/webauthn/{credential_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Deletes a registered `WebAuthn` security key.",
+        "description": "Side Effects:\n- Disables MFA (`MfaState::Disabled`) if this was the last security key AND no TOTP is configured.\n- Logs an audit event.",
+        "operationId": "delete_key",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "description": "Hex-encoded credential ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Security key deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Security key not found"
           }
         }
       }
@@ -1823,7 +2173,9 @@
           "created_at",
           "updated_at",
           "roles",
-          "scopes"
+          "scopes",
+          "mfa_enabled",
+          "totp_enabled"
         ],
         "properties": {
           "created_at": {
@@ -1847,6 +2199,9 @@
               "null"
             ]
           },
+          "mfa_enabled": {
+            "type": "boolean"
+          },
           "roles": {
             "type": "array",
             "items": {
@@ -1858,6 +2213,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "totp_enabled": {
+            "type": "boolean"
           },
           "updated_at": {
             "type": "string"
@@ -1881,6 +2239,63 @@
           }
         },
         "additionalProperties": false
+      },
+      "MfaRecoveryRequest": {
+        "type": "object",
+        "description": "Payload for verifying an MFA recovery code during challenge.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "MfaTotpEnrollFinishRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "credential_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "credential_id": {
+            "type": "string"
+          }
+        }
+      },
+      "MfaTotpEnrollStartResponse": {
+        "type": "object",
+        "required": [
+          "secret",
+          "qr_code_url",
+          "credential_id"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string"
+          },
+          "qr_code_url": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
+      "MfaTotpVerifyRequest": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
       },
       "OpaqueLoginFinishRequest": {
         "type": "object",
@@ -2105,6 +2520,20 @@
           }
         }
       },
+      "RecoveryCodesResponse": {
+        "type": "object",
+        "required": [
+          "codes"
+        ],
+        "properties": {
+          "codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ResendVerificationRequest": {
         "type": "object",
         "required": [
@@ -2116,12 +2545,47 @@
           }
         }
       },
+      "SecurityKeySummary": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "label",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SessionKind": {
+        "type": "string",
+        "description": "Session kinds used to gate MFA bootstrap and challenge flows.",
+        "enum": [
+          "full",
+          "mfa_bootstrap",
+          "mfa_challenge"
+        ]
+      },
       "SessionResponse": {
         "type": "object",
         "required": [
           "user_id",
           "email",
-          "is_operator"
+          "is_operator",
+          "session_kind"
         ],
         "properties": {
           "email": {
@@ -2129,6 +2593,9 @@
           },
           "is_operator": {
             "type": "boolean"
+          },
+          "session_kind": {
+            "$ref": "#/components/schemas/SessionKind"
           },
           "user_id": {
             "type": "string"
@@ -2253,6 +2720,62 @@
         ],
         "properties": {
           "token": {
+            "type": "string"
+          }
+        }
+      },
+      "WebauthnAuthenticateFinishRequest": {
+        "type": "object",
+        "required": [
+          "auth_id",
+          "response"
+        ],
+        "properties": {
+          "auth_id": {
+            "type": "string"
+          },
+          "response": {}
+        }
+      },
+      "WebauthnAuthenticateStartResponse": {
+        "type": "object",
+        "required": [
+          "auth_id",
+          "challenge"
+        ],
+        "properties": {
+          "auth_id": {
+            "type": "string"
+          },
+          "challenge": {}
+        }
+      },
+      "WebauthnRegisterFinishRequest": {
+        "type": "object",
+        "required": [
+          "reg_id",
+          "label",
+          "response"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "reg_id": {
+            "type": "string"
+          },
+          "response": {}
+        }
+      },
+      "WebauthnRegisterStartResponse": {
+        "type": "object",
+        "required": [
+          "reg_id",
+          "challenge"
+        ],
+        "properties": {
+          "challenge": {},
+          "reg_id": {
             "type": "string"
           }
         }
