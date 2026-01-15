@@ -1,12 +1,20 @@
 //! `OPAQUE` login endpoints.
+//!
+//! Successful logins issue one of three session kinds based on MFA state:
+//! full sessions for `disabled`, challenge sessions for `enabled`, and bootstrap
+//! sessions for `required_unenrolled`.
 
 use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
+        mfa::{self, MfaState},
         rate_limit::{RateLimitAction, RateLimitDecision},
-        session::session_cookie,
+        session::session_cookie_with_ttl,
         state::{AuthState, OpaqueSuite},
-        storage::{insert_session, lookup_login_record},
+        storage::{
+            insert_mfa_bootstrap_session, insert_mfa_challenge_session, insert_session,
+            lookup_login_record,
+        },
         types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, OpaqueLoginStartResponse},
         utils::{decode_base64_field, extract_client_ip, normalize_email, valid_email},
         zero_token::{require_zero_token, zero_token_error_response},
@@ -30,7 +38,7 @@ use opaque_ke::{
 use rand::rngs::OsRng;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 #[utoipa::path(
@@ -195,6 +203,7 @@ async fn build_login_start_response(
     ),
     tag = "auth"
 )]
+#[allow(clippy::too_many_lines)]
 pub async fn opaque_login_finish(
     headers: HeaderMap,
     pool: Extension<PgPool>,
@@ -247,25 +256,108 @@ pub async fn opaque_login_finish(
             let Some(user_id) = login_state.user_id else {
                 return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
             };
-            // Generate a fresh session token, store only its hash, and return the raw
-            // value for the cookie header.
-            let token =
-                match insert_session(&pool, user_id, auth_state.config().session_ttl_seconds())
-                    .await
-                {
-                    Ok(token) => token,
-                    Err(err) => {
-                        error!("Failed to create session: {err}");
+            let mfa_record = match mfa::storage::load_mfa_state(&pool, user_id).await {
+                Ok(record) => record,
+                Err(err) => {
+                    if auth_state.mfa().required() {
+                        error!("Failed to load MFA state: {err}");
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "Login failed".to_string(),
                         )
                             .into_response();
                     }
-                };
+                    warn!("Skipping MFA state enforcement: {err}");
+                    None
+                }
+            };
+
+            let mut mfa_state = mfa_record
+                .as_ref()
+                .map_or(MfaState::Disabled, |record| record.state);
+
+            let effective_state =
+                mfa::enforce_required_state(auth_state.mfa().required(), mfa_state);
+            if effective_state == MfaState::RequiredUnenrolled
+                && mfa_state != MfaState::RequiredUnenrolled
+                && let Err(err) = mfa::storage::upsert_mfa_state(
+                    &pool,
+                    user_id,
+                    MfaState::RequiredUnenrolled,
+                    None,
+                )
+                .await
+            {
+                error!("Failed to set MFA required state: {err}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Login failed".to_string(),
+                )
+                    .into_response();
+            }
+            mfa_state = effective_state;
+
+            let (token, ttl_seconds) = match mfa_state {
+                MfaState::RequiredUnenrolled => {
+                    if let Err(err) = mfa::storage::delete_full_sessions(&pool, user_id).await {
+                        error!("Failed to revoke full sessions for MFA bootstrap: {err}");
+                    }
+                    match insert_mfa_bootstrap_session(
+                        &pool,
+                        user_id,
+                        auth_state.mfa().bootstrap_session_ttl_seconds(),
+                    )
+                    .await
+                    {
+                        Ok(token) => (token, auth_state.mfa().bootstrap_session_ttl_seconds()),
+                        Err(err) => {
+                            error!("Failed to create MFA bootstrap session: {err}");
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Login failed".to_string(),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+                MfaState::Enabled => {
+                    match insert_mfa_challenge_session(
+                        &pool,
+                        user_id,
+                        auth_state.mfa().challenge_session_ttl_seconds(),
+                    )
+                    .await
+                    {
+                        Ok(token) => (token, auth_state.mfa().challenge_session_ttl_seconds()),
+                        Err(err) => {
+                            error!("Failed to create MFA challenge session: {err}");
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Login failed".to_string(),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+                MfaState::Disabled => {
+                    match insert_session(&pool, user_id, auth_state.config().session_ttl_seconds())
+                        .await
+                    {
+                        Ok(token) => (token, auth_state.config().session_ttl_seconds()),
+                        Err(err) => {
+                            error!("Failed to create session: {err}");
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Login failed".to_string(),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+            };
 
             let mut response_headers = HeaderMap::new();
-            match session_cookie(&auth_state, &token) {
+            match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
                 Ok(cookie) => {
                     // Attach the cookie so the browser can present it on future requests.
                     response_headers.insert(SET_COOKIE, cookie);

@@ -176,7 +176,7 @@ async fn build_reauth_start_response(
         ));
     };
 
-    let login_id = auth_state
+    let login_id: Uuid = auth_state
         .opaque()
         .store_login_state(start_result.state, Some(record.user_id))
         .await;

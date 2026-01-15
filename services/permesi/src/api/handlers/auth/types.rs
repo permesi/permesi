@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::session_kind::SessionKind;
+
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct OpaqueSignupStartRequest {
     pub email: String,
@@ -85,6 +87,56 @@ pub struct SessionResponse {
     pub user_id: String,
     pub email: String,
     pub is_operator: bool,
+    pub session_kind: SessionKind,
+}
+
+/// Payload for verifying an MFA recovery code during challenge.
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct MfaRecoveryRequest {
+    pub code: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct MfaTotpEnrollStartResponse {
+    pub secret: String,
+    pub qr_code_url: String,
+    pub credential_id: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct MfaTotpEnrollFinishRequest {
+    pub code: String,
+    pub credential_id: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct MfaTotpVerifyRequest {
+    pub code: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct WebauthnRegisterStartResponse {
+    pub reg_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct WebauthnRegisterFinishRequest {
+    pub reg_id: String,
+    pub label: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct WebauthnAuthenticateStartResponse {
+    pub auth_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Debug)]
+pub struct WebauthnAuthenticateFinishRequest {
+    pub auth_id: String,
+    pub response: serde_json::Value,
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]

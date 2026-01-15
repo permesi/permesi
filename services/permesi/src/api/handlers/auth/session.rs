@@ -15,8 +15,13 @@ use tracing::error;
 
 use super::{
     admin_storage::operator_enabled,
+    session_kind::SessionKind,
     state::AuthState,
-    storage::{SessionRecord, delete_session, lookup_session},
+    storage::{
+        SessionRecord, delete_full_session, delete_mfa_bootstrap_session,
+        delete_mfa_challenge_session, lookup_full_session, lookup_mfa_bootstrap_session,
+        lookup_mfa_challenge_session,
+    },
     types::SessionResponse,
     utils::hash_session_token,
 };
@@ -37,20 +42,19 @@ pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRe
     let Some(token) = extract_session_token(&headers) else {
         return StatusCode::NO_CONTENT.into_response();
     };
-    // Only the hash is stored; never compare raw tokens against the database.
-    let token_hash = hash_session_token(&token);
-    match lookup_session(&pool, &token_hash).await {
+    match lookup_any_session(&pool, &token).await {
         Ok(Some(SessionRecord {
             user_id,
             email,
-            created_at_unix: _,
-            auth_time_unix: _,
+            kind,
+            ..
         })) => {
             let is_operator = operator_enabled(&pool, user_id).await.unwrap_or(false);
             let response = SessionResponse {
                 user_id: user_id.to_string(),
                 email,
                 is_operator,
+                session_kind: kind,
             };
             (StatusCode::OK, Json(response)).into_response()
         }
@@ -72,8 +76,7 @@ pub(crate) async fn authenticate_session(
     let Some(token) = extract_session_token(headers) else {
         return Ok(None);
     };
-    let token_hash = hash_session_token(&token);
-    match lookup_session(pool, &token_hash).await {
+    match lookup_any_session(pool, &token).await {
         Ok(record) => Ok(record),
         Err(err) => {
             error!("Failed to lookup session: {err}");
@@ -95,11 +98,10 @@ pub async fn logout(
     pool: Extension<PgPool>,
     auth_state: Extension<Arc<AuthState>>,
 ) -> impl IntoResponse {
-    if let Some(token) = extract_session_token(&headers) {
-        let token_hash = hash_session_token(&token);
-        if let Err(err) = delete_session(&pool, &token_hash).await {
-            error!("Failed to delete session: {err}");
-        }
+    if let Some(token) = extract_session_token(&headers)
+        && let Err(err) = delete_any_session(&pool, &token).await
+    {
+        error!("Failed to delete session: {err}");
     }
 
     // Always clear the cookie, even if the session record was missing.
@@ -110,12 +112,12 @@ pub async fn logout(
     (StatusCode::NO_CONTENT, response_headers).into_response()
 }
 
-/// Build a secure `HttpOnly` cookie for the session token.
-pub(super) fn session_cookie(
+/// Build a secure `HttpOnly` cookie for the session token with a custom TTL.
+pub(crate) fn session_cookie_with_ttl(
     auth_state: &AuthState,
     token: &str,
+    ttl_seconds: i64,
 ) -> Result<HeaderValue, InvalidHeaderValue> {
-    let ttl_seconds = auth_state.config().session_ttl_seconds();
     // Only mark cookies secure when the frontend is served over HTTPS.
     let secure = auth_state.config().session_cookie_secure();
     let mut cookie = format!(
@@ -171,5 +173,26 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         None
     } else {
         Some(token.to_string())
+    }
+}
+
+async fn lookup_any_session(
+    pool: &PgPool,
+    token: &str,
+) -> Result<Option<SessionRecord>, anyhow::Error> {
+    let token_hash = hash_session_token(token);
+    match SessionKind::from_token(token) {
+        SessionKind::Full => lookup_full_session(pool, &token_hash).await,
+        SessionKind::MfaBootstrap => lookup_mfa_bootstrap_session(pool, &token_hash).await,
+        SessionKind::MfaChallenge => lookup_mfa_challenge_session(pool, &token_hash).await,
+    }
+}
+
+async fn delete_any_session(pool: &PgPool, token: &str) -> Result<(), anyhow::Error> {
+    let token_hash = hash_session_token(token);
+    match SessionKind::from_token(token) {
+        SessionKind::Full => delete_full_session(pool, &token_hash).await,
+        SessionKind::MfaBootstrap => delete_mfa_bootstrap_session(pool, &token_hash).await,
+        SessionKind::MfaChallenge => delete_mfa_challenge_session(pool, &token_hash).await,
     }
 }

@@ -99,6 +99,14 @@ pub struct ResendVerificationRequest {
     pub email: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    Full,
+    MfaBootstrap,
+    MfaChallenge,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Session summary returned by the API to hydrate auth state.
 /// This mirrors cookie-backed session state and contains no secrets.
@@ -106,6 +114,60 @@ pub struct UserSession {
     pub user_id: String,
     pub email: String,
     pub is_operator: bool,
+    pub session_kind: SessionKind,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MfaTotpEnrollStartResponse {
+    pub secret: String,
+    pub qr_code_url: String,
+    pub credential_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MfaTotpEnrollFinishRequest {
+    pub code: String,
+    pub credential_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MfaTotpVerifyRequest {
+    pub code: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnRegisterStartResponse {
+    pub reg_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnRegisterFinishRequest {
+    pub reg_id: String,
+    pub label: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnAuthenticateStartResponse {
+    pub auth_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnAuthenticateFinishRequest {
+    pub auth_id: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MfaRecoveryRequest {
+    pub code: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecoveryCodesResponse {
+    pub codes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

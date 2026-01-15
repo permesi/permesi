@@ -7,16 +7,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use url::Url;
 use uuid::Uuid;
 
-use super::rate_limit::RateLimiter;
+use super::{mfa::MfaConfig, rate_limit::RateLimiter};
 
 const DEFAULT_TOKEN_TTL_SECONDS: i64 = 30 * 60;
 const DEFAULT_RESEND_COOLDOWN_SECONDS: i64 = 60;
 const DEFAULT_OPAQUE_LOGIN_TTL_SECONDS: u64 = 5 * 60;
 const DEFAULT_SESSION_TTL_SECONDS: i64 = 12 * 60 * 60;
-const DEFAULT_OPAQUE_KV_MOUNT: &str = "kv";
-const DEFAULT_OPAQUE_KV_PATH: &str = "permesi/opaque";
 const DEFAULT_OPAQUE_SERVER_ID: &str = "api.permesi.dev";
 
 #[derive(Clone, Debug)]
@@ -26,23 +25,33 @@ pub struct AuthConfig {
     resend_cooldown_seconds: i64,
     session_ttl_seconds: i64,
     opaque_kv_mount: String,
-    opaque_kv_path: String,
     opaque_server_id: String,
     opaque_login_ttl_seconds: u64,
+    webauthn_rp_id: String,
+    webauthn_rp_origin: String,
 }
 
 impl AuthConfig {
     #[must_use]
     pub fn new(frontend_base_url: String) -> Self {
+        let rp_id = Url::parse(&frontend_base_url)
+            .ok()
+            .and_then(|u: Url| u.host_str().map(ToString::to_string))
+            .unwrap_or_else(|| "localhost".to_string());
+
+        // Ensure origin does not have a trailing slash
+        let rp_origin = frontend_base_url.trim_end_matches('/').to_string();
+
         Self {
             frontend_base_url,
             email_token_ttl_seconds: DEFAULT_TOKEN_TTL_SECONDS,
             resend_cooldown_seconds: DEFAULT_RESEND_COOLDOWN_SECONDS,
             session_ttl_seconds: DEFAULT_SESSION_TTL_SECONDS,
-            opaque_kv_mount: DEFAULT_OPAQUE_KV_MOUNT.to_string(),
-            opaque_kv_path: DEFAULT_OPAQUE_KV_PATH.to_string(),
+            opaque_kv_mount: "secret/permesi".to_string(),
             opaque_server_id: DEFAULT_OPAQUE_SERVER_ID.to_string(),
             opaque_login_ttl_seconds: DEFAULT_OPAQUE_LOGIN_TTL_SECONDS,
+            webauthn_rp_id: rp_id,
+            webauthn_rp_origin: rp_origin,
         }
     }
 
@@ -71,12 +80,6 @@ impl AuthConfig {
     }
 
     #[must_use]
-    pub fn with_opaque_kv_path(mut self, path: String) -> Self {
-        self.opaque_kv_path = path;
-        self
-    }
-
-    #[must_use]
     pub fn with_opaque_server_id(mut self, server_id: String) -> Self {
         self.opaque_server_id = server_id;
         self
@@ -89,13 +92,30 @@ impl AuthConfig {
     }
 
     #[must_use]
-    pub fn opaque_kv_mount(&self) -> &str {
-        &self.opaque_kv_mount
+    pub fn with_webauthn_rp_id(mut self, rp_id: String) -> Self {
+        self.webauthn_rp_id = rp_id;
+        self
     }
 
     #[must_use]
-    pub fn opaque_kv_path(&self) -> &str {
-        &self.opaque_kv_path
+    pub fn with_webauthn_rp_origin(mut self, rp_origin: String) -> Self {
+        self.webauthn_rp_origin = rp_origin;
+        self
+    }
+
+    #[must_use]
+    pub fn webauthn_rp_id(&self) -> &str {
+        &self.webauthn_rp_id
+    }
+
+    #[must_use]
+    pub fn webauthn_rp_origin(&self) -> &str {
+        &self.webauthn_rp_origin
+    }
+
+    #[must_use]
+    pub fn opaque_kv_mount(&self) -> &str {
+        &self.opaque_kv_mount
     }
 
     #[must_use]
@@ -206,6 +226,7 @@ pub struct AuthState {
     config: AuthConfig,
     opaque: OpaqueState,
     rate_limiter: Arc<dyn RateLimiter>,
+    mfa: MfaConfig,
 }
 
 impl AuthState {
@@ -213,11 +234,13 @@ impl AuthState {
         config: AuthConfig,
         opaque: OpaqueState,
         rate_limiter: Arc<dyn RateLimiter>,
+        mfa: MfaConfig,
     ) -> Self {
         Self {
             config,
             opaque,
             rate_limiter,
+            mfa,
         }
     }
 
@@ -233,6 +256,11 @@ impl AuthState {
 
     pub(super) fn rate_limiter(&self) -> &dyn RateLimiter {
         self.rate_limiter.as_ref()
+    }
+
+    #[must_use]
+    pub fn mfa(&self) -> &MfaConfig {
+        &self.mfa
     }
 }
 
@@ -256,8 +284,7 @@ mod tests {
             config.resend_cooldown_seconds(),
             super::DEFAULT_RESEND_COOLDOWN_SECONDS
         );
-        assert_eq!(config.opaque_kv_mount(), super::DEFAULT_OPAQUE_KV_MOUNT);
-        assert_eq!(config.opaque_kv_path(), super::DEFAULT_OPAQUE_KV_PATH);
+        assert_eq!(config.opaque_kv_mount(), "secret/permesi");
         assert_eq!(config.opaque_server_id(), super::DEFAULT_OPAQUE_SERVER_ID);
         assert_eq!(
             config.opaque_login_ttl_seconds(),
@@ -268,14 +295,12 @@ mod tests {
             .with_email_token_ttl_seconds(120)
             .with_resend_cooldown_seconds(30)
             .with_opaque_kv_mount("kv-v2".to_string())
-            .with_opaque_kv_path("permesi/opaque-v2".to_string())
             .with_opaque_server_id("api.test".to_string())
             .with_opaque_login_ttl_seconds(42);
 
         assert_eq!(config.email_token_ttl_seconds(), 120);
         assert_eq!(config.resend_cooldown_seconds(), 30);
         assert_eq!(config.opaque_kv_mount(), "kv-v2");
-        assert_eq!(config.opaque_kv_path(), "permesi/opaque-v2");
         assert_eq!(config.opaque_server_id(), "api.test");
         assert_eq!(config.opaque_login_ttl_seconds(), 42);
     }
@@ -300,7 +325,7 @@ mod tests {
             Duration::from_secs(5),
         );
         let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
-        let state = AuthState::new(config, opaque, limiter);
+        let state = AuthState::new(config, opaque, limiter, super::MfaConfig::new());
         assert_eq!(state.opaque().server_id(), b"api.permesi.dev");
     }
 }

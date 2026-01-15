@@ -1,7 +1,9 @@
 use crate::{
     api::handlers::{auth, health, root},
     cli::globals::GlobalArgs,
+    totp::{DekManager, TotpService},
     vault,
+    webauthn::SecurityKeyService,
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -81,22 +83,30 @@ pub async fn new(
         .await
         .context("Failed to connect to database")?;
 
-    let opaque_seed = vault::kv::read_opaque_seed(
-        globals,
-        auth_config.opaque_kv_mount(),
-        auth_config.opaque_kv_path(),
-    )
-    .await
-    .context("Failed to load OPAQUE seed from Vault")?;
+    let secrets = vault::kv::read_config_secrets(globals, "secret/permesi", "config")
+        .await
+        .context("Failed to load configuration secrets from Vault")?;
+
     let opaque_state = auth::OpaqueState::from_seed(
-        opaque_seed,
+        secrets.opaque_server_seed,
         auth_config.opaque_server_id().to_string(),
         Duration::from_secs(auth_config.opaque_login_ttl_seconds()),
     );
+
+    let mut mfa_config = auth::mfa::MfaConfig::from_env().context("Failed to load MFA config")?;
+    // Override/set pepper from Vault
+    mfa_config = mfa_config.with_recovery_pepper(Arc::from(secrets.mfa_recovery_pepper));
+
+    if mfa_config.required() && mfa_config.recovery_pepper().is_none() {
+        return Err(anyhow!(
+            "MFA is required but PERMESI_MFA_RECOVERY_PEPPER is not configured"
+        ));
+    }
     let auth_state = Arc::new(auth::AuthState::new(
-        auth_config,
+        auth_config.clone(),
         opaque_state,
         Arc::new(auth::NoopRateLimiter),
+        mfa_config,
     ));
     let admin_state = Arc::new(
         auth::AdminState::new(admin_config, pool.clone())
@@ -107,6 +117,21 @@ pub async fn new(
     // delivers/logs them, and retries failures with exponential backoff.
     email::spawn_outbox_worker(pool.clone(), Arc::new(email::LogEmailSender), email_config);
 
+    // Initialize TOTP
+    let dek_manager = DekManager::new(globals.clone());
+    if let Err(e) = dek_manager.init(&pool).await {
+        tracing::error!("Failed to initialize TOTP DEK manager: {e}");
+    }
+    let totp_service = TotpService::new(dek_manager, pool.clone(), "Permesi".to_string());
+
+    // Initialize Security Keys (WebAuthn)
+    let security_key_service = SecurityKeyService::new(
+        pool.clone(),
+        auth_config.webauthn_rp_id(),
+        auth_config.webauthn_rp_origin(),
+    )
+    .context("Failed to initialize Security Key service")?;
+
     let frontend_origin = frontend_origin(auth_state.config().frontend_base_url())?;
     let cors = CorsLayer::new()
         .allow_headers([
@@ -114,7 +139,7 @@ pub async fn new(
             AUTHORIZATION,
             HeaderName::from_static("x-permesi-zero-token"),
         ])
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .expose_headers([AUTHORIZATION])
         .allow_origin(AllowOrigin::exact(frontend_origin))
         .allow_credentials(true);
@@ -140,7 +165,9 @@ pub async fn new(
                 .layer(Extension(admin_state.clone()))
                 .layer(Extension(admission.clone()))
                 .layer(Extension(globals.clone()))
-                .layer(Extension(pool.clone())),
+                .layer(Extension(pool.clone()))
+                .layer(Extension(totp_service))
+                .layer(Extension(Arc::new(security_key_service))),
         )
         .layer(Extension(pool));
 

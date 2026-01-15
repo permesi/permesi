@@ -382,6 +382,7 @@ fn auth_state() -> super::AuthState {
         config,
         opaque_state,
         std::sync::Arc::new(super::NoopRateLimiter),
+        super::mfa::MfaConfig::new(),
     )
 }
 
@@ -636,6 +637,7 @@ async fn password_change_flow() -> Result<()> {
             Duration::from_secs(300),
         ),
         Arc::new(super::NoopRateLimiter),
+        super::mfa::MfaConfig::new(),
     ));
 
     // Setup Admission Verifier for test
@@ -827,6 +829,7 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
             Duration::from_secs(300),
         ),
         Arc::new(super::NoopRateLimiter),
+        super::mfa::MfaConfig::new(),
     ));
 
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);

@@ -492,6 +492,24 @@ impl VaultContainer {
         Ok(())
     }
 
+    /// Write a secret to a KV-v2 mount.
+    ///
+    /// # Errors
+    /// Returns an error if the Vault API request fails.
+    pub async fn write_kv_v2(&self, mount: &str, path: &str, data: Value) -> Result<()> {
+        let mount = mount.trim_matches('/');
+        let path = path.trim_matches('/');
+        self.request(
+            Method::POST,
+            &format!("/v1/{mount}/data/{path}"),
+            Some(json!({ "data": data })),
+            None,
+        )
+        .await
+        .context("Failed to write KV-v2 secret")?;
+        Ok(())
+    }
+
     async fn request(
         &self,
         method: Method,

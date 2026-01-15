@@ -31,8 +31,6 @@ pub struct Args {
     pub email_outbox_max_attempts: u32,
     pub email_outbox_backoff_base_seconds: u64,
     pub email_outbox_backoff_max_seconds: u64,
-    pub opaque_kv_mount: String,
-    pub opaque_kv_path: String,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
     pub platform_admin_ttl_seconds: i64,
@@ -113,8 +111,6 @@ pub async fn execute(args: Args) -> Result<()> {
         .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
         .with_session_ttl_seconds(args.session_ttl_seconds)
-        .with_opaque_kv_mount(args.opaque_kv_mount)
-        .with_opaque_kv_path(args.opaque_kv_path)
         .with_opaque_server_id(args.opaque_server_id)
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 

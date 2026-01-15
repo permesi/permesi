@@ -80,6 +80,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
     };
     let auth = use_auth();
     let is_authenticated = auth.is_authenticated;
+    let is_full_session = auth.is_full_session;
     let location = use_location();
     let on_login = move || location.pathname.get() == paths::LOGIN;
     let breadcrumb_segments = Signal::derive(move || breadcrumbs(&location.pathname.get()));
@@ -103,7 +104,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                         <span class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">
                             "Permesi"
                         </span>
-                        <Show when=move || is_authenticated.get()>
+                        <Show when=move || is_full_session.get()>
                             <For
                                 each=move || breadcrumb_segments.get().into_iter().enumerate()
                                 key=|(i, _)| *i
@@ -183,9 +184,8 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                 >
                                     <div class="flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
                                         {move || {
-                                            user_info
-                                                .get()
-                                                .map(|(_user_id, email)| {
+                                            if is_full_session.get() {
+                                                user_info.get().map(|(_user_id, email)| {
                                                     view! {
                                                         <A
                                                             href={paths::ME}
@@ -200,6 +200,9 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                                         </span>
                                                     }
                                                 })
+                                            } else {
+                                                None
+                                            }
                                         }}
                                         <button
                                             type="button"
@@ -229,7 +232,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
             </header>
 
             <div class="flex flex-1 overflow-hidden">
-                <Show when=move || is_authenticated.get()>
+                <Show when=move || is_full_session.get()>
                     <Sidebar />
                 </Show>
 

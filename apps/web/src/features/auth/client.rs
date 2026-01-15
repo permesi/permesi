@@ -12,11 +12,14 @@ use crate::{
     },
     features::auth::types::{
         AdminBootstrapRequest, AdminBootstrapResponse, AdminElevateRequest, AdminElevateResponse,
-        AdminInfraResponse, AdminStatusResponse, OpaqueLoginFinishRequest, OpaqueLoginStartRequest,
-        OpaqueLoginStartResponse, OpaquePasswordFinishRequest, OpaquePasswordStartRequest,
-        OpaquePasswordStartResponse, OpaqueReauthFinishRequest, OpaqueReauthStartRequest,
-        OpaqueSignupFinishRequest, OpaqueSignupStartRequest, OpaqueSignupStartResponse,
-        ResendVerificationRequest, UserSession, VerifyEmailRequest,
+        AdminInfraResponse, AdminStatusResponse, MfaRecoveryRequest, MfaTotpEnrollFinishRequest,
+        MfaTotpEnrollStartResponse, MfaTotpVerifyRequest, OpaqueLoginFinishRequest,
+        OpaqueLoginStartRequest, OpaqueLoginStartResponse, OpaquePasswordFinishRequest,
+        OpaquePasswordStartRequest, OpaquePasswordStartResponse, OpaqueReauthFinishRequest,
+        OpaqueReauthStartRequest, OpaqueSignupFinishRequest, OpaqueSignupStartRequest,
+        OpaqueSignupStartResponse, RecoveryCodesResponse, ResendVerificationRequest, UserSession,
+        VerifyEmailRequest, WebauthnAuthenticateFinishRequest, WebauthnAuthenticateStartResponse,
+        WebauthnRegisterFinishRequest, WebauthnRegisterStartResponse,
     },
 };
 
@@ -133,6 +136,109 @@ pub async fn resend_verification(
 ) -> Result<(), AppError> {
     let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
     post_json_with_headers("/v1/auth/resend-verification", request, &headers).await
+}
+
+/// Starts TOTP enrollment and returns the secret and QR code URL.
+pub async fn mfa_totp_enroll_start() -> Result<MfaTotpEnrollStartResponse, AppError> {
+    post_json_with_headers_with_credentials_response("/v1/auth/mfa/totp/enroll/start", &(), &vec![])
+        .await
+}
+
+/// Finishes TOTP enrollment and returns recovery codes and the new session token.
+pub async fn mfa_totp_enroll_finish(
+    request: &MfaTotpEnrollFinishRequest,
+) -> Result<(RecoveryCodesResponse, Option<String>), AppError> {
+    let response = post_json_with_headers_with_credentials_raw(
+        "/v1/auth/mfa/totp/enroll/finish",
+        request,
+        &vec![],
+    )
+    .await?;
+
+    let token = extract_bearer_token(&response);
+    let body = response
+        .json::<RecoveryCodesResponse>()
+        .await
+        .map_err(|err| AppError::Parse(format!("Failed to decode response: {err}")))?;
+
+    Ok((body, token))
+}
+
+/// Verifies a TOTP code during challenge and returns the new session token.
+pub async fn mfa_totp_verify(request: &MfaTotpVerifyRequest) -> Result<Option<String>, AppError> {
+    let response =
+        post_json_with_headers_with_credentials_raw("/v1/auth/mfa/totp/verify", request, &vec![])
+            .await?;
+    Ok(extract_bearer_token(&response))
+}
+
+/// Verifies a recovery code during challenge and returns the new bootstrap token.
+pub async fn mfa_recovery(request: &MfaRecoveryRequest) -> Result<Option<String>, AppError> {
+    let response =
+        post_json_with_headers_with_credentials_raw("/v1/auth/mfa/recovery", request, &vec![])
+            .await?;
+    Ok(extract_bearer_token(&response))
+}
+
+/// Disables TOTP MFA.
+pub async fn mfa_totp_disable(token: Option<&str>) -> Result<(), AppError> {
+    let headers = auth_headers(token);
+    crate::app_lib::delete_json_with_headers_with_credentials("/v1/me/mfa/totp", &headers).await
+}
+
+/// Regenerates MFA recovery codes.
+pub async fn regenerate_recovery_codes(
+    token: Option<&str>,
+) -> Result<RecoveryCodesResponse, AppError> {
+    let headers = auth_headers(token);
+    post_json_with_headers_with_credentials_response("/v1/me/mfa/recovery-codes", &(), &headers)
+        .await
+}
+
+/// Starts WebAuthn registration.
+pub async fn mfa_webauthn_register_start() -> Result<WebauthnRegisterStartResponse, AppError> {
+    post_json_with_headers_with_credentials_response(
+        "/v1/auth/mfa/webauthn/register/start",
+        &(),
+        &vec![],
+    )
+    .await
+}
+
+/// Finishes WebAuthn registration.
+pub async fn mfa_webauthn_register_finish(
+    request: &WebauthnRegisterFinishRequest,
+) -> Result<(), AppError> {
+    post_json_with_headers_with_credentials(
+        "/v1/auth/mfa/webauthn/register/finish",
+        request,
+        &vec![],
+    )
+    .await
+}
+
+/// Starts WebAuthn authentication.
+pub async fn mfa_webauthn_authenticate_start() -> Result<WebauthnAuthenticateStartResponse, AppError>
+{
+    post_json_with_headers_with_credentials_response(
+        "/v1/auth/mfa/webauthn/authenticate/start",
+        &(),
+        &vec![],
+    )
+    .await
+}
+
+/// Finishes WebAuthn authentication and returns the new session token.
+pub async fn mfa_webauthn_authenticate_finish(
+    request: &WebauthnAuthenticateFinishRequest,
+) -> Result<Option<String>, AppError> {
+    let response = post_json_with_headers_with_credentials_raw(
+        "/v1/auth/mfa/webauthn/authenticate/finish",
+        request,
+        &vec![],
+    )
+    .await?;
+    Ok(extract_bearer_token(&response))
 }
 
 /// Fetches the current session using cookie-based auth.

@@ -32,4 +32,6 @@
 
 pub mod api;
 pub mod cli;
+pub mod totp;
 pub mod vault;
+pub mod webauthn;

@@ -7,6 +7,7 @@ mod dashboard;
 mod health;
 mod login;
 mod me;
+mod mfa;
 mod not_found;
 mod orgs;
 mod signup;
@@ -19,6 +20,7 @@ pub(crate) use dashboard::DashboardPage;
 pub(crate) use health::HealthPage;
 pub(crate) use login::LoginPage;
 pub(crate) use me::{MePage, MeSecurityPage};
+pub(crate) use mfa::{MfaChallengePage, MfaSetupPage};
 pub(crate) use not_found::{NotFoundContent, NotFoundPage};
 pub(crate) use orgs::{OrgDetailPage, OrgsListPage, ProjectDetailPage};
 pub(crate) use signup::SignUpPage;
@@ -45,6 +47,8 @@ pub mod paths {
     pub const DASHBOARD: &str = "/console/dashboard";
     pub const ME: &str = "/console/me";
     pub const ME_SECURITY: &str = "/console/me/security";
+    pub const MFA_SETUP: &str = "/console/mfa/setup";
+    pub const MFA_CHALLENGE: &str = "/console/mfa/challenge";
     pub const ADMIN: &str = "/console/admin";
     pub const ADMIN_CLAIM: &str = "/console/admin/claim";
     pub const ORGS: &str = "/console/orgs";
@@ -83,6 +87,8 @@ pub fn AppRoutes() -> impl IntoView {
                 <Route path=path!("dashboard") view=DashboardPage />
                 <Route path=path!("me") view=MePage />
                 <Route path=path!("me/security") view=MeSecurityPage />
+                <Route path=path!("mfa/setup") view=MfaSetupPage />
+                <Route path=path!("mfa/challenge") view=MfaChallengePage />
 
                 // Admin subtree (nested)
                 <ParentRoute path=path!("admin") view=|| view! { <AdminLayout/> }>

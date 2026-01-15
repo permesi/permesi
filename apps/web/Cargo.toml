@@ -20,6 +20,7 @@ leptos_router = { version = "0.8" }
 gloo-net = { version = "0.6", features = ["json"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
 base64 = { workspace = true }
 opaque-ke = { workspace = true }
 rand = { workspace = true }
@@ -28,4 +29,5 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 hex = "0.4"
 sha2 = "0.10"
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3.83", features = ["AbortController", "AbortSignal", "History", "Location", "Storage", "UrlSearchParams", "Window"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3.83", features = ["AbortController", "AbortSignal", "History", "Location", "Storage", "UrlSearchParams", "Window", "CredentialsContainer", "PublicKeyCredential", "AuthenticatorAttestationResponse", "AuthenticatorAssertionResponse", "PublicKeyCredentialCreationOptions", "PublicKeyCredentialRequestOptions", "PublicKeyCredentialDescriptor", "PublicKeyCredentialUserEntity", "PublicKeyCredentialRpEntity", "PublicKeyCredentialParameters", "AuthenticatorSelectionCriteria", "PublicKeyCredentialType", "AuthenticatorTransport", "Navigator", "CredentialCreationOptions", "CredentialRequestOptions"] }

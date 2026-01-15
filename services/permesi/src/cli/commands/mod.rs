@@ -239,20 +239,6 @@ fn with_auth_outbox_args(command: Command) -> Command {
 fn with_auth_opaque_args(command: Command) -> Command {
     command
         .arg(
-            Arg::new("opaque-kv-mount")
-                .long("opaque-kv-mount")
-                .help("Vault KV v2 mount containing the OPAQUE seed")
-                .env("PERMESI_OPAQUE_KV_MOUNT")
-                .default_value("secret/permesi"),
-        )
-        .arg(
-            Arg::new("opaque-kv-path")
-                .long("opaque-kv-path")
-                .help("Vault KV v2 path containing the OPAQUE seed")
-                .env("PERMESI_OPAQUE_KV_PATH")
-                .default_value("opaque"),
-        )
-        .arg(
             Arg::new("opaque-server-id")
                 .long("opaque-server-id")
                 .help("OPAQUE server identifier")

@@ -103,6 +103,12 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'citext') THEN
         RAISE EXCEPTION 'Missing extension: citext';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_deks') THEN
+        RAISE EXCEPTION 'Missing permesi table: totp_deks';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_credentials') THEN
+        RAISE EXCEPTION 'Missing permesi table: totp_credentials';
+    END IF;
 END;
 $$;
 

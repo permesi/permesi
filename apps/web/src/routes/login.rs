@@ -13,7 +13,7 @@ use crate::{
         opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
         state::use_auth,
         token,
-        types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, UserSession},
+        types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, SessionKind, UserSession},
     },
     routes::paths,
 };
@@ -114,17 +114,27 @@ pub fn LoginPage() -> impl IntoView {
         if let Some(result) = login_action.value().get() {
             match result {
                 Ok(login) => {
-                    auth.set_session(login.session);
+                    auth.set_session(login.session.clone());
                     if let Some(token) = login.session_token {
                         auth.set_session_token(token);
                     }
-                    if let Some(storage) = web_sys::window()
-                        .and_then(|w| w.local_storage().ok())
-                        .flatten()
-                    {
-                        let _ = storage.set_item("permesi_logged_in", "true");
+                    match login.session.session_kind {
+                        SessionKind::Full => {
+                            if let Some(storage) = web_sys::window()
+                                .and_then(|w| w.local_storage().ok())
+                                .flatten()
+                            {
+                                let _ = storage.set_item("permesi_logged_in", "true");
+                            }
+                            navigate_for_effect(paths::DASHBOARD, Default::default());
+                        }
+                        SessionKind::MfaBootstrap => {
+                            navigate_for_effect(paths::MFA_SETUP, Default::default());
+                        }
+                        SessionKind::MfaChallenge => {
+                            navigate_for_effect(paths::MFA_CHALLENGE, Default::default());
+                        }
                     }
-                    navigate_for_effect("/", Default::default());
                 }
                 Err(err) => set_error.set(Some(err)),
             }

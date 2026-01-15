@@ -226,7 +226,12 @@ mod tests {
             Duration::from_secs(30),
         );
         let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
-        Arc::new(AuthState::new(config, opaque, limiter))
+        Arc::new(AuthState::new(
+            config,
+            opaque,
+            limiter,
+            super::super::mfa::MfaConfig::new(),
+        ))
     }
 
     #[tokio::test]

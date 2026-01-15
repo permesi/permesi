@@ -61,9 +61,14 @@ The resources are defined in `vault/contrib/terraform/`:
   - Key: `users` (type `chacha20-poly1305`)
 - **Transit (genesis)**: mounted at `transit/genesis`
   - Key: `genesis-signing` (type `ed25519`)
-- **KV v2 (OPAQUE seed)**: mounted at `secret/permesi`
-  - Secret: `opaque`
-  - Field: `opaque_seed_b64` (base64-encoded 32 bytes)
+### Permesi Configuration Secrets
+
+- Path: `secret/permesi/config`
+- Fields:
+  - `opaque_server_seed` (base64-encoded 32 bytes)
+  - `mfa_recovery_pepper` (base64-encoded string)
+
+Used by the `permesi` service to initialize OPAQUE authentication and MFA recovery code hashing.
 - **Database creds (Postgres)**: mounted at `database`
   - Connections: `genesis`, `permesi`
   - Roles: `genesis`, `permesi`
@@ -148,7 +153,7 @@ Then pass that wrapping token to the service via `*_VAULT_WRAPPED_TOKEN`.
 The most useful env vars (all have defaults in `vault.Dockerfile` and/or `vault/bootstrap.sh`):
 
 - `VAULT_APPROLE_MOUNT`, `VAULT_TRANSIT_MOUNT`, `VAULT_TRANSIT_KEY`, `VAULT_GENESIS_TRANSIT_MOUNT`, `VAULT_GENESIS_TRANSIT_KEY`, `VAULT_TRANSIT_AUTO_ROTATE_PERIOD`, `VAULT_DATABASE_MOUNT`
-- `VAULT_KV_MOUNT`, `VAULT_OPAQUE_SECRET_PATH`, `VAULT_OPAQUE_SEED_B64`
+- `VAULT_KV_MOUNT`, `VAULT_CONFIG_SECRET_PATH`, `VAULT_OPAQUE_SERVER_SEED`, `VAULT_MFA_RECOVERY_PEPPER`
 - `VAULT_POSTGRES_HOST`, `VAULT_POSTGRES_PORT`, `VAULT_POSTGRES_USERNAME`, `VAULT_POSTGRES_PASSWORD`
 - `VAULT_POSTGRES_DATABASE_GENESIS`, `VAULT_POSTGRES_DATABASE_PERMESI`, `VAULT_POSTGRES_SSLMODE`
 - `VAULT_POSTGRES_REASSIGN_OWNER` (role used for `REASSIGN OWNED BY ... TO ...` during revocation)

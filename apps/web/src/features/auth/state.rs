@@ -16,6 +16,7 @@ pub struct AuthContext {
     pub session_token: RwSignal<Option<String>>,
     pub admin_token: RwSignal<Option<AdminElevateResponse>>,
     pub is_authenticated: Signal<bool>,
+    pub is_full_session: Signal<bool>,
     pub is_operator: Signal<bool>,
     pub is_loading: RwSignal<bool>,
 }
@@ -29,6 +30,12 @@ impl AuthContext {
         is_loading: RwSignal<bool>,
     ) -> Self {
         let is_authenticated = Signal::derive(move || session.get().is_some());
+        let is_full_session = Signal::derive(move || {
+            session
+                .get()
+                .map(|s| s.session_kind == crate::features::auth::types::SessionKind::Full)
+                .unwrap_or(false)
+        });
         let is_operator = Signal::derive(move || {
             session
                 .get()
@@ -40,6 +47,7 @@ impl AuthContext {
             session_token,
             admin_token,
             is_authenticated,
+            is_full_session,
             is_operator,
             is_loading,
         }

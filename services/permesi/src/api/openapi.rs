@@ -28,6 +28,14 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(auth::opaque::reauth::opaque_reauth_finish))
         .routes(routes!(auth::opaque::password::opaque_password_start))
         .routes(routes!(auth::opaque::password::opaque_password_finish))
+        .routes(routes!(auth::mfa::mfa_recovery))
+        .routes(routes!(auth::mfa::totp_enroll_start))
+        .routes(routes!(auth::mfa::totp_enroll_finish))
+        .routes(routes!(auth::mfa::totp_verify))
+        .routes(routes!(auth::mfa::webauthn::register_start))
+        .routes(routes!(auth::mfa::webauthn::register_finish))
+        .routes(routes!(auth::mfa::webauthn::authenticate_start))
+        .routes(routes!(auth::mfa::webauthn::authenticate_finish))
         .routes(routes!(auth::verification::verify_email))
         .routes(routes!(auth::verification::resend_verification))
         .routes(routes!(auth::session::session))
@@ -40,6 +48,10 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(me::patch_me))
         .routes(routes!(me::list_sessions))
         .routes(routes!(me::revoke_session))
+        .routes(routes!(me::disable_totp))
+        .routes(routes!(me::list_security_keys))
+        .routes(routes!(auth::mfa::webauthn::delete_key))
+        .routes(routes!(me::regenerate_recovery_codes))
         .routes(routes!(orgs::organizations::create_org))
         .routes(routes!(orgs::organizations::list_orgs))
         .routes(routes!(orgs::organizations::get_org))
@@ -187,6 +199,7 @@ mod tests {
                 .paths
                 .contains_key("/v1/auth/resend-verification")
         );
+        assert!(spec.paths.paths.contains_key("/v1/auth/mfa/recovery"));
         assert!(spec.paths.paths.contains_key("/v1/auth/session"));
         assert!(spec.paths.paths.contains_key("/v1/auth/logout"));
         assert!(spec.paths.paths.contains_key("/v1/auth/admin/status"));
@@ -195,6 +208,7 @@ mod tests {
         assert!(spec.paths.paths.contains_key("/v1/me"));
         assert!(spec.paths.paths.contains_key("/v1/me/sessions"));
         assert!(spec.paths.paths.contains_key("/v1/me/sessions/{sid}"));
+        assert!(spec.paths.paths.contains_key("/v1/me/mfa/recovery-codes"));
         assert!(spec.paths.paths.contains_key("/v1/orgs"));
         assert!(spec.paths.paths.contains_key("/v1/orgs/{org_slug}"));
         assert!(

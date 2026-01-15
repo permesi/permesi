@@ -9,6 +9,31 @@
 --   - cron.database_name = 'postgres'
 --   - pg_cron installed and listed in shared_preload_libraries
 --   - genesis/permesi databases and vault_* roles already created
+--
+-- Authentication for Vault-Managed Users (Critical):
+--   These cron jobs run as `vault_genesis` and `vault_permesi`. Because Vault can
+--   rotate passwords for these roles (either automatically in Vault Enterprise or
+--   manually via API), `pg_cron` cannot safely use password authentication.
+--   Instead, it must use `peer` authentication over the local socket, mapping the
+--   internal system user (usually `postgres`) to the target Vault roles.
+--
+--   Manual Rotation Command (for reference):
+--     vault write -f database/rotate-root/permesi
+--     vault write -f database/rotate-root/genesis
+--
+--   1. Update `pg_ident.conf` (User Name Maps):
+--      # MAPNAME   SYSTEM-USERNAME   PG-USERNAME
+--      cronmap     postgres          vault_genesis
+--      cronmap     postgres          vault_permesi
+--
+--   2. Update `pg_hba.conf` (Host-Based Authentication):
+--      Insert these lines *before* generic local rules:
+--      # TYPE  DATABASE  USER            ADDRESS  METHOD  OPTIONS
+--      local   genesis   vault_genesis            peer    map=cronmap
+--      local   permesi   vault_permesi            peer    map=cronmap
+--
+--   3. Reload configuration:
+--      SELECT pg_reload_conf();
 
 \set ON_ERROR_STOP 1
 

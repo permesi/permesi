@@ -229,15 +229,20 @@ SELECT cleanup_expired_tokens();
 OPAQUE server setup is derived from a 32-byte seed stored in Vault KV v2:
 
 - Mount: `--opaque-kv-mount` / `PERMESI_OPAQUE_KV_MOUNT` (default: `secret/permesi`)
-- Path: `--opaque-kv-path` / `PERMESI_OPAQUE_KV_PATH` (default: `opaque`)
-- Field: `opaque_seed_b64` (base64-encoded 32 bytes)
+- Fields:
+  - `opaque_server_seed` (base64-encoded 32 bytes)
+  - `mfa_recovery_pepper` (base64-encoded string)
 
-The dev bootstrap (`vault/bootstrap.sh`) seeds this automatically for local runs.
+To initialize these in Vault:
 
-Creation:
-- Generate 32 random bytes and store the base64 value as `opaque_seed_b64`.
-- Example: `OPAQUE_SEED_B64=$(openssl rand -base64 32)` and `vault kv put secret/permesi/opaque opaque_seed_b64="$OPAQUE_SEED_B64"`.
-- All `permesi` instances must read the same seed so existing registrations remain valid.
+- Generate 32 random bytes and store the base64 value as `opaque_server_seed`.
+- Generate a random string and store it as `mfa_recovery_pepper`.
+- Example:
+  ```bash
+  OPAQUE_SEED=$(openssl rand -base64 32)
+  MFA_PEPPER=$(openssl rand -base64 32)
+  vault kv put secret/permesi/config opaque_server_seed="$OPAQUE_SEED" mfa_recovery_pepper="$MFA_PEPPER"
+  ```
 
 Rotation:
 - Rotation is not routine: changing the seed invalidates all existing OPAQUE registration records.
@@ -255,6 +260,12 @@ Maintenance:
 - `--email-resend-cooldown-seconds` / `PERMESI_EMAIL_RESEND_COOLDOWN_SECONDS`
 - `--opaque-server-id` / `PERMESI_OPAQUE_SERVER_ID` (default `api.permesi.dev`)
 - `--opaque-login-ttl-seconds` / `PERMESI_OPAQUE_LOGIN_TTL_SECONDS`
+
+### MFA config flags
+
+- `PERMESI_MFA_REQUIRED` (set to `true` to require MFA bootstrap for new sessions)
+- `PERMESI_MFA_RECOVERY_PEPPER` (override: base64-encoded recovery pepper, defaults to Vault `mfa_recovery_pepper`)
+- `PERMESI_MFA_RECOVERY_PEPPER_FILE` (override: path to a file containing the base64 recovery pepper)
 
 ### Email outbox worker flags
 

@@ -14,6 +14,13 @@ resource "vault_transit_secret_backend_key" "permesi_users" {
   auto_rotate_period = 2592000 # 30 days
 }
 
+resource "vault_transit_secret_backend_key" "permesi_totp" {
+  backend            = vault_mount.transit_permesi.path # "transit/permesi"
+  name               = "totp"
+  type               = "chacha20-poly1305"
+  auto_rotate_period = 2592000 # 30 days
+}
+
 # ----------------------------------------------------------------------------
 # Transit - Genesis (Admission token signing)
 # ----------------------------------------------------------------------------

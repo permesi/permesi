@@ -235,6 +235,30 @@ pub async fn post_empty_with_credentials(path: &str) -> Result<(), AppError> {
     handle_empty_response(response).await
 }
 
+/// Deletes a resource with custom headers and cookies.
+pub async fn delete_json_with_headers_with_credentials(
+    path: &str,
+    headers: &[(String, String)],
+) -> Result<(), AppError> {
+    let url = build_url(path);
+    let response = send_with_timeout(move |signal| {
+        let mut builder = Request::delete(&url)
+            .credentials(RequestCredentials::Include)
+            .abort_signal(Some(signal));
+
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+
+        builder
+            .build()
+            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
+    })
+    .await?;
+
+    handle_empty_response(response).await
+}
+
 /// Fetches JSON with cookies and returns `None` on 204 or 401.
 pub async fn get_optional_json_with_credentials<T: DeserializeOwned>(
     path: &str,

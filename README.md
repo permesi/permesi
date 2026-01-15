@@ -67,7 +67,7 @@ schedule pg_cron jobs directly.
 
 - **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.
 - **permesi encryption:** Vault Transit key type `chacha20-poly1305` (default `transit/permesi` / key `users`) for encrypt/decrypt operations.
-- **OPAQUE (user auth):** Client-side OPAQUE; server stores only the registration record. The server setup seed is stored in Vault KV v2 (`opaque_seed_b64`).
+- **OPAQUE (user auth):** Client-side OPAQUE; server stores only the registration record. The server setup seed is stored in Vault KV v2 (`opaque_server_seed`).
 
 ## Admission Token Verification (Offline)
 

@@ -5,3 +5,7 @@ path "auth/approle/role/permesi/secret-id" {
 path "auth/approle/role/genesis/secret-id" {
   capabilities = ["update"]
 }
+
+path "sys/leases/renew" {
+  capabilities = ["update"]
+}

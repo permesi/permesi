@@ -3,15 +3,9 @@ name: Deploy Documentation
 
 on:
   push:
-    branches:
-      - main
-      - develop
-    paths:
-      - docs/**
-      - crates/**
-      - services/**
-      - .justfile
-      - .github/workflows/deploy-docs.yml
+    tags:
+      - '*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,7 +14,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

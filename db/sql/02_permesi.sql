@@ -326,3 +326,142 @@ BEGIN
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
 END;
 $$;
+
+-- -----------------------------------------------------------------------------
+-- MFA (Multi-Factor Authentication)
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS user_mfa_state (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('disabled', 'required_unenrolled', 'enabled')),
+    totp_secret BYTEA,
+    recovery_batch_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_mfa_recovery_codes (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    batch_id UUID NOT NULL,
+    code_hash TEXT NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS user_mfa_recovery_codes_user_batch_idx ON user_mfa_recovery_codes (user_id, batch_id);
+
+CREATE TABLE IF NOT EXISTS user_mfa_bootstrap_sessions (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(session_hash) = 32),
+    expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS user_mfa_bootstrap_sessions_expires_at_idx ON user_mfa_bootstrap_sessions (expires_at);
+
+CREATE TABLE IF NOT EXISTS user_mfa_challenge_sessions (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(session_hash) = 32),
+    expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS user_mfa_challenge_sessions_expires_at_idx ON user_mfa_challenge_sessions (expires_at);
+
+-- -----------------------------------------------------------------------------
+-- TOTP MFA
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS totp_deks (
+    dek_id UUID PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('active', 'decrypt_only', 'retired')),
+    wrapped_dek TEXT NOT NULL, -- Vault transit ciphertext
+    kek_mount TEXT NOT NULL DEFAULT 'transit/permesi',
+    kek_key TEXT NOT NULL DEFAULT 'totp',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    rotated_at TIMESTAMPTZ
+);
+
+-- Ensure only one active DEK
+CREATE UNIQUE INDEX IF NOT EXISTS totp_deks_active_idx ON totp_deks (status) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS totp_credentials (
+    credential_id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT,
+    digits SMALLINT NOT NULL DEFAULT 6,
+    period SMALLINT NOT NULL DEFAULT 30,
+    algo TEXT NOT NULL DEFAULT 'SHA1',
+    dek_id UUID NOT NULL REFERENCES totp_deks(dek_id),
+    seed_ciphertext BYTEA NOT NULL, -- nonce (12 bytes) + ciphertext
+    confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_totp_credentials_user ON totp_credentials (user_id);
+
+-- One active confirmed credential per user
+CREATE UNIQUE INDEX IF NOT EXISTS idx_totp_credentials_active_confirmed
+ON totp_credentials (user_id)
+WHERE confirmed_at IS NOT NULL;
+
+-- One active pending enrollment per user (prevents flooding)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_totp_credentials_active_pending
+ON totp_credentials (user_id)
+WHERE confirmed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS totp_audit_log (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id UUID REFERENCES totp_credentials(credential_id) ON DELETE SET NULL,
+    action TEXT NOT NULL, -- enroll, confirm, verify_success, verify_failure, lockout
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_totp_audit_user_time ON totp_audit_log (user_id, created_at);
+
+-- -----------------------------------------------------------------------------
+-- Security Keys (WebAuthn)
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS security_keys (
+    credential_id BYTEA PRIMARY KEY, -- WebAuthn Credential ID
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    public_key BYTEA NOT NULL,
+    sign_count BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_keys_user ON security_keys (user_id);
+
+CREATE TABLE IF NOT EXISTS security_key_audit_log (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id BYTEA REFERENCES security_keys(credential_id) ON DELETE SET NULL,
+    action TEXT NOT NULL, -- register, verify_success, verify_failure, delete
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_key_audit_user_time ON security_key_audit_log (user_id, created_at);
+
+-- Grant permissions to permesi_runtime
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
+        GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
+        GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;
+        GRANT ALL PRIVILEGES ON TABLE totp_audit_log TO permesi_runtime;
+        GRANT ALL PRIVILEGES ON TABLE security_keys TO permesi_runtime;
+        GRANT ALL PRIVILEGES ON TABLE security_key_audit_log TO permesi_runtime;
+    END IF;
+END $$;

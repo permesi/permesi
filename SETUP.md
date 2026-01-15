@@ -416,26 +416,51 @@ Rotation script (`/usr/local/sbin/vault-proxy-rotate.sh`):
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Configuration ---
 VAULT_ADDR="https://vault.example.com:8200"
-token_path="/etc/vault/proxy-rotate.token"
-if [[ ! -f "${token_path}" ]]; then
-  echo "Missing ${token_path}. Create it with: vault token create -policy=vault-proxy-rotate ..." >&2
-  exit 1
+TOKEN_PATH="/etc/vault/proxy-rotate.token"
+SECRET_ID_PATH="/etc/vault/proxy-secret-id"
+ROLE_NAME="vault-proxy"
+
+# 1. Check if the rotation token exists
+if [[ ! -f "$TOKEN_PATH" ]]; then
+    echo "ERROR: Missing ${TOKEN_PATH}." >&2
+    echo "Create it with: vault token create -policy=vault-proxy-rotate -period=24h" >&2
+    exit 1
 fi
-VAULT_TOKEN="$(cat "${token_path}")"
 
+VAULT_TOKEN="$(cat "$TOKEN_PATH" | tr -d '\n\r ')"
+export VAULT_ADDR
+export VAULT_TOKEN
+
+# 2. Renew the rotation token for another 12-hour window
+# We use 18h to ensure it doesn't expire exactly when the next timer starts
+echo "Renewing rotation token..."
+curl -fsS -H "X-Vault-Token: ${VAULT_TOKEN}" \
+    -X POST -d '{"increment": "64800"}' "${VAULT_ADDR}/v1/auth/token/renew-self" > /dev/null
+
+# 3. Generate the new SecretID (Valid for 24h per server config)
+echo "Generating new SecretID..."
 umask 077
-new_secret_id="$(
-  curl -fsS -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    -X POST "${VAULT_ADDR}/v1/auth/approle/role/vault-proxy/secret-id" \
-    | jq -er '.data.secret_id'
-)"
+NEW_SECRET_ID=$(curl -fsS -H "X-Vault-Token: ${VAULT_TOKEN}" \
+    -X POST "${VAULT_ADDR}/v1/auth/approle/role/${ROLE_NAME}/secret-id" |
+    jq -er '.data.secret_id')
 
-install -o vault -g vault -m 0600 /dev/null /etc/vault/proxy-secret-id.new
-printf '%s' "${new_secret_id}" > /etc/vault/proxy-secret-id.new
-chmod 0400 /etc/vault/proxy-secret-id.new
-mv /etc/vault/proxy-secret-id.new /etc/vault/proxy-secret-id
-systemctl restart vault-proxy
+# 4. Atomic write to the SecretID file
+install -o vault -g vault -m 0400 /dev/null "${SECRET_ID_PATH}.new"
+printf '%s' "$NEW_SECRET_ID" >"${SECRET_ID_PATH}.new"
+mv "${SECRET_ID_PATH}.new" "$SECRET_ID_PATH"
+
+# 5. Signal Vault Proxy to re-authenticate
+if systemctl is-active --quiet vault; then
+    echo "Signaling Vault Agent to reload credentials (SIGHUP)..."
+    systemctl kill -s SIGHUP vault
+else
+    echo "Vault service is not running. Starting it..."
+    systemctl start vault
+fi
+
+echo "Rotation successful."
 ```
 
 Systemd unit (`/etc/systemd/system/vault-proxy-rotate.service`):
@@ -521,9 +546,9 @@ If this seed changes, all existing OPAQUE registrations will no longer validate;
 will need to re-register or reset their credentials.
 
 ```bash
-# Generate a seed and store it
-SEED=$(head -c 32 /dev/urandom | base64)
-vault kv put secret/permesi/opaque opaque_seed_b64="$SEED"
+$ SEED=$(openssl rand -base64 32)
+$ PEPPER=$(openssl rand -base64 32)
+$ vault kv put secret/permesi/config opaque_server_seed="$SEED" mfa_recovery_pepper="$PEPPER"
 ```
 
 ### D. Define Service Policies

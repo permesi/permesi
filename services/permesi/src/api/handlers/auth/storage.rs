@@ -6,10 +6,13 @@ use sqlx::{PgPool, Row};
 use tracing::Instrument;
 use uuid::Uuid;
 
-use super::state::AuthConfig;
-use super::utils::{
-    build_verify_url, generate_session_token, generate_verification_token, hash_session_token,
-    hash_verification_token, is_unique_violation,
+use super::{
+    session_kind::{MFA_BOOTSTRAP_PREFIX, MFA_CHALLENGE_PREFIX, SessionKind},
+    state::AuthConfig,
+    utils::{
+        build_verify_url, generate_session_token, generate_verification_token, hash_session_token,
+        hash_verification_token, is_unique_violation,
+    },
 };
 
 /// Outcome when attempting to create a new user + verification record.
@@ -39,7 +42,8 @@ pub(crate) struct SessionRecord {
     pub(crate) user_id: Uuid,
     pub(crate) email: String,
     pub(crate) created_at_unix: i64,
-    pub(crate) auth_time_unix: i64,
+    pub(crate) auth_time_unix: Option<i64>,
+    pub(crate) kind: SessionKind,
 }
 
 /// Look up login data by email (used by OPAQUE login start).
@@ -212,7 +216,7 @@ pub(super) async fn insert_session(
     Err(anyhow!("failed to generate unique session token"))
 }
 
-pub(super) async fn lookup_session(
+pub(super) async fn lookup_full_session(
     pool: &PgPool,
     token_hash: &[u8],
 ) -> Result<Option<SessionRecord>> {
@@ -269,7 +273,162 @@ pub(super) async fn lookup_session(
         user_id: row.get("id"),
         email: row.get("email"),
         created_at_unix: row.get("created_at_unix"),
-        auth_time_unix: row.get("auth_time_unix"),
+        auth_time_unix: Some(row.get("auth_time_unix")),
+        kind: SessionKind::Full,
+    }))
+}
+
+pub(super) async fn insert_mfa_bootstrap_session(
+    pool: &PgPool,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    // TODO: Draft-only table `user_mfa_bootstrap_sessions` pending migrations.
+    let query = r"
+        INSERT INTO user_mfa_bootstrap_sessions (user_id, session_hash, expires_at)
+        VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.statement = query
+    );
+
+    for _ in 0..3 {
+        let token = format!("{MFA_BOOTSTRAP_PREFIX}{}", generate_session_token()?);
+        let token_hash = hash_session_token(&token);
+        let result = sqlx::query(query)
+            .bind(user_id)
+            .bind(token_hash)
+            .bind(ttl_seconds)
+            .execute(pool)
+            .instrument(span.clone())
+            .await;
+
+        match result {
+            Ok(_) => return Ok(token),
+            Err(err) if is_unique_violation(&err) => {}
+            Err(err) => return Err(err).context("failed to insert MFA bootstrap session"),
+        }
+    }
+
+    Err(anyhow!(
+        "failed to generate unique MFA bootstrap session token"
+    ))
+}
+
+pub(super) async fn insert_mfa_challenge_session(
+    pool: &PgPool,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    // TODO: Draft-only table `user_mfa_challenge_sessions` pending migrations.
+    let query = r"
+        INSERT INTO user_mfa_challenge_sessions (user_id, session_hash, expires_at)
+        VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "INSERT",
+        db.statement = query
+    );
+
+    for _ in 0..3 {
+        let token = format!("{MFA_CHALLENGE_PREFIX}{}", generate_session_token()?);
+        let token_hash = hash_session_token(&token);
+        let result = sqlx::query(query)
+            .bind(user_id)
+            .bind(token_hash)
+            .bind(ttl_seconds)
+            .execute(pool)
+            .instrument(span.clone())
+            .await;
+
+        match result {
+            Ok(_) => return Ok(token),
+            Err(err) if is_unique_violation(&err) => {}
+            Err(err) => return Err(err).context("failed to insert MFA challenge session"),
+        }
+    }
+
+    Err(anyhow!(
+        "failed to generate unique MFA challenge session token"
+    ))
+}
+
+pub(super) async fn lookup_mfa_bootstrap_session(
+    pool: &PgPool,
+    token_hash: &[u8],
+) -> Result<Option<SessionRecord>> {
+    let query = r"
+        SELECT users.id,
+               users.email,
+               EXTRACT(EPOCH FROM user_mfa_bootstrap_sessions.created_at)::bigint AS created_at_unix
+        FROM user_mfa_bootstrap_sessions
+        JOIN users ON users.id = user_mfa_bootstrap_sessions.user_id
+        WHERE user_mfa_bootstrap_sessions.session_hash = $1
+          AND user_mfa_bootstrap_sessions.expires_at > NOW()
+          AND users.status = 'active'
+        LIMIT 1
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.statement = query
+    );
+    let row = sqlx::query(query)
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .instrument(span)
+        .await
+        .context("failed to lookup MFA bootstrap session")?;
+
+    Ok(row.map(|row| SessionRecord {
+        user_id: row.get("id"),
+        email: row.get("email"),
+        created_at_unix: row.get("created_at_unix"),
+        auth_time_unix: None,
+        kind: SessionKind::MfaBootstrap,
+    }))
+}
+
+pub(super) async fn lookup_mfa_challenge_session(
+    pool: &PgPool,
+    token_hash: &[u8],
+) -> Result<Option<SessionRecord>> {
+    let query = r"
+        SELECT users.id,
+               users.email,
+               EXTRACT(EPOCH FROM user_mfa_challenge_sessions.created_at)::bigint AS created_at_unix
+        FROM user_mfa_challenge_sessions
+        JOIN users ON users.id = user_mfa_challenge_sessions.user_id
+        WHERE user_mfa_challenge_sessions.session_hash = $1
+          AND user_mfa_challenge_sessions.expires_at > NOW()
+          AND users.status = 'active'
+        LIMIT 1
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT",
+        db.statement = query
+    );
+    let row = sqlx::query(query)
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .instrument(span)
+        .await
+        .context("failed to lookup MFA challenge session")?;
+
+    Ok(row.map(|row| SessionRecord {
+        user_id: row.get("id"),
+        email: row.get("email"),
+        created_at_unix: row.get("created_at_unix"),
+        auth_time_unix: None,
+        kind: SessionKind::MfaChallenge,
     }))
 }
 
@@ -353,7 +512,7 @@ pub(super) async fn rotate_password_and_clear_sessions(
     Ok(true)
 }
 
-pub(super) async fn delete_session(pool: &PgPool, token_hash: &[u8]) -> Result<()> {
+pub(super) async fn delete_full_session(pool: &PgPool, token_hash: &[u8]) -> Result<()> {
     // Logout is idempotent; it's fine if no rows are deleted.
     let query = "DELETE FROM user_sessions WHERE session_hash = $1";
     let span = tracing::info_span!(
@@ -368,6 +527,40 @@ pub(super) async fn delete_session(pool: &PgPool, token_hash: &[u8]) -> Result<(
         .instrument(span)
         .await
         .context("failed to delete session")?;
+    Ok(())
+}
+
+pub(super) async fn delete_mfa_bootstrap_session(pool: &PgPool, token_hash: &[u8]) -> Result<()> {
+    let query = "DELETE FROM user_mfa_bootstrap_sessions WHERE session_hash = $1";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "DELETE",
+        db.statement = query
+    );
+    sqlx::query(query)
+        .bind(token_hash)
+        .execute(pool)
+        .instrument(span)
+        .await
+        .context("failed to delete MFA bootstrap session")?;
+    Ok(())
+}
+
+pub(super) async fn delete_mfa_challenge_session(pool: &PgPool, token_hash: &[u8]) -> Result<()> {
+    let query = "DELETE FROM user_mfa_challenge_sessions WHERE session_hash = $1";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "DELETE",
+        db.statement = query
+    );
+    sqlx::query(query)
+        .bind(token_hash)
+        .execute(pool)
+        .instrument(span)
+        .await
+        .context("failed to delete MFA challenge session")?;
     Ok(())
 }
 

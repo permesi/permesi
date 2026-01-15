@@ -4,6 +4,7 @@
 //! 1) Authenticate via bearer token or session cookie.
 //! 2) Resolve the current user from the database.
 //! 3) Apply allow-listed updates and session management.
+//! 4) Regenerate MFA recovery codes only after recent authentication.
 
 use axum::{
     Json,
@@ -13,13 +14,21 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+use std::sync::Arc;
 use tracing::error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::auth::principal::require_auth;
+use super::auth::{
+    AuthState,
+    mfa::{self, MfaState},
+    principal::require_auth,
+};
+use crate::totp::repo::TotpRepo;
 
-#[derive(Debug, Serialize, ToSchema)]
+const RECOVERY_RECENT_AUTH_SECONDS: i64 = 10 * 60;
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct MeResponse {
     pub id: String,
     pub email: String,
@@ -29,6 +38,8 @@ pub struct MeResponse {
     pub updated_at: String,
     pub roles: Vec<String>,
     pub scopes: Vec<String>,
+    pub mfa_enabled: bool,
+    pub totp_enabled: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -44,6 +55,19 @@ pub struct SessionSummary {
     pub created_at: String,
     pub last_seen_at: Option<String>,
     pub expires_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecoveryCodesResponse {
+    pub codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SecurityKeySummary {
+    pub credential_id: String,
+    pub label: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
 }
 
 #[utoipa::path(
@@ -72,6 +96,8 @@ pub async fn get_me(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRes
                 updated_at: profile.updated_at,
                 roles: Vec::new(),
                 scopes: principal.scopes,
+                mfa_enabled: profile.mfa_enabled,
+                totp_enabled: profile.totp_enabled,
             };
             (StatusCode::OK, Json(response)).into_response()
         }
@@ -122,6 +148,8 @@ pub async fn patch_me(
                 updated_at: profile.updated_at,
                 roles: Vec::new(),
                 scopes: principal.scopes,
+                mfa_enabled: profile.mfa_enabled,
+                totp_enabled: profile.totp_enabled,
             };
             (StatusCode::OK, Json(response)).into_response()
         }
@@ -152,6 +180,41 @@ pub async fn list_sessions(headers: HeaderMap, pool: Extension<PgPool>) -> impl 
         Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
         Err(err) => {
             error!("Failed to list sessions: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/me/mfa/security-keys",
+    responses(
+        (status = 200, description = "List of registered security keys.", body = [SecurityKeySummary]),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "me"
+)]
+pub async fn list_security_keys(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
+    match crate::webauthn::SecurityKeyRepo::list_user_keys(&pool, principal.user_id).await {
+        Ok(keys) => {
+            let summaries: Vec<SecurityKeySummary> = keys
+                .into_iter()
+                .map(|k| SecurityKeySummary {
+                    credential_id: hex::encode(k.credential_id),
+                    label: k.label,
+                    created_at: k.created_at.to_rfc3339(),
+                    last_used_at: k.last_used_at.map(|t| t.to_rfc3339()),
+                })
+                .collect();
+            (StatusCode::OK, Json(summaries)).into_response()
+        }
+        Err(err) => {
+            error!("Failed to list security keys: {err}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -192,24 +255,160 @@ pub async fn revoke_session(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/me/mfa/recovery-codes",
+    responses(
+        (status = 200, description = "Recovery codes regenerated.", body = RecoveryCodesResponse),
+        (status = 401, description = "Missing or invalid session cookie."),
+        (status = 409, description = "MFA not enabled.")
+    ),
+    tag = "me"
+)]
+pub async fn regenerate_recovery_codes(
+    headers: HeaderMap,
+    pool: Extension<PgPool>,
+    auth_state: Extension<Arc<AuthState>>,
+) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
+    if !recent_auth_ok(&principal) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "Recent authentication required.".to_string(),
+        )
+            .into_response();
+    }
+
+    let Some(pepper) = auth_state.mfa().recovery_pepper() else {
+        error!("MFA recovery codes requested without pepper configured");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Recovery unavailable.".to_string(),
+        )
+            .into_response();
+    };
+
+    let state = match mfa::storage::load_mfa_state(&pool, principal.user_id).await {
+        Ok(state) => state,
+        Err(err) => {
+            error!("Failed to load MFA state: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let Some(state) = state else {
+        return (StatusCode::CONFLICT, "MFA not enabled.".to_string()).into_response();
+    };
+    if state.state != MfaState::Enabled {
+        return (StatusCode::CONFLICT, "MFA not enabled.".to_string()).into_response();
+    }
+
+    let batch = match mfa::recovery::RecoveryCodeBatch::generate(pepper) {
+        Ok(batch) => batch,
+        Err(err) => {
+            error!("Failed to generate recovery codes: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if let Err(err) = mfa::storage::insert_recovery_codes(
+        &pool,
+        principal.user_id,
+        batch.batch_id,
+        &batch.code_hashes,
+    )
+    .await
+    {
+        error!("Failed to insert recovery codes: {err}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    if let Err(err) = mfa::storage::upsert_mfa_state(
+        &pool,
+        principal.user_id,
+        MfaState::Enabled,
+        Some(batch.batch_id),
+    )
+    .await
+    {
+        error!("Failed to update recovery batch id: {err}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(RecoveryCodesResponse { codes: batch.codes }),
+    )
+        .into_response()
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/me/mfa/totp",
+    responses(
+        (status = 204, description = "TOTP disabled."),
+        (status = 401, description = "Unauthorized or recent auth required."),
+    ),
+    tag = "me"
+)]
+pub async fn disable_totp(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
+    if !recent_auth_ok(&principal) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "Recent authentication required.".to_string(),
+        )
+            .into_response();
+    }
+
+    // 1. Disable in totp_credentials
+    if let Err(err) = TotpRepo::disable_active_credentials(&pool, principal.user_id).await {
+        error!("Failed to disable TOTP credentials: {err}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // 2. Update user_mfa_state to disabled
+    if let Err(err) =
+        mfa::storage::upsert_mfa_state(&pool, principal.user_id, MfaState::Disabled, None).await
+    {
+        error!("Failed to update MFA state: {err}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 struct MeProfileRow {
     id: String,
     display_name: Option<String>,
     locale: Option<String>,
     created_at: String,
     updated_at: String,
+    mfa_enabled: bool,
+    totp_enabled: bool,
 }
 
 async fn fetch_profile(pool: &PgPool, user_id: Uuid) -> Result<Option<MeProfileRow>, sqlx::Error> {
     let query = r#"
         SELECT
-            id::text AS id,
-            display_name,
-            locale,
-            to_char(created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-            to_char(updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            users.id::text AS id,
+            users.display_name,
+            users.locale,
+            to_char(users.created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+            to_char(users.updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
+            COALESCE(user_mfa_state.state = 'enabled', FALSE) AS mfa_enabled,
+            (user_mfa_state.recovery_batch_id IS NOT NULL) AS totp_enabled
         FROM users
-        WHERE id = $1
+        LEFT JOIN user_mfa_state ON user_mfa_state.user_id = users.id
+        WHERE users.id = $1
         LIMIT 1
     "#;
     let row = sqlx::query(query)
@@ -222,6 +421,8 @@ async fn fetch_profile(pool: &PgPool, user_id: Uuid) -> Result<Option<MeProfileR
         locale: row.get("locale"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        mfa_enabled: row.get("mfa_enabled"),
+        totp_enabled: row.get("totp_enabled"),
     }))
 }
 
@@ -232,17 +433,25 @@ async fn update_profile(
     locale: Option<String>,
 ) -> Result<Option<MeProfileRow>, sqlx::Error> {
     let query = r#"
-        UPDATE users
-        SET
-            display_name = COALESCE($1, display_name),
-            locale = COALESCE($2, locale)
-        WHERE id = $3
-        RETURNING
-            id::text AS id,
-            display_name,
-            locale,
-            to_char(created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-            to_char(updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+        WITH updated AS (
+            UPDATE users
+            SET
+                display_name = COALESCE($1, display_name),
+                locale = COALESCE($2, locale)
+            WHERE id = $3
+            RETURNING
+                id::text AS id,
+                display_name,
+                locale,
+                to_char(created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                to_char(updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+        )
+        SELECT
+            updated.*,
+            COALESCE(user_mfa_state.state = 'enabled', FALSE) AS mfa_enabled,
+            (user_mfa_state.recovery_batch_id IS NOT NULL) AS totp_enabled
+        FROM updated
+        LEFT JOIN user_mfa_state ON user_mfa_state.user_id = (updated.id)::uuid
     "#;
     let row = sqlx::query(query)
         .bind(display_name)
@@ -256,6 +465,8 @@ async fn update_profile(
         locale: row.get("locale"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        mfa_enabled: row.get("mfa_enabled"),
+        totp_enabled: row.get("totp_enabled"),
     }))
 }
 
@@ -303,4 +514,19 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn recent_auth_ok(principal: &super::auth::principal::Principal) -> bool {
+    let now = unix_now();
+    let auth_time = principal
+        .session_auth_time_unix
+        .unwrap_or(principal.session_issued_at_unix);
+    now.saturating_sub(auth_time) <= RECOVERY_RECENT_AUTH_SECONDS
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
 }

@@ -130,14 +130,6 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let auth = parse_auth_args(matches)?;
     let email_outbox = parse_email_outbox_args(matches);
 
-    let opaque_kv_mount = matches
-        .get_one::<String>("opaque-kv-mount")
-        .cloned()
-        .unwrap_or_else(|| "kv".to_string());
-    let opaque_kv_path = matches
-        .get_one::<String>("opaque-kv-path")
-        .cloned()
-        .unwrap_or_else(|| "permesi/opaque".to_string());
     let opaque_server_id = matches
         .get_one::<String>("opaque-server-id")
         .cloned()
@@ -179,8 +171,6 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         email_outbox_max_attempts: email_outbox.max_attempts,
         email_outbox_backoff_base_seconds: email_outbox.backoff_base_seconds,
         email_outbox_backoff_max_seconds: email_outbox.backoff_max_seconds,
-        opaque_kv_mount,
-        opaque_kv_path,
         opaque_server_id,
         opaque_login_ttl_seconds,
         platform_admin_ttl_seconds,

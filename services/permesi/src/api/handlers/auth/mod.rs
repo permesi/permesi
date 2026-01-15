@@ -3,6 +3,11 @@
 //! This module coordinates authentication (`OPAQUE`), session management, and
 //! administrative elevation.
 //!
+//! Flow Overview:
+//! - Password auth uses `OPAQUE` to establish sessions without exposing plaintext.
+//! - MFA bootstrap/challenge sessions gate access when MFA is required or enabled.
+//! - Recovery codes provide the only self-service MFA recovery path.
+//!
 //! ## Admin Rate Limiting
 //!
 //! Administrative endpoints (`/v1/auth/admin/*`) are strictly rate-limited to
@@ -23,10 +28,12 @@ pub(crate) mod admin;
 mod admin_rate_limit;
 mod admin_storage;
 mod admin_token;
+pub(crate) mod mfa;
 pub(crate) mod opaque;
 pub(crate) mod principal;
 mod rate_limit;
 pub(crate) mod session;
+mod session_kind;
 mod state;
 mod storage;
 pub(crate) mod types;

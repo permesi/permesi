@@ -6,6 +6,7 @@ pub enum RateLimitAction {
     Login,
     VerifyEmail,
     ResendVerification,
+    MfaRecovery,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
