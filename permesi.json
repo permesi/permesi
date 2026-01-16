@@ -2585,7 +2585,9 @@
           "user_id",
           "email",
           "is_operator",
-          "session_kind"
+          "session_kind",
+          "totp_enabled",
+          "webauthn_enabled"
         ],
         "properties": {
           "email": {
@@ -2597,8 +2599,14 @@
           "session_kind": {
             "$ref": "#/components/schemas/SessionKind"
           },
+          "totp_enabled": {
+            "type": "boolean"
+          },
           "user_id": {
             "type": "string"
+          },
+          "webauthn_enabled": {
+            "type": "boolean"
           }
         }
       },
