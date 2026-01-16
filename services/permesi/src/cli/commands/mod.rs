@@ -35,9 +35,14 @@ pub fn new() -> Command {
         .literal(AnsiColor::Blue.on_default() | Effects::BOLD)
         .placeholder(AnsiColor::Green.on_default());
 
+    let long_version: &'static str = Box::leak(
+        format!("{} - {}", env!("CARGO_PKG_VERSION"), crate::GIT_COMMIT_HASH).into_boxed_str(),
+    );
+
     let command = Command::new("permesi")
         .about("Identity and Access Management")
         .version(env!("CARGO_PKG_VERSION"))
+        .long_version(long_version)
         .color(ColorChoice::Auto)
         .styles(styles)
         .arg(

@@ -4,7 +4,7 @@ pub mod renew;
 pub mod step_up;
 pub mod transit;
 
-use crate::api::APP_USER_AGENT;
+use crate::APP_USER_AGENT;
 use anyhow::Result;
 use tracing::instrument;
 

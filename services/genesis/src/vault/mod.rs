@@ -2,10 +2,9 @@ pub mod database;
 pub mod renew;
 pub mod transit;
 
+use crate::APP_USER_AGENT;
 use anyhow::Result;
 use tracing::instrument;
-
-pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[instrument]
 /// # Errors

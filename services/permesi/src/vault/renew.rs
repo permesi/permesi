@@ -11,7 +11,7 @@ use tracing::{debug, error, instrument, warn};
 /// Renew a Vault token
 #[instrument(skip(token))]
 async fn renew_token(url: &str, token: &SecretString, increment: Option<u64>) -> Result<u64> {
-    vault_client::renew_token(crate::api::APP_USER_AGENT, url, token, increment).await
+    vault_client::renew_token(crate::APP_USER_AGENT, url, token, increment).await
 }
 
 #[instrument(skip(token))]
@@ -21,7 +21,7 @@ async fn renew_db_token(
     lease_id: &str,
     increment: u64,
 ) -> Result<u64> {
-    vault_client::renew_db_token(crate::api::APP_USER_AGENT, url, token, lease_id, increment).await
+    vault_client::renew_db_token(crate::APP_USER_AGENT, url, token, lease_id, increment).await
 }
 
 /// Refresh a Vault token

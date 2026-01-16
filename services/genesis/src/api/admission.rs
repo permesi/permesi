@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::cli::globals::GlobalArgs;
-use crate::vault;
+use crate::{APP_USER_AGENT, vault};
 
 const PASERK_CACHE_TTL_SECONDS: u64 = 300;
 const TRANSIT_KEY_NAME: &str = "genesis-signing";
@@ -75,7 +75,7 @@ impl AdmissionSigner {
             .unwrap_or_else(|_| TRANSIT_MOUNT_DEFAULT.to_string());
 
         let client = reqwest::Client::builder()
-            .user_agent(vault::APP_USER_AGENT)
+            .user_agent(APP_USER_AGENT)
             .build()?;
 
         let signer = Self {

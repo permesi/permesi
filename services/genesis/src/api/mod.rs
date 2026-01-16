@@ -27,16 +27,6 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 mod admission;
 mod handlers;
 
-#[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
-pub mod built_info {
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
-
-pub const GIT_COMMIT_HASH: &str = match built_info::GIT_COMMIT_HASH {
-    Some(hash) => hash,
-    None => "unknown",
-};
-
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
     // Reuse the same router wiring and only return the generated OpenAPI spec.

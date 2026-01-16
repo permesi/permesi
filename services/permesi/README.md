@@ -264,8 +264,6 @@ Maintenance:
 ### MFA config flags
 
 - `PERMESI_MFA_REQUIRED` (set to `true` to require MFA bootstrap for new sessions)
-- `PERMESI_MFA_RECOVERY_PEPPER` (override: base64-encoded recovery pepper, defaults to Vault `mfa_recovery_pepper`)
-- `PERMESI_MFA_RECOVERY_PEPPER_FILE` (override: path to a file containing the base64 recovery pepper)
 
 ### Email outbox worker flags
 

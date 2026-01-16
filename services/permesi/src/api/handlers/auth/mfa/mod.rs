@@ -18,14 +18,13 @@ pub(crate) mod recovery;
 pub(crate) mod storage;
 pub(crate) mod webauthn;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use axum::{
     Json,
     extract::Extension,
     http::{HeaderMap, HeaderValue, StatusCode, header::AUTHORIZATION},
     response::IntoResponse,
 };
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -52,8 +51,6 @@ use crate::{
 const DEFAULT_MFA_BOOTSTRAP_TTL_SECONDS: i64 = 10 * 60;
 const DEFAULT_MFA_CHALLENGE_TTL_SECONDS: i64 = 5 * 60;
 const ENV_MFA_REQUIRED: &str = "PERMESI_MFA_REQUIRED";
-const ENV_RECOVERY_PEPPER: &str = "PERMESI_MFA_RECOVERY_PEPPER";
-const ENV_RECOVERY_PEPPER_FILE: &str = "PERMESI_MFA_RECOVERY_PEPPER_FILE";
 
 /// Logical MFA state for a user.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -144,17 +141,10 @@ impl MfaConfig {
     }
 
     /// Load MFA configuration from environment variables.
-    ///
-    /// # Errors
-    /// Returns an error if a pepper is configured but cannot be decoded or read.
-    pub fn from_env() -> Result<Self> {
+    #[must_use]
+    pub fn from_env() -> Self {
         let required = parse_bool_env(ENV_MFA_REQUIRED).unwrap_or(false);
-        let pepper = load_recovery_pepper_from_env()?;
-        let mut config = Self::new().with_required(required);
-        if let Some(pepper) = pepper {
-            config = config.with_recovery_pepper(pepper);
-        }
-        Ok(config)
+        Self::new().with_required(required)
     }
 }
 
@@ -166,32 +156,6 @@ fn parse_bool_env(key: &str) -> Option<bool> {
             "0" | "false" | "FALSE" | "no" | "NO" => Some(false),
             _ => None,
         })
-}
-
-fn load_recovery_pepper_from_env() -> Result<Option<Arc<[u8]>>> {
-    if let Ok(value) = std::env::var(ENV_RECOVERY_PEPPER) {
-        let pepper = decode_base64(value.trim().as_bytes())
-            .context("failed to decode MFA recovery pepper")?;
-        return Ok(Some(pepper.into()));
-    }
-    if let Ok(path) = std::env::var(ENV_RECOVERY_PEPPER_FILE) {
-        let contents = std::fs::read_to_string(path.trim())
-            .context("failed to read MFA recovery pepper file")?;
-        let pepper = decode_base64(contents.trim().as_bytes())
-            .context("failed to decode MFA recovery pepper file")?;
-        return Ok(Some(pepper.into()));
-    }
-    Ok(None)
-}
-
-fn decode_base64(value: &[u8]) -> Result<Vec<u8>> {
-    if value.is_empty() {
-        return Err(anyhow!("empty MFA recovery pepper"));
-    }
-    base64::engine::general_purpose::STANDARD
-        .decode(value)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value))
-        .map_err(|_| anyhow!("invalid base64 MFA recovery pepper"))
 }
 
 /// Start TOTP enrollment. Requires bootstrap or full session.

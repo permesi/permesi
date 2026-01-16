@@ -6,11 +6,6 @@ use clap::{
     },
 };
 
-#[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
-pub mod built_info {
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
-
 #[must_use]
 pub fn validator_log_level() -> ValueParser {
     ValueParser::from(move |level: &str| -> std::result::Result<u8, String> {
@@ -40,9 +35,9 @@ pub fn new() -> Command {
         .literal(AnsiColor::Blue.on_default() | Effects::BOLD)
         .placeholder(AnsiColor::Green.on_default());
 
-    let git_hash = built_info::GIT_COMMIT_HASH.unwrap_or("unknown");
-    let long_version: &'static str =
-        Box::leak(format!("{} - {}", env!("CARGO_PKG_VERSION"), git_hash).into_boxed_str());
+    let long_version: &'static str = Box::leak(
+        format!("{} - {}", env!("CARGO_PKG_VERSION"), crate::GIT_COMMIT_HASH).into_boxed_str(),
+    );
 
     Command::new("genesis")
         .about(env!("CARGO_PKG_DESCRIPTION"))

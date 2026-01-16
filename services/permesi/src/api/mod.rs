@@ -44,18 +44,6 @@ pub fn router() -> OpenApiRouter {
     openapi::api_router()
 }
 
-#[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
-pub mod built_info {
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
-
-pub const GIT_COMMIT_HASH: &str = match built_info::GIT_COMMIT_HASH {
-    Some(hash) => hash,
-    None => "unknown",
-};
-
-pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
-
 /// Start the server
 /// # Errors
 /// Return error if failed to start the server
@@ -93,13 +81,13 @@ pub async fn new(
         Duration::from_secs(auth_config.opaque_login_ttl_seconds()),
     );
 
-    let mut mfa_config = auth::mfa::MfaConfig::from_env().context("Failed to load MFA config")?;
-    // Override/set pepper from Vault
+    let mut mfa_config = auth::mfa::MfaConfig::from_env();
+    // Set pepper from Vault
     mfa_config = mfa_config.with_recovery_pepper(Arc::from(secrets.mfa_recovery_pepper));
 
     if mfa_config.required() && mfa_config.recovery_pepper().is_none() {
         return Err(anyhow!(
-            "MFA is required but PERMESI_MFA_RECOVERY_PEPPER is not configured"
+            "MFA is required but recovery pepper is missing from Vault configuration"
         ));
     }
     let auth_state = Arc::new(auth::AuthState::new(

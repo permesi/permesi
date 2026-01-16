@@ -1,5 +1,5 @@
 use super::{AdmissionVerifier, DependencyStatus};
-use crate::api::GIT_COMMIT_HASH;
+use crate::GIT_COMMIT_HASH;
 use axum::{
     body::Body,
     extract::Extension,

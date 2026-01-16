@@ -133,7 +133,7 @@ impl AdmissionVerifier {
     /// Returns an error if the keyset cannot be fetched or parsed.
     pub async fn new_remote(url: String, issuer: String, audience: String) -> Result<Self> {
         let client = Client::builder()
-            .user_agent(crate::api::APP_USER_AGENT)
+            .user_agent(crate::APP_USER_AGENT)
             .build()?;
         // Startup fetch is best-effort: if genesis isn't ready yet, start with an empty, stale cache
         // so /health stays red and verification fails closed until refresh succeeds.

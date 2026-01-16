@@ -34,7 +34,7 @@ impl StepUpClient {
     /// Returns an error if the Vault address is invalid or the HTTP client cannot be built.
     pub fn new(vault_addr: &str, namespace: Option<String>) -> Result<Self> {
         let client = Client::builder()
-            .user_agent(crate::api::APP_USER_AGENT)
+            .user_agent(crate::APP_USER_AGENT)
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(5))
             .build()

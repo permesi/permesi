@@ -175,7 +175,7 @@ impl DekManager {
 
     async fn unwrap_dek(&self, wrapped_dek: &str) -> Result<Vec<u8>> {
         let client = Client::builder()
-            .user_agent(crate::api::APP_USER_AGENT)
+            .user_agent(crate::APP_USER_AGENT)
             .build()?;
 
         let url = vault::endpoint_url(&self.globals.vault_url, "/v1/transit/permesi/decrypt/totp")?;
@@ -211,7 +211,7 @@ impl DekManager {
 
     async fn generate_datakey(&self) -> Result<(String, String)> {
         let client = Client::builder()
-            .user_agent(crate::api::APP_USER_AGENT)
+            .user_agent(crate::APP_USER_AGENT)
             .build()?;
 
         let url = vault::endpoint_url(

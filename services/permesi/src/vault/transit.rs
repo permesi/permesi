@@ -29,7 +29,7 @@ fn get_required_str<'a>(json_response: &'a Value, path: &[&str]) -> Option<&'a s
 #[instrument(skip(globals, plaintext, context))]
 pub async fn encrypt(globals: &GlobalArgs, plaintext: &str, context: &str) -> Result<String> {
     let client = Client::builder()
-        .user_agent(crate::api::APP_USER_AGENT)
+        .user_agent(crate::APP_USER_AGENT)
         .build()?;
 
     // Parse the URL
@@ -80,7 +80,7 @@ pub async fn encrypt(globals: &GlobalArgs, plaintext: &str, context: &str) -> Re
 /// Returns an error if the Vault request fails, Vault returns a non-success status, the response is missing expected fields, or plaintext is not valid UTF-8.
 pub async fn decrypt(globals: &GlobalArgs, ciphertext: &str, context: &str) -> Result<String> {
     let client = Client::builder()
-        .user_agent(crate::api::APP_USER_AGENT)
+        .user_agent(crate::APP_USER_AGENT)
         .build()?;
 
     // Parse the URL

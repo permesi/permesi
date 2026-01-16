@@ -26,7 +26,7 @@ pub async fn read_config_secrets(
     kv_path: &str,
 ) -> Result<ConfigSecrets> {
     let client = Client::builder()
-        .user_agent(crate::api::APP_USER_AGENT)
+        .user_agent(crate::APP_USER_AGENT)
         .build()?;
     let path = format!("/v1/{kv_mount}/data/{kv_path}");
     let url = vault::endpoint_url(&globals.vault_url, &path)?;
