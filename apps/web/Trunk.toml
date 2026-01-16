@@ -9,4 +9,4 @@ command_arguments = ["run", "css:build"]
 
 [tools]
 # Match the wasm-bindgen CLI to the crate version in Cargo.lock.
-wasm_bindgen = "0.2.106"
+wasm_bindgen = "0.2.108"
