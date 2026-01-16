@@ -27,6 +27,15 @@ pub fn MfaChallengePage() -> impl IntoView {
     let (error, set_error) = signal::<Option<AppError>>(None);
     let (show_recovery, set_show_recovery) = signal(false);
 
+    let totp_enabled = move || _auth.session.get().map(|s| s.totp_enabled).unwrap_or(true);
+    let webauthn_enabled = move || {
+        _auth
+            .session
+            .get()
+            .map(|s| s.webauthn_enabled)
+            .unwrap_or(false)
+    };
+
     let authenticate_key_action = Action::new_local(move |_: &()| {
         async move {
             // 1. Start WebAuthn authentication
@@ -60,7 +69,20 @@ pub fn MfaChallengePage() -> impl IntoView {
         }
     });
 
+    // Auto-trigger security key if it's the only factor available
+    Effect::new(move |_| {
+        if !show_recovery.get()
+            && !totp_enabled()
+            && webauthn_enabled()
+            && authenticate_key_action.value().get().is_none()
+            && !authenticate_key_action.pending().get()
+        {
+            authenticate_key_action.dispatch(());
+        }
+    });
+
     let verify_action = Action::new_local(move |code: &String| {
+        // ... existing verify_action logic ...
         let code = code.clone();
         let is_recovery = show_recovery.get_untracked();
         async move {
@@ -144,74 +166,80 @@ pub fn MfaChallengePage() -> impl IntoView {
                 <p class="mt-2 text-gray-600 dark:text-gray-400">
                     {move || if show_recovery.get() {
                         "Enter a recovery code to regain access to your account."
-                    } else {
+                    } else if totp_enabled() {
                         "Enter the 6-digit code from your authenticator app."
+                    } else {
+                        "Please use your security key to continue."
                     }}
                 </p>
             </div>
 
             <div class="space-y-6">
-                <div>
-                    <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">
-                        {move || if show_recovery.get() { "Recovery Code" } else { "Verification Code" }}
-                    </label>
-                    <input
-                        type="text"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                        on:input=move |ev| set_code.set(event_target_value(&ev))
-                        on:keydown=move |ev| {
-                            if ev.key() == "Enter" {
-                                verify_action.dispatch(code.get());
+                <Show when=move || totp_enabled() || show_recovery.get()>
+                    <div>
+                        <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">
+                            {move || if show_recovery.get() { "Recovery Code" } else { "Verification Code" }}
+                        </label>
+                        <input
+                            type="text"
+                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            on:input=move |ev| set_code.set(event_target_value(&ev))
+                            on:keydown=move |ev| {
+                                if ev.key() == "Enter" {
+                                    verify_action.dispatch(code.get());
+                                }
                             }
-                        }
-                    />
-                </div>
+                        />
+                    </div>
 
-                                <Button
-                                    disabled=verify_action.pending()
-                                    on:click=move |_| { verify_action.dispatch(code.get()); }
-                                >
-                                    "Verify"
-                                </Button>
+                    <Button
+                        disabled=verify_action.pending()
+                        on:click=move |_| { verify_action.dispatch(code.get()); }
+                    >
+                        "Verify"
+                    </Button>
+                </Show>
 
-                            <Show when=move || !show_recovery.get()>
-                                <div class="relative my-6">
-                                    <div class="absolute inset-0 flex items-center" aria-hidden="true">
-                                        <div class="w-full border-t border-gray-200 dark:border-gray-700"></div>
-                                    </div>
-                                    <div class="relative flex justify-center">
-                                        <span class="px-2 bg-white dark:bg-gray-800 text-xs text-gray-500">
-                                            "OR"
-                                        </span>
-                                    </div>
-                                </div>
+                <Show when=move || !show_recovery.get() && webauthn_enabled()>
+                    <Show when=totp_enabled>
+                        <div class="relative my-6">
+                            <div class="absolute inset-0 flex items-center" aria-hidden="true">
+                                <div class="w-full border-t border-gray-200 dark:border-gray-700"></div>
+                            </div>
+                            <div class="relative flex justify-center">
+                                <span class="px-2 bg-white dark:bg-gray-800 text-xs text-gray-500">
+                                    "OR"
+                                </span>
+                            </div>
+                        </div>
+                    </Show>
 
-                                <button
-                                    type="button"
-                                    disabled=authenticate_key_action.pending()
-                                    on:click=move |_| { authenticate_key_action.dispatch(()); }
-                                    class="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors cursor-pointer"
-                                >
-                                    <span class="material-symbols-outlined mr-2 text-base">"key"</span>
-                                    {move || if authenticate_key_action.pending().get() {
-                                        "Waiting for key..."
-                                    } else {
-                                        "Use Security Key"
-                                    }}
-                                </button>
+                    <button
+                        type="button"
+                        disabled=authenticate_key_action.pending()
+                        on:click=move |_| { authenticate_key_action.dispatch(()); }
+                        class="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors cursor-pointer"
+                    >
+                        <span class="material-symbols-outlined mr-2 text-base">"key"</span>
+                        {move || if authenticate_key_action.pending().get() {
+                            "Waiting for key..."
+                        } else {
+                            "Use Security Key"
+                        }}
+                    </button>
 
-                                {move || {
-                                    authenticate_key_action
-                                        .value()
-                                        .get()
-                                        .and_then(|res| res.err())
-                                        .map(|err| {
-                                            view! { <div class="mt-2"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                        })
-                                }}
-                            </Show>
+                    {move || {
+                        authenticate_key_action
+                            .value()
+                            .get()
+                            .and_then(|res| res.err())
+                            .map(|err| {
+                                view! { <div class="mt-2"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                            })
+                    }}
+                </Show>
 
-                                <div class="text-center">
+                <div class="text-center">
                     <button
                         on:click=move |_| {
                             set_show_recovery.update(|v| *v = !*v);
@@ -219,7 +247,11 @@ pub fn MfaChallengePage() -> impl IntoView {
                         }
                         class="text-sm text-blue-600 hover:text-blue-500 dark:text-blue-400"
                     >
-                        {move || if show_recovery.get() { "Use authenticator app" } else { "Use a recovery code" }}
+                        {move || if show_recovery.get() {
+                            if totp_enabled() { "Use authenticator app" } else { "Use security key" }
+                        } else {
+                            "Use a recovery code"
+                        }}
                     </button>
                 </div>
 

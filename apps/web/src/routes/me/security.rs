@@ -19,6 +19,7 @@
 //! - **2FA**: UI placeholder for future TOTP/Hardware key implementation.
 
 use crate::{
+    app_lib::theme::Theme,
     app_lib::{AppError, config::AppConfig},
     components::{Alert, AlertKind, Button, Spinner},
     features::{
@@ -473,11 +474,11 @@ pub fn MeSecurityPage() -> impl IntoView {
                                     </h2>
                                     <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                                         // Password Row
-                                        <div class="px-6 py-4">
+                                        <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class="material-symbols-outlined text-gray-400 dark:text-gray-500">
-                                                        "key"
+                                                    <span class=Theme::ICON>
+                                                        "password"
                                                     </span>
                                                     <div>
                                                         <p class="text-sm font-medium text-gray-900 dark:text-white">
@@ -599,10 +600,10 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         </div>
 
                                         // Passkeys Row
-                                        <div class="px-6 py-4">
+                                        <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class="material-symbols-outlined text-gray-400 dark:text-gray-500">
+                                                    <span class=Theme::ICON>
                                                         "fingerprint"
                                                     </span>
                                                     <div>
@@ -632,10 +633,10 @@ pub fn MeSecurityPage() -> impl IntoView {
 
                                     <div class="divide-y divide-gray-200 dark:divide-gray-700">
                                         // Status Row
-                                        <div class="px-6 py-4">
+                                        <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class="material-symbols-outlined text-gray-400 dark:text-gray-500">
+                                                    <span class=Theme::ICON>
                                                         "phonelink_lock"
                                                     </span>
                                                     <div>
@@ -667,15 +668,17 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                     }
                                                 </Show>
                                             </div>
+                                        </div>
 
-                                            <Show when=move || status.two_factor_enabled>
-                                                <div class="mt-6 space-y-4 pb-4">
-                                                    <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                                        "Configured methods"
-                                                    </h3>
-                                                    <div class="flex items-center justify-between bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                        <Show when=move || status.two_factor_enabled>
+                                            <div class="px-6 py-4 space-y-4">
+                                                <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                                    "Configured methods"
+                                                </h3>
+                                                <div class="group">
+                                                    <div class=Theme::LIST_ITEM>
                                                         <div class="flex items-center space-x-3">
-                                                            <span class="material-symbols-outlined text-gray-400 dark:text-gray-500 text-sm">
+                                                            <span class=Theme::ICON_SMALL>
                                                                 "smartphone"
                                                             </span>
                                                             <span class="text-sm text-gray-700 dark:text-gray-300 font-medium">
@@ -758,7 +761,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                 </div>
 
                                                 <Show when=move || show_delete_totp_form.get()>
-                                                    <div class="mt-4 pb-4">
+                                                    <div class="mt-4">
                                                         <form
                                                             class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
                                                             on:submit=move |event: SubmitEvent| {
@@ -828,15 +831,15 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                         </form>
                                                     </div>
                                                 </Show>
-                                            </Show>
-                                        </div>
+                                            </div>
+                                        </Show>
 
                                         // Recovery Codes Row
                                         <Show when=move || status.two_factor_enabled && status.totp_enabled>
-                                            <div class="px-6 py-4">
+                                            <div class=Theme::ROW>
                                                 <div class="flex items-center justify-between">
                                                     <div class="flex items-center space-x-3">
-                                                        <span class="material-symbols-outlined text-gray-400 dark:text-gray-500">
+                                                        <span class=Theme::ICON>
                                                             "settings_backup_restore"
                                                         </span>
                                                         <div>
@@ -934,10 +937,10 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         </Show>
 
                                         // Security Keys Row
-                                        <div class="px-6 py-4">
+                                        <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class="material-symbols-outlined text-gray-400 dark:text-gray-500">
+                                                    <span class=Theme::ICON>
                                                         "usb"
                                                     </span>
                                                     <div>
@@ -1016,156 +1019,156 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                     }}
                                                 </form>
                                             </Show>
+                                        </div>
 
-                                            <Show when=move || {
-                                                security_keys.get().map(|r| r.map(|keys| !keys.is_empty()).unwrap_or(false)).unwrap_or(false)
-                                            }>
-                                                <div class="mt-6 space-y-4 pb-4">
-                                                    <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                                        "Registered keys"
-                                                    </h3>
-                                                    <For
-                                                        each=move || security_keys.get().and_then(|res| res.ok()).unwrap_or_default()
-                                                        key=|key| key.credential_id.clone()
-                                                        children={
-                                                            let show_delete_key_form = show_delete_key_form.clone();
-                                                            let delete_key_action = delete_key_action.clone();
-                                                            move |key| {
-                                                                let credential_id = key.credential_id.clone();
-                                                                let label = key.label.clone();
-                                                                let (show_menu, set_show_menu) = signal(false);
+                                        <Show when=move || {
+                                            security_keys.get().map(|r| r.map(|keys| !keys.is_empty()).unwrap_or(false)).unwrap_or(false)
+                                        }>
+                                            <div class="px-6 py-4 space-y-4">
+                                                <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                                    "Registered keys"
+                                                </h3>
+                                                <For
+                                                    each=move || security_keys.get().and_then(|res| res.ok()).unwrap_or_default()
+                                                    key=|key| key.credential_id.clone()
+                                                    children={
+                                                        let show_delete_key_form = show_delete_key_form.clone();
+                                                        let delete_key_action = delete_key_action.clone();
+                                                        move |key| {
+                                                            let credential_id = key.credential_id.clone();
+                                                            let label = key.label.clone();
+                                                            let (show_menu, set_show_menu) = signal(false);
 
-                                                                let credential_id_for_show = credential_id.clone();
-                                                                let credential_id_for_delete = credential_id.clone();
+                                                            let credential_id_for_show = credential_id.clone();
+                                                            let credential_id_for_delete = credential_id.clone();
 
-                                                                view! {
-                                                                    <div class="flex flex-col space-y-4">
-                                                                        <div class="flex items-center justify-between bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                                                                            <div class="flex items-center space-x-3">
-                                                                                <span class="material-symbols-outlined text-gray-400 dark:text-gray-500 text-sm">
-                                                                                    "key"
-                                                                                </span>
-                                                                                <div>
-                                                                                    <p class="text-sm text-gray-700 dark:text-gray-300 font-medium">
-                                                                                        {label}
-                                                                                    </p>
-                                                                                    <p class="text-[10px] text-gray-500 dark:text-gray-400">
-                                                                                        "Registered on " {key.created_at}
-                                                                                    </p>
-                                                                                </div>
-                                                                            </div>
-                                                                            <div class="flex items-center space-x-4">
-                                                                                <div class="relative inline-block text-left">
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        on:click=move |ev| {
-                                                                                            ev.stop_propagation();
-                                                                                            set_show_menu.update(|v| *v = !*v);
-                                                                                        }
-                                                                                        class="p-1 rounded-md hover:bg-white dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors shadow-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 cursor-pointer"
-                                                                                    >
-                                                                                        <span class="material-symbols-outlined text-xl">"more_horiz"</span>
-                                                                                    </button>
-
-                                                                                    <Show when=move || show_menu.get()>
-                                                                                        <div
-                                                                                            class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none border border-gray-200 dark:border-gray-700"
-                                                                                            on:click=move |ev| ev.stop_propagation()
-                                                                                            on:mouseleave=move |_| set_show_menu.set(false)
-                                                                                        >
-                                                                                            <div class="py-1">
-                                                                                                <button
-                                                                                                    type="button"
-                                                                                                    on:click={
-                                                                                                        let credential_id = credential_id.clone();
-                                                                                                        move |_| {
-                                                                                                            set_show_menu.set(false);
-                                                                                                            set_show_delete_key_form.set(Some(credential_id.clone()));
-                                                                                                        }
-                                                                                                    }
-                                                                                                    class="flex w-full items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer text-left"
-                                                                                                >
-                                                                                                    <span class="material-symbols-outlined mr-3 text-sm">"delete"</span>
-                                                                                                    "Delete key"
-                                                                                                </button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </Show>
-                                                                                </div>
+                                                            view! {
+                                                                <div class="flex flex-col space-y-4 group">
+                                                                    <div class=Theme::LIST_ITEM>
+                                                                        <div class="flex items-center space-x-3">
+                                                                            <span class=Theme::ICON_SMALL>
+                                                                                "key"
+                                                                            </span>
+                                                                            <div>
+                                                                                <p class="text-sm text-gray-700 dark:text-gray-300 font-medium">
+                                                                                    {label}
+                                                                                </p>
+                                                                                <p class="text-[10px] text-gray-500 dark:text-gray-400">
+                                                                                    "Registered on " {key.created_at}
+                                                                                </p>
                                                                             </div>
                                                                         </div>
-
-                                                                        <Show when=move || show_delete_key_form.get() == Some(credential_id_for_show.clone())>
-                                                                            <div class="px-2">
-                                                                                <form
-                                                                                    class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
-                                                                                    on:submit={
-                                                                                        let credential_id = credential_id_for_delete.clone();
-                                                                                        let delete_key_action = delete_key_action.clone();
-                                                                                        move |event: SubmitEvent| {
-                                                                                            event.prevent_default();
-                                                                                            let password = delete_key_password.get_untracked();
-                                                                                            if password.trim().is_empty() {
-                                                                                                return;
-                                                                                            }
-                                                                                            delete_key_action.dispatch((credential_id.clone(), password));
-                                                                                        }
+                                                                        <div class="flex items-center space-x-4">
+                                                                            <div class="relative inline-block text-left">
+                                                                                <button
+                                                                                    type="button"
+                                                                                    on:click=move |ev| {
+                                                                                        ev.stop_propagation();
+                                                                                        set_show_menu.update(|v| *v = !*v);
                                                                                     }
+                                                                                    class="p-1 rounded-md hover:bg-white dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors shadow-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 cursor-pointer"
                                                                                 >
-                                                                                    <p class="text-xs text-red-700 dark:text-red-300 mb-4">
-                                                                                        "Deleting this hardware key will remove it as a sign-in method. Please enter your password to confirm."
-                                                                                    </p>
-                                                                                    <div>
-                                                                                        <label class="block mb-1 text-xs font-medium text-red-900 dark:text-red-200" for="delete_key_password">
-                                                                                            "Password"
-                                                                                        </label>
-                                                                                        <input
-                                                                                            id="delete_key_password"
-                                                                                            type="password"
-                                                                                            class="bg-white border border-red-200 text-gray-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block w-full p-2 dark:bg-gray-800 dark:border-red-900/50 dark:text-white"
-                                                                                            required
-                                                                                            on:input=move |event| set_delete_key_password.set(event_target_value(&event))
-                                                                                        />
+                                                                                    <span class="material-symbols-outlined text-xl">"more_horiz"</span>
+                                                                                </button>
+
+                                                                                <Show when=move || show_menu.get()>
+                                                                                    <div
+                                                                                        class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none border border-gray-200 dark:border-gray-700"
+                                                                                        on:click=move |ev| ev.stop_propagation()
+                                                                                        on:mouseleave=move |_| set_show_menu.set(false)
+                                                                                    >
+                                                                                        <div class="py-1">
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                on:click={
+                                                                                                    let credential_id = credential_id.clone();
+                                                                                                    move |_| {
+                                                                                                        set_show_menu.set(false);
+                                                                                                        set_show_delete_key_form.set(Some(credential_id.clone()));
+                                                                                                    }
+                                                                                                }
+                                                                                                class="flex w-full items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer text-left"
+                                                                                            >
+                                                                                                <span class="material-symbols-outlined mr-3 text-sm">"delete"</span>
+                                                                                                "Delete key"
+                                                                                            </button>
+                                                                                        </div>
                                                                                     </div>
-                                                                                    <div class="pt-2 flex items-center gap-3">
-                                                                                        <button
-                                                                                            type="submit"
-                                                                                            disabled=delete_key_action.pending()
-                                                                                            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-                                                                                        >
-                                                                                            "Remove key"
-                                                                                        </button>
-                                                                                        <button
-                                                                                            type="button"
-                                                                                            on:click=move |_| set_show_delete_key_form.set(None)
-                                                                                            class="px-4 py-2 text-gray-600 dark:text-gray-400 text-sm font-medium hover:underline cursor-pointer"
-                                                                                        >
-                                                                                            "Cancel"
-                                                                                        </button>
-                                                                                        {move || {
-                                                                                            delete_key_action.pending().get().then_some(view! { <Spinner /> })
-                                                                                        }}
-                                                                                    </div>
-                                                                                    {move || {
-                                                                                        delete_key_action
-                                                                                            .value()
-                                                                                            .get()
-                                                                                            .and_then(|res| res.err())
-                                                                                            .map(|err| {
-                                                                                                view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                                                                            })
-                                                                                    }}
-                                                                                </form>
+                                                                                </Show>
                                                                             </div>
-                                                                        </Show>
+                                                                        </div>
                                                                     </div>
-                                                                }
+
+                                                                    <Show when=move || show_delete_key_form.get() == Some(credential_id_for_show.clone())>
+                                                                        <div class="px-2">
+                                                                            <form
+                                                                                class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
+                                                                                on:submit={
+                                                                                    let credential_id = credential_id_for_delete.clone();
+                                                                                    let delete_key_action = delete_key_action.clone();
+                                                                                    move |event: SubmitEvent| {
+                                                                                        event.prevent_default();
+                                                                                        let password = delete_key_password.get_untracked();
+                                                                                        if password.trim().is_empty() {
+                                                                                            return;
+                                                                                        }
+                                                                                        delete_key_action.dispatch((credential_id.clone(), password));
+                                                                                    }
+                                                                                }
+                                                                            >
+                                                                                <p class="text-xs text-red-700 dark:text-red-300 mb-4">
+                                                                                    "Deleting this hardware key will remove it as a sign-in method. Please enter your password to confirm."
+                                                                                </p>
+                                                                                <div>
+                                                                                    <label class="block mb-1 text-xs font-medium text-red-900 dark:text-red-200" for="delete_key_password">
+                                                                                        "Password"
+                                                                                    </label>
+                                                                                    <input
+                                                                                        id="delete_key_password"
+                                                                                        type="password"
+                                                                                        class="bg-white border border-red-200 text-gray-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block w-full p-2 dark:bg-gray-800 dark:border-red-900/50 dark:text-white"
+                                                                                        required
+                                                                                        on:input=move |event| set_delete_key_password.set(event_target_value(&event))
+                                                                                    />
+                                                                                </div>
+                                                                                <div class="pt-2 flex items-center gap-3">
+                                                                                    <button
+                                                                                        type="submit"
+                                                                                        disabled=delete_key_action.pending()
+                                                                                        class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                                                                                    >
+                                                                                        "Remove key"
+                                                                                    </button>
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        on:click=move |_| set_show_delete_key_form.set(None)
+                                                                                        class="px-4 py-2 text-gray-600 dark:text-gray-400 text-sm font-medium hover:underline cursor-pointer"
+                                                                                    >
+                                                                                        "Cancel"
+                                                                                    </button>
+                                                                                    {move || {
+                                                                                        delete_key_action.pending().get().then_some(view! { <Spinner /> })
+                                                                                    }}
+                                                                                </div>
+                                                                                {move || {
+                                                                                    delete_key_action
+                                                                                        .value()
+                                                                                        .get()
+                                                                                        .and_then(|res| res.err())
+                                                                                        .map(|err| {
+                                                                                            view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                                                                        })
+                                                                                }}
+                                                                            </form>
+                                                                        </div>
+                                                                    </Show>
+                                                                </div>
                                                             }
                                                         }
-                                                    />
-                                                </div>
-                                            </Show>
-                                        </div>
+                                                    }
+                                                />
+                                            </div>
+                                        </Show>
                                     </div>
                                 </section>
                             </div>

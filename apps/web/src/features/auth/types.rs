@@ -115,6 +115,8 @@ pub struct UserSession {
     pub email: String,
     pub is_operator: bool,
     pub session_kind: SessionKind,
+    pub totp_enabled: bool,
+    pub webauthn_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

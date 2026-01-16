@@ -50,11 +50,26 @@ pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRe
             ..
         })) => {
             let is_operator = operator_enabled(&pool, user_id).await.unwrap_or(false);
+
+            let mfa_record = super::mfa::storage::load_mfa_state(&pool, user_id)
+                .await
+                .unwrap_or(None);
+            let totp_enabled = mfa_record
+                .as_ref()
+                .is_some_and(|r| r.recovery_batch_id.is_some());
+
+            let webauthn_enabled = crate::webauthn::SecurityKeyRepo::list_user_keys(&pool, user_id)
+                .await
+                .map(|keys| !keys.is_empty())
+                .unwrap_or(false);
+
             let response = SessionResponse {
                 user_id: user_id.to_string(),
                 email,
                 is_operator,
                 session_kind: kind,
+                totp_enabled,
+                webauthn_enabled,
             };
             (StatusCode::OK, Json(response)).into_response()
         }

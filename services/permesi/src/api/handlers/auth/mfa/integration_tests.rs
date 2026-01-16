@@ -7,7 +7,7 @@ use crate::{
     cli::globals::GlobalArgs,
     totp::{DekManager, TotpService},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use axum::{
     Extension, Router,
     body::{Body, to_bytes},
@@ -206,6 +206,10 @@ fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) ->
             "/v1/me/mfa/webauthn/{credential_id}",
             delete(super::webauthn::delete_key),
         )
+        .route(
+            "/v1/me/mfa/totp",
+            delete(crate::api::handlers::me::disable_totp),
+        )
         .route("/v1/me", get(crate::api::handlers::me::get_me))
         .layer(Extension(std::sync::Arc::new(auth_state)))
         .layer(Extension(pool))
@@ -248,7 +252,7 @@ async fn mfa_enrollment_flow() -> Result<()> {
         } else {
             use base32::Alphabet;
             base32::decode(Alphabet::Rfc4648 { padding: false }, &start_data.secret)
-                .ok_or_else(|| anyhow::anyhow!("Invalid base32 secret"))?
+                .ok_or_else(|| anyhow!("Invalid base32 secret"))?
         };
 
     // 2. Generate Code
@@ -261,10 +265,10 @@ async fn mfa_enrollment_flow() -> Result<()> {
         Some("Permesi".to_string()),
         email.to_string(),
     )
-    .map_err(|e| anyhow::anyhow!("Failed to create TOTP: {e}"))?;
+    .map_err(|e| anyhow!("Failed to create TOTP: {e}"))?;
     let code = totp
         .generate_current()
-        .map_err(|e| anyhow::anyhow!("Failed to generate code: {e}"))?;
+        .map_err(|e| anyhow!("Failed to generate code: {e}"))?;
 
     // 3. Finish Enrollment
     let payload = serde_json::to_string(
@@ -350,7 +354,7 @@ async fn security_key_deletion_disables_mfa() -> Result<()> {
     // Verify MFA disabled
     let state = super::storage::load_mfa_state(&ctx.pool, user_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("MFA state not found"))?;
+        .ok_or_else(|| anyhow!("MFA state not found"))?;
     assert_eq!(state.state, MfaState::Disabled);
 
     Ok(())
@@ -401,9 +405,156 @@ async fn security_key_preserves_totp() -> Result<()> {
     // Verify MFA STILL enabled
     let state = super::storage::load_mfa_state(&ctx.pool, user_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("MFA state not found"))?;
+        .ok_or_else(|| anyhow!("MFA state not found"))?;
     assert_eq!(state.state, MfaState::Enabled);
     assert_eq!(state.recovery_batch_id, Some(batch_id));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn totp_deletion_preserves_security_key() -> Result<()> {
+    let Ok(ctx) = TestContext::new().await else {
+        return Ok(());
+    };
+
+    let email = "totp_del@example.com";
+    let user_id = insert_active_user(&ctx.pool, email).await?;
+    let token = insert_session(&ctx.pool, user_id).await?;
+
+    // 1. Insert fake security key
+    let cred_id = vec![9, 10, 11, 12];
+    sqlx::query(
+        "INSERT INTO security_keys (credential_id, user_id, label, public_key, sign_count) VALUES ($1, $2, 'test', $3, 0)"
+    )
+    .bind(&cred_id)
+    .bind(user_id)
+    .bind(vec![0u8; 32])
+    .execute(&ctx.pool)
+    .await?;
+
+    // 2. Enable MFA with TOTP (recovery batch)
+    let batch_id = Uuid::new_v4();
+    super::storage::upsert_mfa_state(&ctx.pool, user_id, MfaState::Enabled, Some(batch_id)).await?;
+
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+
+    // 3. Call disable_totp
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/me/mfa/totp")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // 4. Verify MFA STILL enabled (because of security key)
+    let state = super::storage::load_mfa_state(&ctx.pool, user_id)
+        .await?
+        .ok_or_else(|| anyhow!("MFA state not found"))?;
+    assert_eq!(state.state, MfaState::Enabled);
+    assert!(
+        state.recovery_batch_id.is_none(),
+        "Recovery batch should be cleared"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn totp_deletion_disables_mfa_when_no_keys() -> Result<()> {
+    let Ok(ctx) = TestContext::new().await else {
+        return Ok(());
+    };
+
+    let email = "totp_only@example.com";
+    let user_id = insert_active_user(&ctx.pool, email).await?;
+    let token = insert_session(&ctx.pool, user_id).await?;
+
+    // 1. Enable MFA with TOTP only
+    let batch_id = Uuid::new_v4();
+    super::storage::upsert_mfa_state(&ctx.pool, user_id, MfaState::Enabled, Some(batch_id)).await?;
+
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+
+    // 2. Call disable_totp
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/me/mfa/totp")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // 3. Verify MFA IS disabled
+    let state = super::storage::load_mfa_state(&ctx.pool, user_id)
+        .await?
+        .ok_or_else(|| anyhow!("MFA state not found"))?;
+    assert_eq!(state.state, MfaState::Disabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_response_includes_mfa_flags() -> Result<()> {
+    let Ok(ctx) = TestContext::new().await else {
+        return Ok(());
+    };
+
+    let email = "flags@example.com";
+    let user_id = insert_active_user(&ctx.pool, email).await?;
+    let token = insert_session(&ctx.pool, user_id).await?;
+
+    // 1. Setup both factors
+    let cred_id = vec![1, 3, 3, 7];
+    sqlx::query(
+        "INSERT INTO security_keys (credential_id, user_id, label, public_key, sign_count) VALUES ($1, $2, 'test', $3, 0)"
+    )
+    .bind(&cred_id)
+    .bind(user_id)
+    .bind(vec![0u8; 32])
+    .execute(&ctx.pool)
+    .await?;
+
+    let batch_id = Uuid::new_v4();
+    super::storage::upsert_mfa_state(&ctx.pool, user_id, MfaState::Enabled, Some(batch_id)).await?;
+
+    // 2. Fetch session
+    let app = Router::new()
+        .route(
+            "/v1/auth/session",
+            get(crate::api::handlers::auth::session::session),
+        )
+        .layer(Extension(std::sync::Arc::new(auth_state())))
+        .layer(Extension(ctx.pool.clone()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/auth/session")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let session: crate::api::handlers::auth::types::SessionResponse =
+        serde_json::from_slice(&body)?;
+
+    assert!(session.totp_enabled);
+    assert!(session.webauthn_enabled);
 
     Ok(())
 }

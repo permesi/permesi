@@ -5,6 +5,7 @@
 //! 2. Workspace (Organizations, Projects)
 //! 3. Platform Admin (Users, Global Settings - Operator only)
 
+use crate::app_lib::theme::Theme;
 use crate::features::auth::state::use_auth;
 use crate::routes::paths;
 use leptos::prelude::*;
@@ -55,7 +56,7 @@ pub fn Sidebar() -> impl IntoView {
                                 aria-expanded=move || if is_profile_open.get() { "true" } else { "false" }
                             >
                                 <div class="flex items-center">
-                                    <span class="material-symbols-outlined mr-3 text-xl text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
+                                    <span class=Theme::ICON>
                                         "person"
                                     </span>
                                     "My Profile"

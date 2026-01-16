@@ -375,9 +375,19 @@ pub async fn disable_totp(headers: HeaderMap, pool: Extension<PgPool>) -> impl I
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    // 2. Update user_mfa_state to disabled
+    // 2. Update user_mfa_state. If security keys remain, keep it Enabled but clear recovery_batch_id.
+    let remaining_keys = crate::webauthn::SecurityKeyRepo::list_user_keys(&pool, principal.user_id)
+        .await
+        .unwrap_or_default();
+
+    let new_state = if remaining_keys.is_empty() {
+        MfaState::Disabled
+    } else {
+        MfaState::Enabled
+    };
+
     if let Err(err) =
-        mfa::storage::upsert_mfa_state(&pool, principal.user_id, MfaState::Disabled, None).await
+        mfa::storage::upsert_mfa_state(&pool, principal.user_id, new_state, None).await
     {
         error!("Failed to update MFA state: {err}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();

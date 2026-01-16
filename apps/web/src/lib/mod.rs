@@ -23,6 +23,7 @@ pub(crate) mod api;
 pub(crate) mod build_info;
 pub(crate) mod config;
 pub(crate) mod errors;
+pub(crate) mod theme;
 
 pub(crate) use api::{
     delete_json_with_headers_with_credentials, get_json_with_base, get_json_with_credentials,

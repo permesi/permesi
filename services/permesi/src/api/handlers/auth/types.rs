@@ -88,6 +88,8 @@ pub struct SessionResponse {
     pub email: String,
     pub is_operator: bool,
     pub session_kind: SessionKind,
+    pub totp_enabled: bool,
+    pub webauthn_enabled: bool,
 }
 
 /// Payload for verifying an MFA recovery code during challenge.
