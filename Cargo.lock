@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admission_token"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "genesis"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -2947,7 +2947,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permesi"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3002,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "permesi_web"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -3731,9 +3731,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.13.2"
+version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21e6f2ab2928ca4291b86736a8bd920a277a399bba1589409d72154ff87c1282"
+checksum = "4910321ebe4151be888e35fe062169554e74aad01beafed60410131420ceffbc"
 dependencies = [
  "web-time",
  "zeroize",
@@ -4533,7 +4533,7 @@ dependencies = [
 
 [[package]]
 name = "test_support"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "anyhow",
  "reqwest 0.13.1",
@@ -5231,7 +5231,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault_client"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "anyhow",
  "reqwest 0.13.1",
