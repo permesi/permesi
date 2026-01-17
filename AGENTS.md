@@ -8,6 +8,9 @@ These guidelines are mandatory for contributors and for any AI coding agent oper
 - Do not change authentication, authorization, token semantics, or trust boundaries unless explicitly requested.
 - Do not weaken validation, scope checks, rate/risk controls, TLS verification, or logging hygiene.
 - If you are unsure about an invariant, prefer asking for context or leaving behavior unchanged with a clear note.
+- Do not hardcode configuration values. All runtime config for `permesi` and `genesis` must be defined in
+  `services/permesi/src/cli/commands/mod.rs` or `services/genesis/src/cli/commands/mod.rs`, validated by clap,
+  and then filtered/validated again in the corresponding `services/*/src/cli/dispatch/mod.rs`.
 
 ## Project Structure & Module Organization
 - Workspace members:

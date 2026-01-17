@@ -543,30 +543,39 @@ permesi:
   if [[ -f {{root}}/.envrc ]]; then
     source {{root}}/.envrc
   fi
-  if [[ -n "${PERMESI_ADMISSION_PASERK_URL:-}" ]]; then
-  echo "Waiting for genesis PASERK at ${PERMESI_ADMISSION_PASERK_URL}..."
-  python3 - "$PERMESI_ADMISSION_PASERK_URL" <<'PY'
-  import json
-  import sys
-  import time
-  import urllib.request
-
-  url = sys.argv[1]
-  deadline = time.time() + 30
-
-  while time.time() < deadline:
-      try:
-          with urllib.request.urlopen(url, timeout=1) as resp:
-              if resp.status != 200:
-                  raise RuntimeError(f"status {resp.status}")
-              json.loads(resp.read())
-          raise SystemExit(0)
-      except Exception:
-          time.sleep(0.5)
-
-  print(f"Timed out waiting for {url}", file=sys.stderr)
-  raise SystemExit(1)
-  PY
+  paserk_url="${PERMESI_ADMISSION_PASERK_URL:-}"
+  ca_path="${PERMESI_TLS_CA_PATH:-{{root}}/certs/permesi/ca.pem}"
+  paserk_ca_path="${PERMESI_ADMISSION_PASERK_CA_PATH:-$ca_path}"
+  if [[ -n "${PERMESI_ADMISSION_PASERK_CA_PATH:-}" && ! -f "$paserk_ca_path" ]]; then
+    echo "Missing ${paserk_ca_path}; falling back to ${ca_path}" >&2
+    paserk_ca_path="${ca_path}"
+  fi
+  if [[ "$paserk_url" == *"permesi.localhost"* && "$paserk_url" != *":8000"* ]]; then
+    mkcert_ca="{{root}}/certs/mkcert-root.pem"
+    if [[ -f "$mkcert_ca" ]]; then
+      paserk_ca_path="$mkcert_ca"
+    fi
+  fi
+  if [[ -n "$paserk_url" ]]; then
+  if [[ ! -f "$paserk_ca_path" ]]; then
+    echo "Missing ${paserk_ca_path}; run: just dev-tls-certs" >&2
+    exit 1
+  fi
+  echo "Waiting for genesis PASERK at ${paserk_url}..."
+  deadline=$((SECONDS + 30))
+  success=0
+  while (( SECONDS < deadline )); do
+    code="$(curl -sS --cacert "$paserk_ca_path" -o /dev/null -w "%{http_code}" "$paserk_url" || true)"
+    if [[ "$code" == "200" ]]; then
+      success=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ "$success" -ne 1 ]]; then
+    echo "Timed out waiting for ${paserk_url}" >&2
+    exit 1
+  fi
   fi
   if ! command -v vault >/dev/null 2>&1; then
     echo "vault CLI not found; install it or set PERMESI_VAULT_SECRET_ID manually before running." >&2
@@ -610,7 +619,7 @@ genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
   token="$(
-    xh '0:8000/token?client_id=00000000-0000-0000-0000-000000000000' \
+    xh 'https://genesis.permesi.localhost/token?client_id=00000000-0000-0000-0000-000000000000' \
       | jq -er '.token'
   )"
   python3 - "$token" <<'PY'
@@ -1050,10 +1059,36 @@ vault-env:
 dev-env:
   #!/usr/bin/env zsh
   set -euo pipefail
-  just --quiet vault-env
-  printf '\n'
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+  just --quiet vault-env > "$tmp"
+  vault_block="$(
+    rg -N '^export VAULT_' "$tmp"
+  )"
+  operator_block="$(
+    rg -N '^export PERMESI_OPERATOR_TOKEN=' "$tmp"
+  )"
+  genesis_block="$(
+    rg -N '^export GENESIS_' "$tmp"
+  )"
+  permesi_block="$(
+    rg -N '^export PERMESI_' "$tmp" | rg -v '^export PERMESI_OPERATOR_TOKEN='
+  )"
   printf '%s\n' \
-    "export PERMESI_ADMISSION_PASERK_URL=\"https://genesis.permesi.localhost/paserk.json\"" \
+    "$vault_block" \
+    "$operator_block" \
+    "" \
+    "$genesis_block" \
+    "export GENESIS_TLS_CERT_PATH=\"{{root}}/certs/genesis/tls.crt\"" \
+    "export GENESIS_TLS_KEY_PATH=\"{{root}}/certs/genesis/tls.key\"" \
+    "export GENESIS_TLS_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
+    "" \
+    "$permesi_block" \
+    "export PERMESI_TLS_CERT_PATH=\"{{root}}/certs/permesi/tls.crt\"" \
+    "export PERMESI_TLS_KEY_PATH=\"{{root}}/certs/permesi/tls.key\"" \
+    "export PERMESI_TLS_CA_PATH=\"{{root}}/certs/permesi/ca.pem\"" \
+    "export PERMESI_ADMISSION_PASERK_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
+    "export PERMESI_ADMISSION_PASERK_URL=\"https://genesis.permesi.localhost:8000/paserk.json\"" \
     "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost\"" \
     "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost\"" \
     "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost\"" \
@@ -1211,6 +1246,15 @@ mkcert-local:
     exit 0
   fi
   mkcert -install
+  mkdir -p {{root}}/certs
+  caroot="$(mkcert -CAROOT)"
+  root_ca="${caroot}/rootCA.pem"
+  if [[ -f "$root_ca" ]]; then
+    cp "$root_ca" "{{root}}/certs/mkcert-root.pem"
+    chmod 0644 "{{root}}/certs/mkcert-root.pem"
+  else
+    echo "mkcert root CA not found at: $root_ca" >&2
+  fi
   mkcert -key-file {{root}}/config/haproxy/certs/permesi.localhost-key.pem \
     -cert-file {{root}}/config/haproxy/certs/permesi.localhost-cert.pem \
     "localhost" "127.0.0.1" "::1" "*.localhost" \
@@ -1269,11 +1313,97 @@ mkcert-trust:
   echo "No known system trust tool found. Install p11-kit (trust) or ca-certificates tools." >&2
   exit 1
 
+dev-tls-certs:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+  if ! command -v podman >/dev/null 2>&1; then
+    echo "podman not found; install it first." >&2
+    exit 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq not found; install it first." >&2
+    exit 1
+  fi
+  keys="{{root}}/vault/keys.json"
+  if [[ ! -f "$keys" ]]; then
+    echo "Missing ${keys}. Run: just vault-init" >&2
+    exit 1
+  fi
+  if [[ -z "$(podman ps -q --filter 'name=^vault$')" ]]; then
+    echo "Vault container not running. Run: just vault-persist-ready" >&2
+    exit 1
+  fi
+  certs_dir="{{root}}/certs"
+  if [[ -x /bin/chmod ]]; then
+    chmod_bin="/bin/chmod"
+  elif [[ -x /usr/bin/chmod ]]; then
+    chmod_bin="/usr/bin/chmod"
+  else
+    chmod_bin="chmod"
+  fi
+  root_token="$(jq -r '.root_token' "$keys")"
+  vault_addr="http://127.0.0.1:8200"
+
+  ensure_dir() {
+    local dir="$1"
+    if [[ -d "$dir" ]]; then
+      return 0
+    fi
+    mkdir -p "$dir"
+    "$chmod_bin" 0700 "$dir"
+  }
+
+  write_file() {
+    local path="$1"
+    local mode="$2"
+    local content="$3"
+    local dir="${path:h}"
+    ensure_dir "$dir"
+    printf '%s\n' "$content" > "$path"
+    "$chmod_bin" "$mode" "$path"
+  }
+
+  issue_cert() {
+    local service="$1"
+    local common_name="$2"
+    local alt_names="$3"
+    local out_dir="${certs_dir}/${service}"
+
+    ensure_dir "$out_dir"
+
+    cert_json="$(
+      podman exec -e VAULT_ADDR="$vault_addr" -e VAULT_TOKEN="$root_token" \
+        vault vault write -format=json "pki_int/issue/${service}-runtime" \
+        "common_name=${common_name}" \
+        "alt_names=${alt_names}" \
+        "ttl=24h"
+    )"
+
+    tls_cert="$(jq -er '.data.certificate' <<<"$cert_json")"
+    tls_key="$(jq -er '.data.private_key' <<<"$cert_json")"
+    issuing_ca="$(jq -er '.data.issuing_ca' <<<"$cert_json")"
+    ca_chain="$(jq -er '.data.ca_chain | join("\n")' <<<"$cert_json")"
+
+    write_file "${out_dir}/tls.crt" 0644 "$tls_cert"
+    write_file "${out_dir}/tls.key" 0600 "$tls_key"
+    if [[ -n "$ca_chain" ]]; then
+      write_file "${out_dir}/ca.pem" 0644 "$ca_chain"
+    else
+      write_file "${out_dir}/ca.pem" 0644 "$issuing_ca"
+    fi
+  }
+
+  issue_cert permesi "api.permesi.localhost" "api.permesi.localhost"
+  issue_cert genesis "genesis.permesi.localhost" "genesis.permesi.localhost"
+  echo "Wrote TLS certs to ${certs_dir}/permesi and ${certs_dir}/genesis."
+
 haproxy-start:
   #!/usr/bin/env zsh
   set -euo pipefail
   cfg="{{root}}/config/haproxy/haproxy.cfg"
   cert="{{root}}/config/haproxy/certs/permesi.localhost.pem"
+  backend_ca="${PERMESI_TLS_CA_PATH:-{{root}}/certs/permesi/ca.pem}"
   if [[ ! -f "$cfg" ]]; then
     echo "Missing HAProxy config: $cfg" >&2
     exit 1
@@ -1287,6 +1417,10 @@ haproxy-start:
       echo "Run: just mkcert-local" >&2
       exit 1
     fi
+  fi
+  if [[ ! -f "$backend_ca" ]]; then
+    echo "Missing backend CA: ${backend_ca}. Run: just dev-tls-certs" >&2
+    exit 1
   fi
   if [[ -n "$(podman ps -q --filter 'name=^permesi-haproxy$')" ]]; then
     echo "permesi-haproxy already running."
@@ -1307,6 +1441,7 @@ haproxy-start:
     "${port_args[@]}" \
     -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
     -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
+    -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
     docker.io/haproxy:latest; then
     if [[ "${port_args[*]}" == *"[::]:443:8080"* ]]; then
       echo "IPv6 publish failed; retrying IPv4-only."
@@ -1317,6 +1452,7 @@ haproxy-start:
         "${port_args[@]}" \
         -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
         -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
+        -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
         docker.io/haproxy:latest
     else
       exit 1
@@ -1385,7 +1521,7 @@ start:
   start_session
   tmux attach -t "$session"
 
-dev-start-infra: setup-network postgres vault-persist-ready jaeger haproxy-start
+dev-start-infra: setup-network postgres vault-persist-ready dev-tls-certs jaeger haproxy-start
 
 # Stop all services and the tmux session
 stop: tmux-stop dev-stop

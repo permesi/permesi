@@ -35,27 +35,19 @@ fn parse_email_outbox_args(matches: &clap::ArgMatches) -> EmailOutboxArgs {
 }
 
 struct AdmissionArgs {
-    path: Option<String>,
-    paserk: Option<String>,
-    url: Option<String>,
+    url: String,
     issuer: Option<String>,
     audience: Option<String>,
 }
 
 fn parse_admission_args(matches: &clap::ArgMatches) -> Result<AdmissionArgs> {
-    let path = matches.get_one::<String>("admission-paserk-path").cloned();
-    let paserk = matches.get_one::<String>("admission-paserk").cloned();
     let url = matches.get_one::<String>("admission-paserk-url").cloned();
-
-    if path.is_none() && paserk.is_none() && url.is_none() {
-        anyhow::bail!(
-            "missing required argument: --admission-paserk-path, --admission-paserk, or --admission-paserk-url"
-        );
-    }
+    let url = match url {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => anyhow::bail!("missing required argument: --admission-paserk-url"),
+    };
 
     Ok(AdmissionArgs {
-        path,
-        paserk,
         url,
         issuer: matches.get_one::<String>("admission-issuer").cloned(),
         audience: matches.get_one::<String>("admission-audience").cloned(),
@@ -95,6 +87,30 @@ fn parse_auth_args(matches: &clap::ArgMatches) -> Result<AuthArgs> {
     })
 }
 
+fn read_path_arg(matches: &clap::ArgMatches, name: &str, env_name: &str) -> Result<Option<String>> {
+    match matches.get_one::<String>(name) {
+        Some(value) if value.trim().is_empty() => {
+            anyhow::bail!("{env_name} must not be empty");
+        }
+        Some(value) => Ok(Some(value.clone())),
+        None => Ok(None),
+    }
+}
+
+fn read_required_path_arg(
+    matches: &clap::ArgMatches,
+    name: &str,
+    env_name: &str,
+) -> Result<String> {
+    match matches.get_one::<String>(name) {
+        Some(value) if value.trim().is_empty() => {
+            anyhow::bail!("{env_name} must not be empty");
+        }
+        Some(value) => Ok(value.clone()),
+        None => anyhow::bail!("missing required argument: --{name}"),
+    }
+}
+
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
 pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
@@ -128,6 +144,14 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let admission = parse_admission_args(matches)?;
     let auth = parse_auth_args(matches)?;
+    let tls_cert_path = read_required_path_arg(matches, "tls-cert-path", "PERMESI_TLS_CERT_PATH")?;
+    let tls_key_path = read_required_path_arg(matches, "tls-key-path", "PERMESI_TLS_KEY_PATH")?;
+    let tls_ca_path = read_required_path_arg(matches, "tls-ca-path", "PERMESI_TLS_CA_PATH")?;
+    let admission_paserk_ca_path = read_path_arg(
+        matches,
+        "admission-paserk-ca-path",
+        "PERMESI_ADMISSION_PASERK_CA_PATH",
+    )?;
     let email_outbox = parse_email_outbox_args(matches);
 
     let opaque_server_id = matches
@@ -157,11 +181,13 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_addr,
         vault_namespace,
         vault_policy,
-        admission_paserk: admission.paserk,
-        admission_paserk_path: admission.path,
         admission_paserk_url: admission.url,
         admission_issuer: admission.issuer,
         admission_audience: admission.audience,
+        tls_cert_path,
+        tls_key_path,
+        tls_ca_path,
+        admission_paserk_ca_path,
         frontend_base_url: auth.frontend_base_url,
         email_token_ttl_seconds: auth.email_token_ttl_seconds,
         email_resend_cooldown_seconds: auth.email_resend_cooldown_seconds,
@@ -176,4 +202,43 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         platform_admin_ttl_seconds,
         platform_recent_auth_seconds,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admission_paserk_url_required() {
+        temp_env::with_vars(
+            [
+                ("PERMESI_ADMISSION_PASERK_URL", None::<&str>),
+                ("PERMESI_TLS_CERT_PATH", Some("/tmp/permesi-cert.pem")),
+                ("PERMESI_TLS_KEY_PATH", Some("/tmp/permesi-key.pem")),
+                ("PERMESI_TLS_CA_PATH", Some("/tmp/permesi-ca.pem")),
+                (
+                    "PERMESI_DSN",
+                    Some("postgres://user@localhost:5432/permesi"),
+                ),
+                (
+                    "PERMESI_VAULT_URL",
+                    Some("http://127.0.0.1:8200/v1/auth/approle/login"),
+                ),
+                ("PERMESI_VAULT_ROLE_ID", Some("role-id")),
+                ("PERMESI_VAULT_SECRET_ID", Some("secret-id")),
+            ],
+            || {
+                let command = crate::cli::commands::new();
+                let matches = command.get_matches_from(vec!["permesi"]);
+                let result = handler(&matches);
+                assert!(result.is_err());
+                if let Err(err) = result {
+                    assert!(
+                        err.to_string()
+                            .contains("missing required argument: --admission-paserk-url")
+                    );
+                }
+            },
+        );
+    }
 }

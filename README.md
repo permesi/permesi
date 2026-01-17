@@ -230,9 +230,8 @@ Production readiness checklist:
 
 Default ports: genesis `8000`, permesi `8001`, web `8080`.
 
-Local HTTPS is now the default for development. We use the `.test` domain to avoid `.localhost` IPv6 resolution issues and keep WebAuthn happy with HTTPS. Run `just localhost-hosts` once to map the `.test` hosts to `127.0.0.1`, then `just mkcert-local` to install the local CA and generate certs. `just start` launches HAProxy with TLS termination on port `443`. The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
-If HAProxy can't reach host services on macOS, it will fall back to `host.docker.internal` automatically.
-On Linux, if server-side HTTPS calls fail (e.g., `admission_keyset` health is red), run `just mkcert-trust` to install the mkcert root CA into the system trust store used by Rust/reqwest (supports `update-ca-certificates` and Arch’s `/etc/ca-certificates/trust-source/anchors`).
+Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443`. The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
+If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
 
 1) One command: `just start` (infra + `.envrc` + web).
 2) Run services: `just genesis` and `just permesi` (they auto-source `.envrc`, so direnv is optional).
@@ -251,8 +250,15 @@ to (re)apply schemas and runtime roles, then `just db-verify` to confirm constra
 
 Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/logs`).
 
-`just dev-envrc` emits Vault credentials plus local endpoints:
-- `PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost/paserk.json`
+`just dev-envrc` emits Vault credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single Vault PKI CA (the CA written to `certs/<service>/ca.pem`). `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis Vault CA bundle when fetching `paserk.json` directly from the Genesis service.
+- `PERMESI_TLS_CERT_PATH=.../certs/permesi/tls.crt`
+- `PERMESI_TLS_KEY_PATH=.../certs/permesi/tls.key`
+- `PERMESI_TLS_CA_PATH=.../certs/permesi/ca.pem`
+- `PERMESI_ADMISSION_PASERK_CA_PATH=.../certs/genesis/ca.pem`
+- `GENESIS_TLS_CERT_PATH=.../certs/genesis/tls.crt`
+- `GENESIS_TLS_KEY_PATH=.../certs/genesis/tls.key`
+- `GENESIS_TLS_CA_PATH=.../certs/genesis/ca.pem`
+- `PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json`
 - `PERMESI_FRONTEND_BASE_URL=https://permesi.localhost`
 - `PERMESI_API_BASE_URL=https://api.permesi.localhost`
 - `PERMESI_TOKEN_BASE_URL=https://genesis.permesi.localhost`

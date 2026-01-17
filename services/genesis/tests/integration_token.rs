@@ -1,11 +1,14 @@
 use admission_token::{PaserkKeySet, VerificationOptions, verify_v4_public};
 use anyhow::{Context, Result, bail, ensure};
+use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use std::{
-    env,
+    env, fs,
+    io::ErrorKind,
     net::TcpListener,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     process::{Child, Command, Stdio},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -35,6 +38,7 @@ struct TestConfig {
 struct TestContext {
     postgres: PostgresContainer,
     _vault: VaultContainer,
+    tls: TestTlsPaths,
     config: TestConfig,
 }
 
@@ -45,6 +49,12 @@ struct ClaimsExpectations {
 
 struct ChildGuard(Child);
 
+struct TestTlsPaths {
+    ca: String,
+    cert: String,
+    key: String,
+}
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -53,7 +63,7 @@ impl Drop for ChildGuard {
 }
 
 impl TestContext {
-    async fn new() -> Result<Self> {
+    async fn new(tls: TestTlsPaths) -> Result<Self> {
         let network = TestNetwork::new("genesis-it");
 
         let postgres = PostgresContainer::start(network.name()).await?;
@@ -75,6 +85,7 @@ impl TestContext {
         Ok(Self {
             postgres,
             _vault: vault,
+            tls,
             config,
         })
     }
@@ -102,7 +113,7 @@ fn claims_expectations() -> ClaimsExpectations {
     ClaimsExpectations { issuer, audience }
 }
 
-fn spawn_genesis(config: &TestConfig) -> Result<ChildGuard> {
+fn spawn_genesis(config: &TestConfig, tls: &TestTlsPaths) -> Result<ChildGuard> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_genesis"));
     // Default to info logs so CI failures include useful context.
     if env::var("GENESIS_LOG_LEVEL").is_err() {
@@ -114,6 +125,12 @@ fn spawn_genesis(config: &TestConfig) -> Result<ChildGuard> {
             &config.port.to_string(),
             "--dsn",
             &config.dsn,
+            "--tls-cert-path",
+            &tls.cert,
+            "--tls-key-path",
+            &tls.key,
+            "--tls-ca-path",
+            &tls.ca,
             "--vault-url",
             &config.vault_url,
             "--vault-role-id",
@@ -126,6 +143,91 @@ fn spawn_genesis(config: &TestConfig) -> Result<ChildGuard> {
         .spawn()
         .context("Failed to spawn genesis binary")?;
     Ok(ChildGuard(child))
+}
+
+fn prepare_tls_assets() -> Result<Option<TestTlsPaths>> {
+    let tls_dir = env::temp_dir().join(format!("genesis-it-{}", Uuid::new_v4()));
+    if let Err(err) = fs::create_dir_all(&tls_dir) {
+        if err.kind() == ErrorKind::PermissionDenied {
+            eprintln!("Skipping integration test: cannot write to temp TLS dir");
+            return Ok(None);
+        }
+        return Err(err).context("Failed to create temp TLS directory");
+    }
+    let probe_path = tls_dir.join(".perm_check");
+    match fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&probe_path)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe_path);
+        }
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+            eprintln!("Skipping integration test: cannot write to temp TLS dir");
+            return Ok(None);
+        }
+        Err(err) => return Err(err).context("Failed to probe temp TLS write access"),
+    }
+
+    let ca_key = KeyPair::generate().context("Failed to generate CA key")?;
+    let mut ca_params = CertificateParams::new(vec!["genesis.permesi.localhost".to_string()])
+        .context("Failed to build CA certificate params")?;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.distinguished_name = DistinguishedName::new();
+    ca_params
+        .distinguished_name
+        .push(DnType::CommonName, "genesis-test-ca");
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .context("Failed to build CA certificate")?;
+
+    let leaf_key = KeyPair::generate().context("Failed to generate leaf key")?;
+    let mut leaf_params = CertificateParams::new(vec!["genesis.permesi.localhost".to_string()])
+        .context("Failed to build leaf certificate params")?;
+    leaf_params.distinguished_name = DistinguishedName::new();
+    leaf_params
+        .distinguished_name
+        .push(DnType::CommonName, "genesis.permesi.localhost");
+    let leaf_cert = leaf_params
+        .signed_by(&leaf_key, &ca_cert, &ca_key)
+        .context("Failed to build leaf certificate")?;
+
+    let ca_pem = ca_cert.pem();
+    let leaf_pem = leaf_cert.pem();
+    let leaf_key = leaf_key.serialize_pem();
+
+    let ca_path = tls_dir.join("ca.pem");
+    let cert_path = tls_dir.join("tls.crt");
+    let key_path = tls_dir.join("tls.key");
+    if let Err(err) = fs::write(&ca_path, ca_pem) {
+        if err.kind() == ErrorKind::PermissionDenied {
+            eprintln!("Skipping integration test: cannot write CA bundle");
+            return Ok(None);
+        }
+        return Err(err).context("Failed to write CA bundle");
+    }
+    if let Err(err) = fs::write(&cert_path, leaf_pem) {
+        if err.kind() == ErrorKind::PermissionDenied {
+            eprintln!("Skipping integration test: cannot write TLS cert");
+            return Ok(None);
+        }
+        return Err(err).context("Failed to write TLS cert");
+    }
+    if let Err(err) = fs::write(&key_path, leaf_key) {
+        if err.kind() == ErrorKind::PermissionDenied {
+            eprintln!("Skipping integration test: cannot write TLS key");
+            return Ok(None);
+        }
+        return Err(err).context("Failed to write TLS key");
+    }
+
+    Ok(Some(TestTlsPaths {
+        ca: ca_path.display().to_string(),
+        cert: cert_path.display().to_string(),
+        key: key_path.display().to_string(),
+    }))
 }
 
 async fn wait_for_ready(client: &reqwest::Client, base: &str) -> Result<()> {
@@ -192,9 +294,13 @@ async fn token_endpoint_mints_and_persists() -> Result<()> {
         return Ok(());
     }
 
-    let context = TestContext::new().await?;
+    let Some(tls) = prepare_tls_assets()? else {
+        return Ok(());
+    };
+
+    let context = TestContext::new(tls).await?;
     let config = &context.config;
-    let base = format!("http://127.0.0.1:{}", config.port);
+    let base = format!("https://genesis.permesi.localhost:{}", config.port);
 
     let admin_dsn = context.postgres.admin_dsn();
     let pool = PgPoolOptions::new()
@@ -203,9 +309,19 @@ async fn token_endpoint_mints_and_persists() -> Result<()> {
         .await
         .context("Failed to connect to Postgres")?;
 
-    let _child = spawn_genesis(config)?;
+    let _child = spawn_genesis(config, &context.tls)?;
 
-    let client = reqwest::Client::new();
+    let ca_pem = fs::read(&context.tls.ca).context("Failed to read test CA bundle")?;
+    let ca_cert = reqwest::Certificate::from_pem(&ca_pem).context("Failed to parse test CA")?;
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .tls_certs_only(std::iter::once(ca_cert))
+        .resolve(
+            "genesis.permesi.localhost",
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.port),
+        )
+        .build()
+        .context("Failed to build HTTPS client")?;
     wait_for_ready(&client, &base).await?;
 
     let token = request_token(&client, &base, &config.client_id).await?;

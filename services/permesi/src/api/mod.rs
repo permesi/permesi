@@ -1,13 +1,14 @@
 use crate::{
     api::handlers::{auth, health, root},
     cli::globals::GlobalArgs,
+    tls,
     totp::{DekManager, TotpService},
     vault,
     webauthn::{PasskeyConfig, PasskeyService, SecurityKeyService},
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
-    Extension,
+    Extension, Router,
     body::Body,
     extract::MatchedPath,
     http::{
@@ -17,8 +18,12 @@ use axum::{
     routing::{get, options},
 };
 use sqlx::postgres::PgPoolOptions;
-use std::{sync::Arc, time::Duration};
-use tokio::{net::TcpListener, sync::mpsc};
+use std::{
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::sync::mpsc;
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -57,7 +62,7 @@ pub async fn new(
     email_config: email::EmailWorkerConfig,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::unbounded_channel();
 
     vault::renew::try_renew(globals, tx).await?;
 
@@ -163,15 +168,44 @@ pub async fn new(
         )
         .layer(Extension(pool));
 
-    let listener = TcpListener::bind(format!("::0:{port}")).await?;
+    serve_tls(app, port, rx).await?;
 
-    info!("Listening on [::]:{}", port);
+    Ok(())
+}
 
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(async move {
-            rx.recv().await;
+/// Serve the API over TLS using Vault-issued certificates.
+///
+/// # Errors
+/// Returns an error if TLS configuration or the server fails to start.
+async fn serve_tls(
+    app: Router,
+    port: u16,
+    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
+) -> Result<()> {
+    let rustls_config = tls::load_server_config()?;
+    let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
+    let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
+    let handle = axum_server::Handle::new();
+
+    tokio::spawn({
+        let handle = handle.clone();
+        async move {
+            shutdown_rx.recv().await;
             info!("Gracefully shutdown");
-        })
+            handle.graceful_shutdown(Some(Duration::from_secs(30)));
+        }
+    });
+
+    let tls_paths = crate::tls::runtime_paths()?;
+    info!(
+        "TLS enabled; cert loaded from {}",
+        tls_paths.cert_path().display()
+    );
+    info!("Listening on https://[::]:{}", port);
+
+    axum_server::bind_rustls(addr, tls_config)
+        .handle(handle)
+        .serve(app.into_make_service())
         .await?;
 
     Ok(())

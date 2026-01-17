@@ -34,6 +34,7 @@ docs/svg-pan-zoom.min.js
 
 # Local TLS certs (mkcert / HAProxy)
 config/haproxy/certs/
+certs/
 config/haproxy/*.pem
 config/haproxy/*.key
 

@@ -661,7 +661,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                     "Methods"
                                                 </h3>
                                                 <div class="group">
-                                                    <div class=Theme::LIST_ITEM>
+                                                    <div class=Theme::LIST_ITEM_FLAT>
                                                         <div class="flex items-center space-x-3">
                                                             <span class=Theme::ICON_SMALL>
                                                                 "smartphone"
@@ -929,7 +929,7 @@ pub fn MeSecurityPage() -> impl IntoView {
 
                                                             view! {
                                                                 <div class="flex flex-col space-y-4 group">
-                                                                    <div class=Theme::LIST_ITEM>
+                                                                    <div class=Theme::LIST_ITEM_FLAT>
                                                                         <div class="flex items-center space-x-3">
                                                                             <span class=Theme::ICON_SMALL>
                                                                                 "key"

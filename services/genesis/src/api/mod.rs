@@ -1,7 +1,7 @@
 use crate::{
     api::handlers::{headers, health, paserk, root, token},
     cli::globals::GlobalArgs,
-    vault,
+    tls, vault,
 };
 use anyhow::{Context, Result};
 use axum::{
@@ -11,8 +11,12 @@ use axum::{
     routing::{get, options},
 };
 use sqlx::postgres::PgPoolOptions;
-use std::{sync::Arc, time::Duration};
-use tokio::{net::TcpListener, sync::mpsc};
+use std::{
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::sync::mpsc;
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -169,15 +173,30 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .route("/health", options(health::health))
         .layer(Extension(pool));
 
-    let listener = TcpListener::bind(format!("::0:{port}")).await?;
+    let rustls_config = tls::load_server_config()?;
+    let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
+    let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
+    let handle = axum_server::Handle::new();
 
-    info!("Listening on [::]:{}", port);
-
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(async move {
+    tokio::spawn({
+        let handle = handle.clone();
+        async move {
             rx.recv().await;
             info!("Gracefully shutdown");
-        })
+            handle.graceful_shutdown(Some(Duration::from_secs(30)));
+        }
+    });
+
+    let tls_paths = crate::tls::runtime_paths()?;
+    info!(
+        "TLS enabled; cert loaded from {}",
+        tls_paths.cert_path().display()
+    );
+    info!("Listening on https://[::]:{}", port);
+
+    axum_server::bind_rustls(addr, tls_config)
+        .handle(handle)
+        .serve(app.into_make_service())
         .await?;
 
     Ok(())

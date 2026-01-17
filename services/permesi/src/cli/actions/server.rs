@@ -1,9 +1,8 @@
 use crate::{api, cli::globals::GlobalArgs, vault};
-use admission_token::PaserkKeySet;
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
-use std::{fs, sync::Arc};
-use tracing::debug;
+use std::sync::Arc;
+use tracing::{debug, info};
 use url::Url;
 
 #[derive(Debug)]
@@ -17,11 +16,13 @@ pub struct Args {
     pub vault_addr: Option<String>,
     pub vault_namespace: Option<String>,
     pub vault_policy: String,
-    pub admission_paserk: Option<String>,
-    pub admission_paserk_path: Option<String>,
-    pub admission_paserk_url: Option<String>,
+    pub admission_paserk_url: String,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
+    pub tls_cert_path: String,
+    pub tls_key_path: String,
+    pub tls_ca_path: String,
+    pub admission_paserk_ca_path: Option<String>,
     pub frontend_base_url: String,
     pub email_token_ttl_seconds: i64,
     pub email_resend_cooldown_seconds: i64,
@@ -41,34 +42,34 @@ pub struct Args {
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
+    crate::tls::set_runtime_paths(crate::tls::TlsPaths::from_cli(
+        args.tls_cert_path.clone(),
+        args.tls_key_path.clone(),
+        args.tls_ca_path.clone(),
+        args.admission_paserk_ca_path.clone(),
+    ));
     let issuer = args
         .admission_issuer
+        .clone()
         .unwrap_or_else(|| "https://genesis.permesi.dev".to_string());
     let audience = args
         .admission_audience
+        .clone()
         .unwrap_or_else(|| "permesi".to_string());
-
-    let admission_verifier = if let Some(url) = &args.admission_paserk_url {
-        Arc::new(api::handlers::AdmissionVerifier::new_remote(url.clone(), issuer, audience).await?)
-    } else {
-        let keyset_json = if let Some(path) = &args.admission_paserk_path {
-            fs::read_to_string(path)
-                .with_context(|| format!("Failed to read PASERK file: {path}"))?
-        } else if let Some(keyset) = &args.admission_paserk {
-            keyset.clone()
-        } else {
-            return Err(anyhow!("Admission PASERK keyset is required"));
-        };
-
-        let keyset =
-            PaserkKeySet::from_json(&keyset_json).context("Invalid admission PASERK JSON")?;
-        keyset
-            .validate()
-            .context("Invalid admission PASERK keyset")?;
-        Arc::new(api::handlers::AdmissionVerifier::new(
-            keyset, issuer, audience,
-        ))
+    let vault_addr = match args.vault_addr.clone() {
+        Some(addr) => addr,
+        None => vault_base_url(&args.vault_url)?,
     };
+    log_startup_args(&args, &issuer, &audience, &vault_addr);
+
+    let admission_verifier = Arc::new(
+        api::handlers::AdmissionVerifier::new_remote(
+            args.admission_paserk_url.clone(),
+            issuer,
+            audience,
+        )
+        .await?,
+    );
 
     let mut globals = GlobalArgs::new(args.vault_url.clone());
 
@@ -114,11 +115,6 @@ pub async fn execute(args: Args) -> Result<()> {
         .with_opaque_server_id(args.opaque_server_id)
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
-    let vault_addr = match args.vault_addr {
-        Some(addr) => addr,
-        None => vault_base_url(&args.vault_url)?,
-    };
-
     let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
         .with_vault_namespace(args.vault_namespace)
         .with_vault_policy(args.vault_policy)
@@ -142,6 +138,107 @@ pub async fn execute(args: Args) -> Result<()> {
         email_config,
     )
     .await
+}
+
+fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str) {
+    let admission_paserk_ca = args
+        .admission_paserk_ca_path
+        .clone()
+        .unwrap_or_else(|| args.tls_ca_path.clone());
+    let entries = [
+        ("port", args.port.to_string()),
+        ("dsn", redact_dsn(&args.dsn)),
+        ("vault_url", args.vault_url.clone()),
+        ("vault_addr", vault_addr.to_string()),
+        ("vault_role_id", args.vault_role_id.clone()),
+        (
+            "vault_secret_id_set",
+            args.vault_secret_id.is_some().to_string(),
+        ),
+        (
+            "vault_wrapped_token_set",
+            args.vault_wrapped_token.is_some().to_string(),
+        ),
+        (
+            "vault_namespace",
+            args.vault_namespace.clone().unwrap_or_default(),
+        ),
+        ("vault_policy", args.vault_policy.clone()),
+        ("tls_cert_path", args.tls_cert_path.clone()),
+        ("tls_key_path", args.tls_key_path.clone()),
+        ("tls_ca_path", args.tls_ca_path.clone()),
+        ("admission_paserk_url", args.admission_paserk_url.clone()),
+        ("admission_paserk_ca_path", admission_paserk_ca),
+        ("admission_issuer", issuer.to_string()),
+        ("admission_audience", audience.to_string()),
+        ("frontend_base_url", args.frontend_base_url.clone()),
+        (
+            "email_token_ttl_seconds",
+            args.email_token_ttl_seconds.to_string(),
+        ),
+        (
+            "email_resend_cooldown_seconds",
+            args.email_resend_cooldown_seconds.to_string(),
+        ),
+        ("session_ttl_seconds", args.session_ttl_seconds.to_string()),
+        (
+            "email_outbox_poll_seconds",
+            args.email_outbox_poll_seconds.to_string(),
+        ),
+        (
+            "email_outbox_batch_size",
+            args.email_outbox_batch_size.to_string(),
+        ),
+        (
+            "email_outbox_max_attempts",
+            args.email_outbox_max_attempts.to_string(),
+        ),
+        (
+            "email_outbox_backoff_base_seconds",
+            args.email_outbox_backoff_base_seconds.to_string(),
+        ),
+        (
+            "email_outbox_backoff_max_seconds",
+            args.email_outbox_backoff_max_seconds.to_string(),
+        ),
+        ("opaque_server_id", args.opaque_server_id.clone()),
+        (
+            "opaque_login_ttl_seconds",
+            args.opaque_login_ttl_seconds.to_string(),
+        ),
+        (
+            "platform_admin_ttl_seconds",
+            args.platform_admin_ttl_seconds.to_string(),
+        ),
+        (
+            "platform_recent_auth_seconds",
+            args.platform_recent_auth_seconds.to_string(),
+        ),
+    ];
+    log_entries("Permesi startup configuration", &entries);
+}
+
+fn redact_dsn(dsn: &str) -> String {
+    match Url::parse(dsn) {
+        Ok(mut parsed) => {
+            if parsed.password().is_some() {
+                let _ = parsed.set_password(Some("REDACTED"));
+            }
+            parsed.to_string()
+        }
+        Err(_) => "invalid-dsn".to_string(),
+    }
+}
+
+fn log_entries(title: &str, entries: &[(&str, String)]) {
+    let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+    let mut message = format!("{title}:");
+    for (key, value) in entries {
+        let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
+        let _ =
+            std::fmt::Write::write_fmt(&mut message, format_args!("\n  {key}:{padding} {value}"));
+    }
+    info!("{message}");
 }
 
 fn vault_base_url(url: &str) -> Result<String> {

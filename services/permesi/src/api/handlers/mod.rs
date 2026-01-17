@@ -19,11 +19,15 @@ use admission_token::{
 };
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{
+    Client,
+    header::{ETAG, IF_NONE_MATCH},
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 use tracing::{Instrument, error, info, info_span, instrument, warn};
+use url::Url;
 
 // PASERK caching: use in-memory keyset with TTL; refresh on stale cache or unknown kid.
 // If refresh fails, keep the last known keyset so verification keeps working.
@@ -58,6 +62,8 @@ struct KeysetCache {
     keyset: PaserkKeySet,
     /// When the keyset was last successfully fetched.
     fetched_at: Instant,
+    /// `ETag` from the last successful fetch, if provided by genesis.
+    etag: Option<String>,
 }
 
 impl KeysetCache {
@@ -120,6 +126,7 @@ impl AdmissionVerifier {
             keyset_cache: RwLock::new(KeysetCache {
                 keyset,
                 fetched_at: Instant::now(),
+                etag: None,
             }),
             issuer,
             audience,
@@ -133,34 +140,72 @@ impl AdmissionVerifier {
     /// # Errors
     /// Returns an error if the keyset cannot be fetched or parsed.
     pub async fn new_remote(url: String, issuer: String, audience: String) -> Result<Self> {
+        let parsed = Url::parse(&url).context("Invalid admission PASERK URL")?;
+        if parsed.scheme() != "https" {
+            return Err(anyhow!("Admission PASERK URL must use https: {url}"));
+        }
+
+        let ca_cert = crate::tls::load_reqwest_ca()?;
         let client = Client::builder()
+            .use_rustls_tls()
+            .tls_certs_only(std::iter::once(ca_cert))
             .user_agent(crate::APP_USER_AGENT)
-            .build()?;
+            .build()
+            .context("Failed to build PASERK HTTP client")?;
         // Startup fetch is best-effort: if genesis isn't ready yet, start with an empty, stale cache
         // so /health stays red and verification fails closed until refresh succeeds.
-        let (keyset, fetched_at, last_refresh_unix) = match fetch_keyset(&client, &url).await {
-            Ok(keyset) => {
-                keyset
-                    .validate()
-                    .context("Invalid admission PASERK keyset")?;
-                (keyset, Instant::now(), now_unix_seconds_u64())
-            }
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "admission PASERK fetch failed during startup; continuing with empty keyset"
-                );
-                (empty_keyset(), stale_instant(), 0)
-            }
-        };
+        let (keyset, fetched_at, last_refresh_unix, etag) =
+            match fetch_keyset(&client, &url, None).await {
+                Ok(FetchOutcome::Updated { keyset, etag }) => {
+                    keyset
+                        .validate()
+                        .context("Invalid admission PASERK keyset")?;
+                    (keyset, Instant::now(), now_unix_seconds_u64(), etag)
+                }
+                Ok(FetchOutcome::NotModified) => {
+                    warn!("admission PASERK fetch returned not-modified during startup");
+                    (empty_keyset(), stale_instant(), 0, None)
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "admission PASERK fetch failed during startup; continuing with empty keyset"
+                    );
+                    (empty_keyset(), stale_instant(), 0, None)
+                }
+            };
         Ok(Self {
             keyset_source: KeysetSource::Remote { url, client },
-            keyset_cache: RwLock::new(KeysetCache { keyset, fetched_at }),
+            keyset_cache: RwLock::new(KeysetCache {
+                keyset,
+                fetched_at,
+                etag,
+            }),
             issuer,
             audience,
             action: ADMISSION_ACTION.to_string(),
             last_refresh_unix: AtomicU64::new(last_refresh_unix),
         })
+    }
+
+    /// Return the remote PASERK URL when configured, otherwise `None`.
+    pub fn keyset_url(&self) -> Option<&str> {
+        match &self.keyset_source {
+            KeysetSource::Static => None,
+            KeysetSource::Remote { url, .. } => Some(url.as_str()),
+        }
+    }
+
+    /// Return the configured issuer string for admission token verification.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// Return the configured audience for admission token verification.
+    #[must_use]
+    pub fn audience(&self) -> &str {
+        &self.audience
     }
 
     /// Return a keyset snapshot; refresh if stale, keep cache if refresh fails.
@@ -174,11 +219,15 @@ impl AdmissionVerifier {
             return Ok(cached);
         }
 
-        if let KeysetSource::Remote { .. } = &self.keyset_source
+        if let KeysetSource::Remote { url, .. } = &self.keyset_source
             && let Err(err) = self.refresh_keyset().await
         {
             // Refresh failure shouldn't break verification; keep using the last cached keyset.
-            warn!(error = %err, "failed to refresh paserk keyset cache");
+            warn!(
+                error = %err,
+                url = %url,
+                "failed to refresh paserk keyset cache"
+            );
             return Ok(cached);
         }
 
@@ -188,22 +237,33 @@ impl AdmissionVerifier {
 
     /// Fetch PASERK from genesis and update the in-memory cache.
     async fn refresh_keyset(&self) -> Result<()> {
-        let (url, client) = match &self.keyset_source {
+        let (url, client, etag) = match &self.keyset_source {
             KeysetSource::Static => return Ok(()),
-            KeysetSource::Remote { url, client } => (url.clone(), client.clone()),
+            KeysetSource::Remote { url, client } => {
+                let etag = self.keyset_cache.read().await.etag.clone();
+                (url.clone(), client.clone(), etag)
+            }
         };
 
-        let keyset = fetch_keyset(&client, &url).await?;
-        keyset
-            .validate()
-            .context("Invalid admission PASERK keyset")?;
-        let mut cache = self.keyset_cache.write().await;
-        cache.keyset = keyset;
-        cache.fetched_at = Instant::now();
-        info!(
-            keyset_keys = cache.keyset.keys.len(),
-            "paserk keyset cache refreshed"
-        );
+        match fetch_keyset(&client, &url, etag.as_deref()).await? {
+            FetchOutcome::NotModified => {
+                let mut cache = self.keyset_cache.write().await;
+                cache.fetched_at = Instant::now();
+            }
+            FetchOutcome::Updated { keyset, etag } => {
+                keyset
+                    .validate()
+                    .context("Invalid admission PASERK keyset")?;
+                let mut cache = self.keyset_cache.write().await;
+                cache.keyset = keyset;
+                cache.fetched_at = Instant::now();
+                cache.etag = etag;
+                info!(
+                    keyset_keys = cache.keyset.keys.len(),
+                    "paserk keyset cache refreshed"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -211,11 +271,15 @@ impl AdmissionVerifier {
     async fn dependency_status(&self) -> DependencyStatus {
         match &self.keyset_source {
             KeysetSource::Static => DependencyStatus::Static,
-            KeysetSource::Remote { .. } => match self.refresh_keyset().await {
+            KeysetSource::Remote { url, .. } => match self.refresh_keyset().await {
                 Ok(()) => DependencyStatus::Ok,
                 Err(err) => {
                     // /health reports dependency errors when refresh fails.
-                    warn!(error = %err, "paserk keyset fetch failed during health check");
+                    warn!(
+                        error = %err,
+                        url = %url,
+                        "paserk keyset fetch failed during health check"
+                    );
                     DependencyStatus::Error
                 }
             },
@@ -269,23 +333,44 @@ fn stale_instant() -> Instant {
         .unwrap_or_else(Instant::now)
 }
 
+enum FetchOutcome {
+    NotModified,
+    Updated {
+        keyset: PaserkKeySet,
+        etag: Option<String>,
+    },
+}
+
 /// Fetch the PASERK keyset from genesis and parse its JSON response.
-async fn fetch_keyset(client: &Client, url: &str) -> Result<PaserkKeySet> {
+async fn fetch_keyset(client: &Client, url: &str, etag: Option<&str>) -> Result<FetchOutcome> {
     let span = info_span!(
         "admission.keyset.fetch",
         http.method = "GET",
         url = %url
     );
     async {
-        let response = client.get(url).send().await?;
+        let mut request = client.get(url);
+        if let Some(etag_value) = etag {
+            request = request.header(IF_NONE_MATCH, etag_value);
+        }
+        let response = request.send().await?;
         let status = response.status();
+        if status.as_u16() == 304 {
+            return Ok(FetchOutcome::NotModified);
+        }
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let body = response.text().await?;
 
         if !status.is_success() {
             return Err(anyhow!("paserk keyset fetch failed: {status}"));
         }
 
-        PaserkKeySet::from_json(&body).context("Invalid admission PASERK JSON")
+        let keyset = PaserkKeySet::from_json(&body).context("Invalid admission PASERK JSON")?;
+        Ok(FetchOutcome::Updated { keyset, etag })
     }
     .instrument(span)
     .await
@@ -500,6 +585,7 @@ mod tests {
         let cache = KeysetCache {
             keyset,
             fetched_at: Instant::now(),
+            etag: None,
         };
         let verifier = AdmissionVerifier {
             keyset_source: KeysetSource::Remote {

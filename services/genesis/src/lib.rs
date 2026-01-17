@@ -36,6 +36,7 @@
 
 pub mod api;
 pub mod cli;
+pub mod tls;
 pub mod vault;
 
 #[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]

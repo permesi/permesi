@@ -61,6 +61,10 @@ The resources are defined in `vault/contrib/terraform/`:
   - Key: `users` (type `chacha20-poly1305`)
 - **Transit (genesis)**: mounted at `transit/genesis`
   - Key: `genesis-signing` (type `ed25519`)
+- **PKI (TLS certificates)**: mounted at `pki_root` and `pki_int`
+  - Runtime roles: `permesi-runtime`, `genesis-runtime`
+  - Bootstrap roles: `permesi-bootstrap`, `genesis-bootstrap`
+  - Cert auth roles: `permesi-agent`, `genesis-agent`
 ### Permesi Configuration Secrets
 
 - Path: `secret/permesi/config`

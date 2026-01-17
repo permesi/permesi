@@ -28,6 +28,8 @@ use rand::rngs::OsRng;
 use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 
+const EMPTY_PASSKEYS_MESSAGE: &str = "No passkeys registered yet.";
+
 fn webauthn_supported() -> bool {
     let Some(window) = web_sys::window() else {
         return false;
@@ -101,6 +103,16 @@ fn format_relative(value: &str) -> String {
     }
 
     format!("{} ago", parts.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EMPTY_PASSKEYS_MESSAGE;
+
+    #[test]
+    fn empty_passkeys_message_is_stable() {
+        assert_eq!(EMPTY_PASSKEYS_MESSAGE, "No passkeys registered yet.");
+    }
 }
 
 #[component]
@@ -467,60 +479,60 @@ pub fn PasskeysSection() -> impl IntoView {
                             .into_any(),
                             Some(Ok(list)) => {
                                 if list.credentials.is_empty() {
-                                    let message = "No passkeys registered yet.";
-                                    view! {
+                                let message = EMPTY_PASSKEYS_MESSAGE;
+                                view! {
                                         <p class="text-sm text-gray-600 dark:text-gray-300">{message}</p>
                                     }
                                     .into_any()
                                 } else {
                                     let preview = list.preview_mode;
-                                        view! {
-                                            <div class="space-y-2">
-                                                {list.credentials.into_iter().map(|cred| {
-                                                    let delete_action = delete_action.clone();
-                                                    let set_show_delete_passkey_form = set_show_delete_passkey_form.clone();
-                                                    let id = cred.id.clone();
-                                                    let credential_id_for_show = id.clone();
-                                                    let credential_id_for_delete = id.clone();
-                                                    let remove_button = if preview {
-                                                        None
-                                                    } else {
-                                                        let id_for_click = id.clone();
-                                                        let id_for_keydown = id.clone();
-                                                        Some(view! {
-                                                            <span
-                                                                class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
-                                                                role="button"
-                                                                tabindex="0"
-                                                                aria-label="Remove passkey"
-                                                                on:click=move |_| {
+                                    view! {
+                                        <div class="space-y-2">
+                                            {list.credentials.into_iter().map(|cred| {
+                                                let delete_action = delete_action.clone();
+                                                let set_show_delete_passkey_form = set_show_delete_passkey_form.clone();
+                                                let id = cred.id.clone();
+                                                let credential_id_for_show = id.clone();
+                                                let credential_id_for_delete = id.clone();
+                                                let remove_button = if preview {
+                                                    None
+                                                } else {
+                                                    let id_for_click = id.clone();
+                                                    let id_for_keydown = id.clone();
+                                                    Some(view! {
+                                                        <span
+                                                            class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                                                            role="button"
+                                                            tabindex="0"
+                                                            aria-label="Remove passkey"
+                                                            on:click=move |_| {
+                                                                set_show_delete_passkey_form
+                                                                    .set(Some(id_for_click.clone()));
+                                                            }
+                                                            on:keydown=move |event| {
+                                                                if event.key() == "Enter" || event.key() == " " {
                                                                     set_show_delete_passkey_form
-                                                                        .set(Some(id_for_click.clone()));
+                                                                        .set(Some(id_for_keydown.clone()));
                                                                 }
-                                                                on:keydown=move |event| {
-                                                                    if event.key() == "Enter" || event.key() == " " {
-                                                                        set_show_delete_passkey_form
-                                                                            .set(Some(id_for_keydown.clone()));
-                                                                    }
-                                                                }
-                                                            >
-                                                                <span class="material-symbols-outlined text-sm">
-                                                                    "delete"
-                                                                </span>
+                                                            }
+                                                        >
+                                                            <span class="material-symbols-outlined text-sm">
+                                                                "delete"
                                                             </span>
-                                                        })
-                                                    };
-                                                    view! {
-                                                        <div class="flex flex-col space-y-4">
-                                                            <div class=move || format!("{} group", Theme::LIST_ITEM)>
-                                                                <div class="flex items-center space-x-3">
-                                                                    <span class=Theme::ICON_SMALL>
-                                                                        "key"
-                                                                    </span>
-                                                                    <div>
-                                                                        <p class="text-sm text-gray-700 dark:text-gray-200 font-medium">
-                                                                            {cred.label.unwrap_or_else(|| "Passkey".to_string())}
-                                                                        </p>
+                                                        </span>
+                                                    })
+                                                };
+                                                view! {
+                                                    <div class="flex flex-col space-y-4">
+                                                        <div class=move || format!("{} group", Theme::LIST_ITEM_FLAT)>
+                                                            <div class="flex items-center space-x-3">
+                                                                <span class=Theme::ICON_SMALL>
+                                                                    "key"
+                                                                </span>
+                                                                <div>
+                                                                    <p class="text-sm text-gray-700 dark:text-gray-200 font-medium">
+                                                                        {cred.label.unwrap_or_else(|| "Passkey".to_string())}
+                                                                    </p>
                                                                     <p class="text-xs text-gray-500 dark:text-gray-400">
                                                                         {format!(
                                                                             "Added {} | Last used {}",
@@ -539,74 +551,74 @@ pub fn PasskeysSection() -> impl IntoView {
                                                                 </div>
                                                             </div>
                                                             {remove_button}
-                                                            </div>
-                                                            <Show when=move || show_delete_passkey_form.get() == Some(credential_id_for_show.clone())>
-                                                                <div class="px-2">
-                                                                    <form
-                                                                        class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
-                                                                        on:submit={
-                                                                            let credential_id = credential_id_for_delete.clone();
-                                                                            let delete_action = delete_action.clone();
-                                                                            move |event: leptos::ev::SubmitEvent| {
-                                                                                event.prevent_default();
-                                                                                let password = delete_passkey_password.get_untracked();
-                                                                                if password.trim().is_empty() {
-                                                                                    return;
-                                                                                }
-                                                                                delete_action.dispatch((credential_id.clone(), password));
-                                                                            }
-                                                                        }
-                                                                    >
-                                                                        <p class="text-xs text-red-700 dark:text-red-300 mb-4">
-                                                                            "Deleting this passkey will remove it as a sign-in method. Please enter your password to confirm."
-                                                                        </p>
-                                                                        <div>
-                                                                            <label class="block mb-1 text-xs font-medium text-red-900 dark:text-red-200" for="delete_passkey_password">
-                                                                                "Password"
-                                                                            </label>
-                                                                            <input
-                                                                                id="delete_passkey_password"
-                                                                                type="password"
-                                                                                class="bg-white border border-red-200 text-gray-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block w-full p-2 dark:bg-gray-800 dark:border-red-900/50 dark:text-white"
-                                                                                required
-                                                                                on:input=move |event| set_delete_passkey_password.set(event_target_value(&event))
-                                                                            />
-                                                                        </div>
-                                                                        <div class="pt-2 flex items-center gap-3">
-                                                                            <button
-                                                                                type="submit"
-                                                                                disabled=delete_action.pending()
-                                                                                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-                                                                            >
-                                                                                "Remove passkey"
-                                                                            </button>
-                                                                            <button
-                                                                                type="button"
-                                                                                on:click=move |_| set_show_delete_passkey_form.set(None)
-                                                                                class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                                                            >
-                                                                                "Cancel"
-                                                                            </button>
-                                                                            {move || {
-                                                                                delete_action.pending().get().then_some(view! { <Spinner /> })
-                                                                            }}
-                                                                        </div>
-                                                                        {move || {
-                                                                            delete_action
-                                                                                .value()
-                                                                                .get()
-                                                                                .and_then(|res| res.err())
-                                                                                .map(|err| {
-                                                                                    view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                                                                })
-                                                                        }}
-                                                                    </form>
-                                                                </div>
-                                                            </Show>
                                                         </div>
-                                                }
-                                                }).collect_view()}
-                                            </div>
+                                                        <Show when=move || show_delete_passkey_form.get() == Some(credential_id_for_show.clone())>
+                                                            <div class="px-2">
+                                                                <form
+                                                                    class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
+                                                                    on:submit={
+                                                                        let credential_id = credential_id_for_delete.clone();
+                                                                        let delete_action = delete_action.clone();
+                                                                        move |event: leptos::ev::SubmitEvent| {
+                                                                            event.prevent_default();
+                                                                            let password = delete_passkey_password.get_untracked();
+                                                                            if password.trim().is_empty() {
+                                                                                return;
+                                                                            }
+                                                                            delete_action.dispatch((credential_id.clone(), password));
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    <p class="text-xs text-red-700 dark:text-red-300 mb-4">
+                                                                        "Deleting this passkey will remove it as a sign-in method. Please enter your password to confirm."
+                                                                    </p>
+                                                                    <div>
+                                                                        <label class="block mb-1 text-xs font-medium text-red-900 dark:text-red-200" for="delete_passkey_password">
+                                                                            "Password"
+                                                                        </label>
+                                                                        <input
+                                                                            id="delete_passkey_password"
+                                                                            type="password"
+                                                                            class="bg-white border border-red-200 text-gray-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block w-full p-2 dark:bg-gray-800 dark:border-red-900/50 dark:text-white"
+                                                                            required
+                                                                            on:input=move |event| set_delete_passkey_password.set(event_target_value(&event))
+                                                                        />
+                                                                    </div>
+                                                                    <div class="pt-2 flex items-center gap-3">
+                                                                        <button
+                                                                            type="submit"
+                                                                            disabled=delete_action.pending()
+                                                                            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                                                                        >
+                                                                            "Remove passkey"
+                                                                        </button>
+                                                                        <button
+                                                                            type="button"
+                                                                            on:click=move |_| set_show_delete_passkey_form.set(None)
+                                                                            class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                                        >
+                                                                            "Cancel"
+                                                                        </button>
+                                                                        {move || {
+                                                                            delete_action.pending().get().then_some(view! { <Spinner /> })
+                                                                        }}
+                                                                    </div>
+                                                                    {move || {
+                                                                        delete_action
+                                                                            .value()
+                                                                            .get()
+                                                                            .and_then(|res| res.err())
+                                                                            .map(|err| {
+                                                                                view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                                                            })
+                                                                    }}
+                                                                </form>
+                                                            </div>
+                                                        </Show>
+                                                    </div>
+                                            }
+                                            }).collect_view()}
+                                        </div>
                                     }
                                     .into_any()
                                 }

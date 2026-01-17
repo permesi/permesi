@@ -1,7 +1,7 @@
 use crate::{api, cli::globals::GlobalArgs, vault};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
-use tracing::debug;
+use tracing::{debug, info};
 use url::Url;
 
 #[derive(Debug)]
@@ -12,12 +12,21 @@ pub struct Args {
     pub vault_role_id: String,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
+    pub tls_cert_path: String,
+    pub tls_key_path: String,
+    pub tls_ca_path: String,
 }
 
 /// Execute the server action.
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
+    crate::tls::set_runtime_paths(crate::tls::TlsPaths::from_cli(
+        args.tls_cert_path.clone(),
+        args.tls_key_path.clone(),
+        args.tls_ca_path.clone(),
+    ));
+    log_startup_args(&args);
     let mut globals = GlobalArgs::new(args.vault_url);
 
     // If vault wrapped token try to unwrap, otherwise use secret-id.
@@ -56,4 +65,48 @@ pub async fn execute(args: Args) -> Result<()> {
         .map_err(|()| anyhow!("Error setting password"))?;
 
     api::new(args.port, dsn.to_string(), &globals).await
+}
+
+fn log_startup_args(args: &Args) {
+    let entries = [
+        ("port", args.port.to_string()),
+        ("dsn", redact_dsn(&args.dsn)),
+        ("vault_url", args.vault_url.clone()),
+        ("vault_role_id", args.vault_role_id.clone()),
+        (
+            "vault_secret_id_set",
+            args.vault_secret_id.is_some().to_string(),
+        ),
+        (
+            "vault_wrapped_token_set",
+            args.vault_wrapped_token.is_some().to_string(),
+        ),
+        ("tls_cert_path", args.tls_cert_path.clone()),
+        ("tls_key_path", args.tls_key_path.clone()),
+        ("tls_ca_path", args.tls_ca_path.clone()),
+    ];
+    log_entries("Genesis startup configuration", &entries);
+}
+
+fn redact_dsn(dsn: &str) -> String {
+    match Url::parse(dsn) {
+        Ok(mut parsed) => {
+            if parsed.password().is_some() {
+                let _ = parsed.set_password(Some("REDACTED"));
+            }
+            parsed.to_string()
+        }
+        Err(_) => "invalid-dsn".to_string(),
+    }
+}
+
+fn log_entries(title: &str, entries: &[(&str, String)]) {
+    let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+    let mut message = format!("{title}:");
+    for (key, value) in entries {
+        let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
+        let _ =
+            std::fmt::Write::write_fmt(&mut message, format_args!("\n  {key}:{padding} {value}"));
+    }
+    info!("{message}");
 }

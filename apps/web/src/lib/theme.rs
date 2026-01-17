@@ -13,6 +13,6 @@ impl Theme {
     /// Small icon variant (often used in lists).
     pub const ICON_SMALL: &'static str = "material-symbols-outlined text-gray-400 dark:text-gray-500 text-sm group-hover:text-gray-900 dark:group-hover:text-white transition-colors";
 
-    /// Style for interactive items within a list or group.
-    pub const LIST_ITEM: &'static str = "flex items-center justify-between bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm transition-colors";
+    /// Flat list item variant without drop shadow.
+    pub const LIST_ITEM_FLAT: &'static str = "flex items-center justify-between bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors";
 }

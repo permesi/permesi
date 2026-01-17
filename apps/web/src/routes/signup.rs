@@ -8,10 +8,11 @@
 
 use crate::{
     app_lib::{AppError, config::AppConfig},
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{Alert, AlertKind, AlreadySignedInPanel, Button, Spinner},
     features::auth::{
         client,
         opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
+        state::use_auth,
         token,
         types::{OpaqueSignupFinishRequest, OpaqueSignupStartRequest},
     },
@@ -34,6 +35,7 @@ struct SignupInput {
 /// On success it prompts the user to verify their email.
 #[component]
 pub fn SignUpPage() -> impl IntoView {
+    let auth = use_auth();
     let (email, set_email) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (confirm_password, set_confirm_password) = signal(String::new());
@@ -152,114 +154,135 @@ pub fn SignUpPage() -> impl IntoView {
         });
     };
 
+    let is_loading = auth.is_loading;
     view! {
-        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
-            <form
-                class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
-                on:submit=on_submit
-            >
-                <div class="space-y-2">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                        "Create account"
-                    </p>
-                    <h1 class="text-2xl font-semibold text-slate-900">
-                        "Create account"
-                    </h1>
-                    <p class="text-sm text-slate-500">
-                        "Start with a password. You can add passkeys after signing in."
-                    </p>
-                </div>
-
-                <div class="mt-6 space-y-4">
-                    <div>
-                        <label
-                            class="block mb-2 text-sm font-medium text-slate-700"
-                            for="email"
-                        >
-                            "Email"
-                        </label>
-                        <input
-                            id="email"
-                            type="email"
-                            autofocus
-                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                            autocomplete="email"
-                            inputmode="email"
-                            placeholder="name@inbox.im"
-                            required
-                            on:input=move |event| set_email.set(event_target_value(&event))
-                        />
+        <Show
+            when=move || !is_loading.get()
+            fallback=|| {
+                view! {
+                    <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+                        <Spinner />
                     </div>
-                    <div>
-                        <label
-                            class="block mb-2 text-sm font-medium text-slate-700"
-                            for="password"
-                        >
-                            "Password"
-                        </label>
-                        <input
-                            id="password"
-                            type="password"
-                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                            autocomplete="new-password"
-                            required
-                            on:input=move |event| set_password.set(event_target_value(&event))
-                        />
-                    </div>
-                    <div>
-                        <label
-                            class="block mb-2 text-sm font-medium text-slate-700"
-                            for="confirm_password"
-                        >
-                            "Confirm password"
-                        </label>
-                        <input
-                            id="confirm_password"
-                            type="password"
-                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                            autocomplete="new-password"
-                            required
-                            on:input=move |event| {
-                                set_confirm_password.set(event_target_value(&event));
-                            }
-                        />
-                    </div>
+                }
+            }
+        >
+            {move || {
+                if auth.is_authenticated.get() {
+                    view! { <AlreadySignedInPanel /> }.into_any()
+                } else {
+                    view! {
+                        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+                            <form
+                                class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
+                                on:submit=on_submit
+                            >
+                                <div class="space-y-2">
+                                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                        "Create account"
+                                    </p>
+                                    <h1 class="text-2xl font-semibold text-slate-900">
+                                        "Create account"
+                                    </h1>
+                                    <p class="text-sm text-slate-500">
+                                        "Start with a password. You can add passkeys after signing in."
+                                    </p>
+                                </div>
 
-                    <Button button_type="submit" disabled=signup_action.pending()>
-                        "Create account"
-                    </Button>
-                </div>
+                                <div class="mt-6 space-y-4">
+                                    <div>
+                                        <label
+                                            class="block mb-2 text-sm font-medium text-slate-700"
+                                            for="email"
+                                        >
+                                            "Email"
+                                        </label>
+                                        <input
+                                            id="email"
+                                            type="email"
+                                            autofocus
+                                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                                            autocomplete="email"
+                                            inputmode="email"
+                                            placeholder="name@inbox.im"
+                                            required
+                                            on:input=move |event| set_email.set(event_target_value(&event))
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            class="block mb-2 text-sm font-medium text-slate-700"
+                                            for="password"
+                                        >
+                                            "Password"
+                                        </label>
+                                        <input
+                                            id="password"
+                                            type="password"
+                                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                                            autocomplete="new-password"
+                                            required
+                                            on:input=move |event| set_password.set(event_target_value(&event))
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            class="block mb-2 text-sm font-medium text-slate-700"
+                                            for="confirm_password"
+                                        >
+                                            "Confirm password"
+                                        </label>
+                                        <input
+                                            id="confirm_password"
+                                            type="password"
+                                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                                            autocomplete="new-password"
+                                            required
+                                            on:input=move |event| {
+                                                set_confirm_password.set(event_target_value(&event));
+                                            }
+                                        />
+                                    </div>
 
-                {move || {
-                    signup_action
-                        .pending()
-                        .get()
-                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
-                }}
-                {move || {
-                    success
-                        .get()
-                        .then_some(view! {
-                            <div class="mt-4">
-                                <Alert
-                                    kind=AlertKind::Success
-                                    message="Check your email to verify your account.".to_string()
-                                />
-                            </div>
-                        })
-                }}
-                {move || {
-                    error.get().map(|err| {
-                        let message = format_error(&err);
-                        view! {
-                            <div class="mt-4">
-                                <Alert kind=AlertKind::Error message=message />
-                            </div>
-                        }
-                    })
-                }}
-            </form>
-        </div>
+                                    <Button button_type="submit" disabled=signup_action.pending()>
+                                        "Create account"
+                                    </Button>
+                                </div>
+
+                                {move || {
+                                    signup_action
+                                        .pending()
+                                        .get()
+                                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                                }}
+                                {move || {
+                                    success
+                                        .get()
+                                        .then_some(view! {
+                                            <div class="mt-4">
+                                                <Alert
+                                                    kind=AlertKind::Success
+                                                    message="Check your email to verify your account.".to_string()
+                                                />
+                                            </div>
+                                        })
+                                }}
+                                {move || {
+                                    error.get().map(|err| {
+                                        let message = format_error(&err);
+                                        view! {
+                                            <div class="mt-4">
+                                                <Alert kind=AlertKind::Error message=message />
+                                            </div>
+                                        }
+                                    })
+                                }}
+                            </form>
+                        </div>
+                    }
+                        .into_any()
+                }
+            }}
+        </Show>
     }
 }
 

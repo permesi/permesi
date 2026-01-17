@@ -13,3 +13,9 @@ permesi_database_username   = "vault_permesi"
 permesi_database_password   = "change-me"
 genesis_database_username   = "vault_genesis"
 genesis_database_password   = "change-me"
+
+# PKI URL placeholders (override in production).
+pki_root_issuing_certificates_url = "https://vault.example.invalid/v1/pki_root/ca"
+pki_root_crl_distribution_points_url = "https://vault.example.invalid/v1/pki_root/crl"
+pki_int_issuing_certificates_url = "https://vault.example.invalid/v1/pki_int/ca"
+pki_int_crl_distribution_points_url = "https://vault.example.invalid/v1/pki_int/crl"

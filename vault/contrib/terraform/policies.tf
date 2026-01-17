@@ -22,3 +22,13 @@ resource "vault_policy" "vault_proxy_rotate" {
   name   = "vault-proxy-rotate"
   policy = file("${path.module}/policies/vault-proxy-rotate-policy.hcl")
 }
+
+resource "vault_policy" "permesi_pki_issue_only" {
+  name   = "permesi-pki-issue-only"
+  policy = file("${path.module}/policies/permesi-pki-issue-only.hcl")
+}
+
+resource "vault_policy" "genesis_pki_issue_only" {
+  name   = "genesis-pki-issue-only"
+  policy = file("${path.module}/policies/genesis-pki-issue-only.hcl")
+}

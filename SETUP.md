@@ -143,7 +143,7 @@ the Vault root and runtime roles. It is destructive and cannot be undone.
 
 ## 4. Vault Configuration (Terraform)
 
-Vault is central to the security of the stack. We provide a **Terraform** configuration in `vault/contrib/terraform` that automates the setup of secret engines, transit keys, policies, and AppRoles.
+Vault is central to the security of the stack. We provide a **Terraform** configuration in `vault/contrib/terraform` that automates the setup of secret engines, transit keys, policies, AppRoles, and the Vault-managed PKI hierarchy for future service certificates.
 
 Using Terraform is the recommended way to ensure your configuration is consistent, reproducible, and easy to maintain.
 
@@ -155,6 +155,15 @@ terraform apply
 ```
 
 Refer to the `vault/README.md` for details on the specific resources provisioned.
+
+### Terraform tests
+Terraform tests run in the module directory and validate the PKI + cert-auth wiring at plan time:
+
+```bash
+cd vault/contrib/terraform
+terraform init
+terraform test
+```
 
 ### AppRole login sanity check (CLI)
 
@@ -190,8 +199,8 @@ and `/root/genesis.env`, while short-lived SecretIDs live in service-specific tm
 PERMESI_DSN=postgres://postgres@localhost:5432/permesi
 PERMESI_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
 PERMESI_VAULT_ROLE_ID=<permesi_role_id>
-PERMESI_ADMISSION_PASERK_URL=https://genesis.example.com/paserk.json
-PERMESI_ADMISSION_ISS=https://genesis.example.com
+PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json
+PERMESI_ADMISSION_ISS=https://genesis.permesi.localhost
 PERMESI_ADMISSION_AUD=permesi
 PERMESI_FRONTEND_BASE_URL=https://permesi.example.com
 ```
@@ -205,6 +214,21 @@ GENESIS_DSN=postgres://postgres@localhost:5432/genesis
 GENESIS_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
 GENESIS_VAULT_ROLE_ID=<genesis_role_id>
 ```
+
+Both services require Vault-issued TLS material and must trust a single Vault PKI CA shared by the services. Defaults are:
+`/run/permesi/tls.crt`, `/run/permesi/tls.key`, `/run/permesi/ca.pem` and
+`/run/genesis/tls.crt`, `/run/genesis/tls.key`, `/run/genesis/ca.pem`.
+Override paths with:
+`PERMESI_TLS_CERT_PATH`, `PERMESI_TLS_KEY_PATH`, `PERMESI_TLS_CA_PATH` and
+`GENESIS_TLS_CERT_PATH`, `GENESIS_TLS_KEY_PATH`, `GENESIS_TLS_CA_PATH`.
+If your PASERK URL is served by a different CA (for example, HAProxy with mkcert),
+set `PERMESI_ADMISSION_PASERK_CA_PATH` to that CA bundle. For direct Genesis access,
+use the Vault-issued Genesis CA bundle.
+Permesi also needs `PERMESI_ADMISSION_PASERK_URL` to locate the Genesis `/paserk.json` endpoint
+over HTTPS.
+
+Genesis serves public zero-token endpoints used by the frontend, and it is expected to sit
+behind Cloudflare or HAProxy for scale and edge protection.
 
 `/root/permesi-pre-start.sh` (writes the SecretID to tmpfs, permesi only):
 ```bash
@@ -306,6 +330,7 @@ Notes:
 - `GENESIS_VAULT_URL` / `PERMESI_VAULT_URL` must point to the **main Vault login endpoint**
   (`/v1/auth/approle/login`). The proxy is only used by the pre-start scripts to mint
   SecretIDs; services still authenticate directly with Vault.
+- Genesis is a public edge service and can sit behind Cloudflare or HAProxy for scale and edge protection.
 
 #### Vault proxy (AppRole) refresher
 

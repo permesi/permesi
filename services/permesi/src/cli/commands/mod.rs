@@ -67,6 +67,7 @@ pub fn new() -> Command {
         );
 
     let command = with_admission_args(command);
+    let command = with_tls_args(command);
     let command = with_vault_args(command);
     let command = with_auth_args(command);
     with_logging_args(command)
@@ -75,40 +76,15 @@ pub fn new() -> Command {
 fn with_admission_args(command: Command) -> Command {
     command
         .arg(
-            Arg::new("admission-paserk-path")
-                .long("admission-paserk-path")
-                .help("Path to a PASERK keyset JSON file used to verify Admission Tokens offline")
-                .long_help(
-                    "Path to a local PASERK keyset JSON file used to verify Admission Tokens offline.\n\
-Use this for fully offline operation (no network fetches). The keyset must include the active key\n\
-and any previous keys needed during rotation.",
-                )
-                .env("PERMESI_ADMISSION_PASERK_PATH")
-                .required_unless_present_any(["admission-paserk", "admission-paserk-url"]),
-        )
-        .arg(
-            Arg::new("admission-paserk")
-                .long("admission-paserk")
-                .help("PASERK keyset JSON string used to verify Admission Tokens offline")
-                .long_help(
-                    "PASERK keyset JSON string used to verify Admission Tokens offline.\n\
-Use this for fully offline operation (no network fetches). The token footer `kid` selects the key\n\
-from this keyset for signature verification.",
-                )
-                .env("PERMESI_ADMISSION_PASERK")
-                .required_unless_present_any(["admission-paserk-path", "admission-paserk-url"]),
-        )
-        .arg(
             Arg::new("admission-paserk-url")
                 .long("admission-paserk-url")
-                .help("PASERK keyset URL used to verify Admission Tokens offline")
+                .help("PASERK keyset URL used to verify Admission Tokens")
                 .long_help(
-                    "PASERK keyset URL (typically genesis `/paserk.json`) used to verify Admission Tokens offline.\n\
+                    "PASERK keyset URL (typically genesis `/paserk.json`) used to verify Admission Tokens.\n\
 The keyset is cached (TTL ~5 minutes) and refreshed on unknown `kid` with a cooldown. Verification\n\
 itself is local and does not call genesis per request.",
                 )
-                .env("PERMESI_ADMISSION_PASERK_URL")
-                .required_unless_present_any(["admission-paserk", "admission-paserk-path"]),
+                .env("PERMESI_ADMISSION_PASERK_URL"),
         )
         .arg(
             Arg::new("admission-issuer")
@@ -121,6 +97,37 @@ itself is local and does not call genesis per request.",
                 .long("admission-audience")
                 .help("Expected Admission Token audience (aud)")
                 .env("PERMESI_ADMISSION_AUD"),
+        )
+}
+
+fn with_tls_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("tls-cert-path")
+                .long("tls-cert-path")
+                .help("Path to TLS certificate (PEM)")
+                .env("PERMESI_TLS_CERT_PATH")
+                .required(true),
+        )
+        .arg(
+            Arg::new("tls-key-path")
+                .long("tls-key-path")
+                .help("Path to TLS private key (PEM)")
+                .env("PERMESI_TLS_KEY_PATH")
+                .required(true),
+        )
+        .arg(
+            Arg::new("tls-ca-path")
+                .long("tls-ca-path")
+                .help("Path to TLS CA bundle (PEM)")
+                .env("PERMESI_TLS_CA_PATH")
+                .required(true),
+        )
+        .arg(
+            Arg::new("admission-paserk-ca-path")
+                .long("admission-paserk-ca-path")
+                .help("Path to CA bundle for the PASERK URL (PEM)")
+                .env("PERMESI_ADMISSION_PASERK_CA_PATH"),
         )
 }
 
@@ -340,8 +347,14 @@ mod tests {
             "8080",
             "--dsn",
             "postgres://user:password@localhost:5432/permesi",
-            "--admission-paserk",
-            "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}",
+            "--admission-paserk-url",
+            "https://genesis.permesi.localhost:8000/paserk.json",
+            "--tls-cert-path",
+            "/tmp/permesi-cert.pem",
+            "--tls-key-path",
+            "/tmp/permesi-key.pem",
+            "--tls-ca-path",
+            "/tmp/permesi-ca.pem",
             "--vault-url",
             "https://vault.tld:8200",
             "--vault-role-id",
@@ -374,11 +387,12 @@ mod tests {
         temp_env::with_vars(
             [
                 (
-                    "PERMESI_ADMISSION_PASERK",
-                    Some(
-                        "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}",
-                    ),
+                    "PERMESI_ADMISSION_PASERK_URL",
+                    Some("https://genesis.permesi.localhost:8000/paserk.json"),
                 ),
+                ("PERMESI_TLS_CERT_PATH", Some("/tmp/permesi-cert.pem")),
+                ("PERMESI_TLS_KEY_PATH", Some("/tmp/permesi-key.pem")),
+                ("PERMESI_TLS_CA_PATH", Some("/tmp/permesi-ca.pem")),
                 ("PERMESI_VAULT_URL", Some("https://vault.tld:8200")),
                 ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
                 ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
@@ -415,11 +429,12 @@ mod tests {
                 [
                     ("PERMESI_LOG_LEVEL", Some(level)),
                     (
-                        "PERMESI_ADMISSION_PASERK",
-                        Some(
-                            "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}",
-                        ),
+                        "PERMESI_ADMISSION_PASERK_URL",
+                        Some("https://genesis.permesi.localhost:8000/paserk.json"),
                     ),
+                    ("PERMESI_TLS_CERT_PATH", Some("/tmp/permesi-cert.pem")),
+                    ("PERMESI_TLS_KEY_PATH", Some("/tmp/permesi-key.pem")),
+                    ("PERMESI_TLS_CA_PATH", Some("/tmp/permesi-ca.pem")),
                     ("PERMESI_VAULT_URL", Some("http://vault.tld:8200")),
                     ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
                     ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
@@ -450,8 +465,14 @@ mod tests {
                     "permesi".to_string(),
                     "--dsn".to_string(),
                     "postgres://user:password@localhost:5432/permesi".to_string(),
-                    "--admission-paserk".to_string(),
-                    "{\"version\":\"v4\",\"purpose\":\"public\",\"active_kid\":\"k4.pid.test\",\"keys\":[]}".to_string(),
+                    "--admission-paserk-url".to_string(),
+                    "https://genesis.permesi.localhost:8000/paserk.json".to_string(),
+                    "--tls-cert-path".to_string(),
+                    "/tmp/permesi-cert.pem".to_string(),
+                    "--tls-key-path".to_string(),
+                    "/tmp/permesi-key.pem".to_string(),
+                    "--tls-ca-path".to_string(),
+                    "/tmp/permesi-ca.pem".to_string(),
                     "--vault-url".to_string(),
                     "https://vault.tld:8200".to_string(),
                     "--vault-role-id".to_string(),

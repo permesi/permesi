@@ -93,6 +93,27 @@ pub fn new() -> Command {
                 .env("GENESIS_VAULT_WRAPPED_TOKEN")
         )
         .arg(
+            Arg::new("tls-cert-path")
+                .long("tls-cert-path")
+                .help("Path to TLS certificate (PEM)")
+                .env("GENESIS_TLS_CERT_PATH")
+                .required(true),
+        )
+        .arg(
+            Arg::new("tls-key-path")
+                .long("tls-key-path")
+                .help("Path to TLS private key (PEM)")
+                .env("GENESIS_TLS_KEY_PATH")
+                .required(true),
+        )
+        .arg(
+            Arg::new("tls-ca-path")
+                .long("tls-ca-path")
+                .help("Path to TLS CA bundle (PEM)")
+                .env("GENESIS_TLS_CA_PATH")
+                .required(true),
+        )
+        .arg(
             Arg::new("verbosity")
                 .short('v')
                 .long("verbose")
@@ -132,6 +153,12 @@ mod tests {
             "8080",
             "--dsn",
             "postgres://user:password@localhost:5432/genesis",
+            "--tls-cert-path",
+            "/tmp/genesis-cert.pem",
+            "--tls-key-path",
+            "/tmp/genesis-key.pem",
+            "--tls-ca-path",
+            "/tmp/genesis-ca.pem",
             "--vault-url",
             "https://vault.tld:8200",
             "--vault-role-id",
@@ -163,6 +190,9 @@ mod tests {
     fn test_check_env() {
         temp_env::with_vars(
             [
+                ("GENESIS_TLS_CERT_PATH", Some("/tmp/genesis-cert.pem")),
+                ("GENESIS_TLS_KEY_PATH", Some("/tmp/genesis-key.pem")),
+                ("GENESIS_TLS_CA_PATH", Some("/tmp/genesis-ca.pem")),
                 ("GENESIS_VAULT_URL", Some("https://vault.tld:8200")),
                 ("GENESIS_VAULT_ROLE_ID", Some("role_id")),
                 ("GENESIS_VAULT_SECRET_ID", Some("secret_id")),
@@ -198,6 +228,9 @@ mod tests {
             temp_env::with_vars(
                 [
                     ("GENESIS_LOG_LEVEL", Some(level)),
+                    ("GENESIS_TLS_CERT_PATH", Some("/tmp/genesis-cert.pem")),
+                    ("GENESIS_TLS_KEY_PATH", Some("/tmp/genesis-key.pem")),
+                    ("GENESIS_TLS_CA_PATH", Some("/tmp/genesis-ca.pem")),
                     ("GENESIS_VAULT_URL", Some("http://vault.tld:8200")),
                     ("GENESIS_VAULT_ROLE_ID", Some("role_id")),
                     ("GENESIS_VAULT_SECRET_ID", Some("secret_id")),
@@ -228,6 +261,12 @@ mod tests {
                     "genesis".to_string(),
                     "--dsn".to_string(),
                     "postgres://user:password@localhost:5432/genesis".to_string(),
+                    "--tls-cert-path".to_string(),
+                    "/tmp/genesis-cert.pem".to_string(),
+                    "--tls-key-path".to_string(),
+                    "/tmp/genesis-key.pem".to_string(),
+                    "--tls-ca-path".to_string(),
+                    "/tmp/genesis-ca.pem".to_string(),
                     "--vault-url".to_string(),
                     "https://vault.tld:8200".to_string(),
                     "--vault-role-id".to_string(),

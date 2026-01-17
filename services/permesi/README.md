@@ -26,7 +26,7 @@ AppRole CLI example (direct secret_id):
 cargo run -p permesi --bin permesi -- \
   --port 8001 \
   --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-paserk-url "https://genesis.permesi.localhost/paserk.json" \
+  --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
   --vault-url "http://vault:8200/v1/auth/approle/login" \
   --vault-role-id "$PERMESI_ROLE_ID" \
   --vault-secret-id "$PERMESI_SECRET_ID"
@@ -38,7 +38,7 @@ AppRole CLI example (wrapped token):
 cargo run -p permesi --bin permesi -- \
   --port 8001 \
   --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-paserk-url "https://genesis.permesi.localhost/paserk.json" \
+  --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
   --vault-url "http://vault:8200/v1/auth/approle/login" \
   --vault-role-id "$PERMESI_ROLE_ID" \
   --vault-wrapped-token "$PERMESI_WRAPPED_TOKEN"

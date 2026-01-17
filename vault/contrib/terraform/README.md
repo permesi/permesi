@@ -9,6 +9,7 @@ This Terraform module provides a production-ready configuration for HashiCorp Va
 - **KV Store**: Generates and stores a persistent 32-byte OPAQUE seed under `secret/permesi/opaque`.
 - **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the Vault root database credentials.
 - **Policies**: Implements least-privilege policies for services and operators.
+- **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for Vault Agent-based certificate delivery.
 
 Terraform state is sensitive in this module. It can contain values such as the Postgres root passwords and the generated OPAQUE seed. Use an encrypted remote backend (or tightly lock down local state files), and never commit `.tfstate` files or variable files containing secrets.
 
@@ -26,6 +27,8 @@ Terraform state is sensitive in this module. It can contain values such as the P
    You can provide required variables in two ways:
 
    This module is security-sensitive. In production, keep Vault TLS verification enabled, use Postgres TLS (`database_sslmode = "verify-full"` or `"verify-ca"`) and ensure Vault trusts the database CA. For service authentication, AppRole SecretIDs are single-use with a 1-hour TTL (`secret_id_num_uses = 1`, `secret_id_ttl = 3600` in `approle.tf`), so ensure your automation can mint fresh SecretIDs (or tune `approle.tf` to match your rotation process).
+
+   For PKI, set the issuing/CRL URLs to routable endpoints served by Vault. The defaults in `variables.tf` and `terraform.tfvars.example` are placeholders (`*.example.invalid`) and must be overridden for real deployments. The PKI hierarchy uses ECDSA P-256 by default to keep interoperability strong with HAProxy and Cloudflare. If you want to move to Ed25519 later, update the PKI key parameters in `vault/contrib/terraform/pki.tf` only after confirming downstream compatibility.
 
    For the database secrets engine, Vault needs a dedicated Postgres "root" user per connection. Those users should be non-superuser roles with `LOGIN` + `CREATEROLE`, be able to terminate sessions during revocation (`pg_signal_backend`), and own the target database objects they grant privileges on. Local dev uses `db/sql/00_init.sql` to create `vault_permesi` and `vault_genesis` with these properties. The file ships with a `change-me` placeholder password; for production, edit it (or use it as a template) to set strong, unique passwords before running it as a superuser.
 
@@ -51,6 +54,10 @@ Terraform state is sensitive in this module. It can contain values such as the P
    genesis_database_password = "change-me"
    # Local/dev only; for production use "verify-full" (or at least "verify-ca").
    database_sslmode  = "disable"
+   pki_root_issuing_certificates_url = "https://vault.example.invalid/v1/pki_root/ca"
+   pki_root_crl_distribution_points_url = "https://vault.example.invalid/v1/pki_root/crl"
+   pki_int_issuing_certificates_url = "https://vault.example.invalid/v1/pki_int/ca"
+   pki_int_crl_distribution_points_url = "https://vault.example.invalid/v1/pki_int/crl"
    ```
 
 3. **Initialize and Apply**:
@@ -99,4 +106,113 @@ vault read transit/genesis/keys/genesis-signing
 
 # Check OPAQUE seed
 vault kv get secret/permesi/opaque
+```
+
+### 4. PKI Bootstrap and Vault Agent cert auth
+The PKI hierarchy provides short-lived runtime roles (`permesi-runtime`, `genesis-runtime`) and longer-lived bootstrap roles (`permesi-bootstrap`, `genesis-bootstrap`) intended only for Vault Agent cert-auth onboarding. Bootstrap certificates should be rotated on a slower cadence and never used directly for service TLS. Vault must be configured to accept cert-auth logins and trust the issuing chain used by the bootstrap certificates.
+
+Example bootstrap issuance (run with an operator token):
+```bash
+vault write pki_int/issue/permesi-bootstrap \
+  alt_names="api.permesi.localhost" \
+  ttl=168h
+
+vault write pki_int/issue/genesis-bootstrap \
+  alt_names="genesis.permesi.localhost" \
+  ttl=168h
+```
+
+Minimal Vault Agent configs (one per service) to authenticate via cert auth and render runtime TLS certificates. Update paths and Vault address to match your host layout:
+
+`permesi`:
+```hcl
+vault {
+  address = "https://vault.example.invalid:8200"
+  ca_cert = "/etc/permesi/bootstrap/ca_cert.pem"
+  client_cert = "/etc/permesi/bootstrap/cert_file.pem"
+  client_key  = "/etc/permesi/bootstrap/key_file.pem"
+}
+
+auto_auth {
+  method "cert" {
+    mount_path = "auth/cert"
+    config = {
+      name        = "permesi-agent"
+      ca_cert     = "/etc/permesi/bootstrap/ca_cert.pem"
+      client_cert = "/etc/permesi/bootstrap/cert_file.pem"
+      client_key  = "/etc/permesi/bootstrap/key_file.pem"
+      reload      = "true"
+    }
+  }
+
+  sink "file" {
+    config = { path = "/run/permesi/vault-token" }
+  }
+}
+
+template {
+  destination = "/run/permesi/tls.crt"
+  contents = "{{ with secret \"pki_int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" }}{{ .Data.certificate }}{{ end }}"
+}
+
+template {
+  destination = "/run/permesi/tls.key"
+  perms = "0600"
+  contents = "{{ with secret \"pki_int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" }}{{ .Data.private_key }}{{ end }}"
+}
+
+template {
+  destination = "/run/permesi/ca.pem"
+  contents = "{{ with secret \"pki_int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" }}{{ .Data.ca_chain | join \"\\n\" }}{{ end }}"
+}
+```
+
+`genesis`:
+```hcl
+vault {
+  address = "https://vault.example.invalid:8200"
+  ca_cert = "/etc/genesis/bootstrap/ca_cert.pem"
+  client_cert = "/etc/genesis/bootstrap/cert_file.pem"
+  client_key  = "/etc/genesis/bootstrap/key_file.pem"
+}
+
+auto_auth {
+  method "cert" {
+    mount_path = "auth/cert"
+    config = {
+      name        = "genesis-agent"
+      ca_cert     = "/etc/genesis/bootstrap/ca_cert.pem"
+      client_cert = "/etc/genesis/bootstrap/cert_file.pem"
+      client_key  = "/etc/genesis/bootstrap/key_file.pem"
+      reload      = "true"
+    }
+  }
+
+  sink "file" {
+    config = { path = "/run/genesis/vault-token" }
+  }
+}
+
+template {
+  destination = "/run/genesis/tls.crt"
+  contents = "{{ with secret \"pki_int/issue/genesis-runtime\" \"ttl=24h\" \"alt_names=genesis.permesi.localhost\" }}{{ .Data.certificate }}{{ end }}"
+}
+
+template {
+  destination = "/run/genesis/tls.key"
+  perms = "0600"
+  contents = "{{ with secret \"pki_int/issue/genesis-runtime\" \"ttl=24h\" \"alt_names=genesis.permesi.localhost\" }}{{ .Data.private_key }}{{ end }}"
+}
+
+template {
+  destination = "/run/genesis/ca.pem"
+  contents = "{{ with secret \"pki_int/issue/genesis-runtime\" \"ttl=24h\" \"alt_names=genesis.permesi.localhost\" }}{{ .Data.ca_chain | join \"\\n\" }}{{ end }}"
+}
+```
+
+## Tests
+Terraform tests in `vault/contrib/terraform/tests` validate the PKI and cert-auth wiring at plan time. Run them from this directory with:
+```bash
+terraform init
+terraform test
 ```
