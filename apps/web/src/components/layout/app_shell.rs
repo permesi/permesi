@@ -94,31 +94,35 @@ pub fn AppShell(children: Children) -> impl IntoView {
         <div class="min-h-screen flex flex-col bg-white dark:bg-gray-900">
             <header class="border-b border-gray-200 bg-[#f6f8fa] dark:bg-gray-900 z-30">
                 <div class="w-full flex flex-wrap items-center gap-4 px-4 py-3">
-                    <A
-                        href={paths::DASHBOARD}
-                        {..}
-                        class="flex items-center space-x-2 rtl:space-x-reverse"
-                        on:click=move |_| set_menu_open.set(false)
-                    >
-                        <img src="/logo.svg" class="h-8" alt="permesi" />
-                        <span class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">
-                            "Permesi"
-                        </span>
-                        <Show when=move || is_full_session.get()>
-                            <For
-                                each=move || breadcrumb_segments.get().into_iter().enumerate()
-                                key=|(i, _)| *i
-                                children=move |(_, segment)| {
-                                    view! {
-                                        <span class="text-sm text-gray-400 dark:text-gray-500">"/"</span>
-                                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
-                                            {segment}
-                                        </span>
-                                    }
-                                }
-                            />
-                        </Show>
-                    </A>
+                    {move || {
+                        let target = if is_authenticated.get() { paths::DASHBOARD } else { paths::LANDING };
+                        view! {
+                            <A
+                                href=target.to_string()
+                                attr:class="flex items-center space-x-2 rtl:space-x-reverse"
+                                on:click=move |_| set_menu_open.set(false)
+                            >
+                                <img src="/logo.svg" class="h-8 dark:invert" alt="permesi" />
+                                <span class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">
+                                    "Permesi"
+                                </span>
+                                <Show when=move || is_full_session.get()>
+                                    <For
+                                        each=move || breadcrumb_segments.get().into_iter().enumerate()
+                                        key=|(i, _)| *i
+                                        children=move |(_, segment)| {
+                                            view! {
+                                                <span class="text-sm text-gray-400 dark:text-gray-500">"/"</span>
+                                                <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                                                    {segment}
+                                                </span>
+                                            }
+                                        }
+                                    />
+                                </Show>
+                            </A>
+                        }
+                    }}
                     <button
                         type="button"
                         class="ml-auto inline-flex items-center p-2 w-10 h-10 justify-center text-sm text-gray-500 rounded-lg md:hidden hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-600"

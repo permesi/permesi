@@ -4,47 +4,35 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for starting OPAQUE signup; carries the registration request.
-/// The request contains protocol transcripts and must never be logged.
 pub struct OpaqueSignupStartRequest {
     pub email: String,
     pub registration_request: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Response for OPAQUE signup start; contains the registration response.
-/// The response contains protocol transcripts and must never be logged.
 pub struct OpaqueSignupStartResponse {
     pub registration_response: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for completing OPAQUE signup; contains the registration record.
-/// The record contains protocol transcripts and must never be logged.
 pub struct OpaqueSignupFinishRequest {
     pub email: String,
     pub registration_record: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for starting OPAQUE login; contains the credential request.
-/// The request contains protocol transcripts and must never be logged.
 pub struct OpaqueLoginStartRequest {
     pub email: String,
     pub credential_request: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Response for OPAQUE login start; contains the credential response.
-/// The response contains protocol transcripts and must never be logged.
 pub struct OpaqueLoginStartResponse {
     pub login_id: String,
     pub credential_response: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for completing OPAQUE login; contains the finalization message.
-/// The message contains protocol transcripts and must never be logged.
 pub struct OpaqueLoginFinishRequest {
     pub login_id: String,
     pub email: String,
@@ -52,49 +40,37 @@ pub struct OpaqueLoginFinishRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for starting OPAQUE re-auth; contains the credential request.
-/// The request contains protocol transcripts and must never be logged.
 pub struct OpaqueReauthStartRequest {
     pub credential_request: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for completing OPAQUE re-auth; contains the finalization message.
-/// The message contains protocol transcripts and must never be logged.
 pub struct OpaqueReauthFinishRequest {
     pub login_id: String,
     pub credential_finalization: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for starting OPAQUE password change; contains the registration request.
-/// The request contains protocol transcripts and must never be logged.
 pub struct OpaquePasswordStartRequest {
     pub registration_request: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Response for OPAQUE password change start; contains the registration response.
-/// The response contains protocol transcripts and must never be logged.
 pub struct OpaquePasswordStartResponse {
     pub registration_response: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for completing OPAQUE password change; contains the registration record.
-/// The record contains protocol transcripts and must never be logged.
 pub struct OpaquePasswordFinishRequest {
     pub registration_record: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for verifying an email token; the token must never be logged.
 pub struct VerifyEmailRequest {
     pub token: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-/// Payload for requesting a new verification email; email must not be logged.
 pub struct ResendVerificationRequest {
     pub email: String,
 }
@@ -246,4 +222,39 @@ pub struct VaultStatus {
 pub struct PlatformStats {
     pub operator_count: i64,
     pub recent_attempts_count: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub commit: String,
+    pub name: String,
+    pub version: String,
+    pub database: String,
+    pub admission_keyset: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_health_response_serialization() {
+        let health = HealthResponse {
+            commit: "abcdef1".to_string(),
+            name: "permesi".to_string(),
+            version: "0.1.0".to_string(),
+            database: "ok".to_string(),
+            admission_keyset: "ok".to_string(),
+        };
+
+        let json = serde_json::to_string(&health).expect("Failed to serialize");
+        assert!(json.contains("abcdef1"));
+        assert!(json.contains("permesi"));
+
+        let deserialized: HealthResponse =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+        assert_eq!(deserialized.commit, "abcdef1");
+        assert_eq!(deserialized.name, "permesi");
+        assert_eq!(deserialized.database, "ok");
+    }
 }

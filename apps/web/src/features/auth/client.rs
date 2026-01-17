@@ -341,3 +341,8 @@ fn extract_bearer_token(response: &gloo_net::http::Response) -> Option<String> {
     }
     None
 }
+
+/// Fetches the system health status.
+pub async fn fetch_health() -> Result<crate::features::auth::types::HealthResponse, AppError> {
+    crate::app_lib::get_json_with_credentials("/health").await
+}

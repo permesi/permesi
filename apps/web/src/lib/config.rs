@@ -1,7 +1,7 @@
-//! Build-time configuration for API and token endpoints with an optional
-//! runtime override. The runtime config is read from `window.PERMESI_CONFIG`
-//! (if present) so static deployments can change endpoints without rebuilding.
-//! Configuration values are public; do not store secrets here.
+//! Runtime configuration loaded from the environment (build-time) or global window object.
+//!
+//! Build-time config via `env!` is preferred for static assets. Runtime config is
+//! useful for containerized builds where the API URL might change per environment.
 
 /// Frontend configuration derived from build-time environment variables.
 #[derive(Clone, Debug)]
@@ -104,7 +104,7 @@ fn normalize_runtime_value(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, RuntimeConfig, apply_runtime_overrides, normalize_runtime_value};
+    use super::*;
 
     #[test]
     fn normalize_runtime_value_trims_and_rejects_empty() {

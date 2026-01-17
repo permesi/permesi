@@ -141,32 +141,49 @@ fn LandingPage() -> impl IntoView {
 #[component]
 fn WelcomePage() -> impl IntoView {
     // AppShell is now provided by PublicLayout, so we just render content.
+    use crate::features::auth::client;
+    use leptos::task::spawn_local;
     use leptos_router::components::A;
+
+    // True = Operational (Green), False = Offline (Red)
+    let (is_healthy, set_is_healthy) = signal(false);
+
+    Effect::new(move |_| {
+        spawn_local(async move {
+            if client::fetch_health().await.is_ok() {
+                set_is_healthy.set(true);
+            }
+        });
+    });
 
     view! {
         <div class="flex flex-col items-center justify-center py-20 text-center px-6">
-            <div class="mx-auto flex w-full max-w-[24rem] items-center justify-center gap-3 mb-6">
-                <img src="/logo.svg" alt="Permesi logo" class="h-20 w-20 -ml-1" />
-                <h1 class="text-5xl font-bold text-gray-900 dark:text-white">
-                    "Permesi"
-                </h1>
+            <div class="mx-auto flex w-full max-w-[28rem] items-center justify-center mb-6">
+                <div class="flex items-center">
+                    <img src="/logo.svg" alt="Permesi logo" class="h-20 w-20 -ml-6 mr-2 dark:invert" />
+                    <h1 class="text-5xl font-space-mono font-normal text-gray-900 dark:text-white tracking-[0.25em]">
+                        "Permesi"
+                    </h1>
+                </div>
             </div>
             <p class="text-base text-gray-600 dark:text-gray-400 mb-8 max-w-sm">
                 "Identity and Access Management"
             </p>
-            <div class="mx-auto flex w-full max-w-[24rem] flex-col sm:flex-row gap-4">
+            <div class="mx-auto flex w-full max-w-sm flex-row gap-3 justify-center">
                 <A
                     href={paths::LOGIN}
                     {..}
-                    class="w-full px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                    class="w-full px-4 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95 whitespace-nowrap"
                 >
+                    <span class="material-symbols-outlined text-[18px]">"login"</span>
                     "Sign In"
                 </A>
                 <A
                     href={paths::SIGNUP}
                     {..}
-                    class="w-full px-6 py-3 bg-gray-200 text-gray-900 font-medium rounded-lg hover:bg-gray-300 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 transition-colors"
+                    class="w-full px-4 py-2.5 bg-gray-100 text-gray-900 text-sm font-semibold rounded-xl hover:bg-gray-200 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95 whitespace-nowrap"
                 >
+                    <span class="material-symbols-outlined text-[18px]">"person_add"</span>
                     "Create account"
                 </A>
             </div>
@@ -174,7 +191,17 @@ fn WelcomePage() -> impl IntoView {
         </div>
         <div class="fixed inset-x-0 bottom-0 hidden border-t border-gray-200 bg-white/80 text-xs text-gray-500 backdrop-blur dark:border-gray-800 dark:bg-gray-900/80 sm:block">
             <div class="mx-auto flex max-w-3xl items-center justify-center px-4 py-2 font-mono">
-                <span>"v0.2.21 · status: local"</span>
+                <A href={paths::HEALTH} attr:class="flex items-center gap-2 hover:text-gray-800 dark:hover:text-gray-300 transition-colors">
+                    <span>{concat!("v", env!("CARGO_PKG_VERSION"))}</span>
+                    <span class="text-[10px] mx-1">"|"</span>
+                    <span
+                        class="text-[10px]"
+                        class:text-green-500=move || is_healthy.get()
+                        class:text-red-500=move || !is_healthy.get()
+                    >
+                        "●"
+                    </span>
+                </A>
             </div>
         </div>
     }
