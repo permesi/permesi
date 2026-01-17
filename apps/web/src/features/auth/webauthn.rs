@@ -21,20 +21,185 @@ use base64::{
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use serde::Serialize;
 use serde_json::Value;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     AuthenticatorAssertionResponse, AuthenticatorAttestationResponse, CredentialCreationOptions,
     CredentialRequestOptions, PublicKeyCredential,
 };
 
+fn coerce_public_key_credential(result: JsValue) -> Result<PublicKeyCredential, AppError> {
+    if result.is_null() || result.is_undefined() {
+        return Err(AppError::Config("No credential returned.".into()));
+    }
+    if !result.is_object() {
+        return Err(AppError::Config("Invalid credential type".into()));
+    }
+    let has_response = Reflect::has(&result, &"response".into()).unwrap_or(false);
+    let has_raw_id = Reflect::has(&result, &"rawId".into()).unwrap_or(false);
+    if !(has_response && has_raw_id) {
+        return Err(AppError::Config("Invalid credential type".into()));
+    }
+    Ok(result.unchecked_into::<PublicKeyCredential>())
+}
+
 /// Registers a new hardware security key.
 pub async fn register_key(challenge: &Value) -> Result<Value, AppError> {
+    let promise = begin_register_key(challenge)?;
+    finish_register_key(promise).await
+}
+
+/// Begin WebAuthn registration by invoking the browser prompt synchronously.
+///
+/// This must be called directly in response to a user gesture (e.g., a click)
+/// to ensure the browser shows the passkey prompt.
+pub fn begin_register_key(challenge: &Value) -> Result<js_sys::Promise, AppError> {
     let window = web_sys::window().ok_or_else(|| AppError::Config("Window not found".into()))?;
     let navigator = window.navigator();
     let credentials = navigator.credentials();
 
-    // 1. Prepare options
+    let create_options = build_creation_options(challenge)?;
+
+    credentials
+        .create_with_options(&create_options)
+        .map_err(|e| AppError::Config(format!("WebAuthn create failed: {:?}", e)))
+}
+
+/// Finish WebAuthn registration after the browser prompt resolves.
+pub async fn finish_register_key(promise: js_sys::Promise) -> Result<Value, AppError> {
+    let result = JsFuture::from(promise).await.map_err(|e| {
+        let err_str = format!("{:?}", e);
+        if err_str.contains("InvalidStateError") {
+            AppError::Config("This security key is already registered.".to_string())
+        } else if err_str.contains("NotAllowedError") {
+            AppError::Config("Operation timed out or was cancelled.".to_string())
+        } else {
+            AppError::Config(format!("Hardware key registration failed: {:?}", e))
+        }
+    })?;
+
+    let credential = coerce_public_key_credential(result)?;
+
+    let raw_id = encode_arraybuffer_to_base64(credential.raw_id());
+
+    let (attestation_object, client_data_json) = extract_attestation_fields(&credential)?;
+
+    Ok(serde_json::json!({
+        "id": credential.id(),
+        "rawId": raw_id,
+        "type": credential.type_(),
+        "response": {
+            "attestationObject": attestation_object,
+            "clientDataJSON": client_data_json,
+        }
+    }))
+}
+
+/// Authenticates using an existing hardware security key.
+pub async fn authenticate_key(challenge: &Value) -> Result<Value, AppError> {
+    let promise = begin_authenticate_key(challenge)?;
+    finish_authenticate_key(promise).await
+}
+
+/// Begin WebAuthn authentication by invoking the browser prompt synchronously.
+///
+/// This must be called directly in response to a user gesture (e.g., a click)
+/// to ensure the browser shows the passkey prompt.
+pub fn begin_authenticate_key(challenge: &Value) -> Result<js_sys::Promise, AppError> {
+    let window = web_sys::window().ok_or_else(|| AppError::Config("Window not found".into()))?;
+    let navigator = window.navigator();
+    let credentials = navigator.credentials();
+
+    let get_options = build_request_options(challenge)?;
+
+    credentials
+        .get_with_options(&get_options)
+        .map_err(|e| AppError::Config(format!("WebAuthn get failed: {:?}", e)))
+}
+
+/// Finish WebAuthn authentication after the browser prompt resolves.
+pub async fn finish_authenticate_key(promise: js_sys::Promise) -> Result<Value, AppError> {
+    let result = JsFuture::from(promise).await.map_err(|e| {
+        let err_str = format!("{:?}", e);
+        if err_str.contains("NotAllowedError") {
+            AppError::Config("Operation timed out or was cancelled.".to_string())
+        } else {
+            AppError::Config(format!("Hardware key authentication failed: {:?}", e))
+        }
+    })?;
+
+    let credential = coerce_public_key_credential(result)?;
+
+    // 3. Convert back
+    let raw_id = encode_arraybuffer_to_base64(credential.raw_id());
+
+    let (authenticator_data, client_data_json, signature, user_handle) = if let Ok(response) =
+        credential
+            .response()
+            .dyn_into::<AuthenticatorAssertionResponse>()
+    {
+        (
+            encode_arraybuffer_to_base64(response.authenticator_data()),
+            encode_arraybuffer_to_base64(response.client_data_json()),
+            encode_arraybuffer_to_base64(response.signature()),
+            response.user_handle().map(encode_arraybuffer_to_base64),
+        )
+    } else {
+        let response = Reflect::get(credential.as_ref(), &JsValue::from_str("response"))
+            .map_err(|_| AppError::Config("Invalid response type".into()))?;
+        let authenticator_value = Reflect::get(&response, &JsValue::from_str("authenticatorData"))
+            .map_err(|_| AppError::Config("Invalid response type".into()))?;
+        let client_data_value = Reflect::get(&response, &JsValue::from_str("clientDataJSON"))
+            .map_err(|_| AppError::Config("Invalid response type".into()))?;
+        let signature_value = Reflect::get(&response, &JsValue::from_str("signature"))
+            .map_err(|_| AppError::Config("Invalid response type".into()))?;
+        let user_handle_value = Reflect::get(&response, &JsValue::from_str("userHandle")).ok();
+        let authenticator_buffer = authenticator_value
+            .dyn_into::<js_sys::ArrayBuffer>()
+            .map_err(|_| AppError::Config("Invalid assertion response".into()))?;
+        let client_data_buffer = client_data_value
+            .dyn_into::<js_sys::ArrayBuffer>()
+            .map_err(|_| AppError::Config("Invalid assertion response".into()))?;
+        let signature_buffer = signature_value
+            .dyn_into::<js_sys::ArrayBuffer>()
+            .map_err(|_| AppError::Config("Invalid assertion response".into()))?;
+        let user_handle = user_handle_value.and_then(|value| {
+            value
+                .dyn_into::<js_sys::ArrayBuffer>()
+                .ok()
+                .map(encode_arraybuffer_to_base64)
+        });
+        (
+            encode_arraybuffer_to_base64(authenticator_buffer),
+            encode_arraybuffer_to_base64(client_data_buffer),
+            encode_arraybuffer_to_base64(signature_buffer),
+            user_handle,
+        )
+    };
+
+    Ok(serde_json::json!({
+        "id": credential.id(),
+        "rawId": raw_id,
+        "type": credential.type_(),
+        "response": {
+            "authenticatorData": authenticator_data,
+            "clientDataJSON": client_data_json,
+            "signature": signature,
+            "userHandle": user_handle,
+        }
+    }))
+}
+
+fn decode_base64_to_uint8array(b64: &str) -> Result<Uint8Array, AppError> {
+    // Try URL safe first, then standard (webauthn-rs often uses URL safe without padding)
+    let bytes = URL_SAFE_NO_PAD
+        .decode(b64)
+        .or_else(|_| STANDARD.decode(b64))
+        .map_err(|e| AppError::Config(format!("Invalid base64: {}", e)))?;
+    Ok(Uint8Array::from(&bytes[..]))
+}
+
+fn build_creation_options(challenge: &Value) -> Result<CredentialCreationOptions, AppError> {
     let pk_options = challenge.get("publicKey").unwrap_or(challenge);
 
     let js_options = Object::new();
@@ -176,57 +341,15 @@ pub async fn register_key(challenge: &Value) -> Result<Value, AppError> {
     Reflect::set(&create_options, &"publicKey".into(), &js_options)
         .map_err(|_| AppError::Config("Failed to set publicKey".into()))?;
 
-    let create_options = create_options.unchecked_into::<CredentialCreationOptions>();
-
-    // 2. Call create
-    let promise = credentials
-        .create_with_options(&create_options)
-        .map_err(|e| AppError::Config(format!("WebAuthn create failed: {:?}", e)))?;
-
-    let result = JsFuture::from(promise).await.map_err(|e| {
-        let err_str = format!("{:?}", e);
-        if err_str.contains("InvalidStateError") {
-            AppError::Config("This security key is already registered.".to_string())
-        } else if err_str.contains("NotAllowedError") {
-            AppError::Config("Operation timed out or was cancelled.".to_string())
-        } else {
-            AppError::Config(format!("Hardware key registration failed: {:?}", e))
-        }
-    })?;
-
-    let credential = result
-        .dyn_into::<PublicKeyCredential>()
-        .map_err(|_| AppError::Config("Invalid credential type".into()))?;
-
-    // 3. Convert back
-    let raw_id = encode_arraybuffer_to_base64(credential.raw_id());
-
-    let response = credential
-        .response()
-        .dyn_into::<AuthenticatorAttestationResponse>()
-        .map_err(|_| AppError::Config("Invalid response type".into()))?;
-
-    let attestation_object = encode_arraybuffer_to_base64(response.attestation_object());
-    let client_data_json = encode_arraybuffer_to_base64(response.client_data_json());
-
-    Ok(serde_json::json!({
-        "id": credential.id(),
-        "rawId": raw_id,
-        "type": credential.type_(),
-        "response": {
-            "attestationObject": attestation_object,
-            "clientDataJSON": client_data_json,
-        }
-    }))
+    Ok(create_options.unchecked_into::<CredentialCreationOptions>())
 }
 
-/// Authenticates using an existing hardware security key.
-pub async fn authenticate_key(challenge: &Value) -> Result<Value, AppError> {
-    let window = web_sys::window().ok_or_else(|| AppError::Config("Window not found".into()))?;
-    let navigator = window.navigator();
-    let credentials = navigator.credentials();
+fn encode_arraybuffer_to_base64(buffer: js_sys::ArrayBuffer) -> String {
+    let bytes = Uint8Array::new(&buffer).to_vec();
+    URL_SAFE_NO_PAD.encode(&bytes)
+}
 
-    // 1. Prepare options
+fn build_request_options(challenge: &Value) -> Result<CredentialRequestOptions, AppError> {
     let pk_options = challenge.get("publicKey").unwrap_or(challenge);
 
     let js_options = Object::new();
@@ -284,62 +407,38 @@ pub async fn authenticate_key(challenge: &Value) -> Result<Value, AppError> {
     Reflect::set(&get_options, &"publicKey".into(), &js_options)
         .map_err(|_| AppError::Config("Failed to set publicKey".into()))?;
 
-    let get_options = get_options.unchecked_into::<CredentialRequestOptions>();
+    Ok(get_options.unchecked_into::<CredentialRequestOptions>())
+}
 
-    // 2. Call get
-    let promise = credentials
-        .get_with_options(&get_options)
-        .map_err(|e| AppError::Config(format!("WebAuthn get failed: {:?}", e)))?;
-
-    let result = JsFuture::from(promise).await.map_err(|e| {
-        let err_str = format!("{:?}", e);
-        if err_str.contains("NotAllowedError") {
-            AppError::Config("Operation timed out or was cancelled.".to_string())
-        } else {
-            AppError::Config(format!("Hardware key authentication failed: {:?}", e))
-        }
-    })?;
-
-    let credential = result
-        .dyn_into::<PublicKeyCredential>()
-        .map_err(|_| AppError::Config("Invalid credential type".into()))?;
-
-    // 3. Convert back
-    let raw_id = encode_arraybuffer_to_base64(credential.raw_id());
-
-    let response = credential
+fn extract_attestation_fields(
+    credential: &PublicKeyCredential,
+) -> Result<(String, String), AppError> {
+    if let Ok(response) = credential
         .response()
-        .dyn_into::<AuthenticatorAssertionResponse>()
+        .dyn_into::<AuthenticatorAttestationResponse>()
+    {
+        let attestation_object = encode_arraybuffer_to_base64(response.attestation_object());
+        let client_data_json = encode_arraybuffer_to_base64(response.client_data_json());
+        return Ok((attestation_object, client_data_json));
+    }
+
+    let response = Reflect::get(credential.as_ref(), &JsValue::from_str("response"))
         .map_err(|_| AppError::Config("Invalid response type".into()))?;
 
-    let authenticator_data = encode_arraybuffer_to_base64(response.authenticator_data());
-    let client_data_json = encode_arraybuffer_to_base64(response.client_data_json());
-    let signature = encode_arraybuffer_to_base64(response.signature());
-    let user_handle = response.user_handle().map(encode_arraybuffer_to_base64);
+    let attestation_value = Reflect::get(&response, &JsValue::from_str("attestationObject"))
+        .map_err(|_| AppError::Config("Invalid response type".into()))?;
+    let client_data_value = Reflect::get(&response, &JsValue::from_str("clientDataJSON"))
+        .map_err(|_| AppError::Config("Invalid response type".into()))?;
 
-    Ok(serde_json::json!({
-        "id": credential.id(),
-        "rawId": raw_id,
-        "type": credential.type_(),
-        "response": {
-            "authenticatorData": authenticator_data,
-            "clientDataJSON": client_data_json,
-            "signature": signature,
-            "userHandle": user_handle,
-        }
-    }))
-}
+    let attestation_buffer = attestation_value
+        .dyn_into::<js_sys::ArrayBuffer>()
+        .map_err(|_| AppError::Config("Invalid attestation response".into()))?;
+    let client_data_buffer = client_data_value
+        .dyn_into::<js_sys::ArrayBuffer>()
+        .map_err(|_| AppError::Config("Invalid attestation response".into()))?;
 
-fn decode_base64_to_uint8array(b64: &str) -> Result<Uint8Array, AppError> {
-    // Try URL safe first, then standard (webauthn-rs often uses URL safe without padding)
-    let bytes = URL_SAFE_NO_PAD
-        .decode(b64)
-        .or_else(|_| STANDARD.decode(b64))
-        .map_err(|e| AppError::Config(format!("Invalid base64: {}", e)))?;
-    Ok(Uint8Array::from(&bytes[..]))
-}
-
-fn encode_arraybuffer_to_base64(buffer: js_sys::ArrayBuffer) -> String {
-    let bytes = Uint8Array::new(&buffer).to_vec();
-    URL_SAFE_NO_PAD.encode(&bytes)
+    Ok((
+        encode_arraybuffer_to_base64(attestation_buffer),
+        encode_arraybuffer_to_base64(client_data_buffer),
+    ))
 }

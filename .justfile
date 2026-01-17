@@ -408,16 +408,14 @@ web: web-clean
     fi
   }
   trap cleanup EXIT INT TERM
-  : "${PERMESI_API_HOST:=http://localhost:8001}"
-  : "${PERMESI_TOKEN_HOST:=http://localhost:8000}"
-  : "${PERMESI_API_TOKEN_HOST:=${PERMESI_TOKEN_HOST}}"
+  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost}"
+  : "${PERMESI_TOKEN_BASE_URL:=https://genesis.permesi.localhost}"
   : "${PERMESI_CLIENT_ID:=00000000-0000-0000-0000-000000000000}"
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
-    PERMESI_API_HOST="${PERMESI_API_HOST}" \
-    PERMESI_TOKEN_HOST="${PERMESI_TOKEN_HOST}" \
-    PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
+    PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
+    PERMESI_TOKEN_BASE_URL="${PERMESI_TOKEN_BASE_URL}" \
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
-    trunk serve
+  trunk serve --address 0.0.0.0 --port 8081 --dist dist-dev
 
 web-build: web-node-setup
   #!/usr/bin/env zsh
@@ -427,18 +425,25 @@ web-build: web-node-setup
   fi
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
-  mkdir -p dist
-  rm -rf dist/.stage
-  : "${PERMESI_API_HOST:=http://localhost:8001}"
-  : "${PERMESI_TOKEN_HOST:=http://localhost:8000}"
-  : "${PERMESI_API_TOKEN_HOST:=${PERMESI_TOKEN_HOST}}"
+  dist_dir="dist"
+  if pgrep -f "trunk serve" >/dev/null 2>&1; then
+    dist_dir="dist-build"
+    echo "Detected running trunk serve; building into ${dist_dir} to avoid staging conflicts."
+  fi
+  mkdir -p "${dist_dir}"
+  rm -rf "${dist_dir}/.stage"
+  mkdir -p "${dist_dir}/.stage"
+  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost}"
+  : "${PERMESI_TOKEN_BASE_URL:=https://genesis.permesi.localhost}"
   : "${PERMESI_CLIENT_ID:=00000000-0000-0000-0000-000000000000}"
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
-    PERMESI_API_HOST="${PERMESI_API_HOST}" \
-    PERMESI_TOKEN_HOST="${PERMESI_TOKEN_HOST}" \
-    PERMESI_API_TOKEN_HOST="${PERMESI_API_TOKEN_HOST}" \
+    PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
+    PERMESI_TOKEN_BASE_URL="${PERMESI_TOKEN_BASE_URL}" \
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
-    trunk build --release
+    trunk build --release --dist "${dist_dir}"
+  if [[ "${dist_dir}" != "dist" ]]; then
+    echo "Build output available at apps/web/${dist_dir}"
+  fi
   if [[ ! -s assets/app.gen.css ]]; then
     echo "Missing generated CSS: apps/web/assets/app.gen.css" >&2
     exit 1
@@ -453,7 +458,7 @@ web-clean: web-node-setup
   rm -rf {{root}}/.tmp/xdg-cache
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
-  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" trunk clean --dist dist
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" trunk clean --dist dist-dev
   npm run css:build
   if [[ ! -s assets/app.gen.css ]]; then
     echo "Missing generated CSS: apps/web/assets/app.gen.css" >&2
@@ -644,8 +649,20 @@ genesis-token:
 signup-verify-url:
   #!/usr/bin/env zsh
   set -euo pipefail
+  base="${PERMESI_FRONTEND_BASE_URL:-}"
+  if [[ -n "$base" ]]; then
+    base_escaped="${base//\'/\'\'}"
+    url="$(
+      podman exec -i postgres-permesi psql -U postgres -d permesi -Atc \
+        "select payload_json->>'verify_url' from email_outbox where payload_json->>'verify_url' like '${base_escaped}%' order by created_at desc limit 1;"
+    )"
+    if [[ -n "$url" ]]; then
+      printf '%s\n' "$url"
+      exit 0
+    fi
+  fi
   podman exec -i postgres-permesi psql -U postgres -d permesi -Atc \
-    "select payload_json->>'verify_url' from email_outbox order by created_at desc limit 1;"
+    "select payload_json->>'verify_url' from email_outbox where payload_json ? 'verify_url' and payload_json->>'verify_url' <> '' order by created_at desc limit 1;"
 
 genesis-it: dev-start-infra
   #!/usr/bin/env zsh
@@ -1036,8 +1053,11 @@ dev-env:
   just --quiet vault-env
   printf '\n'
   printf '%s\n' \
-    "export PERMESI_ADMISSION_PASERK_URL=\"http://localhost:8000/paserk.json\"" \
-    "export PERMESI_FRONTEND_BASE_URL=\"http://localhost:8080\"" \
+    "export PERMESI_ADMISSION_PASERK_URL=\"https://genesis.permesi.localhost/paserk.json\"" \
+    "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost\"" \
+    "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost\"" \
+    "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost\"" \
+    "export PERMESI_PASSKEYS_ALLOWED_ORIGINS=\"https://permesi.localhost\"" \
     "export PERMESI_EMAIL_OUTBOX_POLL_SECONDS=\"10\""
 
 vault-envrc:
@@ -1173,6 +1193,150 @@ jaeger:
 jaeger-stop:
   podman stop jaeger || true
 
+mkcert-local:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v mkcert >/dev/null 2>&1; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      echo "mkcert not found. Install it first (macOS): brew install mkcert nss" >&2
+    else
+      echo "mkcert not found. Install it first: https://github.com/FiloSottile/mkcert" >&2
+    fi
+    exit 1
+  fi
+  mkdir -p {{root}}/config/haproxy/certs
+  cert="{{root}}/config/haproxy/certs/permesi.localhost.pem"
+  if [[ -f "$cert" ]]; then
+    echo "TLS cert already exists: $cert"
+    exit 0
+  fi
+  mkcert -install
+  mkcert -key-file {{root}}/config/haproxy/certs/permesi.localhost-key.pem \
+    -cert-file {{root}}/config/haproxy/certs/permesi.localhost-cert.pem \
+    "localhost" "127.0.0.1" "::1" "*.localhost" \
+    "permesi.localhost" "api.permesi.localhost" "genesis.permesi.localhost" "*.permesi.localhost"
+  cat {{root}}/config/haproxy/certs/permesi.localhost-cert.pem \
+    {{root}}/config/haproxy/certs/permesi.localhost-key.pem \
+    > {{root}}/config/haproxy/certs/permesi.localhost.pem
+  echo "Wrote {{root}}/config/haproxy/certs/permesi.localhost.pem"
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "If HTTPS still fails for server-side fetches, run: just mkcert-trust"
+  fi
+
+mkcert-trust:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "mkcert-trust is Linux-only; macOS/Windows use mkcert -install."
+    exit 0
+  fi
+  if ! command -v mkcert >/dev/null 2>&1; then
+    echo "mkcert not found. Install it first: https://github.com/FiloSottile/mkcert" >&2
+    exit 1
+  fi
+  caroot="$(mkcert -CAROOT)"
+  root_ca="${caroot}/rootCA.pem"
+  if [[ ! -f "$root_ca" ]]; then
+    echo "mkcert root CA not found at: $root_ca" >&2
+    echo "Run: mkcert -install" >&2
+    exit 1
+  fi
+  if command -v update-ca-certificates >/dev/null 2>&1; then
+    sudo install -m 0644 "$root_ca" /usr/local/share/ca-certificates/mkcert-permesi.crt
+    sudo update-ca-certificates
+    echo "Installed mkcert root CA via update-ca-certificates."
+    exit 0
+  fi
+  if [[ -d /etc/ca-certificates/trust-source/anchors ]]; then
+    sudo install -m 0644 "$root_ca" /etc/ca-certificates/trust-source/anchors/mkcert-permesi.crt
+    if command -v trust >/dev/null 2>&1; then
+      sudo trust extract-compat
+    fi
+    echo "Installed mkcert root CA via p11-kit trust-source anchors."
+    exit 0
+  fi
+  if command -v trust >/dev/null 2>&1; then
+    sudo trust anchor "$root_ca"
+    echo "Installed mkcert root CA via trust anchor."
+    exit 0
+  fi
+  if command -v update-ca-trust >/dev/null 2>&1; then
+    sudo install -m 0644 "$root_ca" /etc/pki/ca-trust/source/anchors/mkcert-permesi.crt
+    sudo update-ca-trust
+    echo "Installed mkcert root CA via update-ca-trust."
+    exit 0
+  fi
+  echo "No known system trust tool found. Install p11-kit (trust) or ca-certificates tools." >&2
+  exit 1
+
+haproxy-start:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  cfg="{{root}}/config/haproxy/haproxy.cfg"
+  cert="{{root}}/config/haproxy/certs/permesi.localhost.pem"
+  if [[ ! -f "$cfg" ]]; then
+    echo "Missing HAProxy config: $cfg" >&2
+    exit 1
+  fi
+  if [[ ! -f "$cert" ]]; then
+    if command -v mkcert >/dev/null 2>&1; then
+      echo "Missing TLS cert; generating with mkcert..."
+      just --quiet mkcert-local
+    else
+      echo "Missing TLS cert: $cert" >&2
+      echo "Run: just mkcert-local" >&2
+      exit 1
+    fi
+  fi
+  if [[ -n "$(podman ps -q --filter 'name=^permesi-haproxy$')" ]]; then
+    echo "permesi-haproxy already running."
+    exit 0
+  fi
+  port_args=(-p 443:8080)
+  if [[ "$(uname -s)" == "Linux" ]] && sysctl -n net.ipv6.conf.all.disable_ipv6 >/dev/null 2>&1; then
+    if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "0" ]]; then
+      port_args+=(-p "[::]:443:8080")
+    fi
+  fi
+  add_host_arg=()
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    add_host_arg=(--add-host=host.containers.internal:host-gateway)
+  fi
+  if ! podman run --replace -d --name permesi-haproxy \
+    "${add_host_arg[@]}" \
+    "${port_args[@]}" \
+    -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+    -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
+    docker.io/haproxy:latest; then
+    if [[ "${port_args[*]}" == *"[::]:443:8080"* ]]; then
+      echo "IPv6 publish failed; retrying IPv4-only."
+      podman rm -f permesi-haproxy >/dev/null 2>&1 || true
+      port_args=(-p 443:8080)
+      podman run --replace -d --name permesi-haproxy \
+        "${add_host_arg[@]}" \
+        "${port_args[@]}" \
+        -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+        -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
+        docker.io/haproxy:latest
+    else
+      exit 1
+    fi
+  fi
+
+haproxy-stop:
+  podman stop permesi-haproxy || true
+
+haproxy-sysctl:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "haproxy-sysctl is Linux-only."
+    exit 0
+  fi
+  echo "Allowing unprivileged binds to port 443..."
+  sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443
+
+
 # Restart everything: stop infra and tmux, then start again
 restart: stop start
 
@@ -1221,17 +1385,17 @@ start:
   start_session
   tmux attach -t "$session"
 
-dev-start-infra: setup-network postgres vault-persist-ready jaeger
+dev-start-infra: setup-network postgres vault-persist-ready jaeger haproxy-start
 
 # Stop all services and the tmux session
 stop: tmux-stop dev-stop
 
 # Kill lingering dev processes, containers, and free ports
-dev-stop: vault-stop postgres-stop jaeger-stop
+dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop
   #!/usr/bin/env zsh
   echo "Cleaning up lingering dev processes and test containers..."
   # Kill processes by port to ensure ports are freed (Linux specific)
-  fuser -k 8000/tcp 8001/tcp 8080/tcp 2>/dev/null || true
+  fuser -k 8000/tcp 8001/tcp 8080/tcp 8081/tcp 443/tcp 2>/dev/null || true
   # Specific process names cleanup
   pkill -f "cargo-watch" || true
   pkill -f "trunk serve" || true
@@ -1250,6 +1414,7 @@ reset: stop
   set -euo pipefail
   just vault-reset
   rm -rf {{root}}/db/data {{root}}/db/logs
+  rm -rf {{root}}/config/haproxy/certs
 
 # Generate a fresh platform operator token for admin claim/elevation.
 operator-token:

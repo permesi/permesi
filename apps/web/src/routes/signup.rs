@@ -153,90 +153,113 @@ pub fn SignUpPage() -> impl IntoView {
     };
 
     view! {
-        <form class="max-w-sm mx-auto" on:submit=on_submit>
-            <div class="mb-5">
-                <label
-                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                    for="email"
-                >
-                    "Your email"
-                </label>
-                <input
-                    id="email"
-                    type="email"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                    autocomplete="email"
-                    placeholder="name@inbox.im"
-                    required
-                    on:input=move |event| set_email.set(event_target_value(&event))
-                />
-            </div>
-            <div class="mb-5">
-                <label
-                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                    for="password"
-                >
-                    "Your password"
-                </label>
-                <input
-                    id="password"
-                    type="password"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                    autocomplete="new-password"
-                    required
-                    on:input=move |event| set_password.set(event_target_value(&event))
-                />
-            </div>
-            <div class="mb-5">
-                <label
-                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                    for="confirm_password"
-                >
-                    "Confirm password"
-                </label>
-                <input
-                    id="confirm_password"
-                    type="password"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                    autocomplete="new-password"
-                    required
-                    on:input=move |event| {
-                        set_confirm_password.set(event_target_value(&event));
-                    }
-                />
-            </div>
-            <Button button_type="submit" disabled=signup_action.pending()>
-                "Submit"
-            </Button>
-            {move || {
-                signup_action
-                    .pending()
-                    .get()
-                    .then_some(view! { <div class="mt-4"><Spinner /></div> })
-            }}
-            {move || {
-                success
-                    .get()
-                    .then_some(view! {
-                        <div class="mt-4">
-                            <Alert
-                                kind=AlertKind::Success
-                                message="Check your email to verify your account.".to_string()
-                            />
-                        </div>
+        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+            <form
+                class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
+                on:submit=on_submit
+            >
+                <div class="space-y-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                        "Create account"
+                    </p>
+                    <h1 class="text-2xl font-semibold text-slate-900">
+                        "Create account"
+                    </h1>
+                    <p class="text-sm text-slate-500">
+                        "Start with a password. You can add passkeys after signing in."
+                    </p>
+                </div>
+
+                <div class="mt-6 space-y-4">
+                    <div>
+                        <label
+                            class="block mb-2 text-sm font-medium text-slate-700"
+                            for="email"
+                        >
+                            "Email"
+                        </label>
+                        <input
+                            id="email"
+                            type="email"
+                            autofocus
+                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                            autocomplete="email"
+                            inputmode="email"
+                            placeholder="name@inbox.im"
+                            required
+                            on:input=move |event| set_email.set(event_target_value(&event))
+                        />
+                    </div>
+                    <div>
+                        <label
+                            class="block mb-2 text-sm font-medium text-slate-700"
+                            for="password"
+                        >
+                            "Password"
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                            autocomplete="new-password"
+                            required
+                            on:input=move |event| set_password.set(event_target_value(&event))
+                        />
+                    </div>
+                    <div>
+                        <label
+                            class="block mb-2 text-sm font-medium text-slate-700"
+                            for="confirm_password"
+                        >
+                            "Confirm password"
+                        </label>
+                        <input
+                            id="confirm_password"
+                            type="password"
+                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                            autocomplete="new-password"
+                            required
+                            on:input=move |event| {
+                                set_confirm_password.set(event_target_value(&event));
+                            }
+                        />
+                    </div>
+
+                    <Button button_type="submit" disabled=signup_action.pending()>
+                        "Create account"
+                    </Button>
+                </div>
+
+                {move || {
+                    signup_action
+                        .pending()
+                        .get()
+                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                }}
+                {move || {
+                    success
+                        .get()
+                        .then_some(view! {
+                            <div class="mt-4">
+                                <Alert
+                                    kind=AlertKind::Success
+                                    message="Check your email to verify your account.".to_string()
+                                />
+                            </div>
+                        })
+                }}
+                {move || {
+                    error.get().map(|err| {
+                        let message = format_error(&err);
+                        view! {
+                            <div class="mt-4">
+                                <Alert kind=AlertKind::Error message=message />
+                            </div>
+                        }
                     })
-            }}
-            {move || {
-                error.get().map(|err| {
-                    let message = format_error(&err);
-                    view! {
-                        <div class="mt-4">
-                            <Alert kind=AlertKind::Error message=message />
-                        </div>
-                    }
-                })
-            }}
-        </form>
+                }}
+            </form>
+        </div>
     }
 }
 

@@ -66,7 +66,7 @@ CLI args (also available via env vars):
 - `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id)
 - `GENESIS_LOG_LEVEL` (optional) numeric or string log level (e.g. `info`) / `-v` flags
 
-Local dev note: when running the workspace frontend (Trunk on `:8080`), use `--port 8000` to avoid collisions.
+Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8000` to avoid collisions.
 
 AppRole CLI example (direct secret_id):
 

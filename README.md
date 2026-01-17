@@ -164,6 +164,31 @@ sequenceDiagram
 
  Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
 
+## Passkey + MFA Login Flow
+
+Users sign up with email and password, then can register passkeys from `/console/me/security` once they are logged in. The login page prioritizes passwordless flows; users enter their email and can sign in with a passkey, or expand the password form if they want to use OPAQUE.
+
+MFA enforcement is consistent across login paths. If TOTP is enabled for the account, the login flow always proceeds to the MFA challenge after either password or passkey authentication succeeds.
+
+```mermaid
+flowchart TD
+  Signup[Signup: email + password] --> Verify[Email verification]
+  Verify --> Console["/console/me/security"]
+  Console --> AddPasskey[Register passkey]
+
+  Login[Login: enter email] --> Passkey{Use passkey?}
+  Passkey -->|Yes| PasskeyAuth[Passkey auth]
+  Passkey -->|No| ShowPassword[Show password fields]
+  ShowPassword --> Opaque[OPAQUE password login]
+
+  PasskeyAuth --> Session[Session issued]
+  Opaque --> Session
+  Session --> MFA{TOTP enabled?}
+  MFA -->|Yes| Challenge[MFA challenge]
+  MFA -->|No| Success[Signed in]
+  Challenge --> Success
+```
+
 ### Admin Rate Limiting
 Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against Vault token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
 
@@ -205,6 +230,10 @@ Production readiness checklist:
 
 Default ports: genesis `8000`, permesi `8001`, web `8080`.
 
+Local HTTPS is now the default for development. We use the `.test` domain to avoid `.localhost` IPv6 resolution issues and keep WebAuthn happy with HTTPS. Run `just localhost-hosts` once to map the `.test` hosts to `127.0.0.1`, then `just mkcert-local` to install the local CA and generate certs. `just start` launches HAProxy with TLS termination on port `443`. The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
+If HAProxy can't reach host services on macOS, it will fall back to `host.docker.internal` automatically.
+On Linux, if server-side HTTPS calls fail (e.g., `admission_keyset` health is red), run `just mkcert-trust` to install the mkcert root CA into the system trust store used by Rust/reqwest (supports `update-ca-certificates` and Arch’s `/etc/ca-certificates/trust-source/anchors`).
+
 1) One command: `just start` (infra + `.envrc` + web).
 2) Run services: `just genesis` and `just permesi` (they auto-source `.envrc`, so direnv is optional).
 
@@ -223,16 +252,54 @@ to (re)apply schemas and runtime roles, then `just db-verify` to confirm constra
 Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/logs`).
 
 `just dev-envrc` emits Vault credentials plus local endpoints:
-- `PERMESI_ADMISSION_PASERK_URL=http://localhost:8000/paserk.json`
-- `PERMESI_FRONTEND_BASE_URL=http://localhost:8080`
+- `PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost/paserk.json`
+- `PERMESI_FRONTEND_BASE_URL=https://permesi.localhost`
+- `PERMESI_API_BASE_URL=https://api.permesi.localhost`
+- `PERMESI_TOKEN_BASE_URL=https://genesis.permesi.localhost`
+- `PERMESI_PASSKEYS_ALLOWED_ORIGINS=https://permesi.localhost`
 - `PERMESI_OPERATOR_TOKEN` (used for `/admin/claim`)
+
+Passkey registration is available in preview mode by default and does not persist credentials without additional storage. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`. Persisting passkeys would require a dedicated table to store `credential_id` (bytes), `user_id`, `public_key` (serialized passkey), `sign_count`, `transports`, `created_at`, and `last_used_at` (nullable).
+
+### Local HTTPS for Passkeys (mkcert + HAProxy)
+
+Passkeys require HTTPS. The repo includes a local HAProxy config at `config/haproxy/haproxy.cfg` that terminates TLS and routes `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` to the usual local ports. Generate a local certificate with mkcert, combine it for HAProxy, then run the container:
+
+```
+just mkcert-local
+
+just haproxy-start
+
+```
+
+Manual steps (if you prefer to run them directly):
+
+```
+mkcert -install
+mkcert -key-file config/haproxy/certs/permesi.localhost-key.pem \
+  -cert-file config/haproxy/certs/permesi.localhost-cert.pem \
+  "localhost" "127.0.0.1" "::1" "*.localhost" \
+  "permesi.localhost" "api.permesi.localhost" "genesis.permesi.localhost" "*.permesi.localhost"
+cat config/haproxy/certs/permesi.localhost-cert.pem config/haproxy/certs/permesi.localhost-key.pem \
+  > config/haproxy/certs/permesi.localhost.pem
+
+podman run -d --name permesi-haproxy \
+  --add-host=host.containers.internal:host-gateway \
+  -p 443:8080 \
+  -v "$(pwd)/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+  -v "$(pwd)/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
+  docker.io/haproxy:latest
+```
+
+On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443` (persist with a sysctl.d config if desired). If you want to avoid IPv6 resolution issues, add IPv4 host entries via `just localhost-hosts`.
+You can run `just haproxy-sysctl` to apply the sysctl setting.
 
 ### Testing Admin Claim (Platform Operator)
 To test bootstrapping the first admin or elevating privileges, you need a Vault token with the `permesi-operators` policy.
 The dev bootstrap automatically generates one and prints it to stdout (or exports it via `just dev-envrc`).
 
 1. Copy the **Operator Token** from startup logs or run `echo $PERMESI_OPERATOR_TOKEN`.
-2. Navigate to `http://localhost:8080/admin/claim`.
+2. Navigate to `https://permesi.localhost/admin/claim`.
 3. Paste the token and submit to claim the operator role.
 
 ## API Contract (OpenAPI)

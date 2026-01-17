@@ -15,8 +15,10 @@
 //!
 //! ### Feature Support
 //! - **Password**: Fully implemented with OPAQUE.
-//! - **Passkeys**: UI placeholder for future WebAuthn implementation.
+//! - **Passkeys**: WebAuthn registration support (preview mode when storage is unavailable).
 //! - **2FA**: UI placeholder for future TOTP/Hardware key implementation.
+
+mod passkeys;
 
 use crate::{
     app_lib::theme::Theme,
@@ -38,13 +40,16 @@ use crate::{
     routes::paths,
 };
 use base64::Engine;
+use js_sys::Date;
 use leptos::{ev::SubmitEvent, prelude::*};
 use leptos_router::hooks::use_navigate;
 use opaque_ke::{
     ClientLogin, ClientLoginFinishParameters, ClientRegistration,
     ClientRegistrationFinishParameters, CredentialResponse, RegistrationResponse,
 };
+use passkeys::PasskeysSection;
 use rand::rngs::OsRng;
+use wasm_bindgen::JsValue;
 
 /// Minimum password length enforced by the client for early UX feedback.
 const MIN_PASSWORD_LENGTH: usize = 12;
@@ -495,7 +500,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                 </div>
                                                 <button
                                                     on:click=move |_| set_show_password_form.update(|v| *v = !*v)
-                                                    class="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer"
+                                                    class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                 >
                                                     {move || if show_password_form.get() { "Cancel" } else { "Change password" }}
                                                 </button>
@@ -599,27 +604,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                             </Show>
                                         </div>
 
-                                        // Passkeys Row
-                                        <div class=Theme::ROW>
-                                            <div class="flex items-center justify-between">
-                                                <div class="flex items-center space-x-3">
-                                                    <span class=Theme::ICON>
-                                                        "fingerprint"
-                                                    </span>
-                                                    <div>
-                                                        <p class="text-sm font-medium text-gray-900 dark:text-white">
-                                                            "Passkeys"
-                                                        </p>
-                                                        <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                            {format!("{} passkeys configured", status.passkey_count)}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                                <button class="text-sm font-medium text-gray-400 dark:text-gray-500 cursor-not-allowed" disabled=true>
-                                                    "Add passkey"
-                                                </button>
-                                            </div>
-                                        </div>
+                                        <PasskeysSection />
                                     </div>
                                 </section>
 
@@ -660,7 +645,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                 on:click=move |_| {
                                                                     navigate(paths::MFA_SETUP, Default::default());
                                                                 }
-                                                                class="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer"
+                                                                class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                             >
                                                                 "Add"
                                                             </button>
@@ -673,7 +658,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         <Show when=move || status.two_factor_enabled>
                                             <div class="px-6 py-4 space-y-4">
                                                 <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                                    "Configured methods"
+                                                    "Methods"
                                                 </h3>
                                                 <div class="group">
                                                     <div class=Theme::LIST_ITEM>
@@ -686,29 +671,32 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                             </span>
                                                         </div>
                                                         <div class="flex items-center space-x-4">
-                                                            <span class="text-xs text-gray-500 dark:text-gray-400">
-                                                                {if status.totp_enabled { "Configured" } else { "Not configured" }}
-                                                            </span>
-
                                                             <Show when=move || status.totp_enabled>
                                                                 <div class="relative inline-block text-left">
                                                                     {
                                                                         let (show_menu, set_show_menu) = signal(false);
                                                                         view! {
-                                                                            <button
-                                                                                type="button"
-                                                                                on:click=move |ev| {
-                                                                                    ev.stop_propagation();
-                                                                                    set_show_menu.update(|v| *v = !*v);
-                                                                                }
-                                                                                class="p-1 rounded-md hover:bg-white dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors shadow-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 cursor-pointer"
-                                                                            >
-                                                                                <span class="material-symbols-outlined text-xl">"more_horiz"</span>
-                                                                            </button>
+                                                                                <span
+                                                                                    class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                                                                                    role="button"
+                                                                                    tabindex="0"
+                                                                                    aria-label="Authenticator settings"
+                                                                                    on:click=move |ev| {
+                                                                                        ev.stop_propagation();
+                                                                                        set_show_menu.update(|v| *v = !*v);
+                                                                                    }
+                                                                                    on:keydown=move |event| {
+                                                                                        if event.key() == "Enter" || event.key() == " " {
+                                                                                            set_show_menu.update(|v| *v = !*v);
+                                                                                        }
+                                                                                    }
+                                                                                >
+                                                                                    <span class="material-symbols-outlined text-sm">"settings"</span>
+                                                                                </span>
 
                                                                             <Show when=move || show_menu.get()>
                                                                                 <div
-                                                                                    class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none border border-gray-200 dark:border-gray-700"
+                                                                                    class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black/5 focus:outline-none border border-gray-100 dark:border-gray-700"
                                                                                     on:click=move |ev| ev.stop_propagation()
                                                                                     on:mouseleave=move |_| set_show_menu.set(false)
                                                                                 >
@@ -749,7 +737,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                     view! {
                                                                         <button
                                                                             on:click=move |_| navigate(paths::MFA_SETUP, Default::default())
-                                                                            class="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer"
+                                                                            class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                                         >
                                                                             "Add"
                                                                         </button>
@@ -808,7 +796,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                 <button
                                                                     type="button"
                                                                     on:click=move |_| set_show_delete_totp_form.set(false)
-                                                                    class="px-4 py-2 text-gray-600 dark:text-gray-400 text-sm font-medium hover:underline cursor-pointer"
+                                                                    class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                                 >
                                                                     "Cancel"
                                                                 </button>
@@ -829,108 +817,6 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                     })
                                                             }}
                                                         </form>
-                                                    </div>
-                                                </Show>
-                                            </div>
-                                        </Show>
-
-                                        // Recovery Codes Row
-                                        <Show when=move || status.two_factor_enabled && status.totp_enabled>
-                                            <div class=Theme::ROW>
-                                                <div class="flex items-center justify-between">
-                                                    <div class="flex items-center space-x-3">
-                                                        <span class=Theme::ICON>
-                                                            "settings_backup_restore"
-                                                        </span>
-                                                        <div>
-                                                            <p class="text-sm font-medium text-gray-900 dark:text-white">
-                                                                "Recovery codes"
-                                                            </p>
-                                                            <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                                "Fallback access via one-time codes."
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <button
-                                                        on:click=move |_| {
-                                                            set_show_recovery_codes_form.update(|v| *v = !*v);
-                                                            set_regenerated_codes.set(None);
-                                                        }
-                                                        class="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer"
-                                                    >
-                                                        {move || if show_recovery_codes_form.get() { "Cancel" } else { "Regenerate" }}
-                                                    </button>
-                                                </div>
-
-                                                <Show when=move || show_recovery_codes_form.get()>
-                                                    <form
-                                                        class="mt-6 space-y-4 max-w-md bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm"
-                                                        on:submit=move |event: SubmitEvent| {
-                                                            event.prevent_default();
-                                                            let password = recovery_password.get_untracked();
-                                                            if password.trim().is_empty() {
-                                                                return;
-                                                            }
-                                                            regenerate_codes_action.dispatch(MfaAuthInput {
-                                                                email: email.get_value(),
-                                                                password,
-                                                            });
-                                                        }
-                                                    >
-                                                        <p class="text-xs text-gray-600 dark:text-gray-400 mb-4">
-                                                            "Regenerating codes will invalidate your existing set. Enter your password to continue."
-                                                        </p>
-                                                        <div>
-                                                            <label class="block mb-1 text-xs font-medium text-gray-700 dark:text-gray-300" for="recovery_password">
-                                                                "Password"
-                                                            </label>
-                                                            <input
-                                                                id="recovery_password"
-                                                                type="password"
-                                                                class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                                                required
-                                                                on:input=move |event| set_recovery_password.set(event_target_value(&event))
-                                                            />
-                                                        </div>
-                                                        <div class="pt-2 flex items-center gap-4">
-                                                            <Button button_type="submit" disabled=regenerate_codes_action.pending()>
-                                                                "Regenerate codes"
-                                                            </Button>
-                                                            {move || {
-                                                                regenerate_codes_action
-                                                                    .pending()
-                                                                    .get()
-                                                                    .then_some(view! { <Spinner /> })
-                                                            }}
-                                                        </div>
-                                                        {move || {
-                                                            regenerate_codes_action
-                                                                .value()
-                                                                .get()
-                                                                .and_then(|res| res.err())
-                                                                .map(|err| {
-                                                                    view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                                                })
-                                                        }}
-                                                    </form>
-                                                </Show>
-
-                                                <Show when=move || regenerated_codes.get().is_some()>
-                                                    <div class="mt-6 space-y-4">
-                                                        <Alert kind=AlertKind::Info message="New recovery codes have been generated. Please save them in a safe place.".to_string() />
-                                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-inner">
-                                                            <div class="grid grid-cols-2 gap-2 font-mono text-sm">
-                                                                {move || regenerated_codes.get().unwrap_or_default().into_iter().map(|code| {
-                                                                    view! { <div class="p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm text-center">{code}</div> }
-                                                                }).collect::<Vec<_>>()}
-                                                            </div>
-                                                        </div>
-                                                        <button
-                                                            on:click=move |_| set_regenerated_codes.set(None)
-                                                            class="text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 underline cursor-pointer"
-                                                        >
-                                                            "Close"
-                                                        </button>
                                                     </div>
                                                 </Show>
                                             </div>
@@ -960,7 +846,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                         set_show_add_key_form.update(|v| *v = !*v);
                                                         set_new_key_label.set(String::new());
                                                     }
-                                                    class="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer"
+                                                    class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                 >
                                                     {move || if show_add_key_form.get() { "Cancel" } else { "Add" }}
                                                 </button>
@@ -1037,7 +923,6 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                         move |key| {
                                                             let credential_id = key.credential_id.clone();
                                                             let label = key.label.clone();
-                                                            let (show_menu, set_show_menu) = signal(false);
 
                                                             let credential_id_for_show = credential_id.clone();
                                                             let credential_id_for_delete = credential_id.clone();
@@ -1053,50 +938,43 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                                 <p class="text-sm text-gray-700 dark:text-gray-300 font-medium">
                                                                                     {label}
                                                                                 </p>
-                                                                                <p class="text-[10px] text-gray-500 dark:text-gray-400">
-                                                                                    "Registered on " {key.created_at}
+                                                                                <p class="text-xs text-gray-500 dark:text-gray-400">
+                                                                                    {format!(
+                                                                                        "Added {} | Last used {}",
+                                                                                        format_rfc3339(&key.created_at),
+                                                                                        key.last_used_at
+                                                                                            .as_deref()
+                                                                                            .map(format_relative)
+                                                                                            .unwrap_or_else(|| {
+                                                                                                "Never".to_string()
+                                                                                            })
+                                                                                    )}
                                                                                 </p>
                                                                             </div>
                                                                         </div>
-                                                                        <div class="flex items-center space-x-4">
-                                                                            <div class="relative inline-block text-left">
-                                                                                <button
-                                                                                    type="button"
-                                                                                    on:click=move |ev| {
-                                                                                        ev.stop_propagation();
-                                                                                        set_show_menu.update(|v| *v = !*v);
+                                                                        <span
+                                                                            class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                                                                            role="button"
+                                                                            tabindex="0"
+                                                                            aria-label="Remove security key"
+                                                                            on:click={
+                                                                                let credential_id = credential_id.clone();
+                                                                                move |_| {
+                                                                                    set_show_delete_key_form.set(Some(credential_id.clone()));
+                                                                                }
+                                                                            }
+                                                                            on:keydown={
+                                                                                let credential_id = credential_id.clone();
+                                                                                move |event| {
+                                                                                    if event.key() == "Enter" || event.key() == " " {
+                                                                                        set_show_delete_key_form
+                                                                                            .set(Some(credential_id.clone()));
                                                                                     }
-                                                                                    class="p-1 rounded-md hover:bg-white dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors shadow-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 cursor-pointer"
-                                                                                >
-                                                                                    <span class="material-symbols-outlined text-xl">"more_horiz"</span>
-                                                                                </button>
-
-                                                                                <Show when=move || show_menu.get()>
-                                                                                    <div
-                                                                                        class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none border border-gray-200 dark:border-gray-700"
-                                                                                        on:click=move |ev| ev.stop_propagation()
-                                                                                        on:mouseleave=move |_| set_show_menu.set(false)
-                                                                                    >
-                                                                                        <div class="py-1">
-                                                                                            <button
-                                                                                                type="button"
-                                                                                                on:click={
-                                                                                                    let credential_id = credential_id.clone();
-                                                                                                    move |_| {
-                                                                                                        set_show_menu.set(false);
-                                                                                                        set_show_delete_key_form.set(Some(credential_id.clone()));
-                                                                                                    }
-                                                                                                }
-                                                                                                class="flex w-full items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer text-left"
-                                                                                            >
-                                                                                                <span class="material-symbols-outlined mr-3 text-sm">"delete"</span>
-                                                                                                "Delete key"
-                                                                                            </button>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                </Show>
-                                                                            </div>
-                                                                        </div>
+                                                                                }
+                                                                            }
+                                                                        >
+                                                                            <span class="material-symbols-outlined text-sm">"delete"</span>
+                                                                        </span>
                                                                     </div>
 
                                                                     <Show when=move || show_delete_key_form.get() == Some(credential_id_for_show.clone())>
@@ -1142,7 +1020,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                                     <button
                                                                                         type="button"
                                                                                         on:click=move |_| set_show_delete_key_form.set(None)
-                                                                                        class="px-4 py-2 text-gray-600 dark:text-gray-400 text-sm font-medium hover:underline cursor-pointer"
+                                                                                        class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                                                     >
                                                                                         "Cancel"
                                                                                     </button>
@@ -1169,6 +1047,108 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                 />
                                             </div>
                                         </Show>
+
+                                        // Recovery Codes Row
+                                        <Show when=move || status.two_factor_enabled && status.totp_enabled>
+                                            <div class=Theme::ROW>
+                                                <div class="flex items-center justify-between">
+                                                    <div class="flex items-center space-x-3">
+                                                        <span class=Theme::ICON>
+                                                            "settings_backup_restore"
+                                                        </span>
+                                                        <div>
+                                                            <p class="text-sm font-medium text-gray-900 dark:text-white">
+                                                                "Recovery codes"
+                                                            </p>
+                                                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                                                "Fallback access via one-time codes."
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    <button
+                                                        on:click=move |_| {
+                                                            set_show_recovery_codes_form.update(|v| *v = !*v);
+                                                            set_regenerated_codes.set(None);
+                                                        }
+                                                        class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                    >
+                                                        {move || if show_recovery_codes_form.get() { "Cancel" } else { "Regenerate" }}
+                                                    </button>
+                                                </div>
+
+                                                <Show when=move || show_recovery_codes_form.get()>
+                                                    <form
+                                                        class="mt-6 space-y-4 max-w-md bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm"
+                                                        on:submit=move |event: SubmitEvent| {
+                                                            event.prevent_default();
+                                                            let password = recovery_password.get_untracked();
+                                                            if password.trim().is_empty() {
+                                                                return;
+                                                            }
+                                                            regenerate_codes_action.dispatch(MfaAuthInput {
+                                                                email: email.get_value(),
+                                                                password,
+                                                            });
+                                                        }
+                                                    >
+                                                        <p class="text-xs text-gray-600 dark:text-gray-400 mb-4">
+                                                            "Regenerating codes will invalidate your existing set. Enter your password to continue."
+                                                        </p>
+                                                        <div>
+                                                            <label class="block mb-1 text-xs font-medium text-gray-700 dark:text-gray-300" for="recovery_password">
+                                                                "Password"
+                                                            </label>
+                                                            <input
+                                                                id="recovery_password"
+                                                                type="password"
+                                                                class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                                                required
+                                                                on:input=move |event| set_recovery_password.set(event_target_value(&event))
+                                                            />
+                                                        </div>
+                                                        <div class="pt-2 flex items-center gap-4">
+                                                            <Button button_type="submit" disabled=regenerate_codes_action.pending()>
+                                                                "Regenerate codes"
+                                                            </Button>
+                                                            {move || {
+                                                                regenerate_codes_action
+                                                                    .pending()
+                                                                    .get()
+                                                                    .then_some(view! { <Spinner /> })
+                                                            }}
+                                                        </div>
+                                                        {move || {
+                                                            regenerate_codes_action
+                                                                .value()
+                                                                .get()
+                                                                .and_then(|res| res.err())
+                                                                .map(|err| {
+                                                                    view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                                                })
+                                                        }}
+                                                    </form>
+                                                </Show>
+
+                                                <Show when=move || regenerated_codes.get().is_some()>
+                                                    <div class="mt-6 space-y-4">
+                                                        <Alert kind=AlertKind::Info message="New recovery codes have been generated. Please save them in a safe place.".to_string() />
+                                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-inner">
+                                                            <div class="grid grid-cols-2 gap-2 font-mono text-sm">
+                                                                {move || regenerated_codes.get().unwrap_or_default().into_iter().map(|code| {
+                                                                    view! { <div class="p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm text-center">{code}</div> }
+                                                                }).collect::<Vec<_>>()}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            on:click=move |_| set_regenerated_codes.set(None)
+                                                            class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                        >
+                                                            "Close"
+                                                        </button>
+                                                    </div>
+                                                </Show>
+                                            </div>
+                                        </Show>
                                     </div>
                                 </section>
                             </div>
@@ -1183,4 +1163,61 @@ pub fn MeSecurityPage() -> impl IntoView {
             </Suspense>
         </div>
     }
+}
+
+fn format_rfc3339(value: &str) -> String {
+    let date = Date::new(&JsValue::from_str(value));
+    if date.get_time().is_nan() {
+        value.to_string()
+    } else {
+        date.to_iso_string().into()
+    }
+}
+
+fn format_relative(value: &str) -> String {
+    let date = Date::new(&JsValue::from_str(value));
+    if date.get_time().is_nan() {
+        return value.to_string();
+    }
+    let now_ms = Date::now();
+    let then_ms = date.get_time();
+    let diff_ms = (now_ms - then_ms).max(0.0);
+    let total_minutes = (diff_ms / 1000.0 / 60.0).floor() as i64;
+    let cutoff_minutes = 30 * 24 * 60;
+    if total_minutes >= cutoff_minutes {
+        return format_rfc3339(value);
+    }
+    if total_minutes <= 0 {
+        return "Just now".to_string();
+    }
+    let days = total_minutes / (60 * 24);
+    let hours = (total_minutes % (60 * 24)) / 60;
+    let mins = total_minutes % 60;
+
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{} day{}", days, if days == 1 { "" } else { "s" }));
+        if hours > 0 {
+            parts.push(format!(
+                "{} hour{}",
+                hours,
+                if hours == 1 { "" } else { "s" }
+            ));
+        } else if mins > 0 {
+            parts.push(format!("{} min{}", mins, if mins == 1 { "" } else { "s" }));
+        }
+    } else if hours > 0 {
+        parts.push(format!(
+            "{} hour{}",
+            hours,
+            if hours == 1 { "" } else { "s" }
+        ));
+        if mins > 0 {
+            parts.push(format!("{} min{}", mins, if mins == 1 { "" } else { "s" }));
+        }
+    } else {
+        parts.push(format!("{} min{}", mins, if mins == 1 { "" } else { "s" }));
+    }
+
+    format!("{} ago", parts.join(", "))
 }

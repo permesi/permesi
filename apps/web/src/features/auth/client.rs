@@ -17,7 +17,8 @@ use crate::{
         OpaqueLoginStartRequest, OpaqueLoginStartResponse, OpaquePasswordFinishRequest,
         OpaquePasswordStartRequest, OpaquePasswordStartResponse, OpaqueReauthFinishRequest,
         OpaqueReauthStartRequest, OpaqueSignupFinishRequest, OpaqueSignupStartRequest,
-        OpaqueSignupStartResponse, RecoveryCodesResponse, ResendVerificationRequest, UserSession,
+        OpaqueSignupStartResponse, PasskeyLoginFinishRequest, PasskeyLoginStartRequest,
+        PasskeyLoginStartResponse, RecoveryCodesResponse, ResendVerificationRequest, UserSession,
         VerifyEmailRequest, WebauthnAuthenticateFinishRequest, WebauthnAuthenticateStartResponse,
         WebauthnRegisterFinishRequest, WebauthnRegisterStartResponse,
     },
@@ -62,6 +63,30 @@ pub async fn opaque_login_finish(
     let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
     let response = post_json_with_headers_with_credentials_raw(
         "/v1/auth/opaque/login/finish",
+        request,
+        &headers,
+    )
+    .await?;
+    Ok(extract_bearer_token(&response))
+}
+
+/// Starts passkey login for the supplied email address.
+pub async fn passkey_login_start(
+    request: &PasskeyLoginStartRequest,
+    zero_token: &str,
+) -> Result<PasskeyLoginStartResponse, AppError> {
+    let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
+    post_json_with_headers_response("/v1/auth/passkey/login/start", request, &headers).await
+}
+
+/// Finishes passkey login and allows the server to set session cookies.
+pub async fn passkey_login_finish(
+    request: &PasskeyLoginFinishRequest,
+    zero_token: &str,
+) -> Result<Option<String>, AppError> {
+    let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
+    let response = post_json_with_headers_with_credentials_raw(
+        "/v1/auth/passkey/login/finish",
         request,
         &headers,
     )

@@ -18,10 +18,7 @@ impl AppConfig {
         let api_base_url = option_env!("PERMESI_API_BASE_URL")
             .or(option_env!("PERMESI_API_HOST"))
             .unwrap_or("");
-        let token_base_url = option_env!("PERMESI_TOKEN_BASE_URL")
-            .or(option_env!("PERMESI_TOKEN_HOST"))
-            .or(option_env!("PERMESI_API_TOKEN_HOST"))
-            .unwrap_or("");
+        let token_base_url = option_env!("PERMESI_TOKEN_BASE_URL").unwrap_or("");
         let client_id = option_env!("PERMESI_CLIENT_ID").unwrap_or("");
         let opaque_server_id = option_env!("PERMESI_OPAQUE_SERVER_ID").unwrap_or("api.permesi.dev");
 

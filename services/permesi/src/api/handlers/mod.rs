@@ -9,6 +9,7 @@ pub mod user_login;
 pub mod root;
 
 pub mod me;
+pub mod me_webauthn;
 pub mod orgs;
 
 // common functions for the handlers

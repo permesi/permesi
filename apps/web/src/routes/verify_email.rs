@@ -10,9 +10,12 @@
 use crate::{
     components::{Alert, AlertKind, Button, Spinner},
     features::auth::{
-        client, token,
+        client,
+        state::use_auth,
+        token,
         types::{ResendVerificationRequest, VerifyEmailRequest},
     },
+    routes::not_found::NotFoundContent,
 };
 use leptos::prelude::*;
 use leptos_router::{NavigateOptions, hooks::use_navigate};
@@ -43,9 +46,13 @@ enum ResendStatus {
 #[component]
 pub fn VerifyEmailPage() -> impl IntoView {
     let navigate = use_navigate();
+    let navigate_for_success = StoredValue::new(navigate);
+    let auth = use_auth();
     let (status, set_status) = signal(VerifyStatus::Idle);
     let (resend_email, set_resend_email) = signal(String::new());
     let (resend_status, set_resend_status) = signal(ResendStatus::Idle);
+    let (verify_attempted, set_verify_attempted) = signal(false);
+    let (token_processed, set_token_processed) = signal(false);
 
     let verify_action = Action::new_local(move |token_value: &String| {
         let token_value = token_value.clone();
@@ -67,6 +74,9 @@ pub fn VerifyEmailPage() -> impl IntoView {
 
     Effect::new(move |_| {
         if let Some(result) = verify_action.value().get() {
+            if status.get() == VerifyStatus::Success {
+                return;
+            }
             match result {
                 Ok(()) => set_status.set(VerifyStatus::Success),
                 Err(err) => set_status.set(VerifyStatus::Error(err.to_string())),
@@ -78,9 +88,19 @@ pub fn VerifyEmailPage() -> impl IntoView {
         if status.get() != VerifyStatus::Idle {
             return;
         }
+        if auth.is_loading.get() || auth.is_authenticated.get() {
+            return;
+        }
+        if verify_attempted.get() {
+            return;
+        }
+        if token_processed.get() {
+            return;
+        }
 
         match extract_token_from_hash() {
             Some(token) => {
+                set_verify_attempted.set(true);
                 set_status.set(VerifyStatus::Pending);
                 verify_action.dispatch(token);
             }
@@ -88,6 +108,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
         }
 
         clear_token_fragment();
+        set_token_processed.set(true);
     });
 
     Effect::new(move |_| {
@@ -119,114 +140,128 @@ pub fn VerifyEmailPage() -> impl IntoView {
     };
 
     view! {
-        <div class="max-w-lg mx-auto">
-            <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                "Verify your email"
-            </h1>
-            {move || match status.get() {
-                VerifyStatus::Idle | VerifyStatus::Pending => view! {
-                    <div class="mt-4">
-                        <Spinner />
-                    </div>
-                }
-                .into_any(),
-                VerifyStatus::Success => {
-                    let navigate = navigate.clone();
+        <Show
+            when=move || !auth.is_loading.get()
+            fallback=move || view! { <Spinner /> }
+        >
+            {move || {
+                if auth.is_authenticated.get() {
+                    view! { <NotFoundContent /> }.into_any()
+                } else {
                     view! {
-                        <div class="mt-4">
-                            <Alert
-                                kind=AlertKind::Success
-                                message="Email verified. You can sign in now.".to_string()
-                            />
-                            <div class="mt-4">
-                                <Button
-                                    button_type="button"
-                                    on_click=move |_| {
-                                        navigate("/login", NavigateOptions::default());
-                                    }
-                                >
-                                    "Continue to sign in"
-                                </Button>
-                            </div>
+                        <div class="max-w-lg mx-auto">
+                            <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
+                                "Verify your email"
+                            </h1>
+                            {move || match status.get() {
+                                VerifyStatus::Idle | VerifyStatus::Pending => view! {
+                                    <div class="mt-4">
+                                        <Spinner />
+                                    </div>
+                                }
+                                .into_any(),
+                                VerifyStatus::Success => view! {
+                                    <div class="mt-4">
+                                        <Alert
+                                            kind=AlertKind::Success
+                                            message="Email verified. You can sign in now.".to_string()
+                                        />
+                                        <div class="mt-4">
+                                            <Button
+                                                button_type="button"
+                                                on_click=move |_| {
+                                                    navigate_for_success.get_value()(
+                                                        "/login",
+                                                        NavigateOptions::default(),
+                                                    );
+                                                }
+                                            >
+                                                "Continue to sign in"
+                                            </Button>
+                                        </div>
+                                    </div>
+                                }
+                                .into_any(),
+                                VerifyStatus::MissingToken => view! {
+                                    <div class="mt-4">
+                                        <Alert
+                                            kind=AlertKind::Error
+                                            message="Missing verification token. Check your email link.".to_string()
+                                        />
+                                    </div>
+                                }
+                                .into_any(),
+                                VerifyStatus::Error(message) => view! {
+                                    <div class="mt-4">
+                                        <Alert kind=AlertKind::Error message=message />
+                                    </div>
+                                }
+                                .into_any(),
+                            }}
+                            <Show when=move || status.get() != VerifyStatus::Success>
+                                <div class="mt-8 rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-800">
+                                    <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
+                                        "Need a new link?"
+                                    </h2>
+                                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                                        "Enter your email to resend the verification link."
+                                    </p>
+                                    <div class="mt-4">
+                                        <label
+                                            class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
+                                            for="resend_email"
+                                        >
+                                            "Email"
+                                        </label>
+                                        <input
+                                            id="resend_email"
+                                            type="email"
+                                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
+                                            autocomplete="email"
+                                            placeholder="name@inbox.im"
+                                            on:input=move |event| set_resend_email.set(event_target_value(&event))
+                                        />
+                                    </div>
+                                    <div class="mt-4">
+                                        <Button
+                                            button_type="button"
+                                            disabled=resend_action.pending()
+                                            on_click=on_resend_click
+                                        >
+                                            "Resend verification"
+                                        </Button>
+                                    </div>
+                                    {move || {
+                                        resend_action
+                                            .pending()
+                                            .get()
+                                            .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                                    }}
+                                    {move || match resend_status.get() {
+                                        ResendStatus::Idle | ResendStatus::Pending => None,
+                                        ResendStatus::Success => Some(view! {
+                                            <div class="mt-4">
+                                                <Alert
+                                                    kind=AlertKind::Success
+                                                    message="If that email exists, a new link is on the way."
+                                                        .to_string()
+                                                />
+                                            </div>
+                                        }),
+                                        ResendStatus::Error(message) => Some(view! {
+                                            <div class="mt-4">
+                                                <Alert kind=AlertKind::Error message=message />
+                                            </div>
+                                        }),
+                                    }}
+                                </div>
+                            </Show>
                         </div>
                     }
                     .into_any()
                 }
-                VerifyStatus::MissingToken => view! {
-                    <div class="mt-4">
-                        <Alert
-                            kind=AlertKind::Error
-                            message="Missing verification token. Check your email link.".to_string()
-                        />
-                    </div>
-                }
-                .into_any(),
-                VerifyStatus::Error(message) => view! {
-                    <div class="mt-4">
-                        <Alert kind=AlertKind::Error message=message />
-                    </div>
-                }
-                .into_any(),
             }}
-            <Show when=move || status.get() != VerifyStatus::Success>
-                <div class="mt-8 rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-800">
-                    <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
-                        "Need a new link?"
-                    </h2>
-                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                        "Enter your email to resend the verification link."
-                    </p>
-                    <div class="mt-4">
-                        <label
-                            class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                            for="resend_email"
-                        >
-                            "Email"
-                        </label>
-                        <input
-                            id="resend_email"
-                            type="email"
-                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                            autocomplete="email"
-                            placeholder="name@inbox.im"
-                            on:input=move |event| set_resend_email.set(event_target_value(&event))
-                        />
-                    </div>
-                    <div class="mt-4">
-                        <Button
-                            button_type="button"
-                            disabled=resend_action.pending()
-                            on_click=on_resend_click
-                        >
-                            "Resend verification"
-                        </Button>
-                    </div>
-                    {move || {
-                        resend_action
-                            .pending()
-                            .get()
-                            .then_some(view! { <div class="mt-4"><Spinner /></div> })
-                    }}
-                    {move || match resend_status.get() {
-                        ResendStatus::Idle | ResendStatus::Pending => None,
-                        ResendStatus::Success => Some(view! {
-                            <div class="mt-4">
-                                <Alert
-                                    kind=AlertKind::Success
-                                    message="If that email exists, a new link is on the way."
-                                        .to_string()
-                                />
-                            </div>
-                        }),
-                        ResendStatus::Error(message) => Some(view! {
-                            <div class="mt-4">
-                                <Alert kind=AlertKind::Error message=message />
-                            </div>
-                        }),
-                    }}
-                </div>
-            </Show>
-        </div>
+        </Show>
     }
 }
 

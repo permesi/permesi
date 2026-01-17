@@ -3,7 +3,7 @@ use crate::{
     cli::globals::GlobalArgs,
     totp::{DekManager, TotpService},
     vault,
-    webauthn::SecurityKeyService,
+    webauthn::{PasskeyConfig, PasskeyService, SecurityKeyService},
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -120,6 +120,9 @@ pub async fn new(
     )
     .context("Failed to initialize Security Key service")?;
 
+    // Initialize Passkeys (preview mode supported via env)
+    let passkey_service = init_passkey_service(&auth_config)?;
+
     let frontend_origin = frontend_origin(auth_state.config().frontend_base_url())?;
     let cors = CorsLayer::new()
         .allow_headers([
@@ -155,7 +158,8 @@ pub async fn new(
                 .layer(Extension(globals.clone()))
                 .layer(Extension(pool.clone()))
                 .layer(Extension(totp_service))
-                .layer(Extension(Arc::new(security_key_service))),
+                .layer(Extension(Arc::new(security_key_service)))
+                .layer(Extension(Arc::new(passkey_service))),
         )
         .layer(Extension(pool));
 
@@ -203,4 +207,13 @@ fn frontend_origin(frontend_base_url: &str) -> Result<HeaderValue> {
         .map_or_else(String::new, |port| format!(":{port}"));
     let origin = format!("{}://{}{}", parsed.scheme(), host, port);
     HeaderValue::from_str(&origin).context("Failed to build frontend origin header")
+}
+
+fn init_passkey_service(auth_config: &auth::AuthConfig) -> Result<PasskeyService> {
+    let passkey_config = PasskeyConfig::from_env(
+        auth_config.webauthn_rp_id(),
+        auth_config.webauthn_rp_origin(),
+    )
+    .context("Failed to load passkey configuration")?;
+    PasskeyService::new(passkey_config).context("Failed to initialize Passkey service")
 }

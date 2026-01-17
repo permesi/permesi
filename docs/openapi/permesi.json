@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.2.19"
+    "version": "0.2.21"
   },
   "paths": {
     "/health": {
@@ -437,6 +437,118 @@
           },
           "400": {
             "description": "Invalid code"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/authenticate/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finishes the `WebAuthn` authentication flow and upgrades the session.",
+        "operationId": "authenticate_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebauthnAuthenticateFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Authentication successful"
+          },
+          "400": {
+            "description": "Invalid authentication response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/authenticate/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Starts the authentication flow for a `WebAuthn` security key.",
+        "operationId": "authenticate_start",
+        "responses": {
+          "200": {
+            "description": "Authentication challenge generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebauthnAuthenticateStartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "No security keys registered"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/register/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finishes the registration of a new `WebAuthn` security key.",
+        "description": "Side Effects:\n- Enables MFA (`MfaState::Enabled`) for the user if not already enabled.\n- Logs an audit event.",
+        "operationId": "register_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebauthnRegisterFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Security key registered successfully"
+          },
+          "400": {
+            "description": "Invalid registration response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/webauthn/register/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Starts the registration of a new `WebAuthn` security key.",
+        "operationId": "register_start",
+        "responses": {
+          "200": {
+            "description": "Registration challenge generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebauthnRegisterStartResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -897,6 +1009,95 @@
         }
       }
     },
+    "/v1/auth/passkey/login/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish passkey login and issue a session cookie.",
+        "operationId": "passkey_login_finish",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyLoginFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Passkey login finished"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/auth/passkey/login/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start passkey login by issuing an authentication challenge.",
+        "operationId": "passkey_login_start",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyLoginStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Passkey login started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyLoginStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
     "/v1/auth/resend-verification": {
       "post": {
         "tags": [
@@ -1093,6 +1294,80 @@
         }
       }
     },
+    "/v1/me/mfa/security-keys": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "list_security_keys",
+        "responses": {
+          "200": {
+            "description": "List of registered security keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecurityKeySummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/totp": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "disable_totp",
+        "responses": {
+          "204": {
+            "description": "TOTP disabled."
+          },
+          "401": {
+            "description": "Unauthorized or recent auth required."
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/webauthn/{credential_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Deletes a registered `WebAuthn` security key.",
+        "description": "Side Effects:\n- Disables MFA (`MfaState::Disabled`) if this was the last security key AND no TOTP is configured.\n- Logs an audit event.",
+        "operationId": "delete_key",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "description": "Hex-encoded credential ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Security key deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Security key not found"
+          }
+        }
+      }
+    },
     "/v1/me/sessions": {
       "get": {
         "tags": [
@@ -1145,6 +1420,168 @@
           },
           "404": {
             "description": "Session not found."
+          }
+        }
+      }
+    },
+    "/v1/me/webauthn/credentials": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List registered passkeys for the current user.",
+        "description": "Returns an empty list in preview mode; requires a full session.",
+        "operationId": "list_credentials",
+        "responses": {
+          "200": {
+            "description": "Registered passkeys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyCredentialListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/me/webauthn/credentials/{credential_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Delete a registered passkey by credential id.",
+        "description": "Requires a full session and a valid zero token; not supported in preview mode.",
+        "operationId": "delete_credential",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Passkey deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/me/webauthn/register/finish": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Verify and finalize passkey registration for the current user.",
+        "description": "Requires a full session and a valid zero token; consumes the one-time\nchallenge and never persists credentials while preview mode is enabled.",
+        "operationId": "register_finish",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRegisterFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Passkey registration finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRegisterFinishResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid registration response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "413": {
+            "description": "Payload too large"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/me/webauthn/register/options": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Generate passkey registration options for the current user.",
+        "description": "Requires a full session and a valid zero token; binds the challenge to the\ncurrent session and validates the request Origin before issuing options.",
+        "operationId": "register_options",
+        "parameters": [
+          {
+            "name": "X-Permesi-Zero-Token",
+            "in": "header",
+            "description": "Genesis zero token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Passkey registration options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRegisterOptionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "429": {
+            "description": "Rate limited"
           }
         }
       }
@@ -1987,7 +2424,9 @@
           "created_at",
           "updated_at",
           "roles",
-          "scopes"
+          "scopes",
+          "mfa_enabled",
+          "totp_enabled"
         ],
         "properties": {
           "created_at": {
@@ -2011,6 +2450,9 @@
               "null"
             ]
           },
+          "mfa_enabled": {
+            "type": "boolean"
+          },
           "roles": {
             "type": "array",
             "items": {
@@ -2022,6 +2464,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "totp_enabled": {
+            "type": "boolean"
           },
           "updated_at": {
             "type": "string"
@@ -2061,10 +2506,14 @@
       "MfaTotpEnrollFinishRequest": {
         "type": "object",
         "required": [
-          "code"
+          "code",
+          "credential_id"
         ],
         "properties": {
           "code": {
+            "type": "string"
+          },
+          "credential_id": {
             "type": "string"
           }
         }
@@ -2073,9 +2522,13 @@
         "type": "object",
         "required": [
           "secret",
-          "qr_code_url"
+          "qr_code_url",
+          "credential_id"
         ],
         "properties": {
+          "credential_id": {
+            "type": "string"
+          },
           "qr_code_url": {
             "type": "string"
           },
@@ -2278,6 +2731,139 @@
           }
         }
       },
+      "PasskeyCredentialListResponse": {
+        "type": "object",
+        "required": [
+          "preview_mode",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PasskeyCredentialSummary"
+            }
+          },
+          "preview_mode": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PasskeyCredentialSummary": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PasskeyLoginFinishRequest": {
+        "type": "object",
+        "required": [
+          "auth_id",
+          "response"
+        ],
+        "properties": {
+          "auth_id": {
+            "type": "string"
+          },
+          "response": {}
+        },
+        "additionalProperties": false
+      },
+      "PasskeyLoginStartRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "PasskeyLoginStartResponse": {
+        "type": "object",
+        "required": [
+          "auth_id",
+          "challenge"
+        ],
+        "properties": {
+          "auth_id": {
+            "type": "string"
+          },
+          "challenge": {}
+        }
+      },
+      "PasskeyRegisterFinishRequest": {
+        "type": "object",
+        "required": [
+          "reg_id",
+          "response"
+        ],
+        "properties": {
+          "reg_id": {
+            "type": "string"
+          },
+          "response": {}
+        },
+        "additionalProperties": false
+      },
+      "PasskeyRegisterFinishResponse": {
+        "type": "object",
+        "required": [
+          "stored"
+        ],
+        "properties": {
+          "stored": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PasskeyRegisterOptionsResponse": {
+        "type": "object",
+        "required": [
+          "reg_id",
+          "challenge",
+          "preview_mode"
+        ],
+        "properties": {
+          "challenge": {},
+          "preview_mode": {
+            "type": "boolean"
+          },
+          "reg_id": {
+            "type": "string"
+          }
+        }
+      },
       "PlatformStats": {
         "type": "object",
         "required": [
@@ -2343,6 +2929,31 @@
           }
         }
       },
+      "SecurityKeySummary": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "label",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "SessionKind": {
         "type": "string",
         "description": "Session kinds used to gate MFA bootstrap and challenge flows.",
@@ -2358,7 +2969,9 @@
           "user_id",
           "email",
           "is_operator",
-          "session_kind"
+          "session_kind",
+          "totp_enabled",
+          "webauthn_enabled"
         ],
         "properties": {
           "email": {
@@ -2370,8 +2983,14 @@
           "session_kind": {
             "$ref": "#/components/schemas/SessionKind"
           },
+          "totp_enabled": {
+            "type": "boolean"
+          },
           "user_id": {
             "type": "string"
+          },
+          "webauthn_enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -2493,6 +3112,62 @@
         ],
         "properties": {
           "token": {
+            "type": "string"
+          }
+        }
+      },
+      "WebauthnAuthenticateFinishRequest": {
+        "type": "object",
+        "required": [
+          "auth_id",
+          "response"
+        ],
+        "properties": {
+          "auth_id": {
+            "type": "string"
+          },
+          "response": {}
+        }
+      },
+      "WebauthnAuthenticateStartResponse": {
+        "type": "object",
+        "required": [
+          "auth_id",
+          "challenge"
+        ],
+        "properties": {
+          "auth_id": {
+            "type": "string"
+          },
+          "challenge": {}
+        }
+      },
+      "WebauthnRegisterFinishRequest": {
+        "type": "object",
+        "required": [
+          "reg_id",
+          "label",
+          "response"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "reg_id": {
+            "type": "string"
+          },
+          "response": {}
+        }
+      },
+      "WebauthnRegisterStartResponse": {
+        "type": "object",
+        "required": [
+          "reg_id",
+          "challenge"
+        ],
+        "properties": {
+          "challenge": {},
+          "reg_id": {
             "type": "string"
           }
         }

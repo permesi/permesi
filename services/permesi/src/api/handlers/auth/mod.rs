@@ -30,6 +30,7 @@ mod admin_storage;
 mod admin_token;
 pub(crate) mod mfa;
 pub(crate) mod opaque;
+pub(crate) mod passkeys;
 pub(crate) mod principal;
 mod rate_limit;
 pub(crate) mod session;
@@ -43,9 +44,11 @@ mod zero_token;
 
 pub use admin::{AdminConfig, AdminState};
 pub use rate_limit::NoopRateLimiter;
+pub(crate) use rate_limit::{RateLimitAction, RateLimitDecision};
 pub use state::{AuthConfig, AuthState, OpaqueState};
 #[cfg(test)]
-pub(crate) use utils::{generate_session_token, hash_session_token};
+pub(crate) use utils::generate_session_token;
+pub(crate) use utils::{extract_client_ip, hash_session_token};
 
 #[cfg(test)]
 mod tests;

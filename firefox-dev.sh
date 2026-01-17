@@ -7,9 +7,9 @@ set -euo pipefail
 #   PROFILE_NAME=dev
 #   WM_CLASS=firefox-dev
 #   FIREFOX_BIN=firefox-developer-edition
-#   START_URL=http://localhost:8080
-#   START_URLS=http://localhost:8080,http://localhost:8200,http://localhost:8001/health
-#   HOME_URLS=http://localhost:8080|http://localhost:8200|http://localhost:8001/health
+#   START_URL=https://permesi.localhost
+#   START_URLS=https://permesi.localhost,https://api.permesi.localhost/health,https://genesis.permesi.localhost/health
+#   HOME_URLS=https://permesi.localhost|https://api.permesi.localhost/health|https://genesis.permesi.localhost/health
 #   FORCE_LIGHT_THEME=1 (default: force Light theme)
 #   FIREFOX_THEME_ID=firefox-compact-light@mozilla.org
 #
@@ -25,7 +25,7 @@ WM_CLASS="${WM_CLASS:-firefox-dev}"
 FIREFOX_BIN="${FIREFOX_BIN:-firefox-developer-edition}"
 START_URL="${START_URL:-}"
 START_URLS="${START_URLS:-}"
-HOME_URLS="${HOME_URLS:-http://localhost:8080|http://localhost:8200|http://localhost:8001/health}"
+HOME_URLS="${HOME_URLS:-https://permesi.localhost|https://api.permesi.localhost/health|https://genesis.permesi.localhost/health}"
 FORCE_LIGHT_THEME="${FORCE_LIGHT_THEME:-1}"
 FIREFOX_THEME_ID="${FIREFOX_THEME_ID:-firefox-compact-light@mozilla.org}"
 

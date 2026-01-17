@@ -13,15 +13,24 @@ use crate::{
         opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
         state::use_auth,
         token,
-        types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, SessionKind, UserSession},
+        types::{
+            OpaqueLoginFinishRequest, OpaqueLoginStartRequest, PasskeyLoginFinishRequest,
+            PasskeyLoginStartRequest, PasskeyLoginStartResponse, SessionKind, UserSession,
+        },
+        webauthn,
     },
     routes::paths,
 };
 use base64::Engine;
+use gloo_timers::callback::Timeout;
+use js_sys::{Date, Reflect};
 use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
 use leptos_router::{components::A, hooks::use_navigate};
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
 use rand::rngs::OsRng;
+use std::cell::RefCell;
+use std::rc::Rc;
+use wasm_bindgen::JsValue;
 
 #[derive(Clone)]
 /// Captures login form input for the async action without borrowing signals.
@@ -36,6 +45,24 @@ struct LoginResult {
     session_token: Option<String>,
 }
 
+fn webauthn_supported() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    Reflect::has(window.as_ref(), &JsValue::from_str("PublicKeyCredential"))
+        .ok()
+        .unwrap_or(false)
+}
+
+fn challenge_timeout_ms(challenge: &serde_json::Value) -> Option<f64> {
+    let pk_options = challenge.get("publicKey").unwrap_or(challenge);
+    pk_options.get("timeout").and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.as_u64().map(|ms| ms as f64))
+    })
+}
+
 /// Renders the login form and drives the OPAQUE login flow.
 /// On success it fetches the session cookie and updates auth state.
 #[component]
@@ -45,6 +72,14 @@ pub fn LoginPage() -> impl IntoView {
     let (email, set_email) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
+    let passkey_supported = webauthn_supported();
+    let (passkey_feedback, set_passkey_feedback) = signal::<Option<(AlertKind, String)>>(None);
+    let (passkey_pending, set_passkey_pending) = signal(false);
+    let (passkey_prepare_pending, set_passkey_prepare_pending) = signal(false);
+    let (passkey_options, set_passkey_options) = signal::<Option<PasskeyLoginStartResponse>>(None);
+    let (passkey_prepared_at, set_passkey_prepared_at) = signal::<Option<f64>>(None);
+    let passkey_prepare_timer: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
+    let (show_password_fields, set_show_password_fields) = signal(false);
 
     let login_action = Action::new_local(move |input: &LoginInput| {
         let input = input.clone();
@@ -141,6 +176,67 @@ pub fn LoginPage() -> impl IntoView {
         }
     });
 
+    {
+        let set_passkey_options = set_passkey_options.clone();
+        let set_passkey_prepared_at = set_passkey_prepared_at.clone();
+        Effect::new(move |_| {
+            let _ = email.get();
+            set_passkey_options.set(None);
+            set_passkey_prepared_at.set(None);
+        });
+    }
+
+    {
+        let prepare_timer = passkey_prepare_timer.clone();
+        Effect::new(move |_| {
+            let _ = prepare_timer.borrow_mut().take();
+
+            if !passkey_supported {
+                return;
+            }
+
+            if email.get().trim().is_empty() {
+                return;
+            }
+
+            if passkey_pending.get() || passkey_prepare_pending.get() {
+                return;
+            }
+
+            if let Some(options) = passkey_options.get() {
+                if let (Some(prepared_at), Some(timeout_ms)) = (
+                    passkey_prepared_at.get(),
+                    challenge_timeout_ms(&options.challenge),
+                ) {
+                    let elapsed = Date::now() - prepared_at;
+                    if elapsed.is_finite() && elapsed <= timeout_ms {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+
+            let email = email;
+            let passkey_prepare_pending = passkey_prepare_pending;
+            let set_passkey_prepare_pending = set_passkey_prepare_pending;
+            let set_passkey_feedback = set_passkey_feedback;
+            let set_passkey_options = set_passkey_options;
+            let set_passkey_prepared_at = set_passkey_prepared_at;
+            *prepare_timer.borrow_mut() = Some(Timeout::new(450, move || {
+                start_passkey_prepare(
+                    email,
+                    passkey_prepare_pending,
+                    set_passkey_prepare_pending,
+                    set_passkey_feedback,
+                    set_passkey_options,
+                    set_passkey_prepared_at,
+                    false,
+                );
+            }));
+        });
+    }
+
     let on_submit = move |event: SubmitEvent| {
         event.prevent_default();
         set_error.set(None);
@@ -164,6 +260,8 @@ pub fn LoginPage() -> impl IntoView {
     view! {
         {
             move || {
+                let auth = auth.clone();
+                let navigate = navigate.clone();
                 if auth.is_authenticated.get() {
                     let user_email = Signal::derive(move || {
                         auth.session.get().map(|s| s.email).unwrap_or_default()
@@ -221,68 +319,347 @@ pub fn LoginPage() -> impl IntoView {
                         .into_any()
                 } else {
                     view! {
-                        <form class="max-w-sm mx-auto" on:submit=on_submit>
-                            <div class="mb-5">
-                                <label
-                                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                                    for="email"
-                                >
-                                    "Your email"
-                                </label>
-                                <input
-                                    id="email"
-                                    type="email"
-                                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                                    autocomplete="email"
-                                    placeholder="name@inbox.im"
-                                    required
-                                    on:input=move |event| set_email.set(event_target_value(&event))
-                                />
-                            </div>
-                            <div class="mb-5">
-                                <label
-                                    class="block mb-2 text-sm font-medium text-gray-900 dark:text-white"
-                                    for="password"
-                                >
-                                    "Your password"
-                                </label>
-                                <input
-                                    id="password"
-                                    type="password"
-                                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                                    autocomplete="current-password"
-                                    required
-                                    on:input=move |event| set_password.set(event_target_value(&event))
-                                />
-                            </div>
-                            <Button button_type="submit" disabled=login_action.pending()>
-                                "Submit"
-                            </Button>
-                            {move || {
-                                login_action
-                                    .pending()
-                                    .get()
-                                    .then_some(view! { <div class="mt-4"><Spinner /></div> })
-                            }}
-                            {move || {
-                                error
-                                    .get()
-                                    .map(|err| {
-                                        let message = format_error(&err);
+                        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+                            <form
+                                class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
+                                on:submit=on_submit
+                            >
+                                <div class="space-y-2">
+                                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                        "Sign in"
+                                    </p>
+                                    <h1 class="text-2xl font-semibold text-slate-900">
+                                        "Sign in"
+                                    </h1>
+                                    <p class="text-sm text-slate-500">
+                                        "Use a passkey for a faster, passwordless sign-in."
+                                    </p>
+                                </div>
+
+                                <div class="mt-6 space-y-4">
+                                    <div>
+                                        <label
+                                            class="block mb-2 text-sm font-medium text-slate-700"
+                                            for="email"
+                                        >
+                                            "Email"
+                                        </label>
+                                        <input
+                                            id="email"
+                                            type="email"
+                                            autofocus
+                                            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                                            autocomplete="email"
+                                            inputmode="email"
+                                            placeholder="name@inbox.im"
+                                            required
+                                            on:input=move |event| set_email.set(event_target_value(&event))
+                                        />
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        class="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                                        class:opacity-70=move || passkey_pending.get()
+                                        class:cursor-not-allowed=move || passkey_pending.get()
+                                        disabled=move || passkey_pending.get()
+                                        on:click=move |_| {
+                                            set_passkey_feedback.set(None);
+                                            if !passkey_supported {
+                                                set_passkey_feedback.set(Some((
+                                                    AlertKind::Info,
+                                                    "Passkeys are not supported in this browser.".to_string(),
+                                                )));
+                                                return;
+                                            }
+                                            if passkey_pending.get_untracked() {
+                                                return;
+                                            }
+                                            let prepared = passkey_options.get_untracked();
+                                            if prepared.is_none() {
+                                                start_passkey_prepare(
+                                                    email,
+                                                    passkey_prepare_pending,
+                                                    set_passkey_prepare_pending,
+                                                    set_passkey_feedback,
+                                                    set_passkey_options,
+                                                    set_passkey_prepared_at,
+                                                    true,
+                                                );
+                                                set_passkey_feedback.set(Some((
+                                                    AlertKind::Info,
+                                                    "Preparing passkey login. Click again if no prompt appears.".to_string(),
+                                                )));
+                                                return;
+                                            }
+                                            let options = prepared.expect("checked");
+                                            if let (Some(prepared_at), Some(timeout_ms)) = (
+                                                passkey_prepared_at.get_untracked(),
+                                                challenge_timeout_ms(&options.challenge),
+                                            ) {
+                                                let elapsed = Date::now() - prepared_at;
+                                                if elapsed.is_finite() && elapsed > timeout_ms {
+                                                    set_passkey_options.set(None);
+                                                    set_passkey_prepared_at.set(None);
+                                                    start_passkey_prepare(
+                                                        email,
+                                                        passkey_prepare_pending,
+                                                        set_passkey_prepare_pending,
+                                                        set_passkey_feedback,
+                                                        set_passkey_options,
+                                                        set_passkey_prepared_at,
+                                                        true,
+                                                    );
+                                                    set_passkey_feedback.set(Some((
+                                                        AlertKind::Info,
+                                                        "Passkey request expired. Click again.".to_string(),
+                                                    )));
+                                                    return;
+                                                }
+                                            }
+                                            set_passkey_options.set(None);
+                                            set_passkey_prepared_at.set(None);
+                                            start_passkey_auth(
+                                                auth.clone(),
+                                                navigate.clone(),
+                                                options,
+                                                set_passkey_feedback,
+                                                set_passkey_pending,
+                                            );
+                                        }
+                                    >
+                                        <span class="flex items-center justify-center space-x-2">
+                                            {move || if passkey_pending.get() { view! { <Spinner /> }.into_any() } else { view! { <span>"Use passkey"</span> }.into_any() }}
+                                        </span>
+                                    </button>
+
+                                    {move || {
+                                        passkey_feedback.get().map(|(kind, message)| {
+                                            view! { <Alert kind=kind message=message /> }
+                                        })
+                                    }}
+
+                                    <div class="pt-2">
+                                        <button
+                                            type="button"
+                                            class="text-sm font-medium text-slate-600 underline decoration-slate-300 underline-offset-4 transition hover:text-slate-900 cursor-pointer"
+                                            on:click=move |_| {
+                                                set_show_password_fields.update(|value| *value = !*value);
+                                            }
+                                        >
+                                            {move || {
+                                                if show_password_fields.get() {
+                                                    "Hide password fields"
+                                                } else {
+                                                    "Use password instead"
+                                                }
+                                            }}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {move || {
+                                    if show_password_fields.get() {
                                         view! {
-                                            <div class="mt-4">
-                                                <Alert kind=AlertKind::Error message=message />
+                                            <div class="mt-6 space-y-4 border-t border-slate-100 pt-5">
+                                                <div class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                                    "Continue with password"
+                                                </div>
+                                                <div>
+                                                    <label
+                                                        class="block mb-2 text-sm font-medium text-slate-700"
+                                                        for="password"
+                                                    >
+                                                        "Password"
+                                                    </label>
+                                                    <input
+                                                        id="password"
+                                                        type="password"
+                                                        class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                                                        autocomplete="current-password"
+                                                        required
+                                                        on:input=move |event| set_password.set(event_target_value(&event))
+                                                    />
+                                                </div>
+                                                <Button
+                                                    button_type="submit"
+                                                    disabled=login_action.pending()
+                                                >
+                                                    "Continue with password"
+                                                </Button>
                                             </div>
                                         }
-                                    })
-                            }}
-                        </form>
+                                            .into_any()
+                                    } else {
+                                        view! {
+                                            <p class="mt-4 text-xs text-slate-400">
+                                                "Prefer passkeys. Passwords are available if needed."
+                                            </p>
+                                        }
+                                            .into_any()
+                                    }
+                                }}
+
+                                {move || {
+                                    login_action
+                                        .pending()
+                                        .get()
+                                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                                }}
+                                {move || {
+                                    error
+                                        .get()
+                                        .map(|err| {
+                                            let message = format_error(&err);
+                                            view! {
+                                                <div class="mt-4">
+                                                    <Alert kind=AlertKind::Error message=message />
+                                                </div>
+                                            }
+                                        })
+                                }}
+                            </form>
+                        </div>
                     }
                         .into_any()
                 }
             }
         }
     }
+}
+
+fn start_passkey_prepare(
+    email: ReadSignal<String>,
+    passkey_prepare_pending: ReadSignal<bool>,
+    set_passkey_prepare_pending: WriteSignal<bool>,
+    set_passkey_feedback: WriteSignal<Option<(AlertKind, String)>>,
+    set_passkey_options: WriteSignal<Option<PasskeyLoginStartResponse>>,
+    set_passkey_prepared_at: WriteSignal<Option<f64>>,
+    announce: bool,
+) {
+    if passkey_prepare_pending.get_untracked() {
+        return;
+    }
+
+    let email_value = email.get_untracked().trim().to_string();
+    if email_value.is_empty() {
+        if announce {
+            set_passkey_feedback.set(Some((
+                AlertKind::Info,
+                "Enter your email to use a passkey.".to_string(),
+            )));
+        }
+        return;
+    }
+
+    set_passkey_prepare_pending.set(true);
+    spawn_local(async move {
+        let result: Result<PasskeyLoginStartResponse, AppError> = async {
+            let zero_token = token::fetch_zero_token().await?;
+            client::passkey_login_start(
+                &PasskeyLoginStartRequest { email: email_value },
+                &zero_token,
+            )
+            .await
+        }
+        .await;
+
+        match result {
+            Ok(options) => {
+                set_passkey_prepared_at.set(Some(Date::now()));
+                set_passkey_options.set(Some(options));
+                if announce {
+                    set_passkey_feedback.set(Some((
+                        AlertKind::Info,
+                        "Passkey request ready. Click again to continue.".to_string(),
+                    )));
+                }
+            }
+            Err(err) => {
+                if announce {
+                    set_passkey_feedback.set(Some((AlertKind::Error, err.to_string())));
+                }
+            }
+        }
+        set_passkey_prepare_pending.set(false);
+    });
+}
+
+fn start_passkey_auth<N>(
+    auth: crate::features::auth::state::AuthContext,
+    navigate: N,
+    options: PasskeyLoginStartResponse,
+    set_passkey_feedback: WriteSignal<Option<(AlertKind, String)>>,
+    set_passkey_pending: WriteSignal<bool>,
+) where
+    N: Fn(&str, leptos_router::NavigateOptions) + Clone + 'static,
+{
+    let promise = match webauthn::begin_authenticate_key(&options.challenge) {
+        Ok(promise) => promise,
+        Err(err) => {
+            set_passkey_feedback.set(Some((AlertKind::Error, err.to_string())));
+            return;
+        }
+    };
+    set_passkey_feedback.set(Some((
+        AlertKind::Info,
+        "Waiting for passkey...".to_string(),
+    )));
+    set_passkey_pending.set(true);
+    spawn_local(async move {
+        let result: Result<LoginResult, AppError> = async {
+            let response = webauthn::finish_authenticate_key(promise).await?;
+            let zero_token = token::fetch_zero_token().await?;
+            let session_token = client::passkey_login_finish(
+                &PasskeyLoginFinishRequest {
+                    auth_id: options.auth_id,
+                    response,
+                },
+                &zero_token,
+            )
+            .await?;
+            let session = client::fetch_session(session_token.as_deref())
+                .await?
+                .ok_or_else(|| {
+                    AppError::Config("Login succeeded but no session found.".to_string())
+                })?;
+            Ok(LoginResult {
+                session,
+                session_token,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(login) => {
+                auth.set_session(login.session.clone());
+                if let Some(token) = login.session_token {
+                    auth.set_session_token(token);
+                }
+                match login.session.session_kind {
+                    SessionKind::Full => {
+                        if let Some(storage) = web_sys::window()
+                            .and_then(|w| w.local_storage().ok())
+                            .flatten()
+                        {
+                            let _ = storage.set_item("permesi_logged_in", "true");
+                        }
+                        navigate(paths::DASHBOARD, Default::default());
+                    }
+                    SessionKind::MfaBootstrap => {
+                        navigate(paths::MFA_SETUP, Default::default());
+                    }
+                    SessionKind::MfaChallenge => {
+                        navigate(paths::MFA_CHALLENGE, Default::default());
+                    }
+                }
+            }
+            Err(err) => {
+                set_passkey_feedback.set(Some((AlertKind::Error, err.to_string())));
+            }
+        }
+        set_passkey_pending.set(false);
+    });
 }
 
 /// Maps internal errors to user-facing strings without leaking details.

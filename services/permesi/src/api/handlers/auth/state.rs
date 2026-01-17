@@ -254,7 +254,7 @@ impl AuthState {
         &self.opaque
     }
 
-    pub(super) fn rate_limiter(&self) -> &dyn RateLimiter {
+    pub(crate) fn rate_limiter(&self) -> &dyn RateLimiter {
         self.rate_limiter.as_ref()
     }
 

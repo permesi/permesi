@@ -5,6 +5,8 @@
 dist/
 node_modules/
 apps/web/dist/
+apps/web/dist-dev/
+apps/web/dist-build/
 apps/web/assets/app.gen.css
 apps/web/node_modules/
 .envrc
@@ -29,6 +31,11 @@ docs/mermaid.min.js
 docs/mermaid-init.js
 docs/svg-pan-zoom.min.js
 .bin/
+
+# Local TLS certs (mkcert / HAProxy)
+config/haproxy/certs/
+config/haproxy/*.pem
+config/haproxy/*.key
 
 # Terraform
 .terraform/

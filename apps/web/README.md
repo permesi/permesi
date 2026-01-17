@@ -175,7 +175,7 @@ All values are public, so never store secrets in this file.
 
 ## Admission token configuration
 
-- Token host: `PERMESI_TOKEN_BASE_URL=https://genesis.permesi.dev` (or `PERMESI_TOKEN_HOST` / legacy `PERMESI_API_TOKEN_HOST`).
+- Token host: `PERMESI_TOKEN_BASE_URL=https://genesis.permesi.dev`.
 - Client ID: `PERMESI_CLIENT_ID=<uuid>` (required to mint `/token`).
 - These values are compile-time (`option_env!`). Set them before `trunk build`.
 - `PERMESI_CLIENT_ID` is public (embedded in the WASM). In CI, store it as a GitHub Actions **Variable**, not a Secret.

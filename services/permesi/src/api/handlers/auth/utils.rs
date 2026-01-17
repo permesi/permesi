@@ -78,7 +78,7 @@ pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
 
 /// Extract a client IP for rate limiting from common proxy headers.
 /// Prioritizes Cloudflare's `CF-Connecting-IP` when available.
-pub(super) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
+pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(cf_ip) = headers
         .get("cf-connecting-ip")
         .and_then(|value| value.to_str().ok())

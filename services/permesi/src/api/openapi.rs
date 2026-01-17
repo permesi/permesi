@@ -1,4 +1,4 @@
-use super::handlers::{auth, health, me, orgs, user_login, user_register};
+use super::handlers::{auth, health, me, me_webauthn, orgs, user_login, user_register};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -24,6 +24,8 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(auth::opaque::signup::opaque_signup_finish))
         .routes(routes!(auth::opaque::login::opaque_login_start))
         .routes(routes!(auth::opaque::login::opaque_login_finish))
+        .routes(routes!(auth::passkeys::passkey_login_start))
+        .routes(routes!(auth::passkeys::passkey_login_finish))
         .routes(routes!(auth::opaque::reauth::opaque_reauth_start))
         .routes(routes!(auth::opaque::reauth::opaque_reauth_finish))
         .routes(routes!(auth::opaque::password::opaque_password_start))
@@ -51,6 +53,10 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(me::disable_totp))
         .routes(routes!(me::list_security_keys))
         .routes(routes!(auth::mfa::webauthn::delete_key))
+        .routes(routes!(me_webauthn::register_options))
+        .routes(routes!(me_webauthn::register_finish))
+        .routes(routes!(me_webauthn::list_credentials))
+        .routes(routes!(me_webauthn::delete_credential))
         .routes(routes!(me::regenerate_recovery_codes))
         .routes(routes!(orgs::organizations::create_org))
         .routes(routes!(orgs::organizations::list_orgs))

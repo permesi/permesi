@@ -109,6 +109,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_credentials') THEN
         RAISE EXCEPTION 'Missing permesi table: totp_credentials';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'passkeys') THEN
+        RAISE EXCEPTION 'Missing permesi table: passkeys';
+    END IF;
 END;
 $$;
 

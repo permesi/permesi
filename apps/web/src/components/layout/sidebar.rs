@@ -40,10 +40,9 @@ pub fn Sidebar() -> impl IntoView {
                     </h3>
                     <div class="mt-2 space-y-1">
                         <SidebarLink
-                            target={paths::DASHBOARD}
+                            href={paths::DASHBOARD}
                             icon="dashboard"
                             label="Dashboard"
-                            active=move || pathname() == paths::DASHBOARD
                         />
 
                         // My Profile Parent (Collapsible)
@@ -71,35 +70,36 @@ pub fn Sidebar() -> impl IntoView {
 
                             // Nested Children
                             <div
-                                class="mt-1 space-y-1 overflow-hidden transition-all duration-300 ease-in-out"
+                                class="mt-1 space-y-1 transition-all duration-300 ease-in-out"
                                 class:max-h-0=move || !is_profile_open.get()
                                 class:max-h-40=move || is_profile_open.get()
                                 class:opacity-0=move || !is_profile_open.get()
                                 class:opacity-100=move || is_profile_open.get()
+                                class:overflow-hidden=move || !is_profile_open.get()
+                                class:overflow-visible=move || is_profile_open.get()
                             >
                                 // Overview Child
                                 <A
                                     href=move || paths::ME.to_string()
                                     {..}
-                                    attr:class="group flex items-center pl-10 pr-2 py-2 text-sm font-medium rounded-md transition-colors"
-                                    class:text-blue-600=move || pathname() == paths::ME
-                                    class:bg-blue-50=move || pathname() == paths::ME
-                                    class:dark:bg-blue-900=move || pathname() == paths::ME
-                                    class:dark:text-blue-400=move || pathname() == paths::ME
-                                    class:text-gray-500=move || pathname() != paths::ME
-                                    class:dark:text-gray-400=move || pathname() != paths::ME
-                                    class:hover:bg-gray-50=move || pathname() != paths::ME
-                                    class:dark:hover:bg-gray-800=move || pathname() != paths::ME
-                                    class:hover:text-gray-900=move || pathname() != paths::ME
-                                    class:dark:hover:text-white=move || pathname() != paths::ME
+                                    attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition"
+                                    class:bg-slate-200=move || pathname() == paths::ME
+                                    class:text-slate-900=move || pathname() == paths::ME
+                                    class:font-medium=move || pathname() == paths::ME
+                                    class:text-slate-600=move || pathname() != paths::ME
+                                    class:hover:bg-slate-100=move || pathname() != paths::ME
+                                    class:hover:text-slate-900=move || pathname() != paths::ME
+                                    aria-current=move || {
+                                        if pathname() == paths::ME { Some("page") } else { None }
+                                    }
                                 >
+                                    <Show when=move || pathname() == paths::ME>
+                                        <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
+                                    </Show>
                                     <span
-                                        class="material-symbols-outlined mr-3 text-lg transition-colors"
-                                        class:text-blue-600=move || pathname() == paths::ME
-                                        class:dark:text-blue-400=move || pathname() == paths::ME
-                                        class:text-gray-400=move || pathname() != paths::ME
-                                        class:group-hover:text-gray-900=move || pathname() != paths::ME
-                                        class:dark:group-hover:text-white=move || pathname() != paths::ME
+                                        class=move || format!("{} text-lg", Theme::ICON)
+                                        class:text-slate-700=move || pathname() == paths::ME
+                                        class:text-slate-400=move || pathname() != paths::ME
                                     >
                                         "badge"
                                     </span>
@@ -110,25 +110,28 @@ pub fn Sidebar() -> impl IntoView {
                                 <A
                                     href=move || paths::ME_SECURITY.to_string()
                                     {..}
-                                    attr:class="group flex items-center pl-10 pr-2 py-2 text-sm font-medium rounded-md transition-colors"
-                                    class:text-blue-600=move || pathname() == paths::ME_SECURITY
-                                    class:bg-blue-50=move || pathname() == paths::ME_SECURITY
-                                    class:dark:bg-blue-900=move || pathname() == paths::ME_SECURITY
-                                    class:dark:text-blue-400=move || pathname() == paths::ME_SECURITY
-                                    class:text-gray-500=move || pathname() != paths::ME_SECURITY
-                                    class:dark:text-gray-400=move || pathname() != paths::ME_SECURITY
-                                    class:hover:bg-gray-50=move || pathname() != paths::ME_SECURITY
-                                    class:dark:hover:bg-gray-800=move || pathname() != paths::ME_SECURITY
-                                    class:hover:text-gray-900=move || pathname() != paths::ME_SECURITY
-                                    class:dark:hover:text-white=move || pathname() != paths::ME_SECURITY
+                                    attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition"
+                                    class:bg-slate-200=move || pathname() == paths::ME_SECURITY
+                                    class:text-slate-900=move || pathname() == paths::ME_SECURITY
+                                    class:font-medium=move || pathname() == paths::ME_SECURITY
+                                    class:text-slate-600=move || pathname() != paths::ME_SECURITY
+                                    class:hover:bg-slate-100=move || pathname() != paths::ME_SECURITY
+                                    class:hover:text-slate-900=move || pathname() != paths::ME_SECURITY
+                                    aria-current=move || {
+                                        if pathname() == paths::ME_SECURITY {
+                                            Some("page")
+                                        } else {
+                                            None
+                                        }
+                                    }
                                 >
+                                    <Show when=move || pathname() == paths::ME_SECURITY>
+                                        <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
+                                    </Show>
                                     <span
-                                        class="material-symbols-outlined mr-3 text-lg transition-colors"
-                                        class:text-blue-600=move || pathname() == paths::ME_SECURITY
-                                        class:dark:text-blue-400=move || pathname() == paths::ME_SECURITY
-                                        class:text-gray-400=move || pathname() != paths::ME_SECURITY
-                                        class:group-hover:text-gray-900=move || pathname() != paths::ME_SECURITY
-                                        class:dark:group-hover:text-white=move || pathname() != paths::ME_SECURITY
+                                        class=move || format!("{} text-lg", Theme::ICON)
+                                        class:text-slate-700=move || pathname() == paths::ME_SECURITY
+                                        class:text-slate-400=move || pathname() != paths::ME_SECURITY
                                     >
                                         "encrypted"
                                     </span>
@@ -146,10 +149,9 @@ pub fn Sidebar() -> impl IntoView {
                     </h3>
                     <div class="mt-2 space-y-1">
                         <SidebarLink
-                            target={paths::ORGS}
+                            href={paths::ORGS}
                             icon="corporate_fare"
                             label="Organizations"
-                            active=move || pathname().starts_with(paths::ORGS)
                         />
                     </div>
                 </div>
@@ -162,16 +164,14 @@ pub fn Sidebar() -> impl IntoView {
                         </h3>
                         <div class="mt-2 space-y-1">
                             <SidebarLink
-                                target={paths::ADMIN}
+                                href={paths::ADMIN}
                                 icon="admin_panel_settings"
                                 label="Admin Overview"
-                                active=move || pathname() == paths::ADMIN
                             />
                             <SidebarLink
-                                target={paths::USERS}
+                                href={paths::USERS}
                                 icon="group"
                                 label="Global Users"
-                                active=move || pathname().starts_with(paths::USERS)
                             />
                         </div>
                     </div>
@@ -189,56 +189,30 @@ pub fn Sidebar() -> impl IntoView {
 }
 
 #[component]
-fn SidebarLink<F>(
-    target: &'static str,
-    icon: &'static str,
-    label: &'static str,
-    active: F,
-) -> impl IntoView
-where
-    F: Fn() -> bool + Clone + Send + Sync + 'static,
-{
-    let active_1 = active.clone();
-    let active_2 = active.clone();
-    let active_3 = active.clone();
-    let active_4 = active.clone();
-    let active_5 = active.clone();
-    let active_6 = active.clone();
-    let active_7 = active.clone();
-    let active_8 = active.clone();
-    let active_9 = active.clone();
-    let active_10 = active.clone();
-    let active_11 = active.clone();
-    let active_12 = active.clone();
-    let active_13 = active.clone();
-    let active_14 = active.clone();
+fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> impl IntoView {
+    let location = use_location();
+    let is_active = move || location.pathname.get().starts_with(href);
+    let active_1 = is_active.clone();
+    let active_4 = is_active.clone();
 
     view! {
         <A
-            href=move || target.to_string()
+            href=move || href.to_string()
             {..}
-            attr:class="group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors"
-            class:text-blue-600=move || active_1()
-            class:bg-blue-50=move || active_2()
-            class:dark:bg-blue-900=move || active_3()
-            class:dark:text-blue-400=move || active_4()
-            class:text-gray-600=move || !active_5()
-            class:dark:text-gray-300=move || !active_6()
-            class:hover:bg-gray-50=move || !active_7()
-            class:dark:hover:bg-gray-800=move || !active_8()
-            class:hover:text-gray-900=move || !active_9()
-            class:dark:hover:text-white=move || !active_10()
+            attr:class="group relative flex items-center gap-3 rounded-lg px-3 py-1 text-sm transition"
+            class:bg-slate-200=move || active_1()
+            class:text-slate-900=move || active_4()
+            class:text-slate-700=move || !is_active()
+            class:hover:bg-slate-50=move || !is_active()
+            aria-current=move || if is_active() { Some("page") } else { None }
         >
+            <Show when=move || is_active()>
+                <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
+            </Show>
             <span
-                class="material-symbols-outlined mr-3 text-xl transition-colors"
-                class:text-blue-600=move || active_11()
-                class:dark:text-blue-400=move || active_12()
-                class:text-gray-400=move || !active_13()
-                class:group-hover:text-gray-900=move || !active_14()
-                class:dark:group-hover:text-white=move || {
-                    let active = active.clone();
-                    !active()
-                }
+                class=move || format!("{} text-xl", Theme::ICON)
+                class:text-slate-700=move || is_active()
+                class:text-slate-400=move || !is_active()
             >
                 {icon}
             </span>

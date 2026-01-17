@@ -18,7 +18,7 @@ The DSN can omit username/password because Vault injects DB creds (e.g. `postgre
 Admission PASERK keyset can be provided via a local file/string or fetched from a URL.
 Admission tokens use RFC3339 `iat` / `exp` claims.
 
-Local dev note: when running the workspace frontend (Trunk on `:8080`), use `--port 8001` and point the PASERK URL at `genesis` on `:8000` to avoid collisions.
+Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8001` and point the PASERK URL at `genesis` on `:8000` to avoid collisions.
 
 AppRole CLI example (direct secret_id):
 
@@ -26,7 +26,7 @@ AppRole CLI example (direct secret_id):
 cargo run -p permesi --bin permesi -- \
   --port 8001 \
   --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-paserk-url "http://localhost:8000/paserk.json" \
+  --admission-paserk-url "https://genesis.permesi.localhost/paserk.json" \
   --vault-url "http://vault:8200/v1/auth/approle/login" \
   --vault-role-id "$PERMESI_ROLE_ID" \
   --vault-secret-id "$PERMESI_SECRET_ID"
@@ -38,7 +38,7 @@ AppRole CLI example (wrapped token):
 cargo run -p permesi --bin permesi -- \
   --port 8001 \
   --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-paserk-url "http://localhost:8000/paserk.json" \
+  --admission-paserk-url "https://genesis.permesi.localhost/paserk.json" \
   --vault-url "http://vault:8200/v1/auth/approle/login" \
   --vault-role-id "$PERMESI_ROLE_ID" \
   --vault-wrapped-token "$PERMESI_WRAPPED_TOKEN"
@@ -93,12 +93,18 @@ Endpoints:
 - `POST /v1/auth/opaque/reauth/finish`
 - `POST /v1/auth/opaque/password/start`
 - `POST /v1/auth/opaque/password/finish`
+- `POST /v1/auth/passkey/login/start`
+- `POST /v1/auth/passkey/login/finish`
 - `POST /v1/auth/verify-email`
 - `POST /v1/auth/resend-verification`
 - `GET /v1/me`
 - `PATCH /v1/me`
 - `GET /v1/me/sessions`
 - `DELETE /v1/me/sessions/{sid}`
+- `POST /v1/me/webauthn/register/options`
+- `POST /v1/me/webauthn/register/finish`
+- `GET /v1/me/webauthn/credentials`
+- `DELETE /v1/me/webauthn/credentials/{credential_id}`
 - `POST /v1/orgs`
 - `GET /v1/orgs`
 - `GET /v1/orgs/{org_slug}`
@@ -113,6 +119,15 @@ Endpoints:
 All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated offline
 using the PASERK keyset (same as Admission Tokens). Password changes require a recent re-auth
 (default 10 minutes) and revoke all sessions once the new registration record is stored.
+
+### Passkeys (WebAuthn)
+
+Passkeys are stored in the `passkeys` table and serialized using the `webauthn-rs` `Passkey`
+type to preserve counters and backup state. Passkey login issues the same session kinds as
+password login (full, MFA bootstrap, or MFA challenge) based on the stored MFA state.
+
+Set `PERMESI_PASSKEYS_PREVIEW_MODE=true` to disable persistence and login while still allowing
+registration verification (useful for staged rollouts).
 
 ### Organization endpoints and authorization
 

@@ -454,6 +454,33 @@ CREATE TABLE IF NOT EXISTS security_key_audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_security_key_audit_user_time ON security_key_audit_log (user_id, created_at);
 
+-- -----------------------------------------------------------------------------
+-- Passkeys (WebAuthn)
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS passkeys (
+    credential_id BYTEA PRIMARY KEY, -- WebAuthn Credential ID
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT,
+    passkey_data BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys (user_id);
+
+CREATE TABLE IF NOT EXISTS passkey_audit_log (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id BYTEA REFERENCES passkeys(credential_id) ON DELETE SET NULL,
+    action TEXT NOT NULL, -- register, verify_success, verify_failure, delete
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_audit_user_time ON passkey_audit_log (user_id, created_at);
+
 -- Grant permissions to permesi_runtime
 DO $$
 BEGIN
@@ -463,5 +490,7 @@ BEGIN
         GRANT ALL PRIVILEGES ON TABLE totp_audit_log TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE security_keys TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE security_key_audit_log TO permesi_runtime;
+        GRANT ALL PRIVILEGES ON TABLE passkeys TO permesi_runtime;
+        GRANT ALL PRIVILEGES ON TABLE passkey_audit_log TO permesi_runtime;
     END IF;
 END $$;

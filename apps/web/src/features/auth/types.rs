@@ -163,6 +163,23 @@ pub struct WebauthnAuthenticateFinishRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PasskeyLoginStartRequest {
+    pub email: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PasskeyLoginStartResponse {
+    pub auth_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PasskeyLoginFinishRequest {
+    pub auth_id: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MfaRecoveryRequest {
     pub code: String,
 }

@@ -85,6 +85,9 @@ Container builds (local):
 - Keep functions small; prefer explicit structs over loose maps; use builder-style constructors for configs where appropriate.
 - Group imports from the same crate/namespace (e.g., `use std::{...};`) rather than many single-line imports.
 
+## Frontend UX Conventions
+- Clickable text or icon-only controls must include `cursor-pointer` and a visible hover state so users get a clear affordance.
+
 ## Testing Guidelines
 - Tests live alongside code via `#[cfg(test)]` modules; mirror the public API shape.
 - Name tests `<unit>_<behavior>` (e.g., `admission_token_rejects_expired()`).
