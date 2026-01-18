@@ -204,7 +204,20 @@ Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 
 
 ## Vault Dependency
 
-Vault is required for both services in production (AppRole auth, dynamic DB creds, transit encryption, and the OPAQUE seed in KV v2). Running without Vault is not supported.
+Vault is required for both services in production (AppRole auth or Agent proxy, dynamic DB creds, transit encryption, and the OPAQUE seed in KV v2). Running without Vault is not supported.
+
+### Connectivity Modes
+
+The `vault-url` (and its env equivalents) supports two operational modes:
+
+1.  **TCP Mode (`http://` or `https://`)**:
+    -   Requires `vault-role-id` and `vault-secret-id` (or `vault-wrapped-token`).
+    -   The application performs the AppRole login and manages background token/lease renewals.
+2.  **Agent Mode (`/path/to/socket` or `unix:///path/to/socket`)**:
+    -   Connects to a Vault Agent `api_proxy` via a Unix domain socket.
+    -   No role/secret IDs are required.
+    -   The application delegates authentication and renewals to the Agent.
+    -   **Requirement**: Vault Agent must be configured with `use_auto_auth_token = true`.
 
 Production readiness checklist:
 - HA cluster with tested failover.

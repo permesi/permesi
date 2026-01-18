@@ -124,11 +124,13 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one::<String>("vault-url")
         .cloned()
         .context("missing required argument: --vault-url")?;
-    let vault_role_id = matches
-        .get_one::<String>("vault-role-id")
-        .cloned()
-        .context("missing required argument: --vault-role-id")?;
+    let vault_target =
+        vault_client::VaultTarget::parse(&vault_url).context("invalid PERMESI_VAULT_URL")?;
 
+    // Validate vault auth arguments relative to the URL scheme
+    crate::cli::commands::validate(matches).map_err(|e| anyhow::anyhow!(e))?;
+
+    let vault_role_id = matches.get_one::<String>("vault-role-id").cloned();
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
     let vault_addr = matches.get_one::<String>("vault-addr").cloned();
@@ -137,10 +139,6 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one::<String>("vault-policy")
         .cloned()
         .unwrap_or_else(|| "permesi-operators".to_string());
-
-    if vault_secret_id.is_none() && vault_wrapped_token.is_none() {
-        anyhow::bail!("missing required argument: --vault-secret-id or --vault-wrapped-token");
-    }
 
     let admission = parse_admission_args(matches)?;
     let auth = parse_auth_args(matches)?;
@@ -175,6 +173,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         port,
         dsn,
         vault_url,
+        vault_target,
         vault_role_id,
         vault_secret_id,
         vault_wrapped_token,

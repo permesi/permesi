@@ -49,6 +49,11 @@ thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 chrono = { version = "0.4", features = ["serde"] }
 hyper = "1"
+hyper-util = "0.1"
+hyperlocal = "0.9"
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "tls-rustls",

@@ -29,6 +29,10 @@ async fn renew_db_token(
 /// Returns an error if the initial renewal task setup fails (e.g. request construction).
 #[instrument(skip(globals, tx))]
 pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> Result<()> {
+    if globals.vault_transport.is_agent_proxy() {
+        info!("Vault agent proxy mode enabled; skipping token renewals");
+        return Ok(());
+    }
     // renew the token
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
@@ -147,6 +151,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{renew_db_token, renew_token, try_renew};
     use crate::cli::globals::GlobalArgs;
@@ -259,7 +264,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let target = crate::vault::VaultTarget::parse(&server.uri()).unwrap();
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target).unwrap();
+        let mut globals = GlobalArgs::new(server.uri(), transport);
         globals.set_token(token);
         globals.vault_db_lease_id = DB_LEASE_ID.to_string();
         globals.vault_db_lease_duration = DB_LEASE_DURATION_SECONDS;
@@ -315,7 +322,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let target = crate::vault::VaultTarget::parse(&server.uri()).unwrap();
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target).unwrap();
+        let mut globals = GlobalArgs::new(server.uri(), transport);
         globals.set_token(token);
         globals.vault_db_lease_id = DB_LEASE_ID.to_string();
         globals.vault_db_lease_duration = DB_LEASE_DURATION_SECONDS;
@@ -371,7 +380,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let target = crate::vault::VaultTarget::parse(&server.uri()).unwrap();
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target).unwrap();
+        let mut globals = GlobalArgs::new(server.uri(), transport);
         globals.set_token(token);
         globals.vault_db_lease_id = DB_LEASE_ID.to_string();
         globals.vault_db_lease_duration = DB_LEASE_DURATION_SECONDS;

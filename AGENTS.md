@@ -101,11 +101,11 @@ Container builds (local):
 - Vault bootstrap (policies, AppRole roles, transit keys, database engine) lives in `vault/contrib/terraform` (see `vault/contrib/terraform/README.md`).
 - Terraform state (`.terraform/`, `terraform.tfstate*`, `terraform.tfvars`) is local-only and should remain untracked.
 
-## Vault AppRole CLI Usage
-- `--vault-url` must point to the AppRole login endpoint, e.g. `https://vault.tld:8200/v1/auth/<approle>/login`.
-- `--vault-role-id` is required.
-- Provide either `--vault-secret-id` or `--vault-wrapped-token`; wrapped tokens are unwrapped into a `secret_id` before login.
-- Env equivalents: `GENESIS_VAULT_*` and `PERMESI_VAULT_*` (see `services/genesis/src/cli/commands/mod.rs` and `services/permesi/src/cli/commands/mod.rs`).
+## Vault Connectivity & AppRole Usage
+- `--vault-url` (or `PERMESI_VAULT_URL` / `GENESIS_VAULT_URL`) supports two modes:
+  - **TCP Mode**: Starts with `http://` or `https://`. Requires `--vault-role-id` and either `--vault-secret-id` or `--vault-wrapped-token`. The app performs AppRole login and manages token/lease renewals.
+  - **Agent Mode**: Starts with `/` or `unix://`. Points to a Vault Agent `api_proxy` socket. No role/secret IDs required; the app delegates authentication and renewals to the Agent (which must be configured with `use_auto_auth_token = true`).
+- Wrapped tokens provided via `--vault-wrapped-token` are unwrapped into a `secret_id` before login (TCP mode only).
 
 ## Commit & Pull Request Guidelines
 - Commit messages are short and imperative; scoped prefixes are common (`chore(workspace): ...`, `fix: ...`).

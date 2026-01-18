@@ -1,8 +1,11 @@
 use secrecy::SecretString;
 
+use crate::vault::VaultTransport;
+
 #[derive(Debug, Clone)]
 pub struct GlobalArgs {
     pub vault_url: String,
+    pub vault_transport: VaultTransport,
     pub vault_token: SecretString,
     pub vault_db_lease_id: String,
     pub vault_db_lease_duration: u64,
@@ -12,9 +15,10 @@ pub struct GlobalArgs {
 
 impl GlobalArgs {
     #[must_use]
-    pub fn new(vurl: String) -> Self {
+    pub fn new(vurl: String, vault_transport: VaultTransport) -> Self {
         Self {
             vault_url: vurl,
+            vault_transport,
             vault_token: SecretString::default(),
             vault_db_lease_id: String::new(),
             vault_db_lease_duration: 0,
@@ -29,6 +33,7 @@ impl GlobalArgs {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use secrecy::ExposeSecret;
@@ -36,7 +41,9 @@ mod tests {
     #[test]
     fn test_global_args() {
         let vurl = "https://localhost:8200".to_string();
-        let args = GlobalArgs::new(vurl);
+        let target = crate::vault::VaultTarget::parse(&vurl).unwrap();
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target).unwrap();
+        let args = GlobalArgs::new(vurl, transport);
         assert_eq!(args.vault_url, "https://localhost:8200");
         assert_eq!(args.vault_token.expose_secret(), "");
     }

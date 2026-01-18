@@ -6,11 +6,23 @@ use crate::APP_USER_AGENT;
 use anyhow::Result;
 use tracing::instrument;
 
+pub use vault_client::{VaultMode, VaultTarget, VaultTransport};
+
 #[instrument]
 /// # Errors
 /// Returns an error if `url` cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
     vault_client::endpoint_url(url, path)
+}
+
+/// Resolve the `AppRole` login URL from a base URL or full login URL.
+/// # Errors
+/// Returns an error if the URL cannot be parsed or uses an unsupported scheme.
+pub fn approle_login_url(url: &str) -> Result<String> {
+    if url.contains("/v1/auth/approle/login") {
+        return Ok(url.to_string());
+    }
+    endpoint_url(url, "/v1/auth/approle/login")
 }
 
 /// Unwrap a wrapped Vault client token
@@ -35,7 +47,7 @@ pub async fn approle_login(url: &str, sid: &str, rid: &str) -> Result<(String, u
 
 #[cfg(test)]
 mod tests {
-    use super::{approle_login, endpoint_url, unwrap};
+    use super::{approle_login, approle_login_url, endpoint_url, unwrap};
     use anyhow::{Result, anyhow};
     use serde_json::json;
     use std::net::TcpListener;
@@ -50,6 +62,20 @@ mod tests {
     fn endpoint_url_defaults_https_port() -> Result<()> {
         let url = endpoint_url("https://vault.example", "/v1/test")?;
         assert_eq!(url, "https://vault.example:443/v1/test");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_base_url() -> Result<()> {
+        let url = approle_login_url("https://vault.example")?;
+        assert_eq!(url, "https://vault.example:443/v1/auth/approle/login");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_full_login_url() -> Result<()> {
+        let url = approle_login_url("https://vault.example:8200/v1/auth/approle/login")?;
+        assert_eq!(url, "https://vault.example:8200/v1/auth/approle/login");
         Ok(())
     }
 

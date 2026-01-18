@@ -14,25 +14,24 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one::<String>("vault-url")
         .cloned()
         .context("missing required argument: --vault-url")?;
-    let vault_role_id = matches
-        .get_one::<String>("vault-role-id")
-        .cloned()
-        .context("missing required argument: --vault-role-id")?;
+    let vault_target =
+        crate::vault::VaultTarget::parse(&vault_url).context("invalid GENESIS_VAULT_URL")?;
 
+    // Validate vault auth arguments relative to the URL scheme
+    crate::cli::commands::validate(matches).map_err(|e| anyhow::anyhow!(e))?;
+
+    let vault_role_id = matches.get_one::<String>("vault-role-id").cloned();
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
     let tls_cert_path = read_required_path_arg(matches, "tls-cert-path", "GENESIS_TLS_CERT_PATH")?;
     let tls_key_path = read_required_path_arg(matches, "tls-key-path", "GENESIS_TLS_KEY_PATH")?;
     let tls_ca_path = read_required_path_arg(matches, "tls-ca-path", "GENESIS_TLS_CA_PATH")?;
 
-    if vault_secret_id.is_none() && vault_wrapped_token.is_none() {
-        anyhow::bail!("missing required argument: --vault-secret-id or --vault-wrapped-token");
-    }
-
     Ok(Action::Server(Args {
         port,
         dsn,
         vault_url,
+        vault_target,
         vault_role_id,
         vault_secret_id,
         vault_wrapped_token,

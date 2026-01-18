@@ -288,8 +288,8 @@ WantedBy=default.target
 
 Notes:
 - Keep `/root/permesi.env` and `/root/genesis.env` owned by root with `0600` permissions.
-- Ensure Vault Agent writes `/run/permesi/secrets.env` and `/run/genesis/secrets.env` before the containers start.
-- `GENESIS_VAULT_URL` / `PERMESI_VAULT_URL` should point at the Vault API base URL (not a login endpoint).
+- **Agent Mode**: Set `PERMESI_VAULT_URL` to a socket path (e.g., `/run/vault/proxy.sock`). AppRole credentials (`VAULT_ROLE_ID`, etc.) are not needed. Ensure Vault Agent is configured with `use_auto_auth_token = true` in its `api_proxy` stanza.
+- **TCP Mode**: Ensure Vault Agent writes `/run/permesi/secrets.env` and `/run/genesis/secrets.env` (containing wrapped tokens or SecretIDs) before the containers start.
 
 ### Manual Configuration Recipe (Reference)
 
@@ -400,8 +400,12 @@ vault write auth/cert/certs/genesis-agent \
 Both services are configured via environment variables.
 
 ### Common Vault Variables
-- `VAULT_URL`: The base Vault API URL (for example `https://vault.internal:8200`).
-- `VAULT_WRAPPED_TOKEN`: A short-lived wrapped token provided by Vault Agent (recommended).
+- `VAULT_URL`: The Vault API endpoint. Supports two modes:
+  - **TCP**: `https://vault.internal:8200` (Requires `role-id` and `secret-id`).
+  - **Agent**: `/run/vault/proxy.sock` or `unix:///run/vault/proxy.sock` (Recommended; requires Vault Agent with `api_proxy`).
+- `VAULT_WRAPPED_TOKEN`: A short-lived wrapped token provided by Vault Agent (TCP mode only).
+- `VAULT_ROLE_ID`: AppRole RoleID (TCP mode only).
+- `VAULT_SECRET_ID`: AppRole SecretID (TCP mode only).
 
 ### Service Specifics
 - **Genesis**: Requires `GENESIS_DSN`.

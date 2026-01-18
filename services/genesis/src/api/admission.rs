@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::cli::globals::GlobalArgs;
-use crate::{APP_USER_AGENT, vault};
+use crate::vault;
 
 const PASERK_CACHE_TTL_SECONDS: u64 = 300;
 const TRANSIT_KEY_NAME: &str = "genesis-signing";
@@ -33,9 +33,8 @@ pub struct AdmissionSigner {
     action: String,
     key_name: String,
     transit_mount: String,
-    vault_url: String,
-    vault_token: SecretString,
-    client: reqwest::Client,
+    vault_token: Option<SecretString>,
+    vault_transport: vault::VaultTransport,
     cache: Arc<RwLock<Option<CachedKeySet>>>,
 }
 
@@ -64,7 +63,7 @@ impl AdmissionSigner {
     /// Initialize the admission signer using Vault transit and environment defaults.
     ///
     /// # Errors
-    /// Returns an error if the Vault client cannot be built or PASERK refresh fails.
+    /// Returns an error if PASERK refresh fails.
     pub async fn new(globals: &GlobalArgs) -> Result<Self> {
         let issuer = std::env::var("GENESIS_ADMISSION_ISS")
             .unwrap_or_else(|_| "https://genesis.permesi.dev".to_string());
@@ -74,9 +73,12 @@ impl AdmissionSigner {
         let transit_mount = std::env::var("GENESIS_TRANSIT_MOUNT")
             .unwrap_or_else(|_| TRANSIT_MOUNT_DEFAULT.to_string());
 
-        let client = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .build()?;
+        let vault_transport = globals.vault_transport.clone();
+        let vault_token = if vault_transport.is_tcp() {
+            Some(globals.vault_token.clone())
+        } else {
+            None
+        };
 
         let signer = Self {
             issuer,
@@ -84,9 +86,8 @@ impl AdmissionSigner {
             action: ADMISSION_ACTION.to_string(),
             key_name: TRANSIT_KEY_NAME.to_string(),
             transit_mount,
-            vault_url: globals.vault_url.clone(),
-            vault_token: globals.vault_token.clone(),
-            client,
+            vault_token,
+            vault_transport,
             cache: Arc::new(RwLock::new(None)),
         };
 
@@ -145,9 +146,8 @@ impl AdmissionSigner {
 
         let start = Instant::now();
         let signature = vault::transit::sign_ed25519(
-            &self.client,
-            &self.vault_url,
-            &self.vault_token,
+            &self.vault_transport,
+            self.vault_token.as_ref(),
             &self.transit_mount,
             &self.key_name,
             key_version,
@@ -224,9 +224,8 @@ impl AdmissionSigner {
     /// Refresh PASERK keyset from Vault transit and update the in-memory cache.
     async fn refresh_paserk(&self) -> Result<PaserkSnapshot> {
         let transit = vault::transit::fetch_ed25519_keys(
-            &self.client,
-            &self.vault_url,
-            &self.vault_token,
+            &self.vault_transport,
+            self.vault_token.as_ref(),
             &self.transit_mount,
             &self.key_name,
         )
@@ -307,16 +306,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn test_signer() -> Result<AdmissionSigner> {
-        let client = reqwest::Client::builder().build()?;
+        let target = crate::vault::VaultTarget::parse("http://vault.test")?;
+        let vault_transport = crate::vault::VaultTransport::from_target("test-agent", target)?;
         Ok(AdmissionSigner {
             issuer: "https://issuer.test".to_string(),
             audience: "permesi".to_string(),
             action: ADMISSION_ACTION.to_string(),
             key_name: TRANSIT_KEY_NAME.to_string(),
             transit_mount: TRANSIT_MOUNT_DEFAULT.to_string(),
-            vault_url: "http://vault.test".to_string(),
-            vault_token: SecretString::from("token".to_string()),
-            client,
+            vault_token: Some(SecretString::from("token".to_string())),
+            vault_transport,
             cache: Arc::new(RwLock::new(None)),
         })
     }

@@ -1,19 +1,35 @@
-use crate::{cli::globals::GlobalArgs, vault};
-use anyhow::Result;
+use crate::cli::globals::GlobalArgs;
+use anyhow::{Result, anyhow};
+use secrecy::ExposeSecret;
+use serde_json::Value;
 use tracing::instrument;
+use vault_client::DatabaseCreds;
 
 /// Get DB credentials from Vault
 /// # Errors
 /// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
 #[instrument(skip(globals))]
 pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
-    let creds = vault_client::database_creds(
-        vault::APP_USER_AGENT,
-        &globals.vault_url,
-        &globals.vault_token,
-        "/v1/database/creds/genesis",
-    )
-    .await?;
+    let token = globals
+        .vault_transport
+        .is_tcp()
+        .then(|| globals.vault_token.expose_secret());
+    let response = globals
+        .vault_transport
+        .request_json(http::Method::GET, "/v1/database/creds/genesis", token, None)
+        .await?;
+
+    if !response.status.is_success() {
+        let error_message = vault_error_message(&response.body);
+        return Err(anyhow!(
+            "{} - {}, {}",
+            response.url,
+            response.status,
+            error_message
+        ));
+    }
+
+    let creds = parse_database_creds(&response.body)?;
 
     globals.vault_db_lease_id = creds.lease_id;
     globals.vault_db_lease_duration = creds.lease_duration;
@@ -23,7 +39,44 @@ pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
     Ok(())
 }
 
+fn vault_error_message(json_response: &Value) -> &str {
+    json_response
+        .get("errors")
+        .and_then(|v| v.get(0))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn parse_database_creds(json_response: &Value) -> Result<DatabaseCreds> {
+    let lease_id = json_response
+        .get("lease_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_id found"))?;
+    let lease_duration = json_response
+        .get("lease_duration")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))?;
+    let username = json_response
+        .get("data")
+        .and_then(|v| v.get("username"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no username found"))?;
+    let password = json_response
+        .get("data")
+        .and_then(|v| v.get("password"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no password found"))?;
+
+    Ok(DatabaseCreds {
+        lease_id: lease_id.to_string(),
+        lease_duration,
+        username: username.to_string(),
+        password: secrecy::SecretString::from(password.to_string()),
+    })
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::database_creds;
     use crate::cli::globals::GlobalArgs;
@@ -57,7 +110,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let target = crate::vault::VaultTarget::parse(&server.uri()).unwrap();
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target).unwrap();
+        let mut globals = GlobalArgs::new(server.uri(), transport);
         globals.set_token(SecretString::from("vault-token".to_string()));
 
         database_creds(&mut globals).await?;

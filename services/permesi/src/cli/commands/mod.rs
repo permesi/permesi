@@ -1,30 +1,34 @@
+mod admission;
+mod auth;
+mod logging;
+mod tls;
+mod vault;
+
 use clap::{
     Arg, ColorChoice, Command,
-    builder::{
-        ValueParser,
-        styling::{AnsiColor, Effects, Styles},
-    },
+    builder::styling::{AnsiColor, Effects, Styles},
 };
 
-#[must_use]
-pub fn validator_log_level() -> ValueParser {
-    ValueParser::from(move |level: &str| -> std::result::Result<u8, String> {
-        if let Ok(parsed) = level.parse::<u8>() {
-            // Successfully parsed as a number
-            if parsed <= 5 {
-                return Ok(parsed);
-            }
-        }
+/// Validate that TCP mode requirements are met if the URL implies TCP.
+///
+/// # Errors
+/// Returns an error string if `vault-url` is HTTP(S) but auth arguments are missing.
+pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
+    let Some(url) = matches.get_one::<String>("vault-url") else {
+        return Ok(()); // Should be handled by required=true in clap
+    };
 
-        match level.to_lowercase().as_str() {
-            "error" => Ok(0),
-            "warn" => Ok(1),
-            "info" => Ok(2),
-            "debug" => Ok(3),
-            "trace" => Ok(4),
-            _ => Err("invalid log level".to_string()),
+    if url.starts_with("http://") || url.starts_with("https://") {
+        if !matches.contains_id("vault-role-id") {
+            return Err(
+                "Missing required argument: --vault-role-id (required for TCP mode)".to_string(),
+            );
         }
-    })
+        if !matches.contains_id("vault-secret-id") && !matches.contains_id("vault-wrapped-token") {
+            return Err("Missing required argument: --vault-secret-id or --vault-wrapped-token (required for TCP mode)".to_string());
+        }
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -66,257 +70,11 @@ pub fn new() -> Command {
                 .required(true),
         );
 
-    let command = with_admission_args(command);
-    let command = with_tls_args(command);
-    let command = with_vault_args(command);
-    let command = with_auth_args(command);
-    with_logging_args(command)
-}
-
-fn with_admission_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("admission-paserk-url")
-                .long("admission-paserk-url")
-                .help("PASERK keyset URL used to verify Admission Tokens")
-                .long_help(
-                    "PASERK keyset URL (typically genesis `/paserk.json`) used to verify Admission Tokens.\n\
-The keyset is cached (TTL ~5 minutes) and refreshed on unknown `kid` with a cooldown. Verification\n\
-itself is local and does not call genesis per request.",
-                )
-                .env("PERMESI_ADMISSION_PASERK_URL"),
-        )
-        .arg(
-            Arg::new("admission-issuer")
-                .long("admission-issuer")
-                .help("Expected Admission Token issuer (iss)")
-                .env("PERMESI_ADMISSION_ISS"),
-        )
-        .arg(
-            Arg::new("admission-audience")
-                .long("admission-audience")
-                .help("Expected Admission Token audience (aud)")
-                .env("PERMESI_ADMISSION_AUD"),
-        )
-}
-
-fn with_tls_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("tls-cert-path")
-                .long("tls-cert-path")
-                .help("Path to TLS certificate (PEM)")
-                .env("PERMESI_TLS_CERT_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new("tls-key-path")
-                .long("tls-key-path")
-                .help("Path to TLS private key (PEM)")
-                .env("PERMESI_TLS_KEY_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new("tls-ca-path")
-                .long("tls-ca-path")
-                .help("Path to TLS CA bundle (PEM)")
-                .env("PERMESI_TLS_CA_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new("admission-paserk-ca-path")
-                .long("admission-paserk-ca-path")
-                .help("Path to CA bundle for the PASERK URL (PEM)")
-                .env("PERMESI_ADMISSION_PASERK_CA_PATH"),
-        )
-}
-
-fn with_vault_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("vault-url")
-                .long("vault-url")
-                .help("Vault approle login URL, example: https://vault.tld:8200/v1/auth/<approle>/login")
-                .env("PERMESI_VAULT_URL")
-                .required(true),
-        )
-        .arg(
-            Arg::new("vault-role-id")
-                .long("vault-role-id")
-                .help("Vault role id")
-                .env("PERMESI_VAULT_ROLE_ID")
-                .required(true),
-        )
-        .arg(
-            Arg::new("vault-secret-id")
-                .long("vault-secret-id")
-                .help("Vault secret id")
-                .env("PERMESI_VAULT_SECRET_ID")
-                .required_unless_present("vault-wrapped-token"),
-        )
-        .arg(
-            Arg::new("vault-wrapped-token")
-                .long("vault-wrapped-token")
-                .help("Vault wrapped token")
-                .env("PERMESI_VAULT_WRAPPED_TOKEN"),
-        )
-}
-
-fn with_auth_args(command: Command) -> Command {
-    let command = with_auth_email_args(command);
-    let command = with_auth_outbox_args(command);
-    let command = with_auth_opaque_args(command);
-    with_admin_args(command)
-}
-
-fn with_auth_email_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("frontend-base-url")
-                .long("frontend-base-url")
-                .help("Frontend base URL used for verification links")
-                .env("PERMESI_FRONTEND_BASE_URL")
-                .default_value("https://permesi.dev"),
-        )
-        .arg(
-            Arg::new("email-token-ttl-seconds")
-                .long("email-token-ttl-seconds")
-                .help("Email verification token TTL in seconds")
-                .env("PERMESI_EMAIL_TOKEN_TTL_SECONDS")
-                .default_value("1800")
-                .value_parser(clap::value_parser!(i64)),
-        )
-        .arg(
-            Arg::new("email-resend-cooldown-seconds")
-                .long("email-resend-cooldown-seconds")
-                .help("Cooldown before resending verification emails")
-                .env("PERMESI_EMAIL_RESEND_COOLDOWN_SECONDS")
-                .default_value("60")
-                .value_parser(clap::value_parser!(i64)),
-        )
-        .arg(
-            Arg::new("session-ttl-seconds")
-                .long("session-ttl-seconds")
-                .help("Session cookie TTL in seconds")
-                .env("PERMESI_SESSION_TTL_SECONDS")
-                .default_value("604800")
-                .value_parser(clap::value_parser!(i64)),
-        )
-}
-
-fn with_auth_outbox_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("email-outbox-poll-seconds")
-                .long("email-outbox-poll-seconds")
-                .help("Email outbox poll interval in seconds")
-                .env("PERMESI_EMAIL_OUTBOX_POLL_SECONDS")
-                .default_value("5")
-                .value_parser(clap::value_parser!(u64)),
-        )
-        .arg(
-            Arg::new("email-outbox-batch-size")
-                .long("email-outbox-batch-size")
-                .help("Email outbox batch size per poll")
-                .env("PERMESI_EMAIL_OUTBOX_BATCH_SIZE")
-                .default_value("10")
-                .value_parser(clap::value_parser!(usize)),
-        )
-        .arg(
-            Arg::new("email-outbox-max-attempts")
-                .long("email-outbox-max-attempts")
-                .help("Max attempts before marking an email as failed")
-                .env("PERMESI_EMAIL_OUTBOX_MAX_ATTEMPTS")
-                .default_value("5")
-                .value_parser(clap::value_parser!(u32)),
-        )
-        .arg(
-            Arg::new("email-outbox-backoff-base-seconds")
-                .long("email-outbox-backoff-base-seconds")
-                .help("Base delay for email outbox retry backoff")
-                .env("PERMESI_EMAIL_OUTBOX_BACKOFF_BASE_SECONDS")
-                .default_value("5")
-                .value_parser(clap::value_parser!(u64)),
-        )
-        .arg(
-            Arg::new("email-outbox-backoff-max-seconds")
-                .long("email-outbox-backoff-max-seconds")
-                .help("Max delay for email outbox retry backoff")
-                .env("PERMESI_EMAIL_OUTBOX_BACKOFF_MAX_SECONDS")
-                .default_value("300")
-                .value_parser(clap::value_parser!(u64)),
-        )
-}
-
-fn with_auth_opaque_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("opaque-server-id")
-                .long("opaque-server-id")
-                .help("OPAQUE server identifier")
-                .env("PERMESI_OPAQUE_SERVER_ID")
-                .default_value("api.permesi.dev"),
-        )
-        .arg(
-            Arg::new("opaque-login-ttl-seconds")
-                .long("opaque-login-ttl-seconds")
-                .help("TTL for OPAQUE login state storage")
-                .env("PERMESI_OPAQUE_LOGIN_TTL_SECONDS")
-                .default_value("300")
-                .value_parser(clap::value_parser!(u64)),
-        )
-}
-
-fn with_admin_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("vault-addr")
-                .long("vault-addr")
-                .help("Vault base address for admin step-up lookups")
-                .env("VAULT_ADDR"),
-        )
-        .arg(
-            Arg::new("vault-namespace")
-                .long("vault-namespace")
-                .help("Vault namespace for admin step-up lookups")
-                .env("VAULT_NAMESPACE"),
-        )
-        .arg(
-            Arg::new("vault-policy")
-                .long("vault-policy")
-                .help("Vault policy required for operator elevation")
-                .env("PERMESI_VAULT_POLICY")
-                .default_value("permesi-operators"),
-        )
-        .arg(
-            Arg::new("platform-admin-ttl-seconds")
-                .long("platform-admin-ttl-seconds")
-                .help("Admin elevation token TTL in seconds")
-                .env("PLATFORM_ADMIN_TTL_SECONDS")
-                .default_value("43200")
-                .value_parser(clap::value_parser!(i64)),
-        )
-        .arg(
-            Arg::new("platform-recent-auth-seconds")
-                .long("platform-recent-auth-seconds")
-                .help("Maximum session age for bootstrap in seconds")
-                .env("PLATFORM_RECENT_AUTH_SECONDS")
-                .default_value("3600")
-                .value_parser(clap::value_parser!(i64)),
-        )
-}
-
-fn with_logging_args(command: Command) -> Command {
-    command.arg(
-        Arg::new("verbosity")
-            .short('v')
-            .long("verbose")
-            .help("Verbosity level: ERROR, WARN, INFO, DEBUG, TRACE (default: ERROR)")
-            .env("PERMESI_LOG_LEVEL")
-            .global(true)
-            .action(clap::ArgAction::Count)
-            .value_parser(validator_log_level()),
-    )
+    let command = admission::with_args(command);
+    let command = tls::with_args(command);
+    let command = vault::with_args(command);
+    let command = auth::with_args(command);
+    logging::with_args(command)
 }
 
 #[cfg(test)]

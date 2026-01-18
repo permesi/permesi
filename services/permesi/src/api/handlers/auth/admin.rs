@@ -36,6 +36,7 @@ use super::{
     utils::{extract_client_ip, extract_country_code},
 };
 use crate::vault::step_up::{LookupSelfError, StepUpClient};
+use vault_client::VaultTransport;
 
 const DEFAULT_ADMIN_TTL_SECONDS: i64 = 12 * 60 * 60; // 12 hours
 const DEFAULT_RECENT_AUTH_SECONDS: i64 = 3600; // 1 hour
@@ -124,11 +125,13 @@ pub struct AdminState {
 impl AdminState {
     /// # Errors
     /// Returns an error if the Vault client or token signer cannot be initialized.
-    pub fn new(config: AdminConfig, pool: sqlx::PgPool) -> anyhow::Result<Self> {
-        let vault_client = StepUpClient::new(
-            config.vault_addr(),
-            config.vault_namespace().map(str::to_string),
-        )?;
+    pub fn new(
+        config: AdminConfig,
+        pool: sqlx::PgPool,
+        transport: VaultTransport,
+    ) -> anyhow::Result<Self> {
+        let vault_client =
+            StepUpClient::new(transport, config.vault_namespace().map(str::to_string))?;
         let token_signer = AdminTokenSigner::new()?;
         Ok(Self {
             config,
@@ -590,6 +593,7 @@ fn unix_now() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{AdminConfig, AdminState, validate_vault_token};
     use anyhow::{Context, Result};
@@ -598,6 +602,7 @@ mod tests {
     use std::net::TcpListener;
     use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
     use uuid::Uuid;
+    use vault_client::{VaultTarget, VaultTransport};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -608,6 +613,11 @@ mod tests {
 
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    fn create_transport(url: &str) -> VaultTransport {
+        let target = VaultTarget::parse(url).unwrap();
+        VaultTransport::from_target("test", target).unwrap()
     }
 
     async fn get_test_pool() -> Result<(PgPool, PostgresContainer)> {
@@ -659,7 +669,7 @@ mod tests {
             .await;
 
         let config = AdminConfig::new(server.uri());
-        let state = AdminState::new(config, pool)?;
+        let state = AdminState::new(config, pool, create_transport(&server.uri()))?;
         let response = validate_vault_token(&state, Uuid::new_v4(), "token").await;
         assert!(response.is_err());
         Ok(())
@@ -696,7 +706,7 @@ mod tests {
             .await;
 
         let config = AdminConfig::new(server.uri());
-        let state = AdminState::new(config, pool)?;
+        let state = AdminState::new(config, pool, create_transport(&server.uri()))?;
         let _ = validate_vault_token(&state, Uuid::new_v4(), "token").await;
         let _ = validate_vault_token(&state, Uuid::new_v4(), "token").await;
         Ok(())
@@ -757,7 +767,11 @@ mod tests {
             .await;
 
         let config = AdminConfig::new(server.uri());
-        let state = Arc::new(AdminState::new(config, pool.clone())?);
+        let state = Arc::new(AdminState::new(
+            config,
+            pool.clone(),
+            create_transport(&server.uri()),
+        )?);
 
         // 3. Prepare Request
         let mut headers = axum::http::HeaderMap::new();

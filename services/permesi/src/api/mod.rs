@@ -102,7 +102,7 @@ pub async fn new(
         mfa_config,
     ));
     let admin_state = Arc::new(
-        auth::AdminState::new(admin_config, pool.clone())
+        auth::AdminState::new(admin_config, pool.clone(), globals.vault_transport.clone())
             .context("Failed to initialize admin state")?,
     );
 

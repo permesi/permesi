@@ -60,42 +60,46 @@ CLI args (also available via env vars):
 
 - `GENESIS_PORT` (default: `8080`)
 - `GENESIS_DSN` (required) base DSN; username/password are overwritten with Vault DB creds (e.g. `postgres://postgres@localhost:5432/genesis`)
-- `GENESIS_VAULT_URL` (required) AppRole login URL (example: `https://vault.tld:8200/v1/auth/<approle>/login`)
-- `GENESIS_VAULT_ROLE_ID` (required)
-- `GENESIS_VAULT_SECRET_ID` (required unless `GENESIS_VAULT_WRAPPED_TOKEN` is set)
-- `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id)
+- `GENESIS_VAULT_URL` (required) Vault base URL (`https://vault.tld:8200`) or unix socket path (`/run/vault/proxy.sock` or `unix:///run/vault/proxy.sock`)
+- `GENESIS_VAULT_ROLE_ID` (required for TCP mode)
+- `GENESIS_VAULT_SECRET_ID` (required for TCP mode unless `GENESIS_VAULT_WRAPPED_TOKEN` is set)
+- `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id for TCP mode)
 - `GENESIS_LOG_LEVEL` (optional) numeric or string log level (e.g. `info`) / `-v` flags
 
 Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8000` to avoid collisions.
 
-AppRole CLI example (direct secret_id):
+### Connectivity Modes
+
+**1. TCP Mode (AppRole)**
+
+Use when connecting via HTTP/HTTPS. Requires `role-id` and `secret-id` (or wrapped token).
 
 ```sh
 cargo run -p genesis --bin genesis -- \
   --port 8000 \
   --dsn "postgres://postgres@localhost:5432/genesis" \
-  --vault-url "http://vault:8200/v1/auth/approle/login" \
+  --vault-url "http://vault:8200" \
   --vault-role-id "$GENESIS_ROLE_ID" \
   --vault-secret-id "$GENESIS_SECRET_ID"
 ```
 
-AppRole CLI example (wrapped token):
+**2. Agent Mode (Unix Socket)**
+
+Use when connecting via a Vault Agent `api_proxy` socket. No credentials required.
 
 ```sh
 cargo run -p genesis --bin genesis -- \
   --port 8000 \
   --dsn "postgres://postgres@localhost:5432/genesis" \
-  --vault-url "http://vault:8200/v1/auth/approle/login" \
-  --vault-role-id "$GENESIS_ROLE_ID" \
-  --vault-wrapped-token "$GENESIS_WRAPPED_TOKEN"
+  --vault-url "/run/vault/proxy.sock"
 ```
 
 Startup behavior:
 
-- Logs into Vault (direct secret-id or unwrap wrapped token)
+- Logs into Vault (direct secret-id or unwrap wrapped token) when using TCP mode
 - Fetches DB creds from Vault and injects them into the DSN
 - Starts the HTTP server
-- Spawns background renew loops for the Vault token and the DB lease; repeated renewal failures trigger graceful shutdown
+- Spawns background renew loops for the Vault token and the DB lease (skipped in Agent mode)
 
 ### Admission Token Signing
 

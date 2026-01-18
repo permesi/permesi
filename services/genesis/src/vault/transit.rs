@@ -1,7 +1,6 @@
 use anyhow::{Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -76,45 +75,47 @@ fn transit_path(mount: &str, suffix: &str) -> String {
 }
 
 /// Fetch Ed25519 public keys from Vault transit.
+/// When using the Vault Agent proxy, pass `None` to omit the token header.
 ///
 /// # Errors
 /// Returns an error if the Vault request fails or the response is missing key data.
-#[instrument(skip(client, vault_token))]
+#[instrument(skip(transport, vault_token))]
 pub async fn fetch_ed25519_keys(
-    client: &Client,
-    vault_url: &str,
-    vault_token: &secrecy::SecretString,
+    transport: &vault::VaultTransport,
+    vault_token: Option<&secrecy::SecretString>,
     transit_mount: &str,
     key_name: &str,
 ) -> Result<TransitKeySet> {
-    let keys_url = vault::endpoint_url(
-        vault_url,
-        &transit_path(transit_mount, &format!("keys/{key_name}")),
-    )?;
-
+    let path = transit_path(transit_mount, &format!("keys/{key_name}"));
     let span = info_span!(
         "vault.transit.keys",
         http.method = "GET",
-        url = %keys_url,
+        url = %transport.endpoint_url(&path)?,
         vault.mount = transit_mount,
         vault.key = key_name
     );
-    let response = client
-        .get(&keys_url)
-        .header("X-Vault-Token", vault_token.expose_secret())
-        .send()
+    let response = transport
+        .request_json(
+            http::Method::GET,
+            &path,
+            vault_token.map(ExposeSecret::expose_secret),
+            None,
+        )
         .instrument(span)
         .await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let json_response: Value = response.json().await?;
-        let error_message = vault_error_message(&json_response);
+    if !response.status.is_success() {
+        let error_message = vault_error_message(&response.body);
         error!("Failed to fetch transit keys: {error_message}");
-        return Err(anyhow!("{keys_url} - {status}, {error_message}"));
+        return Err(anyhow!(
+            "{} - {}, {}",
+            response.url,
+            response.status,
+            error_message
+        ));
     }
 
-    let json_response: Value = response.json().await?;
+    let json_response: Value = response.body;
     let data = json_response
         .get("data")
         .ok_or_else(|| anyhow!("missing data in transit response"))?;
@@ -156,23 +157,20 @@ pub async fn fetch_ed25519_keys(
 }
 
 /// Sign a payload using Vault transit Ed25519.
+/// When using the Vault Agent proxy, pass `None` to omit the token header.
 ///
 /// # Errors
 /// Returns an error if the Vault request fails or the signature is missing/invalid.
-#[instrument(skip(client, vault_token, signing_input))]
+#[instrument(skip(transport, vault_token, signing_input))]
 pub async fn sign_ed25519(
-    client: &Client,
-    vault_url: &str,
-    vault_token: &secrecy::SecretString,
+    transport: &vault::VaultTransport,
+    vault_token: Option<&secrecy::SecretString>,
     transit_mount: &str,
     key_name: &str,
     key_version: u32,
     signing_input: &[u8],
 ) -> Result<VaultSignature> {
-    let sign_url = vault::endpoint_url(
-        vault_url,
-        &transit_path(transit_mount, &format!("sign/{key_name}")),
-    )?;
+    let path = transit_path(transit_mount, &format!("sign/{key_name}"));
     let input_b64 = BASE64_STANDARD.encode(signing_input);
 
     let payload = json!({
@@ -183,28 +181,33 @@ pub async fn sign_ed25519(
     let span = info_span!(
         "vault.transit.sign",
         http.method = "POST",
-        url = %sign_url,
+        url = %transport.endpoint_url(&path)?,
         vault.mount = transit_mount,
         vault.key = key_name,
         vault.key_version = key_version
     );
-    let response = client
-        .post(&sign_url)
-        .header("X-Vault-Token", vault_token.expose_secret())
-        .json(&payload)
-        .send()
+    let response = transport
+        .request_json(
+            http::Method::POST,
+            &path,
+            vault_token.map(ExposeSecret::expose_secret),
+            Some(&payload),
+        )
         .instrument(span)
         .await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let json_response: Value = response.json().await?;
-        let error_message = vault_error_message(&json_response);
+    if !response.status.is_success() {
+        let error_message = vault_error_message(&response.body);
         error!("Failed to sign via transit: {error_message}");
-        return Err(anyhow!("{sign_url} - {status}, {error_message}"));
+        return Err(anyhow!(
+            "{} - {}, {}",
+            response.url,
+            response.status,
+            error_message
+        ));
     }
 
-    let json_response: Value = response.json().await?;
+    let json_response: Value = response.body;
     let signature = get_required_str(&json_response, &["data", "signature"]).ok_or_else(|| {
         error!("Missing signature in transit response");
         anyhow!("missing signature in transit response")
@@ -315,9 +318,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
-        let keyset =
-            fetch_ed25519_keys(&client, &server.uri(), &token, "transit", "signing-key").await?;
+        let target = crate::vault::VaultTarget::parse(&server.uri())?;
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target)?;
+        let keyset = fetch_ed25519_keys(&transport, Some(&token), "transit", "signing-key").await?;
         assert_eq!(keyset.latest_version, 2);
         assert_eq!(keyset.keys.get(&1), Some(&"pk1".to_string()));
         assert_eq!(keyset.keys.get(&2), Some(&"pk2".to_string()));
@@ -347,8 +350,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
-        let err = fetch_ed25519_keys(&client, &server.uri(), &token, "transit", "signing-key")
+        let target = crate::vault::VaultTarget::parse(&server.uri())?;
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target)?;
+        let err = fetch_ed25519_keys(&transport, Some(&token), "transit", "signing-key")
             .await
             .err()
             .ok_or_else(|| anyhow!("expected error"))?;
@@ -380,11 +384,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
+        let target = crate::vault::VaultTarget::parse(&server.uri())?;
+        let transport = crate::vault::VaultTransport::from_target("test-agent", target)?;
         let signature = sign_ed25519(
-            &client,
-            &server.uri(),
-            &token,
+            &transport,
+            Some(&token),
             "transit",
             "signing-key",
             3,

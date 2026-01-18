@@ -10,7 +10,8 @@ pub struct Args {
     pub port: u16,
     pub dsn: String,
     pub vault_url: String,
-    pub vault_role_id: String,
+    pub vault_target: vault_client::VaultTarget,
+    pub vault_role_id: Option<String>,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
     pub vault_addr: Option<String>,
@@ -58,7 +59,7 @@ pub async fn execute(args: Args) -> Result<()> {
         .unwrap_or_else(|| "permesi".to_string());
     let vault_addr = match args.vault_addr.clone() {
         Some(addr) => addr,
-        None => vault_base_url(&args.vault_url)?,
+        None => vault_base_url(&args.vault_url).unwrap_or_else(|_| args.vault_url.clone()),
     };
     log_startup_args(&args, &issuer, &audience, &vault_addr);
 
@@ -71,26 +72,35 @@ pub async fn execute(args: Args) -> Result<()> {
         .await?,
     );
 
-    let mut globals = GlobalArgs::new(args.vault_url.clone());
+    let vault_transport = vault_client::VaultTransport::from_target(
+        crate::APP_USER_AGENT,
+        args.vault_target.clone(),
+    )?;
+    let mut globals = GlobalArgs::new(args.vault_url.clone(), vault_transport);
 
-    // If vault wrapped token try to unwrap, otherwise use secret-id.
-    let vault_token: String = if let Some(wrapped) = &args.vault_wrapped_token {
-        let vault_session_id = vault::unwrap(&globals.vault_url, wrapped).await?;
-        let (token, _) =
-            vault::approle_login(&globals.vault_url, &vault_session_id, &args.vault_role_id)
-                .await?;
-        token
-    } else {
-        let secret_id = args
-            .vault_secret_id
+    if args.vault_target.is_tcp() {
+        let vault_role_id = args
+            .vault_role_id
             .as_deref()
-            .ok_or_else(|| anyhow!("Vault secret-id is required"))?;
-        let (token, _) =
-            vault::approle_login(&globals.vault_url, secret_id, &args.vault_role_id).await?;
-        token
-    };
+            .ok_or_else(|| anyhow!("Vault role-id is required for TCP mode"))?;
+        // If vault wrapped token try to unwrap, otherwise use secret-id.
+        let vault_token: String = if let Some(wrapped) = &args.vault_wrapped_token {
+            let vault_session_id = vault::unwrap(&globals.vault_url, wrapped).await?;
+            let (token, _) =
+                vault::approle_login(&globals.vault_url, &vault_session_id, vault_role_id).await?;
+            token
+        } else {
+            let secret_id = args
+                .vault_secret_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("Vault secret-id is required"))?;
+            let (token, _) =
+                vault::approle_login(&globals.vault_url, secret_id, vault_role_id).await?;
+            token
+        };
 
-    globals.set_token(SecretString::from(vault_token));
+        globals.set_token(SecretString::from(vault_token));
+    }
 
     // Get database username and password from Vault
     vault::database::database_creds(&mut globals)
@@ -150,7 +160,19 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
         ("vault_addr", vault_addr.to_string()),
-        ("vault_role_id", args.vault_role_id.clone()),
+        (
+            "vault_mode",
+            match args.vault_target {
+                vault_client::VaultTarget::Tcp { .. } => "tcp".to_string(),
+                vault_client::VaultTarget::AgentProxy { .. } => "agent-proxy".to_string(),
+            },
+        ),
+        (
+            "vault_role_id",
+            args.vault_role_id
+                .clone()
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
         (
             "vault_secret_id_set",
             args.vault_secret_id.is_some().to_string(),
@@ -258,17 +280,17 @@ fn permesi_banner() -> String {
     )
 }
 
-const PERMESI_BANNER: &str = r"
-   *     *
- *   * *   *
-   *  *  *
-    \ | /
-     \|/
-  ----+----  P E R M E S I {VERSION}
-     /|\
-    / | \
-   *  *  *
- *   * *   *
+const PERMESI_BANNER: &str = r"\
+   *     *\
+ *   * *   *\
+   *  *  *\
+    \ | /\
+     \|/\
+  ----+----  P E R M E S I {VERSION}\
+     /|\\
+    / | \\
+   *  *  *\
+ *   * *   *\
    *     *";
 
 fn vault_base_url(url: &str) -> Result<String> {

@@ -1,30 +1,32 @@
+mod logging;
+mod tls;
+mod vault;
+
 use clap::{
     Arg, ColorChoice, Command,
-    builder::{
-        ValueParser,
-        styling::{AnsiColor, Effects, Styles},
-    },
+    builder::styling::{AnsiColor, Effects, Styles},
 };
 
-#[must_use]
-pub fn validator_log_level() -> ValueParser {
-    ValueParser::from(move |level: &str| -> std::result::Result<u8, String> {
-        if let Ok(parsed) = level.parse::<u8>() {
-            // Successfully parsed as a number
-            if parsed <= 5 {
-                return Ok(parsed);
-            }
-        }
+/// Validate that TCP mode requirements are met if the URL implies TCP.
+///
+/// # Errors
+/// Returns an error string if `vault-url` is HTTP(S) but auth arguments are missing.
+pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
+    let Some(url) = matches.get_one::<String>("vault-url") else {
+        return Ok(()); // Should be handled by required=true in clap
+    };
 
-        match level.to_lowercase().as_str() {
-            "error" => Ok(0),
-            "warn" => Ok(1),
-            "info" => Ok(2),
-            "debug" => Ok(3),
-            "trace" => Ok(4),
-            _ => Err("invalid log level".to_string()),
+    if url.starts_with("http://") || url.starts_with("https://") {
+        if !matches.contains_id("vault-role-id") {
+            return Err(
+                "Missing required argument: --vault-role-id (required for TCP mode)".to_string(),
+            );
         }
-    })
+        if !matches.contains_id("vault-secret-id") && !matches.contains_id("vault-wrapped-token") {
+            return Err("Missing required argument: --vault-secret-id or --vault-wrapped-token (required for TCP mode)".to_string());
+        }
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -39,7 +41,7 @@ pub fn new() -> Command {
         format!("{} - {}", env!("CARGO_PKG_VERSION"), crate::GIT_COMMIT_HASH).into_boxed_str(),
     );
 
-    Command::new("genesis")
+    let command = Command::new("genesis")
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .version(env!("CARGO_PKG_VERSION"))
         .long_version(long_version)
@@ -64,65 +66,11 @@ pub fn new() -> Command {
                 )
                 .env("GENESIS_DSN")
                 .required(true),
-        )
-        .arg(
-            Arg::new("vault-url")
-                .long("vault-url")
-                .help("Vault approle login URL, example: https://vault.tld:8200/v1/auth/<approle>/login")
-                .env("GENESIS_VAULT_URL")
-                .required(true),
-        )
-        .arg(
-            Arg::new("vault-role-id")
-                .long("vault-role-id")
-                .help("Vault role id")
-                .env("GENESIS_VAULT_ROLE_ID")
-                .required(true),
-        )
-        .arg(
-            Arg::new("vault-secret-id")
-                .long("vault-secret-id")
-                .help("Vault secret id")
-                .env("GENESIS_VAULT_SECRET_ID")
-                .required_unless_present("vault-wrapped-token")
-        )
-        .arg(
-            Arg::new("vault-wrapped-token")
-                .long("vault-wrapped-token")
-                .help("Vault wrapped token")
-                .env("GENESIS_VAULT_WRAPPED_TOKEN")
-        )
-        .arg(
-            Arg::new("tls-cert-path")
-                .long("tls-cert-path")
-                .help("Path to TLS certificate (PEM)")
-                .env("GENESIS_TLS_CERT_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new("tls-key-path")
-                .long("tls-key-path")
-                .help("Path to TLS private key (PEM)")
-                .env("GENESIS_TLS_KEY_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new("tls-ca-path")
-                .long("tls-ca-path")
-                .help("Path to TLS CA bundle (PEM)")
-                .env("GENESIS_TLS_CA_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new("verbosity")
-                .short('v')
-                .long("verbose")
-                .help("Verbosity level: ERROR, WARN, INFO, DEBUG, TRACE (default: ERROR)")
-                .env("GENESIS_LOG_LEVEL")
-                .global(true)
-                .action(clap::ArgAction::Count)
-                .value_parser(validator_log_level()),
-        )
+        );
+
+    let command = vault::with_args(command);
+    let command = tls::with_args(command);
+    logging::with_args(command)
 }
 
 #[cfg(test)]

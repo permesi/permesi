@@ -29,6 +29,11 @@ async fn renew_db_token(
 /// Returns an error if the initial renewal task setup fails (e.g. request construction).
 #[instrument(skip(globals, tx))]
 pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> Result<()> {
+    if globals.vault_transport.is_agent_proxy() {
+        debug!("Vault Agent Proxy mode detected, skipping application-side token renewal");
+        return Ok(());
+    }
+
     // renew the token
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
@@ -137,6 +142,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{renew_db_token, renew_token, try_renew};
     use crate::cli::globals::GlobalArgs;
@@ -148,6 +154,7 @@ mod tests {
         sync::mpsc,
         time::{Duration, sleep, timeout},
     };
+    use vault_client::{VaultTarget, VaultTransport};
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -156,6 +163,12 @@ mod tests {
 
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    fn create_global_args(url: &str) -> GlobalArgs {
+        let target = VaultTarget::parse(url).unwrap();
+        let transport = VaultTransport::from_target("test", target).unwrap();
+        GlobalArgs::new(url.to_string(), transport)
     }
 
     async fn wait_for_shutdown(rx: &mut mpsc::UnboundedReceiver<()>) -> Result<()> {
@@ -249,7 +262,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let mut globals = create_global_args(&server.uri());
         globals.set_token(token);
         globals.vault_db_lease_id = DB_LEASE_ID.to_string();
         globals.vault_db_lease_duration = DB_LEASE_DURATION_SECONDS;
@@ -305,7 +318,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let mut globals = create_global_args(&server.uri());
         globals.set_token(token);
         globals.vault_db_lease_id = DB_LEASE_ID.to_string();
         globals.vault_db_lease_duration = DB_LEASE_DURATION_SECONDS;
@@ -361,7 +374,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let mut globals = create_global_args(&server.uri());
         globals.set_token(token);
         globals.vault_db_lease_id = DB_LEASE_ID.to_string();
         globals.vault_db_lease_duration = DB_LEASE_DURATION_SECONDS;

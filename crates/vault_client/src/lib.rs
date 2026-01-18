@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 use tracing::{Instrument, debug, info_span};
 use url::Url;
 
+pub mod transport;
+pub use transport::{VaultMode, VaultTarget, VaultTransport};
+
 pub struct DatabaseCreds {
     pub lease_id: String,
     pub lease_duration: u64,

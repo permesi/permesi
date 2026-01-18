@@ -45,6 +45,7 @@ base64 = { workspace = true }
 base64ct = { version = "1.8.1", features = ["alloc"] }
 clap = { workspace = true, features = ["env"] }
 ed25519-dalek = { workspace = true }
+http = { workspace = true }
 once_cell = { workspace = true }
 opaque-ke = { workspace = true }
 opentelemetry = { workspace = true }

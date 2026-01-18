@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use crate::{
     api::handlers::auth::{
         AuthConfig, AuthState, OpaqueState,
@@ -79,7 +80,11 @@ impl TestContext {
             .context("failed to connect test pool")?;
 
         // Initialize DEK Manager
-        let mut globals = GlobalArgs::new(vault.base_url().to_string());
+        let vurl = vault.base_url().to_string();
+        let target = vault_client::VaultTarget::parse(&vurl).expect("test vault URL is valid");
+        let transport = vault_client::VaultTransport::from_target("test", target)
+            .expect("test transport built");
+        let mut globals = GlobalArgs::new(vurl, transport);
         globals.set_token(SecretString::from("root-token".to_string()));
 
         let dek_manager = DekManager::new(globals);

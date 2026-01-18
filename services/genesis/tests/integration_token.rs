@@ -119,6 +119,10 @@ fn spawn_genesis(config: &TestConfig, tls: &TestTlsPaths) -> Result<ChildGuard> 
     if env::var("GENESIS_LOG_LEVEL").is_err() {
         command.env("GENESIS_LOG_LEVEL", "info");
     }
+    // Clear conflicting env vars that might leak from the host
+    command.env_remove("GENESIS_VAULT_SECRET_ID");
+    command.env_remove("GENESIS_VAULT_WRAPPED_TOKEN");
+
     let child = command
         .args([
             "--port",

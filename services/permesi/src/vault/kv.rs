@@ -1,10 +1,10 @@
-use crate::{cli::globals::GlobalArgs, vault};
+use crate::cli::globals::GlobalArgs;
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
-use reqwest::Client;
+use http::Method;
 use secrecy::ExposeSecret;
 use serde_json::Value;
-use tracing::{Instrument, info_span, instrument};
+use tracing::instrument;
 
 const OPAQUE_SEED_FIELD: &str = "opaque_server_seed";
 const MFA_PEPPER_FIELD: &str = "mfa_recovery_pepper";
@@ -25,32 +25,28 @@ pub async fn read_config_secrets(
     kv_mount: &str,
     kv_path: &str,
 ) -> Result<ConfigSecrets> {
-    let client = Client::builder()
-        .user_agent(crate::APP_USER_AGENT)
-        .build()?;
-    let path = format!("/v1/{kv_mount}/data/{kv_path}");
-    let url = vault::endpoint_url(&globals.vault_url, &path)?;
+    let token = globals
+        .vault_transport
+        .is_tcp()
+        .then(|| globals.vault_token.expose_secret());
 
-    let span = info_span!(
-        "vault.kv.read_config",
-        http.method = "GET",
-        url = %url
-    );
-    let response = client
-        .get(&url)
-        .header("X-Vault-Token", globals.vault_token.expose_secret())
-        .send()
-        .instrument(span)
+    let path = format!("/v1/{kv_mount}/data/{kv_path}");
+
+    let response = globals
+        .vault_transport
+        .request_json(Method::GET, &path, token, None)
         .await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+    if !response.status.is_success() {
+        let status = response.status;
+        // Try to get body text if possible, but VaultResponse body is Value.
+        // We can stringify it.
+        let body = response.body.to_string();
         return Err(anyhow!("vault kv read failed: {status} {body}"));
     }
 
-    let json: Value = response.json().await?;
-    let data = json
+    let data = response
+        .body
         .get("data")
         .and_then(|data| data.get("data"))
         .ok_or_else(|| anyhow!("secret data missing from vault response"))?;
@@ -95,6 +91,7 @@ pub async fn read_config_secrets(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::read_config_secrets;
     use crate::cli::globals::GlobalArgs;
@@ -103,11 +100,18 @@ mod tests {
     use secrecy::SecretString;
     use serde_json::json;
     use std::net::TcpListener;
+    use vault_client::{VaultTarget, VaultTransport};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    fn create_global_args(url: &str) -> GlobalArgs {
+        let target = VaultTarget::parse(url).unwrap();
+        let transport = VaultTransport::from_target("test", target).unwrap();
+        GlobalArgs::new(url.to_string(), transport)
     }
 
     #[tokio::test]
@@ -136,7 +140,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut globals = GlobalArgs::new(server.uri());
+        let mut globals = create_global_args(&server.uri());
         globals.set_token(SecretString::from("vault-token".to_string()));
 
         let secrets = read_config_secrets(&globals, "secret/permesi", "config").await?;
@@ -163,7 +167,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let globals = GlobalArgs::new(server.uri());
+        let globals = create_global_args(&server.uri());
         let result = read_config_secrets(&globals, "secret/permesi", "config").await;
         let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
         assert!(err.to_string().contains("mfa recovery pepper missing"));

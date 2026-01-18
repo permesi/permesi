@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
-use reqwest::Client;
+use anyhow::Result;
+use http::{HeaderMap, HeaderValue, Method};
 use serde_json::Value;
-use std::time::Duration;
 use thiserror::Error;
+use vault_client::VaultTransport;
 
 #[derive(Debug, Clone)]
 pub struct VaultTokenInfo {
@@ -20,10 +20,9 @@ pub enum LookupSelfError {
     InvalidResponse,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StepUpClient {
-    client: Client,
-    lookup_url: String,
+    transport: VaultTransport,
     namespace: Option<String>,
 }
 
@@ -31,21 +30,11 @@ impl StepUpClient {
     /// Build a new step-up client for Vault lookups.
     ///
     /// # Errors
-    /// Returns an error if the Vault address is invalid or the HTTP client cannot be built.
-    pub fn new(vault_addr: &str, namespace: Option<String>) -> Result<Self> {
-        let client = Client::builder()
-            .user_agent(crate::APP_USER_AGENT)
-            .connect_timeout(Duration::from_secs(2))
-            .timeout(Duration::from_secs(5))
-            .build()
-            .context("failed to build Vault client")?;
-
-        let lookup_url = vault_client::endpoint_url(vault_addr, "/v1/auth/token/lookup-self")
-            .context("invalid Vault address")?;
-
+    /// This function returns a `Result` for consistency with other builders, though currently
+    /// it always returns `Ok`.
+    pub fn new(transport: VaultTransport, namespace: Option<String>) -> Result<Self> {
         Ok(Self {
-            client,
-            lookup_url,
+            transport,
             namespace,
         })
     }
@@ -55,33 +44,36 @@ impl StepUpClient {
     /// # Errors
     /// Returns `LookupSelfError` if Vault is unavailable, unauthorized, or returns an invalid response.
     pub async fn lookup_self(&self, token: &str) -> Result<VaultTokenInfo, LookupSelfError> {
-        let mut request = self
-            .client
-            .get(&self.lookup_url)
-            .header("X-Vault-Token", token);
-        if let Some(namespace) = &self.namespace {
-            request = request.header("X-Vault-Namespace", namespace);
+        let mut headers = HeaderMap::new();
+        if let Some(ns) = &self.namespace
+            && let Ok(val) = HeaderValue::from_str(ns)
+        {
+            headers.insert("X-Vault-Namespace", val);
         }
 
-        let response = request
-            .send()
+        let response = self
+            .transport
+            .request_json_with_headers(
+                Method::GET,
+                "/v1/auth/token/lookup-self",
+                Some(token),
+                None,
+                Some(headers),
+            )
             .await
             .map_err(|_| LookupSelfError::Unavailable)?;
 
-        if !response.status().is_success() {
-            return if response.status().is_client_error() {
+        if !response.status.is_success() {
+            return if response.status.is_client_error() {
                 Err(LookupSelfError::Unauthorized)
             } else {
                 Err(LookupSelfError::Unavailable)
             };
         }
 
-        let json: Value = response
-            .json()
-            .await
-            .map_err(|_| LookupSelfError::InvalidResponse)?;
-        let policies = parse_policies(&json).ok_or(LookupSelfError::InvalidResponse)?;
-        let ttl = json
+        let policies = parse_policies(&response.body).ok_or(LookupSelfError::InvalidResponse)?;
+        let ttl = response
+            .body
             .get("data")
             .and_then(|data| data.get("ttl"))
             .and_then(Value::as_i64)
@@ -95,22 +87,25 @@ impl StepUpClient {
     /// # Errors
     /// Returns an error if the request fails or the response is invalid.
     pub async fn health(&self) -> Result<crate::api::handlers::auth::types::VaultStatus> {
-        let url = self
-            .lookup_url
-            .replace("/v1/auth/token/lookup-self", "/v1/sys/health");
-        let response = self.client.get(url).send().await?;
-        let status_code = response.status();
-        let json: Value = response.json().await?;
+        let response = self
+            .transport
+            .request_json(Method::GET, "/v1/sys/health", None, None)
+            .await?;
 
-        let version = json
+        let version = response
+            .body
             .get("version")
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
-        let sealed = json.get("sealed").and_then(Value::as_bool).unwrap_or(true);
+        let sealed = response
+            .body
+            .get("sealed")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
 
         Ok(crate::api::handlers::auth::types::VaultStatus {
-            status: if status_code.is_success() {
+            status: if response.status.is_success() {
                 "ok".to_string()
             } else {
                 "unhealthy".to_string()
@@ -141,11 +136,13 @@ fn parse_policies(json: &Value) -> Option<Vec<String>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{LookupSelfError, StepUpClient};
     use anyhow::Result;
     use serde_json::json;
     use std::net::TcpListener;
+    use vault_client::{VaultTarget, VaultTransport};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -172,7 +169,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = StepUpClient::new(&server.uri(), None)?;
+        let target = VaultTarget::parse(&server.uri()).unwrap();
+        let transport = VaultTransport::from_target("test", target).unwrap();
+        let client = StepUpClient::new(transport, None)?;
         let info = client.lookup_self("token").await?;
         assert!(
             info.policies
@@ -197,7 +196,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = StepUpClient::new(&server.uri(), None)?;
+        let target = VaultTarget::parse(&server.uri()).unwrap();
+        let transport = VaultTransport::from_target("test", target).unwrap();
+        let client = StepUpClient::new(transport, None)?;
         let result = client.lookup_self("token").await;
         assert!(matches!(result, Err(LookupSelfError::Unauthorized)));
         Ok(())
