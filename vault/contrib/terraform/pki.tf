@@ -1,6 +1,6 @@
 locals {
-  pki_root_path = "pki_root"
-  pki_int_path  = "pki_int"
+  pki_root_path = "pki-root"
+  pki_int_path  = "pki-int"
 
   permesi_dns_sans = ["api.permesi.localhost"]
   genesis_dns_sans = ["genesis.permesi.localhost"]

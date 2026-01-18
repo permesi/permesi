@@ -1,11 +1,15 @@
-path "pki_int/issue/genesis-runtime" {
+path "pki-int/issue/genesis-runtime" {
   capabilities = ["create", "update"]
 }
 
-path "pki_int/ca" {
+path "pki-int/ca" {
   capabilities = ["read"]
 }
 
-path "pki_int/ca_chain" {
+path "pki-int/ca_chain" {
   capabilities = ["read"]
+}
+
+path "auth/approle/role/genesis/secret-id" {
+  capabilities = ["create", "update"]
 }

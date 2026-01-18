@@ -1,11 +1,15 @@
-path "pki_int/issue/permesi-runtime" {
+path "pki-int/issue/permesi-runtime" {
   capabilities = ["create", "update"]
 }
 
-path "pki_int/ca" {
+path "pki-int/ca" {
   capabilities = ["read"]
 }
 
-path "pki_int/ca_chain" {
+path "pki-int/ca_chain" {
   capabilities = ["read"]
+}
+
+path "auth/approle/role/permesi/secret-id" {
+  capabilities = ["create", "update"]
 }

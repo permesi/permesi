@@ -7,13 +7,13 @@ run "pki_roles_and_cert_auth" {
   command = plan
 
   assert {
-    condition     = vault_mount.pki_root.path == "pki_root"
-    error_message = "Expected pki_root mount at pki_root."
+    condition     = vault_mount.pki_root.path == "pki-root"
+    error_message = "Expected pki_root mount at pki-root."
   }
 
   assert {
-    condition     = vault_mount.pki_int.path == "pki_int"
-    error_message = "Expected pki_int mount at pki_int."
+    condition     = vault_mount.pki_int.path == "pki-int"
+    error_message = "Expected pki_int mount at pki-int."
   }
 
   assert {

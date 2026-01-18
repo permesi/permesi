@@ -85,7 +85,7 @@ fn log_startup_args(args: &Args) {
         ("tls_key_path", args.tls_key_path.clone()),
         ("tls_ca_path", args.tls_ca_path.clone()),
     ];
-    log_entries("Genesis startup configuration", &entries);
+    log_entries("Startup configuration", &entries);
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -102,7 +102,7 @@ fn redact_dsn(dsn: &str) -> String {
 
 fn log_entries(title: &str, entries: &[(&str, String)]) {
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!("{title}:");
+    let mut message = format!("{}\n{title}:", genesis_banner());
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =
@@ -110,3 +110,33 @@ fn log_entries(title: &str, entries: &[(&str, String)]) {
     }
     info!("{message}");
 }
+
+fn genesis_banner() -> String {
+    let short_hash = short_commit(crate::GIT_COMMIT_HASH);
+    GENESIS_BANNER.replace(
+        "{VERSION}",
+        &format!(" - {} - {}", env!("CARGO_PKG_VERSION"), short_hash),
+    )
+}
+
+fn short_commit(hash: &str) -> String {
+    let trimmed = hash.trim();
+    if trimmed.len() > 7 {
+        trimmed[..7].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+const GENESIS_BANNER: &str = r"
+   *     *
+ *   * *   *
+   *  *  *
+    \ | /
+     \|/
+  ----+----  G E N E S I S {VERSION}
+     /|\
+    / | \
+   *  *  *
+ *   * *   *
+   *     *";

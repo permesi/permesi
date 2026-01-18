@@ -22,14 +22,11 @@ use crate::{
     routes::paths,
 };
 use base64::Engine;
-use gloo_timers::callback::Timeout;
 use js_sys::{Date, Reflect};
 use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
 use leptos_router::hooks::use_navigate;
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
 use rand::rngs::OsRng;
-use std::cell::RefCell;
-use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 #[derive(Clone)]
@@ -78,7 +75,6 @@ pub fn LoginPage() -> impl IntoView {
     let (passkey_prepare_pending, set_passkey_prepare_pending) = signal(false);
     let (passkey_options, set_passkey_options) = signal::<Option<PasskeyLoginStartResponse>>(None);
     let (passkey_prepared_at, set_passkey_prepared_at) = signal::<Option<f64>>(None);
-    let passkey_prepare_timer: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
     let (show_password_fields, set_show_password_fields) = signal(false);
 
     let login_action = Action::new_local(move |input: &LoginInput| {
@@ -186,57 +182,6 @@ pub fn LoginPage() -> impl IntoView {
         });
     }
 
-    {
-        let prepare_timer = passkey_prepare_timer.clone();
-        Effect::new(move |_| {
-            let _ = prepare_timer.borrow_mut().take();
-
-            if !passkey_supported {
-                return;
-            }
-
-            if email.get().trim().is_empty() {
-                return;
-            }
-
-            if passkey_pending.get() || passkey_prepare_pending.get() {
-                return;
-            }
-
-            if let Some(options) = passkey_options.get() {
-                if let (Some(prepared_at), Some(timeout_ms)) = (
-                    passkey_prepared_at.get(),
-                    challenge_timeout_ms(&options.challenge),
-                ) {
-                    let elapsed = Date::now() - prepared_at;
-                    if elapsed.is_finite() && elapsed <= timeout_ms {
-                        return;
-                    }
-                } else {
-                    return;
-                }
-            }
-
-            let email = email;
-            let passkey_prepare_pending = passkey_prepare_pending;
-            let set_passkey_prepare_pending = set_passkey_prepare_pending;
-            let set_passkey_feedback = set_passkey_feedback;
-            let set_passkey_options = set_passkey_options;
-            let set_passkey_prepared_at = set_passkey_prepared_at;
-            *prepare_timer.borrow_mut() = Some(Timeout::new(450, move || {
-                start_passkey_prepare(
-                    email,
-                    passkey_prepare_pending,
-                    set_passkey_prepare_pending,
-                    set_passkey_feedback,
-                    set_passkey_options,
-                    set_passkey_prepared_at,
-                    false,
-                );
-            }));
-        });
-    }
-
     let on_submit = move |event: SubmitEvent| {
         event.prevent_default();
         set_error.set(None);
@@ -307,9 +252,15 @@ pub fn LoginPage() -> impl IntoView {
                                     <button
                                         type="button"
                                         class="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-                                        class:opacity-70=move || passkey_pending.get()
-                                        class:cursor-not-allowed=move || passkey_pending.get()
-                                        disabled=move || passkey_pending.get()
+                                        class:opacity-70=move || {
+                                            passkey_pending.get() || passkey_prepare_pending.get()
+                                        }
+                                        class:cursor-not-allowed=move || {
+                                            passkey_pending.get() || passkey_prepare_pending.get()
+                                        }
+                                        disabled=move || {
+                                            passkey_pending.get() || passkey_prepare_pending.get()
+                                        }
                                         on:click=move |_| {
                                             set_passkey_feedback.set(None);
                                             if !passkey_supported {
@@ -319,24 +270,35 @@ pub fn LoginPage() -> impl IntoView {
                                                 )));
                                                 return;
                                             }
-                                            if passkey_pending.get_untracked() {
+                                            if passkey_pending.get_untracked()
+                                                || passkey_prepare_pending.get_untracked()
+                                            {
+                                                return;
+                                            }
+                                            let email_value = email.get_untracked().trim().to_string();
+                                            if email_value.is_empty() {
+                                                set_passkey_feedback.set(Some((
+                                                    AlertKind::Info,
+                                                    "Email is required to use a passkey.".to_string(),
+                                                )));
                                                 return;
                                             }
                                             let prepared = passkey_options.get_untracked();
                                             if prepared.is_none() {
-                                                start_passkey_prepare(
-                                                    email,
-                                                    passkey_prepare_pending,
+                                                set_passkey_feedback.set(Some((
+                                                    AlertKind::Info,
+                                                    "Preparing passkey login...".to_string(),
+                                                )));
+                                                start_passkey_prepare_and_auth(
+                                                    auth.clone(),
+                                                    navigate.clone(),
+                                                    email_value,
                                                     set_passkey_prepare_pending,
                                                     set_passkey_feedback,
                                                     set_passkey_options,
                                                     set_passkey_prepared_at,
-                                                    true,
+                                                    set_passkey_pending,
                                                 );
-                                                set_passkey_feedback.set(Some((
-                                                    AlertKind::Info,
-                                                    "Preparing passkey login. Click again if no prompt appears.".to_string(),
-                                                )));
                                                 return;
                                             }
                                             let options = prepared.expect("checked");
@@ -348,19 +310,20 @@ pub fn LoginPage() -> impl IntoView {
                                                 if elapsed.is_finite() && elapsed > timeout_ms {
                                                     set_passkey_options.set(None);
                                                     set_passkey_prepared_at.set(None);
-                                                    start_passkey_prepare(
-                                                        email,
-                                                        passkey_prepare_pending,
+                                                    set_passkey_feedback.set(Some((
+                                                        AlertKind::Info,
+                                                        "Passkey request expired. Preparing a new one...".to_string(),
+                                                    )));
+                                                    start_passkey_prepare_and_auth(
+                                                        auth.clone(),
+                                                        navigate.clone(),
+                                                        email_value,
                                                         set_passkey_prepare_pending,
                                                         set_passkey_feedback,
                                                         set_passkey_options,
                                                         set_passkey_prepared_at,
-                                                        true,
+                                                        set_passkey_pending,
                                                     );
-                                                    set_passkey_feedback.set(Some((
-                                                        AlertKind::Info,
-                                                        "Passkey request expired. Click again.".to_string(),
-                                                    )));
                                                     return;
                                                 }
                                             }
@@ -475,30 +438,18 @@ pub fn LoginPage() -> impl IntoView {
     }
 }
 
-fn start_passkey_prepare(
-    email: ReadSignal<String>,
-    passkey_prepare_pending: ReadSignal<bool>,
+fn start_passkey_prepare_and_auth<N>(
+    auth: crate::features::auth::state::AuthContext,
+    navigate: N,
+    email_value: String,
     set_passkey_prepare_pending: WriteSignal<bool>,
     set_passkey_feedback: WriteSignal<Option<(AlertKind, String)>>,
     set_passkey_options: WriteSignal<Option<PasskeyLoginStartResponse>>,
     set_passkey_prepared_at: WriteSignal<Option<f64>>,
-    announce: bool,
-) {
-    if passkey_prepare_pending.get_untracked() {
-        return;
-    }
-
-    let email_value = email.get_untracked().trim().to_string();
-    if email_value.is_empty() {
-        if announce {
-            set_passkey_feedback.set(Some((
-                AlertKind::Info,
-                "Enter your email to use a passkey.".to_string(),
-            )));
-        }
-        return;
-    }
-
+    set_passkey_pending: WriteSignal<bool>,
+) where
+    N: Fn(&str, leptos_router::NavigateOptions) + Clone + 'static,
+{
     set_passkey_prepare_pending.set(true);
     spawn_local(async move {
         let result: Result<PasskeyLoginStartResponse, AppError> = async {
@@ -514,18 +465,17 @@ fn start_passkey_prepare(
         match result {
             Ok(options) => {
                 set_passkey_prepared_at.set(Some(Date::now()));
-                set_passkey_options.set(Some(options));
-                if announce {
-                    set_passkey_feedback.set(Some((
-                        AlertKind::Info,
-                        "Passkey request ready. Click again to continue.".to_string(),
-                    )));
-                }
+                set_passkey_options.set(Some(options.clone()));
+                start_passkey_auth(
+                    auth,
+                    navigate,
+                    options,
+                    set_passkey_feedback,
+                    set_passkey_pending,
+                );
             }
             Err(err) => {
-                if announce {
-                    set_passkey_feedback.set(Some((AlertKind::Error, err.to_string())));
-                }
+                set_passkey_feedback.set(Some((AlertKind::Error, err.to_string())));
             }
         }
         set_passkey_prepare_pending.set(false);

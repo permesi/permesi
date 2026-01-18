@@ -53,12 +53,12 @@ variable "pki_root_ttl" {
 
 variable "pki_root_issuing_certificates_url" {
   type    = string
-  default = "https://vault.example.invalid/v1/pki_root/ca"
+  default = "https://vault.example.invalid/v1/pki-root/ca"
 }
 
 variable "pki_root_crl_distribution_points_url" {
   type    = string
-  default = "https://vault.example.invalid/v1/pki_root/crl"
+  default = "https://vault.example.invalid/v1/pki-root/crl"
 }
 
 # PKI: Intermediate CA
@@ -74,10 +74,10 @@ variable "pki_intermediate_ttl" {
 
 variable "pki_int_issuing_certificates_url" {
   type    = string
-  default = "https://vault.example.invalid/v1/pki_int/ca"
+  default = "https://vault.example.invalid/v1/pki-int/ca"
 }
 
 variable "pki_int_crl_distribution_points_url" {
   type    = string
-  default = "https://vault.example.invalid/v1/pki_int/crl"
+  default = "https://vault.example.invalid/v1/pki-int/crl"
 }

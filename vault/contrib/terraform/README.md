@@ -54,10 +54,10 @@ Terraform state is sensitive in this module. It can contain values such as the P
    genesis_database_password = "change-me"
    # Local/dev only; for production use "verify-full" (or at least "verify-ca").
    database_sslmode  = "disable"
-   pki_root_issuing_certificates_url = "https://vault.example.invalid/v1/pki_root/ca"
-   pki_root_crl_distribution_points_url = "https://vault.example.invalid/v1/pki_root/crl"
-   pki_int_issuing_certificates_url = "https://vault.example.invalid/v1/pki_int/ca"
-   pki_int_crl_distribution_points_url = "https://vault.example.invalid/v1/pki_int/crl"
+   pki_root_issuing_certificates_url = "https://vault.example.invalid/v1/pki-root/ca"
+   pki_root_crl_distribution_points_url = "https://vault.example.invalid/v1/pki-root/crl"
+   pki_int_issuing_certificates_url = "https://vault.example.invalid/v1/pki-int/ca"
+   pki_int_crl_distribution_points_url = "https://vault.example.invalid/v1/pki-int/crl"
    ```
 
 3. **Initialize and Apply**:
@@ -111,18 +111,23 @@ vault kv get secret/permesi/opaque
 ### 4. PKI Bootstrap and Vault Agent cert auth
 The PKI hierarchy provides short-lived runtime roles (`permesi-runtime`, `genesis-runtime`) and longer-lived bootstrap roles (`permesi-bootstrap`, `genesis-bootstrap`) intended only for Vault Agent cert-auth onboarding. Bootstrap certificates should be rotated on a slower cadence and never used directly for service TLS. Vault must be configured to accept cert-auth logins and trust the issuing chain used by the bootstrap certificates.
 
+Vault Agent renders templates when the underlying secret changes. For PKI templates, that means the first render issues a certificate, and subsequent renders happen when the agent renews and re-issues the certificate before the TTL expires. Keep the agent running continuously so it can renew its auth token and rotate certificates on schedule.
+If the agent is stopped long enough for the cert-auth token and runtime certificates to expire, it
+cannot re-issue certs until restarted with valid bootstrap certificates.
+
 Example bootstrap issuance (run with an operator token):
 ```bash
-vault write pki_int/issue/permesi-bootstrap \
-  alt_names="api.permesi.localhost" \
-  ttl=168h
+vault write pki-int/issue/permesi-bootstrap \
+  common_name="api.permesi.localhost" \
+  ttl=168h --format=json
 
-vault write pki_int/issue/genesis-bootstrap \
-  alt_names="genesis.permesi.localhost" \
-  ttl=168h
+
+vault write pki-int/issue/genesis-bootstrap \
+  common_name="genesis.permesi.localhost" \
+  ttl=168h --format=json
 ```
 
-Minimal Vault Agent configs (one per service) to authenticate via cert auth and render runtime TLS certificates. Update paths and Vault address to match your host layout:
+Minimal Vault Agent configs (one per service) to authenticate via cert auth and render runtime TLS certificates. Update paths and Vault address to match your host layout. Run the agent as a long-lived service (for example, `vault agent -config=/etc/vault.d/vault.hcl`) so it can renew tokens and rotate certificates before TTLs expire.
 
 `permesi`:
 ```hcl
@@ -152,19 +157,33 @@ auto_auth {
 
 template {
   destination = "/run/permesi/tls.crt"
-  contents = "{{ with secret \"pki_int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" }}{{ .Data.certificate }}{{ end }}"
+  contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"common_name=api.permesi.localhost\" \"alt_names=api.permesi.localhost\" \"ttl=24h\" }}{{ .Data.certificate }}{{ end }}"
 }
 
 template {
   destination = "/run/permesi/tls.key"
   perms = "0600"
-  contents = "{{ with secret \"pki_int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" }}{{ .Data.private_key }}{{ end }}"
+  contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"common_name=api.permesi.localhost\" \"alt_names=api.permesi.localhost\" \"ttl=24h\" }}{{ .Data.private_key }}{{ end }}"
 }
 
 template {
   destination = "/run/permesi/ca.pem"
-  contents = "{{ with secret \"pki_int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" }}{{ .Data.ca_chain | join \"\\n\" }}{{ end }}"
+  contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" \"common_name=api.permesi.localhost\" }}{{ range .Data.ca_chain }}{{ . }}\n{{ end }}{{ end }}"
 }
+
+template {
+  destination = "/run/permesi/secrets.env"
+  perms = "0600"
+  contents = <<EOH
+PERMESI_VAULT_WRAPPED_TOKEN={{ with secret "auth/approle/role/permesi/secret-id" "wrap_ttl=5m" }}{{ .WrapInfo.Token }}{{ end }}
+EOH
+}
+
+To render `secrets.env`, the cert-auth role must be allowed to mint wrapped AppRole SecretIDs.
+That means adding a policy path for `auth/approle/role/permesi/secret-id` (create/update) alongside
+the existing `permesi-pki-issue-only` rules, or attaching a separate minimal policy just for the
+SecretID endpoint. Keep the cert-auth policy tightly scoped and prefer the wrapped token flow so
+the long-lived SecretID is never written to disk.
 ```
 
 `genesis`:
@@ -195,19 +214,71 @@ auto_auth {
 
 template {
   destination = "/run/genesis/tls.crt"
-  contents = "{{ with secret \"pki_int/issue/genesis-runtime\" \"ttl=24h\" \"alt_names=genesis.permesi.localhost\" }}{{ .Data.certificate }}{{ end }}"
+  contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ .Data.certificate }}{{ end }}"
 }
 
 template {
   destination = "/run/genesis/tls.key"
   perms = "0600"
-  contents = "{{ with secret \"pki_int/issue/genesis-runtime\" \"ttl=24h\" \"alt_names=genesis.permesi.localhost\" }}{{ .Data.private_key }}{{ end }}"
+  contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ .Data.private_key }}{{ end }}"
 }
 
 template {
   destination = "/run/genesis/ca.pem"
-  contents = "{{ with secret \"pki_int/issue/genesis-runtime\" \"ttl=24h\" \"alt_names=genesis.permesi.localhost\" }}{{ .Data.ca_chain | join \"\\n\" }}{{ end }}"
+  contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ range .Data.ca_chain }}{{ . }}\n{{ end }}{{ end }}"
 }
+
+template {
+  destination = "/run/genesis/secrets.env"
+  perms = "0600"
+  contents = <<EOH
+GENESIS_VAULT_WRAPPED_TOKEN={{ with secret "auth/approle/role/genesis/secret-id" "wrap_ttl=5m" }}{{ .WrapInfo.Token }}{{ end }}
+EOH
+}
+
+Rendering `secrets.env` for Genesis requires the cert-auth role to access
+`auth/approle/role/genesis/secret-id` (create/update). Attach a minimal policy to the cert-auth role
+if you enable this template.
+```
+
+Example systemd units (one per service; adjust paths and domains as needed):
+
+```ini
+[Unit]
+Description=Vault Agent (Permesi)
+After=network.target
+Wants=network.target
+
+[Service]
+User=vault
+Group=vault
+ExecStart=/usr/bin/vault agent -config=/etc/vault.d/permesi.hcl
+Restart=always
+RestartSec=2s
+RuntimeDirectory=permesi
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+[Unit]
+Description=Vault Agent (Genesis)
+After=network.target
+Wants=network.target
+
+[Service]
+User=vault
+Group=vault
+ExecStart=/usr/bin/vault agent -config=/etc/vault.d/genesis.hcl
+Restart=always
+RestartSec=2s
+RuntimeDirectory=genesis
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ## Tests

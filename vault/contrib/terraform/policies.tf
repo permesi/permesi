@@ -13,16 +13,6 @@ resource "vault_policy" "operators" {
   policy = file("${path.module}/policies/operator-policy.hcl")
 }
 
-resource "vault_policy" "vault_proxy" {
-  name   = "vault-proxy"
-  policy = file("${path.module}/policies/vault-proxy-policy.hcl")
-}
-
-resource "vault_policy" "vault_proxy_rotate" {
-  name   = "vault-proxy-rotate"
-  policy = file("${path.module}/policies/vault-proxy-rotate-policy.hcl")
-}
-
 resource "vault_policy" "permesi_pki_issue_only" {
   name   = "permesi-pki-issue-only"
   policy = file("${path.module}/policies/permesi-pki-issue-only.hcl")

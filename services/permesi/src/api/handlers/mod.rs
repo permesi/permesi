@@ -168,6 +168,7 @@ impl AdmissionVerifier {
                 }
                 Err(err) => {
                     warn!(
+                        url = %url,
                         error = %err,
                         "admission PASERK fetch failed during startup; continuing with empty keyset"
                     );

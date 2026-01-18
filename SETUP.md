@@ -143,7 +143,7 @@ the Vault root and runtime roles. It is destructive and cannot be undone.
 
 ## 4. Vault Configuration (Terraform)
 
-Vault is central to the security of the stack. We provide a **Terraform** configuration in `vault/contrib/terraform` that automates the setup of secret engines, transit keys, policies, AppRoles, and the Vault-managed PKI hierarchy for future service certificates.
+Vault is central to the security of the stack. We provide a **Terraform** configuration in `vault/contrib/terraform` that automates the setup of secret engines, transit keys, policies, cert-auth roles, and the Vault-managed PKI hierarchy for future service certificates.
 
 Using Terraform is the recommended way to ensure your configuration is consistent, reproducible, and easy to maintain.
 
@@ -165,40 +165,51 @@ terraform init
 terraform test
 ```
 
-### AppRole login sanity check (CLI)
+### Cert auth sanity check (CLI)
 
-To verify your AppRole credentials and the login endpoint, run:
+To verify cert-auth roles and TLS client material, run:
 
 ```sh
 export VAULT_ADDR="https://vault.example.com:8200"
-vault write -format=json auth/approle/login \
-  role_id="$PERMESI_ROLE_ID" \
-  secret_id="$PERMESI_SECRET_ID"
+export VAULT_CACERT="/etc/permesi/bootstrap/ca_cert.pem"
+export VAULT_CLIENT_CERT="/etc/permesi/bootstrap/cert_file.pem"
+export VAULT_CLIENT_KEY="/etc/permesi/bootstrap/key_file.pem"
+
+vault login -method=cert -path=auth/cert name=permesi-agent
 ```
 
-If you use wrapped SecretIDs, unwrap first:
+Repeat with the Genesis bootstrap certificate and the `genesis-agent` role.
+
+### Vault Agent sidecar (cert auth)
+
+Use Vault Agent as a sidecar to authenticate via cert auth and render templates. This removes the
+need for a local proxy and lets you generate TLS material (and optional runtime env files) from a
+single config. The minimal agent configs in `vault/contrib/terraform/README.md` already include
+cert-auth and TLS templates, plus an example `secrets.env` template that writes wrapped tokens to
+`/run/permesi/secrets.env` and `/run/genesis/secrets.env`.
+
+Keep the agent running continuously so it can renew the cert-auth token and re-issue TLS
+certificates before the 24h TTL expires. If the agent stops long enough for the runtime certs or
+auth token to expire, the services will lose TLS material and can get stuck until the agent is
+restarted with valid bootstrap certificates. The `secrets.env` templates also require a policy that permits wrapped SecretID
+generation (`auth/approle/role/<service>/secret-id`), which is not included in the default
+issue-only policy; add a minimal policy if you enable those templates.
+
+Run the agent as a long-lived service so it can renew tokens and rotate certificates:
 
 ```sh
-vault unwrap -format=json "$PERMESI_WRAPPED_TOKEN"
+vault agent -config=/etc/vault.d/vault.hcl
 ```
-
-### Vault Proxy (AppRole SecretID minting)
-
-For automated SecretID minting on service restart, use a local-only **vault proxy**. The proxy
-uses its own AppRole credentials to authenticate, then forwards requests and injects its token.
-See **Vault proxy (AppRole) refresher** below for a copy/paste config that uses a Unix socket.
 
 ### Quadlet example (systemd)
 
-Below is a tuned Quadlet setup that mints fresh SecretIDs via `ExecStartPre` and writes a
-runtime-only environment file per service. This keeps static config in `/root/permesi.env`
-and `/root/genesis.env`, while short-lived SecretIDs live in service-specific tmpfs paths.
+Below is a tuned Quadlet setup that assumes Vault Agent writes TLS material under `/run/permesi`
+and `/run/genesis` and, if desired, a short-lived env file with a wrapped token.
 
 `/root/permesi.env` (static, long-lived values; required values shown first):
 ```
 PERMESI_DSN=postgres://postgres@localhost:5432/permesi
-PERMESI_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
-PERMESI_VAULT_ROLE_ID=<permesi_role_id>
+PERMESI_VAULT_URL=https://vault.example.com:8200
 PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json
 PERMESI_ADMISSION_ISS=https://genesis.permesi.localhost
 PERMESI_ADMISSION_AUD=permesi
@@ -211,8 +222,7 @@ intended recipient of the token.
 `/root/genesis.env` (static, long-lived values; required values shown first):
 ```
 GENESIS_DSN=postgres://postgres@localhost:5432/genesis
-GENESIS_VAULT_URL=http://127.0.0.1:8200/v1/auth/approle/login
-GENESIS_VAULT_ROLE_ID=<genesis_role_id>
+GENESIS_VAULT_URL=https://vault.example.com:8200
 ```
 
 Both services require Vault-issued TLS material and must trust a single Vault PKI CA shared by the services. Defaults are:
@@ -230,50 +240,6 @@ over HTTPS.
 Genesis serves public zero-token endpoints used by the frontend, and it is expected to sit
 behind Cloudflare or HAProxy for scale and edge protection.
 
-`/root/permesi-pre-start.sh` (writes the SecretID to tmpfs, permesi only):
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-umask 077
-install -d -m 0700 /run/permesi
-
-vault_proxy_socket="/run/vault/proxy.sock"
-permesi_secret_id="$(
-  curl --unix-socket "${vault_proxy_socket}" -fsS -X POST \
-    http://localhost/v1/auth/approle/role/permesi/secret-id \
-    | jq -er '.data.secret_id'
-)"
-
-cat > /run/permesi/secrets.env <<EOF
-PERMESI_VAULT_SECRET_ID=${permesi_secret_id}
-EOF
-
-chmod 0600 /run/permesi/secrets.env
-```
-
-`/root/genesis-pre-start.sh` (writes the SecretID to tmpfs, genesis only):
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-umask 077
-install -d -m 0700 /run/genesis
-
-vault_proxy_socket="/run/vault/proxy.sock"
-genesis_secret_id="$(
-  curl --unix-socket "${vault_proxy_socket}" -fsS -X POST \
-    http://localhost/v1/auth/approle/role/genesis/secret-id \
-    | jq -er '.data.secret_id'
-)"
-
-cat > /run/genesis/secrets.env <<EOF
-GENESIS_VAULT_SECRET_ID=${genesis_secret_id}
-EOF
-
-chmod 0600 /run/genesis/secrets.env
-```
-
 Quadlet unit (`permesi.container`):
 ```
 [Unit]
@@ -281,7 +247,7 @@ Description=permesi
 After=network.target
 Wants=network.target
 Requires=vault.service
-Requires=vault-proxy.service
+Requires=vault-agent-permesi.service
 
 [Container]
 Image=ghcr.io/permesi/permesi:latest
@@ -292,7 +258,6 @@ EnvironmentFile=/run/permesi/secrets.env
 
 [Service]
 Restart=always
-ExecStartPre=/root/permesi-pre-start.sh
 
 [Install]
 WantedBy=default.target
@@ -305,7 +270,7 @@ Description=genesis
 After=network.target
 Wants=network.target
 Requires=vault.service
-Requires=vault-proxy.service
+Requires=vault-agent-genesis.service
 
 [Container]
 Image=ghcr.io/permesi/genesis:latest
@@ -316,221 +281,15 @@ EnvironmentFile=/run/genesis/secrets.env
 
 [Service]
 Restart=always
-ExecStartPre=/root/genesis-pre-start.sh
 
 [Install]
 WantedBy=default.target
 ```
 
 Notes:
-- Bind the Vault proxy to a Unix socket (recommended) or `127.0.0.1`, and keep its policy limited to
-  `auth/approle/role/*/secret-id`.
-- Keep `/root/permesi.env`, `/root/genesis.env`, and the pre-start scripts owned by root and
-  `0600`/`0700` permissions.
-- `GENESIS_VAULT_URL` / `PERMESI_VAULT_URL` must point to the **main Vault login endpoint**
-  (`/v1/auth/approle/login`). The proxy is only used by the pre-start scripts to mint
-  SecretIDs; services still authenticate directly with Vault.
-- Genesis is a public edge service and can sit behind Cloudflare or HAProxy for scale and edge protection.
-
-#### Vault proxy (AppRole) refresher
-
-The proxy is a Vault **proxy** process using AppRole to authenticate. It needs its own **vault-proxy
-RoleID** and **vault-proxy SecretID** (separate from the service AppRoles). Terraform creates the
-policy and AppRole; you fetch the RoleID and generate a SecretID. If you are not using Terraform,
-create the `vault-proxy` policy and AppRole manually before continuing.
-
-Each service still has its own AppRole **RoleID** (set in `/root/permesi.env` and `/root/genesis.env`).
-The proxy only mints **SecretIDs** for those service roles at runtime. Do not reuse the proxy
-RoleID/SecretID for the services.
-
-Quick setup outline (Terraform users):
-
-1. Fetch the `vault-proxy` RoleID:
-
-   ```sh
-   cd vault/contrib/terraform
-   terraform output -raw vault_proxy_role_id > /etc/vault/proxy-role-id
-   chown vault:vault /etc/vault/proxy-role-id
-   chmod 0400 /etc/vault/proxy-role-id
-   ```
-
-2. Generate the `vault-proxy` SecretID:
-
-   ```sh
-   vault write -field=secret_id -f auth/approle/role/vault-proxy/secret-id > /etc/vault/proxy-secret-id
-   chown vault:vault /etc/vault/proxy-secret-id
-   chmod 0400 /etc/vault/proxy-secret-id
-   ```
-
-3. Configure the proxy to read those files and auto-renew its token:
-
-   ```hcl
-   # /etc/vault/proxy.hcl
-   vault { address = "https://vault.example.com:8200" }
-
-   auto_auth {
-     method "approle" {
-       mount_path = "auth/approle"
-       config = {
-         role_id_file_path   = "/etc/vault/proxy-role-id"
-         secret_id_file_path = "/etc/vault/proxy-secret-id"
-         remove_secret_id_file_after_reading = false
-       }
-     }
-   }
-
-   listener "unix" {
-     address = "/run/vault/proxy.sock"
-     mode = "0600"
-   }
-
-   cache { use_auto_auth_token = true }
-   api_proxy { use_auto_auth_token = true }
-   ```
-
-   Example systemd unit:
-
-   ```ini
-   [Unit]
-   Description=Vault Proxy (Permesi)
-   After=network.target
-   Wants=network.target
-
-   [Service]
-   User=vault
-   Group=vault
-   ExecStart=/usr/bin/vault proxy -config=/etc/vault/proxy.hcl
-   RuntimeDirectory=vault
-   RuntimeDirectoryMode=0750
-   Restart=always
-   RestartSec=2s
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-The proxy renews its token automatically; you only replace the SecretID when it expires based on
-your AppRole settings.
-The proxy policy is intentionally minimal, so `auth/token/lookup-self` will return `permission denied`;
-use SecretID minting as the health check instead.
-
-Note: `vault-proxy` should use a **multi-use SecretID** (for example `secret_id_num_uses=100`).
-If it is set to single-use, the proxy will succeed once and then get 403s on restart.
-
-#### Vault proxy rotation (recommended)
-
-To avoid lockouts on proxy restarts, rotate the **vault-proxy SecretID** on a schedule. Terraform
-creates a dedicated `vault-proxy-rotate` policy that only allows minting SecretIDs for the
-`vault-proxy` AppRole. Create a periodic token with that policy and store it on disk.
-
-Create the rotation token (example):
-
-```sh
-vault policy read vault-proxy-rotate
-vault token create -policy=vault-proxy-rotate -period=24h -orphan -field=token \
-  > /etc/vault/proxy-rotate.token
-chmod 0400 /etc/vault/proxy-rotate.token
-```
-
-Keep `/etc/vault/proxy-rotate.token` root-owned and readable only by root.
-If the rotation script fails with `No such file or directory`, create this token first.
-
-Rotation script (`/usr/local/sbin/vault-proxy-rotate.sh`):
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# --- Configuration ---
-VAULT_ADDR="https://vault.example.com:8200"
-TOKEN_PATH="/etc/vault/proxy-rotate.token"
-SECRET_ID_PATH="/etc/vault/proxy-secret-id"
-ROLE_NAME="vault-proxy"
-
-# 1. Check if the rotation token exists
-if [[ ! -f "$TOKEN_PATH" ]]; then
-    echo "ERROR: Missing ${TOKEN_PATH}." >&2
-    echo "Create it with: vault token create -policy=vault-proxy-rotate -period=24h" >&2
-    exit 1
-fi
-
-VAULT_TOKEN="$(cat "$TOKEN_PATH" | tr -d '\n\r ')"
-export VAULT_ADDR
-export VAULT_TOKEN
-
-# 2. Renew the rotation token for another 12-hour window
-# We use 18h to ensure it doesn't expire exactly when the next timer starts
-echo "Renewing rotation token..."
-curl -fsS -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    -X POST -d '{"increment": "64800"}' "${VAULT_ADDR}/v1/auth/token/renew-self" > /dev/null
-
-# 3. Generate the new SecretID (Valid for 24h per server config)
-echo "Generating new SecretID..."
-umask 077
-NEW_SECRET_ID=$(curl -fsS -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    -X POST "${VAULT_ADDR}/v1/auth/approle/role/${ROLE_NAME}/secret-id" |
-    jq -er '.data.secret_id')
-
-# 4. Atomic write to the SecretID file
-install -o vault -g vault -m 0400 /dev/null "${SECRET_ID_PATH}.new"
-printf '%s' "$NEW_SECRET_ID" >"${SECRET_ID_PATH}.new"
-mv "${SECRET_ID_PATH}.new" "$SECRET_ID_PATH"
-
-# 5. Signal Vault Proxy to re-authenticate
-if systemctl is-active --quiet vault; then
-    echo "Signaling Vault Agent to reload credentials (SIGHUP)..."
-    systemctl kill -s SIGHUP vault
-else
-    echo "Vault service is not running. Starting it..."
-    systemctl start vault
-fi
-
-echo "Rotation successful."
-```
-
-Systemd unit (`/etc/systemd/system/vault-proxy-rotate.service`):
-
-```ini
-[Unit]
-Description=Rotate Vault proxy SecretID (Permesi)
-After=network.target
-Wants=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/vault-proxy-rotate.sh
-```
-
-Systemd timer (`/etc/systemd/system/vault-proxy-rotate.timer`):
-
-```ini
-[Unit]
-Description=Rotate Vault proxy SecretID (weekly)
-
-[Timer]
-OnCalendar=weekly
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Enable the timer:
-
-```sh
-systemctl daemon-reload
-systemctl enable --now vault-proxy-rotate.timer
-```
-
-Sanity check (the proxy user must read the AppRole files):
-
-```sh
-sudo -u vault head -c 8 /etc/vault/proxy-role-id && echo
-sudo -u vault wc -c /etc/vault/proxy-secret-id
-```
-
-If your infrastructure supports auth methods like **TLS cert**, **Kubernetes**, or cloud
-auth (AWS/GCP/Azure), prefer those for the proxy and avoid SecretIDs entirely.
+- Keep `/root/permesi.env` and `/root/genesis.env` owned by root with `0600` permissions.
+- Ensure Vault Agent writes `/run/permesi/secrets.env` and `/run/genesis/secrets.env` before the containers start.
+- `GENESIS_VAULT_URL` / `PERMESI_VAULT_URL` should point at the Vault API base URL (not a login endpoint).
 
 ### Manual Configuration Recipe (Reference)
 
@@ -538,8 +297,8 @@ If you cannot use Terraform, this section provides the manual steps to configure
 
 ### A. Enable Secret Engines and Auth Methods
 ```bash
-# Enable AppRole for service authentication
-vault auth enable approle
+# Enable cert auth for Vault Agent and bootstrap workflows
+vault auth enable cert
 
 # Enable Transit for user data and token signing
 vault secrets enable -path=transit/permesi transit
@@ -610,21 +369,28 @@ path "auth/token/lookup-self" { capabilities = ["read"] }
 EOF
 ```
 
-### E. AppRole Setup
-Each service needs an AppRole to authenticate and receive its policy-restricted token.
+### E. Cert Auth Setup
+Create cert-auth roles for the Vault Agent bootstrap certificates so the agent can authenticate
+and render templates (TLS material, wrapped tokens, or other secrets as needed). The roles should
+use `permesi-pki-issue-only` and `genesis-pki-issue-only` policies with `allowed_dns_sans` that
+match the bootstrap certificates. Mirror the configuration in `vault/contrib/terraform/auth_cert.tf`.
+
+At minimum, enable cert auth and add two roles bound to the intermediate CA chain and DNS SANs:
 
 ```bash
-# Create the roles
-vault write auth/approle/role/permesi token_policies=permesi token_ttl=1h token_max_ttl=4h
-vault write auth/approle/role/genesis token_policies=genesis token_ttl=1h token_max_ttl=4h
+vault auth enable cert
 
-# Retrieve RoleIDs (Keep these for service config)
-vault read -field=role_id auth/approle/role/permesi/role-id
-vault read -field=role_id auth/approle/role/genesis/role-id
+vault write auth/cert/certs/permesi-agent \
+  display_name="permesi-agent" \
+  policies="permesi-pki-issue-only" \
+  certificate=@/path/to/pki-int.pem \
+  allowed_dns_sans="api.permesi.localhost"
 
-# Generate SecretIDs (Keep these for service config)
-vault write -f -field=secret_id auth/approle/role/permesi/secret-id
-vault write -f -field=secret_id auth/approle/role/genesis/secret-id
+vault write auth/cert/certs/genesis-agent \
+  display_name="genesis-agent" \
+  policies="genesis-pki-issue-only" \
+  certificate=@/path/to/pki-int.pem \
+  allowed_dns_sans="genesis.permesi.localhost"
 ```
 
 ---
@@ -634,9 +400,8 @@ vault write -f -field=secret_id auth/approle/role/genesis/secret-id
 Both services are configured via environment variables.
 
 ### Common Vault Variables
-- `VAULT_URL`: The full URL to the Vault AppRole login endpoint (e.g., `https://vault.internal/v1/auth/approle/login`).
-- `VAULT_ROLE_ID`: The RoleID for the specific service.
-- `VAULT_SECRET_ID`: The SecretID for the specific service.
+- `VAULT_URL`: The base Vault API URL (for example `https://vault.internal:8200`).
+- `VAULT_WRAPPED_TOKEN`: A short-lived wrapped token provided by Vault Agent (recommended).
 
 ### Service Specifics
 - **Genesis**: Requires `GENESIS_DSN`.

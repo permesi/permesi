@@ -215,7 +215,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             args.platform_recent_auth_seconds.to_string(),
         ),
     ];
-    log_entries("Permesi startup configuration", &entries);
+    log_entries("Startup configuration", &entries);
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -232,7 +232,7 @@ fn redact_dsn(dsn: &str) -> String {
 
 fn log_entries(title: &str, entries: &[(&str, String)]) {
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!("{title}:");
+    let mut message = format!("{}\n{title}:", permesi_banner());
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =
@@ -240,6 +240,36 @@ fn log_entries(title: &str, entries: &[(&str, String)]) {
     }
     info!("{message}");
 }
+
+fn short_commit(hash: &str) -> String {
+    let trimmed = hash.trim();
+    if trimmed.len() > 7 {
+        trimmed[..7].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn permesi_banner() -> String {
+    let short_hash = short_commit(crate::GIT_COMMIT_HASH);
+    PERMESI_BANNER.replace(
+        "{VERSION}",
+        &format!(" - {} - {}", env!("CARGO_PKG_VERSION"), short_hash),
+    )
+}
+
+const PERMESI_BANNER: &str = r"
+   *     *
+ *   * *   *
+   *  *  *
+    \ | /
+     \|/
+  ----+----  P E R M E S I {VERSION}
+     /|\
+    / | \
+   *  *  *
+ *   * *   *
+   *     *";
 
 fn vault_base_url(url: &str) -> Result<String> {
     let parsed = Url::parse(url).context("Invalid Vault URL")?;

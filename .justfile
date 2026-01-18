@@ -1374,7 +1374,7 @@ dev-tls-certs:
 
     cert_json="$(
       podman exec -e VAULT_ADDR="$vault_addr" -e VAULT_TOKEN="$root_token" \
-        vault vault write -format=json "pki_int/issue/${service}-runtime" \
+        vault vault write -format=json "pki-int/issue/${service}-runtime" \
         "common_name=${common_name}" \
         "alt_names=${alt_names}" \
         "ttl=24h"
