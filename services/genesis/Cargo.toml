@@ -84,7 +84,7 @@ url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
-service_utils = { version = "0.3.8", path = "../../crates/service_utils" }
+service_utils = { workspace = true }
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }

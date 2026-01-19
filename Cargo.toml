@@ -21,6 +21,7 @@ authors = ["Team Permesi <team@permesi.dev>"]
 admission_token = { path = "crates/admission_token" }
 vault_client = { path = "crates/vault_client" }
 test_support = { path = "crates/test_support" }
+service_utils = { path = "crates/service_utils" }
 argon2 = "0.5"
 anyhow = "1"
 axum = { version = "0.8", features = ["tracing"] }
