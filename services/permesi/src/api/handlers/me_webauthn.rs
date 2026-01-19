@@ -1,13 +1,8 @@
-//! Passkey (`WebAuthn`) endpoints for authenticated users.
+//! Passkey (`WebAuthn`) handlers for authenticated user self-service.
 //!
-//! These endpoints support passkey registration and optional credential listing/deletion.
-//! They are additive to MFA security keys and are gated by session + zero-token checks.
-//!
-//! Flow Overview:
-//! 1) Validate session and zero token, then generate registration options.
-//! 2) Bind the challenge to the user + session token hash with a short TTL.
-//! 3) Verify attestation on finish and (if supported) persist the credential.
-//! 4) Return preview-mode warnings when persistence is disabled.
+//! This module provides endpoints for users to register, list, and delete
+//! passkeys. It integrates with the OPAQUE authentication system and
+//! requires a fresh zero token for sensitive registration actions.
 
 use axum::{
     Json,

@@ -1,10 +1,7 @@
-//! Authenticated self-service endpoints.
+//! Self-service handlers for the authenticated user.
 //!
-//! Flow Overview:
-//! 1) Authenticate via bearer token or session cookie.
-//! 2) Resolve the current user from the database.
-//! 3) Apply allow-listed updates and session management.
-//! 4) Regenerate MFA recovery codes only after recent authentication.
+//! This module provides endpoints for users to manage their own profile,
+//! view active sessions, and configure multi-factor authentication (MFA).
 
 use axum::{
     Json,

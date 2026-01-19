@@ -1,16 +1,20 @@
-//! Auth module tests.
+//! Unit and integration tests for the auth module.
 
-use super::AuthConfig;
-use super::state::OpaqueSuite;
-use super::storage::{
-    ResendOutcome, SignupOutcome, consume_verification_token, enqueue_resend_verification,
-    insert_user_and_verification, insert_verification_records,
+use super::{
+    AuthConfig, AuthState, OpaqueState,
+    mfa::MfaConfig,
+    rate_limit::NoopRateLimiter,
+    state::OpaqueSuite,
+    storage::{
+        ResendOutcome, SignupOutcome, consume_verification_token, enqueue_resend_verification,
+        insert_user_and_verification, insert_verification_records,
+    },
+    utils::{
+        build_verify_url, decode_base64_field, generate_session_token, generate_verification_token,
+        hash_session_token, hash_verification_token, normalize_email, valid_email,
+    },
+    zero_token::{ZeroTokenError, zero_token_error_response},
 };
-use super::utils::{
-    build_verify_url, decode_base64_field, generate_session_token, generate_verification_token,
-    hash_session_token, hash_verification_token, normalize_email, valid_email,
-};
-use super::zero_token::{ZeroTokenError, zero_token_error_response};
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Extension, Router,
@@ -21,10 +25,14 @@ use axum::{
     },
     routing::{delete, get},
 };
-use base64::Engine;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use opaque_ke::{ClientRegistration, ClientRegistrationFinishParameters, Identifiers};
-use opaque_ke::{ServerRegistration, ServerSetup};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
+use opaque_ke::{
+    ClientRegistration, ClientRegistrationFinishParameters, Identifiers, ServerRegistration,
+    ServerSetup,
+};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde_json::json;
@@ -369,21 +377,21 @@ async fn resend_verification_respects_cooldown() -> Result<()> {
     Ok(())
 }
 
-fn auth_state() -> super::AuthState {
+fn auth_state() -> Arc<AuthState> {
     let config = AuthConfig::new("https://permesi.dev".to_string())
         .with_email_token_ttl_seconds(60)
         .with_resend_cooldown_seconds(300);
-    let opaque_state = super::OpaqueState::from_seed(
+    let opaque_state = OpaqueState::from_seed(
         [0u8; 32],
         "api.permesi.dev".to_string(),
         Duration::from_secs(300),
     );
-    super::AuthState::new(
+    Arc::new(AuthState::new(
         config,
         opaque_state,
-        std::sync::Arc::new(super::NoopRateLimiter),
-        super::mfa::MfaConfig::new(),
-    )
+        Arc::new(NoopRateLimiter),
+        MfaConfig::new(),
+    ))
 }
 
 async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
@@ -418,7 +426,7 @@ async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
     Ok(token)
 }
 
-fn app_router(auth_state: super::AuthState, pool: PgPool) -> Router {
+fn app_router(auth_state: Arc<AuthState>, pool: PgPool) -> Router {
     Router::new()
         .route(
             "/v1/me",
@@ -432,7 +440,7 @@ fn app_router(auth_state: super::AuthState, pool: PgPool) -> Router {
             "/v1/me/sessions/:sid",
             delete(crate::api::handlers::me::revoke_session),
         )
-        .layer(Extension(std::sync::Arc::new(auth_state)))
+        .layer(Extension(auth_state))
         .layer(Extension(pool))
 }
 

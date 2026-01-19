@@ -1,3 +1,15 @@
+//! Integration tests for the Genesis admission token service.
+//!
+//! This suite verifies the end-to-end flow of the Genesis service by:
+//! 1. Orchestrating transient infrastructure (Postgres and Vault containers).
+//! 2. Provisioning Vault with the required Transit keys and `AppRole` configurations.
+//! 3. Generating dynamic TLS certificates for the service.
+//! 4. Spawning the actual `genesis` binary as a supervised child process.
+//! 5. Executing real HTTPS requests against the running service.
+//!
+//! The primary goal is to ensure that the binary correctly integrates its
+//! dependencies (DB, Vault, TLS) and adheres to the admission token contract.
+
 use admission_token::{PaserkKeySet, VerificationOptions, verify_v4_public};
 use anyhow::{Context, Result, bail, ensure};
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};

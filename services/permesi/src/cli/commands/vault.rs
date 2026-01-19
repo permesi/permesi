@@ -28,6 +28,20 @@ pub fn with_args(command: Command) -> Command {
                 .help("Vault wrapped token (TCP mode only)")
                 .env("PERMESI_VAULT_WRAPPED_TOKEN"),
         )
+        .arg(
+            Arg::new("vault-kv-mount")
+                .long("vault-kv-mount")
+                .help("Vault KV-v2 mount path for configuration secrets")
+                .env("PERMESI_VAULT_KV_MOUNT")
+                .default_value("secret/permesi"),
+        )
+        .arg(
+            Arg::new("vault-kv-path")
+                .long("vault-kv-path")
+                .help("Vault KV-v2 secret path for configuration secrets")
+                .env("PERMESI_VAULT_KV_PATH")
+                .default_value("config"),
+        )
         .group(
             ArgGroup::new("vault-auth")
                 .args(["vault-role-id", "vault-secret-id", "vault-wrapped-token"])

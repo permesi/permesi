@@ -1,3 +1,9 @@
+//! Health check handlers for service monitoring.
+//!
+//! This module provides endpoints to verify the status of the service's
+//! primary dependencies, including the database and the remote admission
+//! PASERK endpoint.
+
 use super::{AdmissionVerifier, DependencyStatus};
 use crate::GIT_COMMIT_HASH;
 use axum::{
@@ -30,7 +36,7 @@ pub struct Health {
     ),
     tag= "health"
 )]
-// axum handler for health
+/// Perform a health check of the service and its dependencies.
 pub async fn health(
     method: Method,
     pool: Extension<PgPool>,

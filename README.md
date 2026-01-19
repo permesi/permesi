@@ -4,6 +4,7 @@
 
 [![Test & Build](https://github.com/permesi/permesi/actions/workflows/build.yml/badge.svg)](https://github.com/permesi/permesi/actions/workflows/build.yml)
 [![codecov](https://codecov.io/gh/permesi/permesi/graph/badge.svg?token=ODC4S2YHPF)](https://codecov.io/gh/permesi/permesi)
+[![API Docs](https://img.shields.io/badge/API-Docs-blue)](https://permesi.github.io/permesi/)
 
 <img src="permesi.svg" height="400">
 

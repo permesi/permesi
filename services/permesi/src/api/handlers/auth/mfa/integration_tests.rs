@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used)]
+
 use crate::{
     api::handlers::auth::{
         AuthConfig, AuthState, OpaqueState,
@@ -167,7 +168,7 @@ fn auth_state() -> AuthState {
 
 async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
     let user_id = Uuid::new_v4();
-    let query = r" 
+    let query = r"
         INSERT INTO users (id, email, opaque_registration_record, status)
         VALUES ($1, $2, $3, 'active')
     ";
@@ -184,7 +185,7 @@ async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
 async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
     let token = generate_session_token()?;
     let hash = hash_session_token(&token);
-    let query = r" 
+    let query = r"
         INSERT INTO user_sessions (user_id, session_hash, expires_at)
         VALUES ($1, $2, NOW() + INTERVAL '1 hour')
     ";

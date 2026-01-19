@@ -1,8 +1,8 @@
-//! Shared SQL helpers for org/project/environment/application handlers.
+//! Shared SQL storage helpers for organization and project entities.
 //!
-//! Handler modules use these helpers to keep HTTP code focused on request/response
-//! flow. This module assumes authentication has already happened and relies on
-//! resolved IDs (org/project/env) to avoid leaking cross-tenant data.
+//! This module provides functions for CRUD operations on organizations,
+//! projects, environments, and applications, ensuring proper scoping
+//! and constraint handling.
 
 use axum::{http::StatusCode, response::IntoResponse};
 use sqlx::{PgPool, Row};

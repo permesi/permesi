@@ -1,7 +1,10 @@
 //! Small helpers for auth validation and email verification token handling.
+//!
+//! This module provides utility functions for normalizing emails, validating
+//! formats, generating secure tokens, and hashing them for storage.
 
 use anyhow::{Context, Result};
-use base64::Engine;
+use base64::{Engine, engine::general_purpose};
 use rand::{RngCore, rngs::OsRng};
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -24,17 +27,18 @@ pub(super) fn generate_verification_token() -> Result<String> {
     OsRng
         .try_fill_bytes(&mut bytes)
         .context("failed to generate verification token")?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    Ok(general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// Create a new session token for the auth cookie.
+///
 /// The raw value is only returned to set the cookie; the database stores a hash.
 pub(crate) fn generate_session_token() -> Result<String> {
     let mut bytes = [0u8; 32];
     OsRng
         .try_fill_bytes(&mut bytes)
         .context("failed to generate session token")?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    Ok(general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// Hash a verification token so we never store the raw token in the database.
@@ -45,6 +49,7 @@ pub(super) fn hash_verification_token(token: &str) -> Vec<u8> {
 }
 
 /// Hash a session token so raw values never touch the database.
+///
 /// The hash is used for lookups when the cookie is presented.
 pub(crate) fn hash_session_token(token: &str) -> Vec<u8> {
     let mut hasher = Sha256::new();
@@ -64,11 +69,12 @@ pub(super) fn decode_base64_field(value: &str) -> Result<Vec<u8>, String> {
     if trimmed.is_empty() {
         return Err("Missing opaque payload".to_string());
     }
-    base64::engine::general_purpose::STANDARD
+    general_purpose::STANDARD
         .decode(trimmed)
         .map_err(|_| "Invalid base64 payload".to_string())
 }
 
+/// Returns true if the database error is a unique constraint violation (SQLSTATE 23505).
 pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
     match err {
         sqlx::Error::Database(db_err) => db_err.code().is_some_and(|code| code.as_ref() == "23505"),
@@ -77,6 +83,7 @@ pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
 }
 
 /// Extract a client IP for rate limiting from common proxy headers.
+///
 /// Prioritizes Cloudflare's `CF-Connecting-IP` when available.
 pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(cf_ip) = headers
@@ -94,8 +101,8 @@ pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<Strin
         .and_then(|value| value.split(',').next())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if forwarded.is_some() {
-        return forwarded.map(str::to_string);
+    if let Some(ip) = forwarded {
+        return Some(ip.to_string());
     }
     headers
         .get("x-real-ip")
@@ -119,12 +126,12 @@ pub(super) fn extract_country_code(headers: &axum::http::HeaderMap) -> Option<St
 mod tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderValue};
-    use base64::Engine;
-    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use base64::{
+        Engine,
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    };
     use sqlx::error::{DatabaseError, ErrorKind};
-    use std::borrow::Cow;
-    use std::error::Error as StdError;
-    use std::fmt;
+    use std::{borrow::Cow, error::Error as StdError, fmt};
 
     #[test]
     fn normalize_email_trims_and_lowercases() {

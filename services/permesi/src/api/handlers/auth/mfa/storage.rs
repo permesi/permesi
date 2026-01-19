@@ -1,6 +1,7 @@
-//! Storage helpers for MFA state and recovery codes.
+//! Database storage helpers for user MFA state and recovery codes.
 //!
-//! NOTE: Schema is draft-only; migrations will be added later.
+//! This module provides functions to load and update MFA enrollment status,
+//! manage recovery code batches, and handle session revocation during recovery.
 
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
@@ -15,7 +16,10 @@ pub struct MfaStateRecord {
     pub recovery_batch_id: Option<Uuid>,
 }
 
-/// Load the MFA state for a user (returns `None` when no state is recorded).
+/// Load the MFA state for a user.
+///
+/// # Errors
+/// Returns an error if the database query fails.
 pub async fn load_mfa_state(pool: &PgPool, user_id: Uuid) -> Result<Option<MfaStateRecord>> {
     let query = r"
         SELECT state::text AS state, recovery_batch_id

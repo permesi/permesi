@@ -1,20 +1,31 @@
-// Admission token signing/PASERK: Genesis mints short-lived "admission" PASETOs for Permesi.
-// This module owns signing via Vault Transit (no private key in-process) and PASERK caching.
+//! Admission token signing and PASERK management.
+//!
+//! Genesis mints short-lived "admission" PASETOs for Permesi. This module
+//! handles signing via Vault Transit (keeping private keys out of process)
+//! and maintains a local cache of PASERK public keys.
+//!
+//! ## Flow Overview
+//! 1. `AdmissionSigner` is initialized with Vault Transit details.
+//! 2. `sign` fetches the latest signing key version from the local PASERK cache.
+//! 3. Claims are signed via Vault's Transit API.
+//! 4. A v4.public PASETO is constructed with the resulting signature.
+//! 5. `paserk_snapshot` provides the keyset for offline verification by Permesi.
+
 use admission_token::{
     AdmissionTokenClaims, AdmissionTokenFooter, PaserkKey, PaserkKeySet, build_token,
     encode_signing_input, rfc3339_from_unix,
 };
 use anyhow::{Context, Result, anyhow};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use secrecy::SecretString;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::cli::globals::GlobalArgs;
-use crate::vault;
+use crate::{cli::globals::GlobalArgs, vault};
 
 const PASERK_CACHE_TTL_SECONDS: u64 = 300;
 const TRANSIT_KEY_NAME: &str = "genesis-signing";

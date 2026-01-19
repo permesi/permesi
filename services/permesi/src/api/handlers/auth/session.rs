@@ -1,4 +1,7 @@
-//! Session endpoints for cookie and bearer auth.
+//! Session handlers for active authentication state management.
+//!
+//! This module provides endpoints for session lookup, logout, and token extraction.
+//! It handles the different session kinds and manages cookie generation.
 
 use axum::{
     Json,

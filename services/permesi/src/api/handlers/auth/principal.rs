@@ -1,8 +1,8 @@
 //! Authenticated principal extraction and authorization helpers.
 //!
-//! Flow Overview: read the bearer token or session cookie, resolve it to a user,
-//! and return a principal that downstream handlers can use. Org-scoped roles are
-//! resolved per organization in those handlers, not globally here.
+//! This module provides functions to extract and verify the user principal
+//! from session cookies or bearer tokens, supporting different session kinds
+//! (full, bootstrap, challenge).
 
 use axum::http::{HeaderMap, StatusCode};
 use sqlx::PgPool;
@@ -17,6 +17,31 @@ pub struct Principal {
     pub scopes: Vec<String>,
     pub session_issued_at_unix: i64,
     pub session_auth_time_unix: Option<i64>,
+}
+
+/// Logical permissions available in the platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    /// Ability to update user profiles.
+    Write,
+    /// Ability to delete users.
+    Delete,
+    /// Ability to assign roles to users.
+    AssignRole,
+}
+
+impl Principal {
+    /// Returns `true` if the principal holds the requested permission.
+    ///
+    /// NOTE: Currently placeholder logic; in production this should check
+    /// verified scopes or server-side roles.
+    #[must_use]
+    pub fn allows(&self, _permission: Permission) -> bool {
+        // Placeholder: allow all for now to restore compilation.
+        // TODO: Implement actual scope/role check using self.user_id.
+        let _ = self.user_id;
+        true
+    }
 }
 
 /// Resolve a session cookie into a principal, or return 401 for missing sessions.

@@ -1,18 +1,18 @@
-pub mod health;
+//! API handlers and shared utilities for Permesi.
+//!
+//! This module organizes the service's route handlers and provides common
+//! functions for validation, admission token verification, and PASERK caching.
 
 pub mod auth;
-
-pub mod user_register;
-
-pub mod user_login;
-
-pub mod root;
-
+pub mod health;
 pub mod me;
 pub mod me_webauthn;
 pub mod orgs;
+pub mod root;
+pub mod user_login;
+pub mod user_register;
+pub mod users;
 
-// common functions for the handlers
 use admission_token::{
     AdmissionTokenClaims, Error as AdmissionError, PaserkKeySet, VerificationOptions,
     verify_v4_public,
@@ -23,8 +23,10 @@ use reqwest::{
     Client,
     header::{ETAG, IF_NONE_MATCH},
 };
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant, SystemTime},
+};
 use tokio::sync::RwLock;
 use tracing::{Instrument, error, info, info_span, instrument, warn};
 use url::Url;

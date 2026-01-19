@@ -1,16 +1,8 @@
-//! `OPAQUE` re-authentication endpoints.
+//! OPAQUE authentication handlers for session re-authentication.
 //!
-//! These handlers let an authenticated session refresh its "recent auth" marker
-//! without creating a new session. This keeps sensitive actions gated on a fresh
-//! password proof while preserving existing session state and audit trails.
-//!
-//! Flow Overview: start runs the server-side login step for the current session
-//! user, and finish validates the password proof before updating the session's
-//! auth timestamp.
-//!
-//! Security boundaries: the caller must already hold a valid session cookie,
-//! supply a zero-token, and prove knowledge of the current password via OPAQUE;
-//! no raw passwords or derived secrets are ever stored or logged.
+//! These handlers allow an already authenticated session to refresh its
+//! "recent authentication" status by proving knowledge of the current password
+//! without requiring a full logout and login.
 
 use crate::api::handlers::{
     AdmissionVerifier,

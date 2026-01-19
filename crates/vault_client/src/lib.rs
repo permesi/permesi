@@ -1,3 +1,10 @@
+//! Vault client library for Permesi and Genesis.
+//!
+//! This crate provides low-level connectivity to `HashiCorp` Vault, supporting
+//! both direct TCP (HTTP/S) and Vault Agent Sidecar (Unix Socket) modes.
+//! It handles `AppRole` authentication, secret unwrapping, and dynamic database
+//! credential retrieval.
+
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
@@ -8,10 +15,15 @@ use url::Url;
 pub mod transport;
 pub use transport::{VaultMode, VaultTarget, VaultTransport};
 
+/// Database credentials and lease information returned from Vault.
 pub struct DatabaseCreds {
+    /// Unique identifier for the credential lease.
     pub lease_id: String,
+    /// Validity period of the lease in seconds.
     pub lease_duration: u64,
+    /// Generated database username.
     pub username: String,
+    /// Generated database password.
     pub password: SecretString,
 }
 
@@ -27,6 +39,8 @@ fn client(user_agent: &str) -> Result<Client> {
     Ok(Client::builder().user_agent(user_agent).build()?)
 }
 
+/// Construct a full Vault endpoint URL from a base URL and path.
+///
 /// # Errors
 /// Returns an error if `url` cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
@@ -55,9 +69,10 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
     Ok(endpoint_url)
 }
 
-/// Unwrap a wrapped Vault client token
+/// Unwrap a wrapped Vault response (typically containing a secret-id).
+///
 /// # Errors
-/// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
+/// Returns an error if the Vault request fails or the response is missing expected fields.
 pub async fn unwrap(user_agent: &str, url: &str, token: &str) -> Result<String> {
     let client = client(user_agent)?;
 
@@ -97,9 +112,10 @@ pub async fn unwrap(user_agent: &str, url: &str, token: &str) -> Result<String> 
     Ok(sid.to_string())
 }
 
-/// Login to Vault using `AppRole`
+/// Login to Vault using the `AppRole` auth method.
+///
 /// # Errors
-/// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
+/// Returns an error if login fails or the response is invalid.
 pub async fn approle_login(
     user_agent: &str,
     url: &str,
@@ -154,9 +170,10 @@ pub async fn approle_login(
     Ok((token.to_string(), lease_duration))
 }
 
-/// Renew a Vault token
+/// Renew the validity of a Vault authentication token.
+///
 /// # Errors
-/// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
+/// Returns an error if renewal fails or the response is invalid.
 pub async fn renew_token(
     user_agent: &str,
     url: &str,
@@ -166,7 +183,7 @@ pub async fn renew_token(
     let client = client(user_agent)?;
 
     let payload = json!({
-        "increment": increment.map_or(0, |increment| increment)
+        "increment": increment.unwrap_or(0)
     });
 
     let renew_url = endpoint_url(url, "/v1/auth/token/renew-self")?;
@@ -205,9 +222,10 @@ pub async fn renew_token(
         .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
 }
 
-/// Renew a Vault database lease
+/// Renew a dynamic database credential lease.
+///
 /// # Errors
-/// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
+/// Returns an error if renewal fails or the response is invalid.
 pub async fn renew_db_token(
     user_agent: &str,
     url: &str,
@@ -257,9 +275,10 @@ pub async fn renew_db_token(
         .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
 }
 
-/// Get DB credentials from Vault
+/// Fetch new dynamic database credentials from Vault.
+///
 /// # Errors
-/// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
+/// Returns an error if the request fails or the response is missing required fields.
 pub async fn database_creds(
     user_agent: &str,
     vault_url: &str,

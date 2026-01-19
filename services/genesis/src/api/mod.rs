@@ -1,3 +1,8 @@
+//! API entrypoint and router configuration for Genesis.
+//!
+//! This module coordinates the server lifecycle, including database connectivity,
+//! background task management (Vault renewals), and TLS serving.
+
 use crate::{
     api::handlers::{health, root},
     cli::globals::GlobalArgs,
@@ -27,6 +32,7 @@ use tower_http::{
 use tracing::{Span, debug_span, info};
 use ulid::Ulid;
 use utoipa_axum::router::OpenApiRouter;
+
 // OpenAPI router wiring and route registration live in openapi.rs.
 mod admission;
 mod handlers;
@@ -40,9 +46,11 @@ pub fn router() -> OpenApiRouter {
     openapi::api_router()
 }
 
-/// router
+/// Initialize and start the Genesis server.
+///
 /// # Errors
-/// Returns an error if the server fails to start
+/// Returns an error if database connectivity fails, Vault initialization fails,
+/// or the TLS server fails to start.
 pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, mut rx) = mpsc::unbounded_channel();

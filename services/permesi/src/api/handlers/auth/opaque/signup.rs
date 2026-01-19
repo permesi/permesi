@@ -1,4 +1,7 @@
-//! `OPAQUE` signup endpoints.
+//! OPAQUE authentication handlers for user registration.
+//!
+//! This module provides endpoints for starting and finishing the OPAQUE PAKE
+//! registration flow. It handles user creation and initial credential storage.
 
 use crate::api::handlers::{
     AdmissionVerifier,

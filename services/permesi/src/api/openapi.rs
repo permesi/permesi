@@ -1,4 +1,4 @@
-use super::handlers::{auth, health, me, me_webauthn, orgs, user_login, user_register};
+use super::handlers::{auth, health, me, me_webauthn, orgs, user_login, user_register, users};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -58,6 +58,11 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(me_webauthn::list_credentials))
         .routes(routes!(me_webauthn::delete_credential))
         .routes(routes!(me::regenerate_recovery_codes))
+        .routes(routes!(users::list_users))
+        .routes(routes!(users::get_user))
+        .routes(routes!(users::patch_user))
+        .routes(routes!(users::delete_user))
+        .routes(routes!(users::set_user_role))
         .routes(routes!(orgs::organizations::create_org))
         .routes(routes!(orgs::organizations::list_orgs))
         .routes(routes!(orgs::organizations::get_org))
@@ -78,6 +83,9 @@ pub(crate) fn api_router() -> OpenApiRouter {
     let mut me_tag = Tag::new("me");
     me_tag.description = Some("Current user self-service endpoints".to_string());
 
+    let mut users_tag = Tag::new("users");
+    users_tag.description = Some("Global user management".to_string());
+
     let mut orgs_tag = Tag::new("orgs");
     orgs_tag.description = Some("Organization endpoints".to_string());
 
@@ -94,6 +102,7 @@ pub(crate) fn api_router() -> OpenApiRouter {
         permesi_tag,
         auth_tag,
         me_tag,
+        users_tag,
         orgs_tag,
         projects_tag,
         environments_tag,

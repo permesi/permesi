@@ -49,6 +49,28 @@ pub fn router() -> OpenApiRouter {
     openapi::api_router()
 }
 
+/// Configuration for Vault KV-v2 configuration secrets.
+#[derive(Debug, Clone)]
+pub struct VaultKvConfig {
+    /// Mount path of the KV-v2 engine.
+    pub mount: String,
+    /// Path to the configuration secret.
+    pub path: String,
+}
+
+/// Comprehensive application configuration.
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    /// Auth module configuration.
+    pub auth: auth::AuthConfig,
+    /// Admin module configuration.
+    pub admin: auth::AdminConfig,
+    /// Email module configuration.
+    pub email: email::EmailWorkerConfig,
+    /// Vault KV module configuration.
+    pub kv: VaultKvConfig,
+}
+
 /// Start the server
 /// # Errors
 /// Return error if failed to start the server
@@ -57,9 +79,7 @@ pub async fn new(
     dsn: String,
     globals: &GlobalArgs,
     admission: Arc<handlers::AdmissionVerifier>,
-    auth_config: auth::AuthConfig,
-    admin_config: auth::AdminConfig,
-    email_config: email::EmailWorkerConfig,
+    config: AppConfig,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
     let (tx, rx) = mpsc::unbounded_channel();
@@ -76,14 +96,14 @@ pub async fn new(
         .await
         .context("Failed to connect to database")?;
 
-    let secrets = vault::kv::read_config_secrets(globals, "secret/permesi", "config")
+    let secrets = vault::kv::read_config_secrets(globals, &config.kv.mount, &config.kv.path)
         .await
         .context("Failed to load configuration secrets from Vault")?;
 
     let opaque_state = auth::OpaqueState::from_seed(
         secrets.opaque_server_seed,
-        auth_config.opaque_server_id().to_string(),
-        Duration::from_secs(auth_config.opaque_login_ttl_seconds()),
+        config.auth.opaque_server_id().to_string(),
+        Duration::from_secs(config.auth.opaque_login_ttl_seconds()),
     );
 
     let mut mfa_config = auth::mfa::MfaConfig::from_env();
@@ -96,19 +116,23 @@ pub async fn new(
         ));
     }
     let auth_state = Arc::new(auth::AuthState::new(
-        auth_config.clone(),
+        config.auth.clone(),
         opaque_state,
         Arc::new(auth::NoopRateLimiter),
         mfa_config,
     ));
     let admin_state = Arc::new(
-        auth::AdminState::new(admin_config, pool.clone(), globals.vault_transport.clone())
-            .context("Failed to initialize admin state")?,
+        auth::AdminState::new(
+            config.admin.clone(),
+            pool.clone(),
+            globals.vault_transport.clone(),
+        )
+        .context("Failed to initialize admin state")?,
     );
 
     // Background worker polls email_outbox (DB-backed queue) for pending rows,
     // delivers/logs them, and retries failures with exponential backoff.
-    email::spawn_outbox_worker(pool.clone(), Arc::new(email::LogEmailSender), email_config);
+    email::spawn_outbox_worker(pool.clone(), Arc::new(email::LogEmailSender), config.email);
 
     // Initialize TOTP
     let dek_manager = DekManager::new(globals.clone());
@@ -120,13 +144,13 @@ pub async fn new(
     // Initialize Security Keys (WebAuthn)
     let security_key_service = SecurityKeyService::new(
         pool.clone(),
-        auth_config.webauthn_rp_id(),
-        auth_config.webauthn_rp_origin(),
+        config.auth.webauthn_rp_id(),
+        config.auth.webauthn_rp_origin(),
     )
     .context("Failed to initialize Security Key service")?;
 
     // Initialize Passkeys (preview mode supported via env)
-    let passkey_service = init_passkey_service(&auth_config)?;
+    let passkey_service = init_passkey_service(&config.auth)?;
 
     let frontend_origin = frontend_origin(auth_state.config().frontend_base_url())?;
     let cors = CorsLayer::new()

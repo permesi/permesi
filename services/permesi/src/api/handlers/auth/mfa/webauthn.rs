@@ -1,3 +1,8 @@
+//! `WebAuthn` (Security Key) handlers for MFA registration and authentication.
+//!
+//! This module provides endpoints for users to register physical security keys
+//! as an additional authentication factor and verify them during challenge sessions.
+
 use crate::{
     api::handlers::auth::{
         AuthState,

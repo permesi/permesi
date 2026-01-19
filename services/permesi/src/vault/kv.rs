@@ -1,6 +1,11 @@
+//! Vault KV v2 client for reading Permesi configuration secrets.
+//!
+//! This module provides helpers for loading application-wide secrets like the
+//! OPAQUE server seed and MFA recovery pepper from Vault's static KV engine.
+
 use crate::cli::globals::GlobalArgs;
 use anyhow::{Context, Result, anyhow};
-use base64::Engine;
+use base64::{Engine, engine::general_purpose};
 use http::Method;
 use secrecy::ExposeSecret;
 use serde_json::Value;
@@ -10,8 +15,11 @@ const OPAQUE_SEED_FIELD: &str = "opaque_server_seed";
 const MFA_PEPPER_FIELD: &str = "mfa_recovery_pepper";
 const OPAQUE_SEED_LEN: usize = 32;
 
+/// Application configuration secrets loaded from Vault.
 pub struct ConfigSecrets {
+    /// 32-byte seed for OPAQUE server setup.
     pub opaque_server_seed: [u8; OPAQUE_SEED_LEN],
+    /// Server-side pepper for recovery code hashing.
     pub mfa_recovery_pepper: Vec<u8>,
 }
 
@@ -57,9 +65,9 @@ pub async fn read_config_secrets(
         .and_then(Value::as_str)
         .context("opaque server seed missing from vault config")?;
 
-    let decoded_seed = base64::engine::general_purpose::STANDARD
+    let decoded_seed = general_purpose::STANDARD
         .decode(seed_b64)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(seed_b64))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(seed_b64))
         .context("opaque seed is not valid base64")?;
 
     if decoded_seed.len() != OPAQUE_SEED_LEN {
@@ -79,9 +87,9 @@ pub async fn read_config_secrets(
         .and_then(Value::as_str)
         .context("mfa recovery pepper missing from vault config")?;
 
-    let mfa_recovery_pepper = base64::engine::general_purpose::STANDARD
+    let mfa_recovery_pepper = general_purpose::STANDARD
         .decode(pepper_b64)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pepper_b64))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(pepper_b64))
         .context("mfa recovery pepper is not valid base64")?;
 
     Ok(ConfigSecrets {
@@ -96,7 +104,7 @@ mod tests {
     use super::read_config_secrets;
     use crate::cli::globals::GlobalArgs;
     use anyhow::{Result, anyhow};
-    use base64::Engine;
+    use base64::{Engine, engine::general_purpose};
     use secrecy::SecretString;
     use serde_json::json;
     use std::net::TcpListener;
@@ -122,9 +130,9 @@ mod tests {
         }
         let server = MockServer::start().await;
         let seed_bytes = [7u8; 32];
-        let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed_bytes);
+        let seed_b64 = general_purpose::STANDARD.encode(seed_bytes);
         let pepper_bytes = b"my-pepper";
-        let pepper_b64 = base64::engine::general_purpose::STANDARD.encode(pepper_bytes);
+        let pepper_b64 = general_purpose::STANDARD.encode(pepper_bytes);
 
         Mock::given(method("GET"))
             .and(path("/v1/secret/permesi/data/config"))
@@ -157,7 +165,7 @@ mod tests {
         }
         let server = MockServer::start().await;
         let seed_bytes = [7u8; 32];
-        let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed_bytes);
+        let seed_b64 = general_purpose::STANDARD.encode(seed_bytes);
 
         Mock::given(method("GET"))
             .and(path("/v1/secret/permesi/data/config"))

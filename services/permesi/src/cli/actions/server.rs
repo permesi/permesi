@@ -36,6 +36,8 @@ pub struct Args {
     pub opaque_login_ttl_seconds: u64,
     pub platform_admin_ttl_seconds: i64,
     pub platform_recent_auth_seconds: i64,
+    pub vault_kv_mount: String,
+    pub vault_kv_path: String,
 }
 
 /// Execute the server action.
@@ -62,14 +64,18 @@ pub async fn execute(args: Args) -> Result<()> {
     };
     log_startup_args(&args, &issuer, &audience, &vault_addr);
 
-    let admission_verifier = Arc::new(
+    let admission_verifier = Arc::new(if args.admission_paserk_url.trim().starts_with('{') {
+        let keyset = admission_token::PaserkKeySet::from_json(&args.admission_paserk_url)
+            .context("Failed to parse admission PASERK keyset from JSON string")?;
+        api::handlers::AdmissionVerifier::new(keyset, issuer, audience)
+    } else {
         api::handlers::AdmissionVerifier::new_remote(
             args.admission_paserk_url.clone(),
             issuer,
             audience,
         )
-        .await?,
-    );
+        .await?
+    });
 
     let vault_transport = vault_client::VaultTransport::from_target(
         crate::APP_USER_AGENT,
@@ -117,15 +123,28 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url)
+    let app_config = build_app_config(&args, vault_addr);
+
+    api::new(
+        args.port,
+        dsn.to_string(),
+        &globals,
+        admission_verifier,
+        app_config,
+    )
+    .await
+}
+
+fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
+    let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url.clone())
         .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
         .with_session_ttl_seconds(args.session_ttl_seconds)
-        .with_opaque_server_id(args.opaque_server_id)
+        .with_opaque_server_id(args.opaque_server_id.clone())
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
     let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
-        .with_vault_policy(args.vault_policy)
+        .with_vault_policy(args.vault_policy.clone())
         .with_admin_ttl_seconds(args.platform_admin_ttl_seconds)
         .with_recent_auth_seconds(args.platform_recent_auth_seconds);
 
@@ -136,16 +155,17 @@ pub async fn execute(args: Args) -> Result<()> {
         .with_backoff_base_seconds(args.email_outbox_backoff_base_seconds)
         .with_backoff_max_seconds(args.email_outbox_backoff_max_seconds);
 
-    api::new(
-        args.port,
-        dsn.to_string(),
-        &globals,
-        admission_verifier,
-        auth_config,
-        admin_config,
-        email_config,
-    )
-    .await
+    let kv_config = api::VaultKvConfig {
+        mount: args.vault_kv_mount.clone(),
+        path: args.vault_kv_path.clone(),
+    };
+
+    api::AppConfig {
+        auth: auth_config,
+        admin: admin_config,
+        email: email_config,
+        kv: kv_config,
+    }
 }
 
 fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str) {

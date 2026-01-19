@@ -1,11 +1,17 @@
 //! Auth state, configuration, and `OPAQUE` server setup.
+//!
+//! This module defines the central `AuthState` and `OpaqueState` structures
+//! used across all authentication handlers. It handles OPAQUE registration
+//! and login state management.
 
 use opaque_ke::{CipherSuite, ServerLogin, ServerSetup, key_exchange::tripledh::TripleDh};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;

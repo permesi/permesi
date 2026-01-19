@@ -1,9 +1,7 @@
-//! Role-based user management endpoints.
+//! Role-based user management handlers.
 //!
-//! Flow Overview:
-//! 1) Authenticate the request via session cookie.
-//! 2) Enforce role-based access for /users routes.
-//! 3) Perform read or allow-listed updates for the requested user.
+//! This module provides endpoints for listing, retrieving, updating, and
+//! deleting user records, as well as managing global user roles.
 
 use axum::{
     Json,
@@ -32,6 +30,7 @@ pub struct UserDetail {
     pub email: String,
     pub display_name: Option<String>,
     pub locale: Option<String>,
+    pub role: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -99,9 +98,8 @@ pub async fn get_user(
     Extension(_principal): Extension<Principal>,
     pool: Extension<PgPool>,
 ) -> impl IntoResponse {
-    let user_id = match Uuid::parse_str(id.trim()) {
-        Ok(id) => id,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    let Ok(user_id) = Uuid::parse_str(id.trim()) else {
+        return StatusCode::BAD_REQUEST.into_response();
     };
 
     match fetch_user_detail(&pool, user_id).await {
@@ -133,9 +131,8 @@ pub async fn patch_user(
     pool: Extension<PgPool>,
     Json(payload): Json<UserUpdateRequest>,
 ) -> impl IntoResponse {
-    let user_id = match Uuid::parse_str(id.trim()) {
-        Ok(id) => id,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    let Ok(user_id) = Uuid::parse_str(id.trim()) else {
+        return StatusCode::BAD_REQUEST.into_response();
     };
 
     let display_name = normalize_optional(payload.display_name);
@@ -169,9 +166,8 @@ pub async fn delete_user(
     Extension(principal): Extension<Principal>,
     pool: Extension<PgPool>,
 ) -> impl IntoResponse {
-    let user_id = match Uuid::parse_str(id.trim()) {
-        Ok(id) => id,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    let Ok(user_id) = Uuid::parse_str(id.trim()) else {
+        return StatusCode::BAD_REQUEST.into_response();
     };
 
     match delete_user_record(&pool, &principal, user_id).await {
@@ -200,12 +196,11 @@ pub async fn set_user_role(
     pool: Extension<PgPool>,
     Json(payload): Json<UserRoleRequest>,
 ) -> impl IntoResponse {
-    let user_id = match Uuid::parse_str(id.trim()) {
-        Ok(id) => id,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    let Ok(user_id) = Uuid::parse_str(id.trim()) else {
+        return StatusCode::BAD_REQUEST.into_response();
     };
 
-    let role = normalize_role(payload.role);
+    let role = normalize_role(&payload.role);
     if role.is_empty() {
         return (StatusCode::BAD_REQUEST, "Role is required.").into_response();
     }
@@ -263,7 +258,10 @@ async fn fetch_user_summaries(pool: &PgPool) -> Result<Vec<UserSummary>, sqlx::E
         .collect())
 }
 
-async fn fetch_user_detail(pool: &PgPool, user_id: Uuid) -> Result<Option<UserDetail>, sqlx::Error> {
+async fn fetch_user_detail(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<UserDetail>, sqlx::Error> {
     let query = r#"
         SELECT
             u.id::text AS id,
@@ -278,7 +276,10 @@ async fn fetch_user_detail(pool: &PgPool, user_id: Uuid) -> Result<Option<UserDe
         WHERE u.id = $1
         LIMIT 1
     "#;
-    let row = sqlx::query(query).bind(user_id).fetch_optional(pool).await?;
+    let row = sqlx::query(query)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|row| UserDetail {
         id: row.get("id"),
         email: row.get("email"),
@@ -297,7 +298,7 @@ async fn update_user_profile(
     display_name: Option<String>,
     locale: Option<String>,
 ) -> Result<Option<UserDetail>, ServiceError> {
-    ensure_permission(principal, Permission::UsersWrite)?;
+    ensure_permission(principal, Permission::Write)?;
     let query = r#"
         UPDATE users
         SET
@@ -324,6 +325,7 @@ async fn update_user_profile(
         email: row.get("email"),
         display_name: row.get("display_name"),
         locale: row.get("locale"),
+        role: None,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
@@ -334,7 +336,7 @@ async fn delete_user_record(
     principal: &Principal,
     user_id: Uuid,
 ) -> Result<bool, ServiceError> {
-    ensure_permission(principal, Permission::UsersDelete)?;
+    ensure_permission(principal, Permission::Delete)?;
     let query = "DELETE FROM users WHERE id = $1";
     let result = sqlx::query(query)
         .bind(user_id)
@@ -350,7 +352,7 @@ async fn assign_user_role(
     user_id: Uuid,
     role: String,
 ) -> Result<UserRoleResponse, ServiceError> {
-    ensure_permission(principal, Permission::UsersAssignRole)?;
+    ensure_permission(principal, Permission::AssignRole)?;
     let mut tx = pool.begin().await.map_err(ServiceError::Database)?;
 
     let target_exists = sqlx::query("SELECT 1 FROM users WHERE id = $1")
@@ -398,10 +400,10 @@ async fn assign_user_role(
 
     if previous_role.as_deref() != Some(role.as_str()) {
         let _ = sqlx::query(
-            r#"
+            r"
             INSERT INTO role_audit_log (actor_id, target_id, previous_role, new_role)
             VALUES ($1, $2, $3, $4)
-            "#,
+            ",
         )
         .bind(principal.user_id)
         .bind(user_id)
@@ -427,6 +429,6 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn normalize_role(value: String) -> String {
+fn normalize_role(value: &str) -> String {
     value.trim().to_lowercase()
 }

@@ -1,8 +1,13 @@
+//! Admission token issuance and persistence.
+//!
+//! This module handles the creation of short-lived admission tokens for clients.
+//! It verifies the client identity in the database, records the request metadata,
+//! and signs the token using Vault Transit.
+
 use admission_token::AdmissionTokenClaims;
 use axum::{
     Json,
-    extract::rejection::QueryRejection,
-    extract::{Extension, Query},
+    extract::{Extension, Query, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
 };
 use chrono::Utc;

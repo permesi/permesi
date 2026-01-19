@@ -1,8 +1,7 @@
-//! `OPAQUE` login endpoints.
+//! OPAQUE authentication handlers for user login.
 //!
-//! Successful logins issue one of three session kinds based on MFA state:
-//! full sessions for `disabled`, challenge sessions for `enabled`, and bootstrap
-//! sessions for `required_unenrolled`.
+//! This module provides endpoints for starting and finishing the OPAQUE PAKE
+//! exchange. Successful logins issue sessions based on the user's MFA state.
 
 use crate::api::handlers::{
     AdmissionVerifier,

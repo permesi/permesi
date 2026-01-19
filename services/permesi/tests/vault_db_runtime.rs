@@ -1,3 +1,18 @@
+//! Integration tests for Vault-managed database runtime roles.
+//!
+//! This suite verifies that the least-privilege SQL permissions defined in the
+//! bootstrap scripts are correctly enforced when using dynamic Vault credentials.
+//!
+//! Flow Overview:
+//! 1. Orchestrate Postgres and Vault containers.
+//! 2. Bootstrap both `genesis` and `permesi` databases and runtime roles.
+//! 3. Configure Vault's database secrets engine with revocation statements.
+//! 4. Verify that dynamic users:
+//!    - Can perform allowed operations (SELECT/INSERT on specific tables).
+//!    - Are blocked from forbidden operations (CREATE TABLE).
+//!    - Are correctly terminated and dropped by Vault upon lease revocation.
+//!    - Data remains persistent across credential rotations.
+
 use anyhow::{Context, Result, bail, ensure};
 use sqlx::{Connection, PgConnection};
 use test_support::{

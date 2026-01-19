@@ -1,3 +1,8 @@
+//! Command-line argument dispatch and server initialization.
+//!
+//! This module parses validated CLI arguments and maps them to the appropriate
+//! action, such as starting the API server with its full configuration state.
+
 use crate::cli::actions::{Action, server::Args};
 use anyhow::{Context, Result};
 
@@ -111,6 +116,8 @@ fn read_required_path_arg(
     }
 }
 
+/// Map validated CLI matches to a server action.
+///
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
 pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
@@ -168,6 +175,15 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .copied()
         .unwrap_or(3600);
 
+    let vault_kv_mount = matches
+        .get_one::<String>("vault-kv-mount")
+        .cloned()
+        .unwrap_or_else(|| "secret/permesi".to_string());
+    let vault_kv_path = matches
+        .get_one::<String>("vault-kv-path")
+        .cloned()
+        .unwrap_or_else(|| "config".to_string());
+
     Ok(Action::Server(Args {
         port,
         dsn,
@@ -198,6 +214,8 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         opaque_login_ttl_seconds,
         platform_admin_ttl_seconds,
         platform_recent_auth_seconds,
+        vault_kv_mount,
+        vault_kv_path,
     }))
 }
 

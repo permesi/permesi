@@ -12,15 +12,19 @@
 //! Security boundary: the service refuses to start without valid TLS assets.
 
 use anyhow::{Context, Result, anyhow};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::server::{ClientHello, ResolvesServerCert};
-use rustls::sign::CertifiedKey;
-use rustls::{RootCertStore, ServerConfig};
+use rustls::{
+    RootCertStore, ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer},
+    server::{ClientHello, ResolvesServerCert},
+    sign::CertifiedKey,
+};
 use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock, RwLock},
+};
 use tokio::time::{Duration, interval};
 use tracing::{debug, error};
 
