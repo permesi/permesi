@@ -46,7 +46,6 @@ const MAX_BODY_BYTES: usize = 8 * 1024;
 #[derive(Clone, Debug)]
 pub struct AdminConfig {
     vault_addr: String,
-    vault_namespace: Option<String>,
     vault_policy: String,
     admin_ttl_seconds: i64,
     recent_auth_seconds: i64,
@@ -57,17 +56,10 @@ impl AdminConfig {
     pub fn new(vault_addr: String) -> Self {
         Self {
             vault_addr,
-            vault_namespace: None,
             vault_policy: DEFAULT_VAULT_POLICY.to_string(),
             admin_ttl_seconds: DEFAULT_ADMIN_TTL_SECONDS,
             recent_auth_seconds: DEFAULT_RECENT_AUTH_SECONDS,
         }
-    }
-
-    #[must_use]
-    pub fn with_vault_namespace(mut self, namespace: Option<String>) -> Self {
-        self.vault_namespace = namespace;
-        self
     }
 
     #[must_use]
@@ -91,11 +83,6 @@ impl AdminConfig {
     #[must_use]
     pub fn vault_addr(&self) -> &str {
         &self.vault_addr
-    }
-
-    #[must_use]
-    pub fn vault_namespace(&self) -> Option<&str> {
-        self.vault_namespace.as_deref()
     }
 
     #[must_use]
@@ -130,8 +117,7 @@ impl AdminState {
         pool: sqlx::PgPool,
         transport: VaultTransport,
     ) -> anyhow::Result<Self> {
-        let vault_client =
-            StepUpClient::new(transport, config.vault_namespace().map(str::to_string))?;
+        let vault_client = StepUpClient::new(transport)?;
         let token_signer = AdminTokenSigner::new()?;
         Ok(Self {
             config,

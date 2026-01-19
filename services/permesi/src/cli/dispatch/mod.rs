@@ -134,7 +134,6 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
     let vault_addr = matches.get_one::<String>("vault-addr").cloned();
-    let vault_namespace = matches.get_one::<String>("vault-namespace").cloned();
     let vault_policy = matches
         .get_one::<String>("vault-policy")
         .cloned()
@@ -178,7 +177,6 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_secret_id,
         vault_wrapped_token,
         vault_addr,
-        vault_namespace,
         vault_policy,
         admission_paserk_url: admission.url,
         admission_issuer: admission.issuer,

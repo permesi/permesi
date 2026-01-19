@@ -1,5 +1,5 @@
 use anyhow::Result;
-use http::{HeaderMap, HeaderValue, Method};
+use http::Method;
 use serde_json::Value;
 use thiserror::Error;
 use vault_client::VaultTransport;
@@ -23,7 +23,6 @@ pub enum LookupSelfError {
 #[derive(Debug, Clone)]
 pub struct StepUpClient {
     transport: VaultTransport,
-    namespace: Option<String>,
 }
 
 impl StepUpClient {
@@ -32,11 +31,8 @@ impl StepUpClient {
     /// # Errors
     /// This function returns a `Result` for consistency with other builders, though currently
     /// it always returns `Ok`.
-    pub fn new(transport: VaultTransport, namespace: Option<String>) -> Result<Self> {
-        Ok(Self {
-            transport,
-            namespace,
-        })
+    pub fn new(transport: VaultTransport) -> Result<Self> {
+        Ok(Self { transport })
     }
 
     /// Perform a token lookup-self to verify policies.
@@ -44,22 +40,9 @@ impl StepUpClient {
     /// # Errors
     /// Returns `LookupSelfError` if Vault is unavailable, unauthorized, or returns an invalid response.
     pub async fn lookup_self(&self, token: &str) -> Result<VaultTokenInfo, LookupSelfError> {
-        let mut headers = HeaderMap::new();
-        if let Some(ns) = &self.namespace
-            && let Ok(val) = HeaderValue::from_str(ns)
-        {
-            headers.insert("X-Vault-Namespace", val);
-        }
-
         let response = self
             .transport
-            .request_json_with_headers(
-                Method::GET,
-                "/v1/auth/token/lookup-self",
-                Some(token),
-                None,
-                Some(headers),
-            )
+            .request_json(Method::GET, "/v1/auth/token/lookup-self", Some(token), None)
             .await
             .map_err(|_| LookupSelfError::Unavailable)?;
 
@@ -171,7 +154,7 @@ mod tests {
 
         let target = VaultTarget::parse(&server.uri()).unwrap();
         let transport = VaultTransport::from_target("test", target).unwrap();
-        let client = StepUpClient::new(transport, None)?;
+        let client = StepUpClient::new(transport)?;
         let info = client.lookup_self("token").await?;
         assert!(
             info.policies
@@ -198,7 +181,7 @@ mod tests {
 
         let target = VaultTarget::parse(&server.uri()).unwrap();
         let transport = VaultTransport::from_target("test", target).unwrap();
-        let client = StepUpClient::new(transport, None)?;
+        let client = StepUpClient::new(transport)?;
         let result = client.lookup_self("token").await;
         assert!(matches!(result, Err(LookupSelfError::Unauthorized)));
         Ok(())

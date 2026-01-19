@@ -15,7 +15,6 @@ pub struct Args {
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
     pub vault_addr: Option<String>,
-    pub vault_namespace: Option<String>,
     pub vault_policy: String,
     pub admission_paserk_url: String,
     pub admission_issuer: Option<String>,
@@ -126,7 +125,6 @@ pub async fn execute(args: Args) -> Result<()> {
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
     let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
-        .with_vault_namespace(args.vault_namespace)
         .with_vault_policy(args.vault_policy)
         .with_admin_ttl_seconds(args.platform_admin_ttl_seconds)
         .with_recent_auth_seconds(args.platform_recent_auth_seconds);
@@ -178,10 +176,6 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         (
             "vault_wrapped_token_set",
             args.vault_wrapped_token.is_some().to_string(),
-        ),
-        (
-            "vault_namespace",
-            args.vault_namespace.clone().unwrap_or_default(),
         ),
         ("vault_policy", args.vault_policy.clone()),
         ("tls_cert_path", args.tls_cert_path.clone()),

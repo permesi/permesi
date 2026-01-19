@@ -114,12 +114,6 @@ fn with_admin_args(command: Command) -> Command {
                 .env("VAULT_ADDR"),
         )
         .arg(
-            Arg::new("vault-namespace")
-                .long("vault-namespace")
-                .help("Vault namespace for admin step-up lookups")
-                .env("VAULT_NAMESPACE"),
-        )
-        .arg(
             Arg::new("vault-policy")
                 .long("vault-policy")
                 .help("Vault policy required for operator elevation")
@@ -142,4 +136,39 @@ fn with_admin_args(command: Command) -> Command {
                 .default_value("3600")
                 .value_parser(clap::value_parser!(i64)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Command;
+
+    #[test]
+    fn test_auth_args_presence() {
+        let cmd = super::with_args(Command::new("test"));
+
+        let expected_args = [
+            "frontend-base-url",
+            "email-token-ttl-seconds",
+            "email-resend-cooldown-seconds",
+            "session-ttl-seconds",
+            "email-outbox-poll-seconds",
+            "email-outbox-batch-size",
+            "email-outbox-max-attempts",
+            "email-outbox-backoff-base-seconds",
+            "email-outbox-backoff-max-seconds",
+            "opaque-server-id",
+            "opaque-login-ttl-seconds",
+            "vault-addr",
+            "vault-policy",
+            "platform-admin-ttl-seconds",
+            "platform-recent-auth-seconds",
+        ];
+
+        for arg in expected_args {
+            assert!(
+                cmd.get_arguments().any(|a| a.get_id() == arg),
+                "Missing expected argument: {arg}"
+            );
+        }
+    }
 }
