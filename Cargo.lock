@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admission_token"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -1385,14 +1385,13 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "filetime"
-version = "0.2.26"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc0505cd1b6fa6580283f6bdf70a73fcf4aba1184038c90902b92b3dd0df63ed"
+checksum = "f98844151eee8917efc50bd9e8318cb963ae8b297431495d3f758616ea5c57db"
 dependencies = [
  "cfg-if",
  "libc",
  "libredox",
- "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1589,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "genesis"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3139,7 +3138,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permesi"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3199,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "permesi_web"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -4794,7 +4793,7 @@ dependencies = [
 
 [[package]]
 name = "test_support"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "reqwest 0.13.1",
@@ -5492,7 +5491,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault_client"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "bytes",
