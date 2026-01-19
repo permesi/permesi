@@ -150,13 +150,17 @@ auto_auth {
     }
   }
 
-  sink "file" {
-    config = { path = "/run/permesi/vault-token" }
-  }
-}
-
 api_proxy {
   use_auto_auth_token = true
+}
+
+listener "unix" {
+  address      = "/run/permesi/agent.sock"
+  socket_mode  = "0660"
+  socket_user  = "permesi"
+  socket_group = "permesi"
+
+  tls_disable = true
 }
 
 cache {}
@@ -176,22 +180,6 @@ template {
   destination = "/run/permesi/ca.pem"
   contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" \"common_name=api.permesi.localhost\" }}{{ range .Data.ca_chain }}{{ . }}\n{{ end }}{{ end }}"
 }
-
-template {
-  destination = "/run/permesi/secrets.env"
-  perms = "0600"
-  contents = <<EOH
-PERMESI_VAULT_SECRET_ID={{ with secret "auth/approle/role/permesi/secret-id" "num_uses=1" }}{{ .Data.secret_id }}{{ end }}
-EOH
-}
-
-To render `secrets.env`, the cert-auth role must be allowed to mint AppRole SecretIDs. Passing
-`num_uses=1` forces a POST to the SecretID endpoint, which is required for creation, and returns the
-raw SecretID (store it carefully; in production, prefer response-wrapped SecretIDs).
-That means adding a policy path for `auth/approle/role/permesi/secret-id` (create/update) alongside
-the existing `permesi-pki-issue-only` rules, or attaching a separate minimal policy just for the
-SecretID endpoint. Keep the cert-auth policy tightly scoped and avoid writing long-lived SecretIDs
-to disk when possible.
 ```
 
 `genesis`:
@@ -224,6 +212,15 @@ api_proxy {
   use_auto_auth_token = true
 }
 
+listener "unix" {
+  address      = "/run/genesis/agent.sock"
+  socket_mode  = "0660"
+  socket_user  = "genesis"
+  socket_group = "genesis"
+
+  tls_disable = true
+}
+
 cache {}
 
 template {
@@ -241,19 +238,6 @@ template {
   destination = "/run/genesis/ca.pem"
   contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ range .Data.ca_chain }}{{ . }}\n{{ end }}{{ end }}"
 }
-
-template {
-  destination = "/run/genesis/secrets.env"
-  perms = "0600"
-  contents = <<EOH
-GENESIS_VAULT_SECRET_ID={{ with secret "auth/approle/role/genesis/secret-id" "num_uses=1" }}{{ .Data.secret_id }}{{ end }}
-EOH
-}
-
-Rendering `secrets.env` for Genesis requires the cert-auth role to access
-`auth/approle/role/genesis/secret-id` (create/update). Passing `num_uses=1` forces a POST to the
-SecretID endpoint so the SecretID is created. Attach a minimal policy to the cert-auth role if you
-enable this template.
 ```
 
 Example systemd units (one per service; adjust paths and domains as needed):

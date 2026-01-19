@@ -77,17 +77,15 @@ pub async fn execute(args: Args) -> Result<()> {
 }
 
 fn log_startup_args(args: &Args) {
+    let mode = match args.vault_target {
+        vault::VaultTarget::Tcp { .. } => "TCP",
+        vault::VaultTarget::AgentProxy { .. } => "AGENT",
+    };
     let entries = [
         ("port", args.port.to_string()),
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
-        (
-            "vault_mode",
-            match args.vault_target {
-                vault::VaultTarget::Tcp { .. } => "tcp".to_string(),
-                vault::VaultTarget::AgentProxy { .. } => "agent-proxy".to_string(),
-            },
-        ),
+        ("vault_mode", mode.to_lowercase()),
         (
             "vault_role_id",
             args.vault_role_id
@@ -106,7 +104,7 @@ fn log_startup_args(args: &Args) {
         ("tls_key_path", args.tls_key_path.clone()),
         ("tls_ca_path", args.tls_ca_path.clone()),
     ];
-    log_entries("Startup configuration", &entries);
+    log_entries("Startup configuration", &entries, mode);
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -121,9 +119,14 @@ fn redact_dsn(dsn: &str) -> String {
     }
 }
 
-fn log_entries(title: &str, entries: &[(&str, String)]) {
+fn log_entries(title: &str, entries: &[(&str, String)], mode: &str) {
+    if mode == "AGENT" {
+        println!("🚀 Mode: Vault Agent (Sidecar)");
+    } else {
+        println!("⚠️ Mode: Direct Vault Access");
+    }
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!("{}\n{title}:", genesis_banner());
+    let mut message = format!("{}\n Vault mode: {mode}\n\n{title}:", genesis_banner());
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =

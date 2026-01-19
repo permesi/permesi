@@ -151,6 +151,10 @@ pub async fn execute(args: Args) -> Result<()> {
 }
 
 fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str) {
+    let mode = match args.vault_target {
+        vault_client::VaultTarget::Tcp { .. } => "TCP",
+        vault_client::VaultTarget::AgentProxy { .. } => "AGENT",
+    };
     let admission_paserk_ca = args
         .admission_paserk_ca_path
         .clone()
@@ -160,13 +164,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
         ("vault_addr", vault_addr.to_string()),
-        (
-            "vault_mode",
-            match args.vault_target {
-                vault_client::VaultTarget::Tcp { .. } => "tcp".to_string(),
-                vault_client::VaultTarget::AgentProxy { .. } => "agent-proxy".to_string(),
-            },
-        ),
+        ("vault_mode", mode.to_lowercase()),
         (
             "vault_role_id",
             args.vault_role_id
@@ -237,7 +235,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             args.platform_recent_auth_seconds.to_string(),
         ),
     ];
-    log_entries("Startup configuration", &entries);
+    log_entries("Startup configuration", &entries, mode);
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -252,9 +250,14 @@ fn redact_dsn(dsn: &str) -> String {
     }
 }
 
-fn log_entries(title: &str, entries: &[(&str, String)]) {
+fn log_entries(title: &str, entries: &[(&str, String)], mode: &str) {
+    if mode == "AGENT" {
+        println!("🚀 Mode: Vault Agent (Sidecar)");
+    } else {
+        println!("⚠️ Mode: Direct Vault Access");
+    }
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!("{}\n{title}:", permesi_banner());
+    let mut message = format!("{}\n Vault mode: {mode}\n\n{title}:", permesi_banner());
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =

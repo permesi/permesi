@@ -6,18 +6,23 @@
 //!
 //! ## Flow Overview
 //! 1) Read PEM-encoded cert chain, private key, and CA bundle from configured paths.
-//! 2) Build a rustls server config with no client auth.
+//! 2) Build a rustls server config with a dynamic certificate resolver.
+//! 3) Spawn a background watcher to reload certificates when they change on disk.
 //!
 //! Security boundary: the service refuses to start without valid TLS assets.
 
 use anyhow::{Context, Result, anyhow};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
+use tokio::time::{Duration, interval};
+use tracing::{debug, error};
 
 static TLS_PATHS: OnceLock<TlsPaths> = OnceLock::new();
 
@@ -68,6 +73,17 @@ pub fn runtime_paths() -> Result<&'static TlsPaths> {
         .ok_or_else(|| anyhow!("TLS paths were not configured"))
 }
 
+#[derive(Debug)]
+struct DynamicCertResolver {
+    cert_key: Arc<RwLock<Arc<CertifiedKey>>>,
+}
+
+impl ResolvesServerCert for DynamicCertResolver {
+    fn resolve(&self, _client_hello: ClientHello) -> Option<Arc<CertifiedKey>> {
+        self.cert_key.read().ok().map(|k| k.clone())
+    }
+}
+
 /// Load the TLS server configuration for Genesis.
 ///
 /// # Errors
@@ -78,16 +94,61 @@ pub fn load_server_config() -> Result<ServerConfig> {
 }
 
 fn load_server_config_from(paths: &TlsPaths) -> Result<ServerConfig> {
-    let cert_chain = load_cert_chain(paths.cert_path())?;
-    let key = load_private_key(paths.key_path())?;
+    let (cert_chain, key) = load_cert_key_pair(paths)?;
+
+    let signing_key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key)
+        .map_err(|_| anyhow!("Failed to parse private key"))?;
+
+    let initial_cert_key = Arc::new(CertifiedKey::new(cert_chain, signing_key));
+    let shared_cert_key = Arc::new(RwLock::new(initial_cert_key));
+
+    let resolver = Arc::new(DynamicCertResolver {
+        cert_key: shared_cert_key.clone(),
+    });
+
+    spawn_watcher(shared_cert_key, paths.clone());
+
     let _ca = load_root_store(paths.ca_path())?;
 
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .context("Failed to build TLS server config")?;
+        .with_cert_resolver(resolver);
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(config)
+}
+
+fn load_cert_key_pair(
+    paths: &TlsPaths,
+) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let certs = load_cert_chain(paths.cert_path())?;
+    let key = load_private_key(paths.key_path())?;
+    Ok((certs, key))
+}
+
+fn spawn_watcher(target: Arc<RwLock<Arc<CertifiedKey>>>, paths: TlsPaths) {
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            match load_cert_key_pair(&paths) {
+                Ok((certs, key)) => {
+                    match rustls::crypto::aws_lc_rs::sign::any_supported_type(&key) {
+                        Ok(signing_key) => {
+                            let new_key = Arc::new(CertifiedKey::new(certs, signing_key));
+                            if let Ok(mut w) = target.write() {
+                                *w = new_key;
+                                debug!("TLS certificate reloaded");
+                            }
+                        }
+                        Err(e) => error!("Failed to parse reloaded private key: {:?}", e),
+                    }
+                }
+                Err(e) => {
+                    debug!("TLS reload check failed (expected during rotation): {}", e);
+                }
+            }
+        }
+    });
 }
 
 fn load_cert_chain(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
@@ -168,5 +229,37 @@ mod tests {
     fn load_root_store_missing_fails() {
         let path = missing_path("ca");
         assert!(load_root_store(&path).is_err());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_load_valid_cert_config() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = std::env::temp_dir().join(format!("genesis-tls-test-valid-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("tls.crt");
+        let key_path = dir.join("tls.key");
+        let ca_path = dir.join("ca.pem");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_pem = cert.cert.pem();
+        let key_pem = cert.key_pair.serialize_pem();
+
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+        std::fs::write(&key_path, &key_pem).unwrap();
+        std::fs::write(&ca_path, &cert_pem).unwrap(); // Self-signed CA
+
+        let paths = TlsPaths {
+            cert: cert_path,
+            key: key_path,
+            ca: ca_path,
+        };
+
+        let config = load_server_config_from(&paths);
+        assert!(
+            config.is_ok(),
+            "Failed to load valid server config: {:?}",
+            config.err()
+        );
     }
 }

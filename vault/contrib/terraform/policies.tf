@@ -13,12 +13,12 @@ resource "vault_policy" "operators" {
   policy = file("${path.module}/policies/operator-policy.hcl")
 }
 
-resource "vault_policy" "permesi_pki_issue_only" {
-  name   = "permesi-pki-issue-only"
-  policy = file("${path.module}/policies/permesi-pki-issue-only.hcl")
+resource "vault_policy" "permesi_agent" {
+  name   = "permesi-agent"
+  policy = file("${path.module}/policies/permesi-agent.hcl")
 }
 
-resource "vault_policy" "genesis_pki_issue_only" {
-  name   = "genesis-pki-issue-only"
-  policy = file("${path.module}/policies/genesis-pki-issue-only.hcl")
+resource "vault_policy" "genesis_agent" {
+  name   = "genesis-agent"
+  policy = file("${path.module}/policies/genesis-agent.hcl")
 }

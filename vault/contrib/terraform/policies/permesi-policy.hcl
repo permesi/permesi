@@ -1,3 +1,5 @@
+path "auth/token/lookup-self" { capabilities = ["read"] }
+
 # users
 path "transit/permesi/encrypt/users" { capabilities = ["update"] }
 path "transit/permesi/decrypt/users" { capabilities = ["update"] }

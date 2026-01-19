@@ -183,17 +183,13 @@ Repeat with the Genesis bootstrap certificate and the `genesis-agent` role.
 ### Vault Agent sidecar (cert auth)
 
 Use Vault Agent as a sidecar to authenticate via cert auth and render templates. This removes the
-need for a local proxy and lets you generate TLS material (and optional runtime env files) from a
-single config. The minimal agent configs in `vault/contrib/terraform/README.md` already include
-cert-auth and TLS templates, plus an example `secrets.env` template that writes wrapped tokens to
-`/run/permesi/secrets.env` and `/run/genesis/secrets.env`.
+need for a local proxy and lets you generate TLS material from a single config. The minimal agent
+configs in `vault/contrib/terraform/README.md` already include cert-auth and TLS templates.
 
 Keep the agent running continuously so it can renew the cert-auth token and re-issue TLS
 certificates before the 24h TTL expires. If the agent stops long enough for the runtime certs or
 auth token to expire, the services will lose TLS material and can get stuck until the agent is
-restarted with valid bootstrap certificates. The `secrets.env` templates also require a policy that permits wrapped SecretID
-generation (`auth/approle/role/<service>/secret-id`), which is not included in the default
-issue-only policy; add a minimal policy if you enable those templates.
+restarted with valid bootstrap certificates.
 
 Run the agent as a long-lived service so it can renew tokens and rotate certificates:
 
@@ -204,7 +200,7 @@ vault agent -config=/etc/vault.d/vault.hcl
 ### Quadlet example (systemd)
 
 Below is a tuned Quadlet setup that assumes Vault Agent writes TLS material under `/run/permesi`
-and `/run/genesis` and, if desired, a short-lived env file with a wrapped token.
+and `/run/genesis`.
 
 `/root/permesi.env` (static, long-lived values; required values shown first):
 ```
@@ -254,7 +250,6 @@ Image=ghcr.io/permesi/permesi:latest
 Network=host
 AutoUpdate=registry
 EnvironmentFile=/root/permesi.env
-EnvironmentFile=/run/permesi/secrets.env
 
 [Service]
 Restart=always
@@ -277,7 +272,6 @@ Image=ghcr.io/permesi/genesis:latest
 Network=host
 AutoUpdate=registry
 EnvironmentFile=/root/genesis.env
-EnvironmentFile=/run/genesis/secrets.env
 
 [Service]
 Restart=always
@@ -288,8 +282,9 @@ WantedBy=default.target
 
 Notes:
 - Keep `/root/permesi.env` and `/root/genesis.env` owned by root with `0600` permissions.
-- **Agent Mode**: Set `PERMESI_VAULT_URL` to a socket path (e.g., `/run/vault/proxy.sock`). AppRole credentials (`VAULT_ROLE_ID`, etc.) are not needed. Ensure Vault Agent is configured with `use_auto_auth_token = true` in its `api_proxy` stanza.
-- **TCP Mode**: Ensure Vault Agent writes `/run/permesi/secrets.env` and `/run/genesis/secrets.env` (containing wrapped tokens or SecretIDs) before the containers start.
+- **Agent Mode**: Set `PERMESI_VAULT_URL` to a socket path (e.g., `/run/vault/proxy.sock`). AppRole credentials (`VAULT_ROLE_ID`, etc.) are not needed. Ensure Vault Agent is configured with `use_auto_auth_token = true` in its `api_proxy` stanza. This is the preferred mode as it avoids writing secrets to disk.
+- **TCP Mode**: If using AppRole without an Agent, ensure `VAULT_ROLE_ID` and `VAULT_SECRET_ID` (or `VAULT_WRAPPED_TOKEN`) are provided in the environment files.
+
 
 ### Manual Configuration Recipe (Reference)
 

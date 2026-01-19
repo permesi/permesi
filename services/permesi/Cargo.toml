@@ -100,6 +100,7 @@ hex = "0.4"
 [dev-dependencies]
 base32 = "0.5.1"
 hyper = { workspace = true }
+rcgen = "0.14.6"
 test_support = { workspace = true }
 wiremock = "0.6"
 

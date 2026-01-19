@@ -10,10 +10,12 @@ use vault_client::DatabaseCreds;
 /// Returns an error if the Vault request fails, Vault returns a non-success status, or the response is missing expected fields.
 #[instrument(skip(globals))]
 pub async fn database_creds(globals: &mut GlobalArgs) -> Result<()> {
-    let token = globals
-        .vault_transport
-        .is_tcp()
-        .then(|| globals.vault_token.expose_secret());
+    let token_str = globals.vault_token.expose_secret();
+    let token = if token_str.is_empty() {
+        None
+    } else {
+        Some(token_str)
+    };
 
     let response = globals
         .vault_transport
