@@ -109,8 +109,23 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_credentials') THEN
         RAISE EXCEPTION 'Missing permesi table: totp_credentials';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_audit_log') THEN
+        RAISE EXCEPTION 'Missing permesi table: totp_audit_log';
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'passkeys') THEN
         RAISE EXCEPTION 'Missing permesi table: passkeys';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'passkey_audit_log') THEN
+        RAISE EXCEPTION 'Missing permesi table: passkey_audit_log';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'user_mfa_state') THEN
+        RAISE EXCEPTION 'Missing permesi table: user_mfa_state';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'security_keys') THEN
+        RAISE EXCEPTION 'Missing permesi table: security_keys';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'security_key_audit_log') THEN
+        RAISE EXCEPTION 'Missing permesi table: security_key_audit_log';
     END IF;
 END;
 $$;

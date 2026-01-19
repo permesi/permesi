@@ -1,18 +1,48 @@
 [Unit]
 Description=Permesi IAM service
-After=network-online.target
-Wants=network-online.target
+Wants=network-online.target vault-agent-permesi.service
+After=network-online.target vault-agent-permesi.service
+Requires=vault-agent-permesi.service
 
 [Service]
 Type=simple
-Environment=PERMESI_PORT=8001
-EnvironmentFile=-/etc/permesi/permesi.env
+User=permesi
+Group=permesi
+
+# Runtime directory for TLS certs and agent socket
+RuntimeDirectory=permesi
+RuntimeDirectoryMode=0750
+
+# Load static config (DSN, port, URLs)
+EnvironmentFile=/etc/permesi/permesi.env
+
+# Default configuration for Agent Mode (Sidecar)
+Environment=PERMESI_VAULT_URL=unix:///run/permesi/agent.sock
+Environment=PERMESI_TLS_CERT_PATH=/run/permesi/tls.crt
+Environment=PERMESI_TLS_KEY_PATH=/run/permesi/tls.key
+Environment=PERMESI_TLS_CA_PATH=/run/permesi/ca.pem
+
+# Wait for Vault Agent to render TLS certificates and listen on the socket
+ExecStartPre=/usr/bin/test -s /run/permesi/tls.crt
+ExecStartPre=/usr/bin/test -s /run/permesi/tls.key
+ExecStartPre=/usr/bin/test -s /run/permesi/ca.pem
+ExecStartPre=/usr/bin/test -S /run/permesi/agent.sock
+
 ExecStart=/usr/bin/permesi
-Restart=on-failure
-RestartSec=2
-NoNewPrivileges=yes
-PrivateTmp=yes
-DynamicUser=yes
+
+# Restart policy
+Restart=always
+RestartSec=2s
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Allow access to the runtime directory
+ReadWritePaths=/run/permesi
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

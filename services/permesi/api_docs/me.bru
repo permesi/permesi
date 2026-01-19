@@ -1,0 +1,15 @@
+meta {
+  name: Get Current User
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/v1/me
+  body: none
+  auth: none
+}
+
+headers {
+  Cookie: permesi_session={{sessionCookie}}
+}

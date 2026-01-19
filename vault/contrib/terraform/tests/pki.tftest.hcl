@@ -42,12 +42,12 @@ run "pki_roles_and_cert_auth" {
   }
 
   assert {
-    condition     = contains(vault_cert_auth_backend_role.permesi_agent.token_policies, "permesi-pki-issue-only")
-    error_message = "Permesi cert-auth role must use the permesi issue-only policy."
+    condition     = contains(vault_cert_auth_backend_role.permesi_agent.token_policies, "permesi-agent") && contains(vault_cert_auth_backend_role.permesi_agent.token_policies, "permesi")
+    error_message = "Permesi cert-auth role must use the permesi-agent and permesi policies."
   }
 
   assert {
-    condition     = contains(vault_cert_auth_backend_role.genesis_agent.token_policies, "genesis-pki-issue-only")
-    error_message = "Genesis cert-auth role must use the genesis issue-only policy."
+    condition     = contains(vault_cert_auth_backend_role.genesis_agent.token_policies, "genesis-agent") && contains(vault_cert_auth_backend_role.genesis_agent.token_policies, "genesis")
+    error_message = "Genesis cert-auth role must use the genesis-agent and genesis policies."
   }
 }

@@ -106,7 +106,7 @@ fn load_server_config_from(paths: &TlsPaths) -> Result<ServerConfig> {
         cert_key: shared_cert_key.clone(),
     });
 
-    spawn_watcher(shared_cert_key, paths.clone());
+    spawn_watcher(shared_cert_key, paths.clone(), Duration::from_secs(10));
 
     let _ca = load_root_store(paths.ca_path())?;
 
@@ -125,26 +125,64 @@ fn load_cert_key_pair(
     Ok((certs, key))
 }
 
-fn spawn_watcher(target: Arc<RwLock<Arc<CertifiedKey>>>, paths: TlsPaths) {
+fn spawn_watcher(target: Arc<RwLock<Arc<CertifiedKey>>>, paths: TlsPaths, poll_interval: Duration) {
     tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(10));
+        let mut interval = interval(poll_interval);
+        let mut last_modified_cert = std::time::SystemTime::UNIX_EPOCH;
+        let mut last_modified_key = std::time::SystemTime::UNIX_EPOCH;
+
+        // Initialize timestamps
+        if let Ok(m) = tokio::fs::metadata(paths.cert_path()).await {
+            #[allow(clippy::collapsible_if)]
+            if let Ok(t) = m.modified() {
+                last_modified_cert = t;
+            }
+        }
+        if let Ok(m) = tokio::fs::metadata(paths.key_path()).await {
+            #[allow(clippy::collapsible_if)]
+            if let Ok(t) = m.modified() {
+                last_modified_key = t;
+            }
+        }
+
         loop {
             interval.tick().await;
-            match load_cert_key_pair(&paths) {
-                Ok((certs, key)) => {
-                    match rustls::crypto::aws_lc_rs::sign::any_supported_type(&key) {
-                        Ok(signing_key) => {
-                            let new_key = Arc::new(CertifiedKey::new(certs, signing_key));
-                            if let Ok(mut w) = target.write() {
-                                *w = new_key;
-                                debug!("TLS certificate reloaded");
+
+            let cert_meta = tokio::fs::metadata(paths.cert_path()).await;
+            let key_meta = tokio::fs::metadata(paths.key_path()).await;
+
+            match (cert_meta, key_meta) {
+                (Ok(cm), Ok(km)) => {
+                    let cm_mod = cm.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    let km_mod = km.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+                    if cm_mod > last_modified_cert || km_mod > last_modified_key {
+                        match load_cert_key_pair(&paths) {
+                            Ok((certs, key)) => {
+                                match rustls::crypto::aws_lc_rs::sign::any_supported_type(&key) {
+                                    Ok(signing_key) => {
+                                        let new_key =
+                                            Arc::new(CertifiedKey::new(certs, signing_key));
+                                        if let Ok(mut w) = target.write() {
+                                            *w = new_key;
+                                            debug!("TLS certificate reloaded");
+                                            last_modified_cert = cm_mod;
+                                            last_modified_key = km_mod;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to parse reloaded private key: {:?}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                debug!("TLS reload check failed (expected during rotation): {}", e);
                             }
                         }
-                        Err(e) => error!("Failed to parse reloaded private key: {:?}", e),
                     }
                 }
-                Err(e) => {
-                    debug!("TLS reload check failed (expected during rotation): {}", e);
+                (Err(e), _) | (_, Err(e)) => {
+                    debug!("TLS watcher failed to read metadata (transient?): {}", e);
                 }
             }
         }
@@ -260,6 +298,63 @@ mod tests {
             config.is_ok(),
             "Failed to load valid server config: {:?}",
             config.err()
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_watcher_reloads_on_change() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = std::env::temp_dir().join(format!("genesis-tls-test-watcher-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("tls.crt");
+        let key_path = dir.join("tls.key");
+        let ca_path = dir.join("ca.pem");
+
+        // Initial cert (Cert A)
+        let cert_a = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        std::fs::write(&cert_path, cert_a.cert.pem()).unwrap();
+        std::fs::write(&key_path, cert_a.key_pair.serialize_pem()).unwrap();
+        std::fs::write(&ca_path, cert_a.cert.pem()).unwrap();
+
+        let paths = TlsPaths {
+            cert: cert_path.clone(),
+            key: key_path.clone(),
+            ca: ca_path.clone(),
+        };
+
+        // Load config and start watcher (with explicit 100ms interval for testing)
+        let (cert_chain, key) = load_cert_key_pair(&paths).unwrap();
+        let signing_key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key).unwrap();
+        let initial_cert_key = Arc::new(CertifiedKey::new(cert_chain, signing_key));
+        let shared_cert_key = Arc::new(RwLock::new(initial_cert_key));
+
+        spawn_watcher(
+            shared_cert_key.clone(),
+            paths.clone(),
+            Duration::from_millis(100),
+        );
+
+        // Verify initial state
+        let initial_key = shared_cert_key.read().unwrap().clone();
+        assert!(!initial_key.cert.is_empty());
+
+        // Update certs (Cert B)
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let cert_b = rcgen::generate_simple_self_signed(vec!["other.local".to_string()]).unwrap();
+        std::fs::write(&cert_path, cert_b.cert.pem()).unwrap();
+        std::fs::write(&key_path, cert_b.key_pair.serialize_pem()).unwrap();
+
+        // Wait for watcher to pick it up (poll 100ms)
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let new_key = shared_cert_key.read().unwrap().clone();
+        // Compare DER of the first cert in chain
+        assert_ne!(
+            initial_key.cert.first().unwrap(),
+            new_key.cert.first().unwrap(),
+            "Certificate should have been updated"
         );
     }
 }

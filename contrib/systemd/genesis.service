@@ -1,18 +1,50 @@
 [Unit]
 Description=Genesis admission token service
-After=network-online.target
-Wants=network-online.target
+Wants=network-online.target vault-agent-genesis.service
+After=network-online.target vault-agent-genesis.service
+Requires=vault-agent-genesis.service
 
 [Service]
 Type=simple
-Environment=GENESIS_PORT=8000
-EnvironmentFile=-/etc/genesis/genesis.env
+User=genesis
+Group=genesis
+
+# Runtime directory for TLS certs (if agent writes there) and other ephemeral data
+RuntimeDirectory=genesis
+RuntimeDirectoryMode=0750
+
+# Load static config (DSN, port, log level)
+EnvironmentFile=/etc/genesis/genesis.env
+
+# Default configuration for Agent Mode (Sidecar)
+# Agent socket must be accessible. If Agent writes to /run/genesis/agent.sock,
+# ensure the socket path matches what is configured in the Agent.
+Environment=GENESIS_VAULT_URL=unix:///run/genesis/agent.sock
+Environment=GENESIS_TLS_CERT_PATH=/run/genesis/tls.crt
+Environment=GENESIS_TLS_KEY_PATH=/run/genesis/tls.key
+Environment=GENESIS_TLS_CA_PATH=/run/genesis/ca.pem
+
+# Wait for Vault Agent to render TLS certificates and listen on the socket
+ExecStartPre=/usr/bin/test -s /run/genesis/tls.crt
+ExecStartPre=/usr/bin/test -s /run/genesis/tls.key
+ExecStartPre=/usr/bin/test -s /run/genesis/ca.pem
+ExecStartPre=/usr/bin/test -S /run/genesis/agent.sock
+
 ExecStart=/usr/bin/genesis
-Restart=on-failure
-RestartSec=2
-NoNewPrivileges=yes
-PrivateTmp=yes
-DynamicUser=yes
+
+# Restart policy
+Restart=always
+RestartSec=2s
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Allow access to the runtime directory (where agent socket and certs live)
+ReadWritePaths=/run/genesis
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

@@ -251,13 +251,16 @@ fn redact_dsn(dsn: &str) -> String {
 }
 
 fn log_entries(title: &str, entries: &[(&str, String)], mode: &str) {
-    if mode == "AGENT" {
-        println!("🚀 Mode: Vault Agent (Sidecar)");
+    let mode_desc = if mode == "AGENT" {
+        "Agent (Sidecar)"
     } else {
-        println!("⚠️ Mode: Direct Vault Access");
-    }
+        "Direct Access (TCP)"
+    };
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!("{}\n Vault mode: {mode}\n\n{title}:", permesi_banner());
+    let mut message = format!(
+        "{}\n\nVault mode: {mode_desc}\n\n{title}:",
+        permesi_banner()
+    );
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =
@@ -283,17 +286,17 @@ fn permesi_banner() -> String {
     )
 }
 
-const PERMESI_BANNER: &str = r"\
-   *     *\
- *   * *   *\
-   *  *  *\
-    \ | /\
-     \|/\
-  ----+----  P E R M E S I {VERSION}\
-     /|\\
-    / | \\
-   *  *  *\
- *   * *   *\
+const PERMESI_BANNER: &str = r"
+   *     *
+ *   * *   *
+   *  *  *
+    \ | /
+     \|/
+  ----+----  P E R M E S I {VERSION}
+     /|\
+    / | \
+   *  *  *
+ *   * *   *
    *     *";
 
 fn vault_base_url(url: &str) -> Result<String> {

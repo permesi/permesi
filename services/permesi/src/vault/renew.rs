@@ -1,32 +1,35 @@
+//! Background renewal tasks for Vault tokens and database leases.
+//!
+//! This module ensures that the application's access to Vault and the database
+//! remains valid by periodically renewing leases before they expire.
+//!
+//! Flow Overview:
+//! 1. `try_renew` determines the connectivity mode (Agent vs Direct).
+//! 2. In Direct (TCP) mode, it spawns a task to renew the application's Vault token.
+//! 3. In all modes, it spawns a task to renew the dynamic database lease.
+//! 4. Tasks use jittered intervals (70-90% of lease duration) to avoid synchronized
+//!    thundering herds.
+//! 5. If renewal fails repeatedly (3 attempts), a signal is sent via `tx` to
+//!    trigger a graceful application shutdown, failing closed.
+
 use crate::cli::globals::GlobalArgs;
 use anyhow::Result;
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use secrecy::SecretString;
+use secrecy::ExposeSecret;
 use tokio::{
     sync::mpsc,
     time::{Duration, sleep},
 };
 use tracing::{debug, error, info, instrument, warn};
 
-/// Renew a Vault token
-#[instrument(skip(token))]
-async fn renew_token(url: &str, token: &SecretString, increment: Option<u64>) -> Result<u64> {
-    vault_client::renew_token(crate::APP_USER_AGENT, url, token, increment).await
-}
-
-#[instrument(skip(token))]
-async fn renew_db_token(
-    url: &str,
-    token: &SecretString,
-    lease_id: &str,
-    increment: u64,
-) -> Result<u64> {
-    vault_client::renew_db_token(crate::APP_USER_AGENT, url, token, lease_id, increment).await
-}
-
-/// Refresh a Vault token
+/// Spawn background tasks to keep Vault and database leases renewed.
+///
+/// If running in Agent mode, the Vault token renewal is skipped as the Agent
+/// handles its own authentication. Database renewal is always performed by the
+/// application to ensure connection continuity.
+///
 /// # Errors
-/// Returns an error if the initial renewal task setup fails (e.g. request construction).
+/// Returns an error if the tasks cannot be initialized.
 #[instrument(skip(globals, tx))]
 pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> Result<()> {
     // In Agent Proxy mode, the Agent handles its own auth token renewal.
@@ -34,76 +37,31 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
     if globals.vault_transport.is_agent_proxy() {
         info!("Vault agent proxy mode enabled; skipping token renewals");
     } else {
-        // renew the token
-        tokio::spawn({
-            let mut rng = StdRng::from_entropy();
-            let mut jittered_lease_duration: Duration = Duration::default();
-
-            let url = globals.vault_url.clone();
-            let token = globals.vault_token.clone();
-            let tx = tx.clone();
-
-            async move {
-                loop {
-                    for attempt in 1..=3 {
-                        let backoff_time = 2u64.pow(attempt - 1);
-
-                        if attempt > 1 {
-                            warn!("Backing off for {} seconds", backoff_time);
-                            sleep(Duration::from_secs(backoff_time)).await;
-                        }
-
-                        match renew_token(&url, &token, None).await {
-                            Ok(lease_duration) => {
-                                let factor = rng.gen_range(70..90);
-
-                                jittered_lease_duration =
-                                    Duration::from_secs(lease_duration * factor / 100);
-                                info!(
-                                    lease_duration,
-                                    next_renew_seconds = jittered_lease_duration.as_secs(),
-                                    "Vault token renewed"
-                                );
-
-                                break;
-                            }
-
-                            Err(e) => {
-                                error!("Failed to renew token: {}", e);
-
-                                if attempt == 3 {
-                                    error!("Failed to renew token after 3 attempts: {}", e);
-                                    let _ = tx.send(());
-                                    return;
-                                }
-                            }
-                        }
-                    }
-
-                    debug!(
-                        "Will renew token in {} seconds",
-                        jittered_lease_duration.as_secs()
-                    );
-
-                    sleep(jittered_lease_duration).await;
-                }
-            }
-        });
+        spawn_token_renewer(globals, tx.clone());
     }
 
-    // renew the DB lease_id
+    spawn_db_lease_renewer(globals, tx);
+
+    Ok(())
+}
+
+fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
         let mut jittered_lease_duration: Duration = Duration::default();
 
-        let url = globals.vault_url.clone();
-        let token = globals.vault_token.clone();
-        let db_lease_id = globals.vault_db_lease_id.clone();
-        let db_lease_duration = globals.vault_db_lease_duration;
-        let tx = tx.clone();
+        let transport = globals.vault_transport.clone();
+        let token_secret = globals.vault_token.clone();
 
         async move {
             loop {
+                let token_str = token_secret.expose_secret();
+                let token = if token_str.is_empty() {
+                    None
+                } else {
+                    Some(token_str)
+                };
+
                 for attempt in 1..=3 {
                     let backoff_time = 2u64.pow(attempt - 1);
 
@@ -112,7 +70,75 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
                         sleep(Duration::from_secs(backoff_time)).await;
                     }
 
-                    match renew_db_token(&url, &token, &db_lease_id, db_lease_duration).await {
+                    match transport.renew_token(token, None).await {
+                        Ok(lease_duration) => {
+                            let factor = rng.gen_range(70..90);
+
+                            jittered_lease_duration =
+                                Duration::from_secs(lease_duration * factor / 100);
+                            info!(
+                                lease_duration,
+                                next_renew_seconds = jittered_lease_duration.as_secs(),
+                                "Vault token renewed"
+                            );
+
+                            break;
+                        }
+
+                        Err(e) => {
+                            error!("Failed to renew token: {}", e);
+
+                            if attempt == 3 {
+                                error!("Failed to renew token after 3 attempts: {}", e);
+                                let _ = tx.send(());
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                debug!(
+                    "Will renew token in {} seconds",
+                    jittered_lease_duration.as_secs()
+                );
+
+                sleep(jittered_lease_duration).await;
+            }
+        }
+    });
+}
+
+fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
+    tokio::spawn({
+        let mut rng = StdRng::from_entropy();
+        let mut jittered_lease_duration: Duration = Duration::default();
+
+        let transport = globals.vault_transport.clone();
+        let token_secret = globals.vault_token.clone();
+        let db_lease_id = globals.vault_db_lease_id.clone();
+        let db_lease_duration = globals.vault_db_lease_duration;
+
+        async move {
+            loop {
+                let token_str = token_secret.expose_secret();
+                let token = if token_str.is_empty() {
+                    None
+                } else {
+                    Some(token_str)
+                };
+
+                for attempt in 1..=3 {
+                    let backoff_time = 2u64.pow(attempt - 1);
+
+                    if attempt > 1 {
+                        warn!("Backing off for {} seconds", backoff_time);
+                        sleep(Duration::from_secs(backoff_time)).await;
+                    }
+
+                    match transport
+                        .renew_db_lease(token, &db_lease_id, db_lease_duration)
+                        .await
+                    {
                         Ok(lease_duration) => {
                             let factor = rng.gen_range(70..90);
 
@@ -148,14 +174,12 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
             }
         }
     });
-
-    Ok(())
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{renew_db_token, renew_token, try_renew};
+    use super::try_renew;
     use crate::cli::globals::GlobalArgs;
     use anyhow::{Result, bail};
     use secrecy::SecretString;
@@ -188,57 +212,6 @@ mod tests {
             Ok(None) => bail!("shutdown channel disconnected unexpectedly"),
             Err(_) => bail!("expected shutdown signal after 3 failed renew attempts"),
         }
-    }
-
-    #[tokio::test]
-    async fn renew_token_returns_lease_duration() -> Result<()> {
-        if !can_bind_localhost() {
-            eprintln!("Skipping test: cannot bind localhost");
-            return Ok(());
-        }
-        let server = MockServer::start().await;
-        let token = SecretString::from("vault-token".to_string());
-
-        Mock::given(method("POST"))
-            .and(path("/v1/auth/token/renew-self"))
-            .and(header("X-Vault-Token", "vault-token"))
-            .and(body_json(json!({ "increment": 0 })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "auth": { "lease_duration": 42 }
-            })))
-            .mount(&server)
-            .await;
-
-        let lease_duration = renew_token(&server.uri(), &token, None).await?;
-        assert_eq!(lease_duration, 42);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn renew_db_token_returns_lease_duration() -> Result<()> {
-        if !can_bind_localhost() {
-            eprintln!("Skipping test: cannot bind localhost");
-            return Ok(());
-        }
-        let server = MockServer::start().await;
-        let token = SecretString::from("vault-token".to_string());
-
-        Mock::given(method("POST"))
-            .and(path("/v1/sys/leases/renew"))
-            .and(header("X-Vault-Token", "vault-token"))
-            .and(body_json(json!({
-                "increment": 120,
-                "lease_id": "lease-1"
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "lease_duration": 120
-            })))
-            .mount(&server)
-            .await;
-
-        let lease_duration = renew_db_token(&server.uri(), &token, "lease-1", 120).await?;
-        assert_eq!(lease_duration, 120);
-        Ok(())
     }
 
     #[tokio::test]

@@ -6,9 +6,9 @@
 //! 3. Platform Admin (Users, Global Settings - Operator only)
 
 use crate::app_lib::theme::Theme;
-use crate::features::auth::state::use_auth;
+use crate::features::auth::{client, state::use_auth};
 use crate::routes::paths;
-use leptos::prelude::*;
+use leptos::{prelude::*, task::spawn_local};
 use leptos_router::{components::A, hooks::use_location};
 
 #[component]
@@ -18,6 +18,17 @@ pub fn Sidebar() -> impl IntoView {
     let pathname = move || location.pathname.get();
 
     let (is_profile_open, set_profile_open) = signal(false);
+
+    // True = Operational (Green), False = Offline (Red)
+    let (is_healthy, set_is_healthy) = signal(false);
+
+    Effect::new(move |_| {
+        spawn_local(async move {
+            if client::fetch_health().await.is_ok() {
+                set_is_healthy.set(true);
+            }
+        });
+    });
 
     // Auto-expand if navigating to any profile sub-route
     Effect::new(move |_| {
@@ -179,10 +190,23 @@ pub fn Sidebar() -> impl IntoView {
             </nav>
 
             // Footer / Build Info
-            <div class="p-4 border-t border-gray-100 dark:border-gray-800">
-                <p class="text-[10px] text-gray-400 font-mono text-center uppercase tracking-tighter">
-                    "Permesi Identity Engine"
-                </p>
+            <div class="border-t border-gray-100 dark:border-gray-800">
+                <div class="mx-auto flex items-center justify-center px-4 py-2 font-mono text-gray-400">
+                    <A
+                        href=paths::HEALTH
+                        attr:class="flex items-center gap-2 hover:text-gray-800 dark:hover:text-gray-300 transition-colors"
+                    >
+                        <span class="text-[10px]">{concat!("v", env!("CARGO_PKG_VERSION"))}</span>
+                        <span class="text-[10px] mx-1">"|"</span>
+                        <span
+                            class="text-[10px]"
+                            class:text-green-500=move || is_healthy.get()
+                            class:text-red-500=move || !is_healthy.get()
+                        >
+                            "●"
+                        </span>
+                    </A>
+                </div>
             </div>
         </aside>
     }

@@ -656,10 +656,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         </div>
 
                                         <Show when=move || status.two_factor_enabled>
-                                            <div class="px-6 py-4 space-y-4">
-                                                <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                                    "Methods"
-                                                </h3>
+                                            <div class="px-6 py-4 space-y-2">
                                                 <div class="group">
                                                     <div class=Theme::LIST_ITEM_FLAT>
                                                         <div class="flex items-center space-x-3">
@@ -910,10 +907,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         <Show when=move || {
                                             security_keys.get().map(|r| r.map(|keys| !keys.is_empty()).unwrap_or(false)).unwrap_or(false)
                                         }>
-                                            <div class="px-6 py-4 space-y-4">
-                                                <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                                    "Registered keys"
-                                                </h3>
+                                            <div class="px-6 py-4 space-y-2">
                                                 <For
                                                     each=move || security_keys.get().and_then(|res| res.ok()).unwrap_or_default()
                                                     key=|key| key.credential_id.clone()

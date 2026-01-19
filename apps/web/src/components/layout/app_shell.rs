@@ -103,7 +103,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                 on:click=move |_| set_menu_open.set(false)
                             >
                                 <img src="/logo.svg" class="h-8 dark:invert" alt="permesi" />
-                                <span class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">
+                                <span class="font-space-mono font-normal tracking-[0.25em] whitespace-nowrap text-gray-900 dark:text-white">
                                     "Permesi"
                                 </span>
                                 <Show when=move || is_full_session.get()>

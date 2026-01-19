@@ -286,6 +286,83 @@ impl VaultTransport {
             }
         }
     }
+
+    /// Renew the current Vault authentication token.
+    ///
+    /// This follows the `/v1/auth/token/renew-self` protocol. If `token` is `None`,
+    /// the request is sent without a token header, allowing the Vault Agent to
+    /// inject it transparently.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or Vault returns a non-success status.
+    pub async fn renew_token(&self, token: Option<&str>, increment: Option<u64>) -> Result<u64> {
+        let payload = serde_json::json!({
+            "increment": increment.unwrap_or(0)
+        });
+
+        let response = self
+            .request_json(
+                Method::POST,
+                "/v1/auth/token/renew-self",
+                token,
+                Some(&payload),
+            )
+            .await?;
+
+        if !response.status.is_success() {
+            return Err(anyhow!(
+                "{} - {}, {}",
+                response.url,
+                response.status,
+                crate::vault_error_message(&response.body)
+            ));
+        }
+
+        response
+            .body
+            .get("auth")
+            .and_then(|v| v.get("lease_duration"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
+    }
+
+    /// Renew a Vault database secret lease.
+    ///
+    /// Extends the validity of a dynamic database credential. The `token` parameter
+    /// follows the same optionality rules as `renew_token`.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or Vault returns a non-success status.
+    pub async fn renew_db_lease(
+        &self,
+        token: Option<&str>,
+        lease_id: &str,
+        increment: u64,
+    ) -> Result<u64> {
+        let payload = serde_json::json!({
+            "increment": increment,
+            "lease_id": lease_id
+        });
+
+        let response = self
+            .request_json(Method::POST, "/v1/sys/leases/renew", token, Some(&payload))
+            .await?;
+
+        if !response.status.is_success() {
+            return Err(anyhow!(
+                "{} - {}, {}",
+                response.url,
+                response.status,
+                crate::vault_error_message(&response.body)
+            ));
+        }
+
+        response
+            .body
+            .get("lease_duration")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
+    }
 }
 
 /// Response wrapper for Vault requests.

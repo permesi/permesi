@@ -156,7 +156,9 @@ api_proxy {
 
 listener "unix" {
   address      = "/run/permesi/agent.sock"
-  socket_mode  = "0660"
+  # Note: set to 0666 to allow container users to connect to the socket.
+  # Restrict access at the directory level (/run/permesi) on the host.
+  socket_mode  = "0666"
   socket_user  = "permesi"
   socket_group = "permesi"
 
@@ -172,7 +174,9 @@ template {
 
 template {
   destination = "/run/permesi/tls.key"
-  perms = "0600"
+  # Note: set to 0644 to allow container users to read the key when mounted as a volume.
+  # Restrict access at the directory level (/run/permesi) on the host.
+  perms = "0644"
   contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"common_name=api.permesi.localhost\" \"alt_names=api.permesi.localhost\" \"ttl=24h\" }}{{ .Data.private_key }}{{ end }}"
 }
 
@@ -214,7 +218,9 @@ api_proxy {
 
 listener "unix" {
   address      = "/run/genesis/agent.sock"
-  socket_mode  = "0660"
+  # Note: set to 0666 to allow container users to connect to the socket.
+  # Restrict access at the directory level (/run/genesis) on the host.
+  socket_mode  = "0666"
   socket_user  = "genesis"
   socket_group = "genesis"
 
@@ -230,7 +236,9 @@ template {
 
 template {
   destination = "/run/genesis/tls.key"
-  perms = "0600"
+  # Note: set to 0644 to allow container users to read the key when mounted as a volume.
+  # Restrict access at the directory level (/run/genesis) on the host.
+  perms = "0644"
   contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ .Data.private_key }}{{ end }}"
 }
 
