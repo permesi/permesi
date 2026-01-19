@@ -84,11 +84,13 @@ url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
+service_utils = { version = "0.3.8", path = "../../crates/service_utils" }
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }
 
 [dev-dependencies]
+hyper = { workspace = true, features = ["full"] }
 rcgen = "0.13"
 test_support = { workspace = true }
 wiremock = "0.6"

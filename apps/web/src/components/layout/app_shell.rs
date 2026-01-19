@@ -18,6 +18,8 @@ fn breadcrumbs(path: &str) -> Vec<String> {
 
     match path {
         "/me" => return vec!["Me".to_string()],
+        "/orgs" => return vec!["Organizations".to_string()],
+        "/users" => return vec!["Users".to_string()],
         "/admin" => return vec!["Admin".to_string()],
         "/admin/claim" => return vec!["Admin".to_string(), "Claim".to_string()],
         // Public routes usually don't have AppShell, but for completeness:
@@ -83,7 +85,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
     let is_full_session = auth.is_full_session;
     let location = use_location();
     let on_login = move || location.pathname.get() == paths::LOGIN;
-    let breadcrumb_segments = Signal::derive(move || breadcrumbs(&location.pathname.get()));
+    let breadcrumb_segments = Memo::new(move |_| breadcrumbs(&location.pathname.get()));
     let user_info = Signal::derive(move || {
         auth.session
             .get()
@@ -103,13 +105,13 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                 on:click=move |_| set_menu_open.set(false)
                             >
                                 <img src="/logo.svg" class="h-8 dark:invert" alt="permesi" />
-                                <span class="font-space-mono font-normal tracking-[0.25em] whitespace-nowrap text-gray-900 dark:text-white">
+                                <span class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">
                                     "Permesi"
                                 </span>
                                 <Show when=move || is_full_session.get()>
                                     <For
                                         each=move || breadcrumb_segments.get().into_iter().enumerate()
-                                        key=|(i, _)| *i
+                                        key=|(_, segment)| segment.clone()
                                         children=move |(_, segment)| {
                                             view! {
                                                 <span class="text-sm text-gray-400 dark:text-gray-500">"/"</span>

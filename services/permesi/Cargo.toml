@@ -96,10 +96,13 @@ chacha20poly1305 = "0.10.1"
 webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
 openssl = { version = "0.10", features = ["vendored"] }
 hex = "0.4"
+service_utils = { version = "0.3.8", path = "../../crates/service_utils" }
 
 [dev-dependencies]
 base32 = "0.5.1"
+http-body-util.workspace = true
 hyper = { workspace = true }
+hyper-util.workspace = true
 rcgen = "0.14.6"
 test_support = { workspace = true }
 wiremock = "0.6"

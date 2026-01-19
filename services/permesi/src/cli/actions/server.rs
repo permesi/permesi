@@ -14,8 +14,6 @@ pub struct Args {
     pub vault_role_id: Option<String>,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
-    pub vault_addr: Option<String>,
-    pub vault_policy: String,
     pub admission_paserk_url: String,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
@@ -44,11 +42,13 @@ pub struct Args {
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
-    crate::tls::set_runtime_paths(crate::tls::TlsPaths::from_cli(
-        args.tls_cert_path.clone(),
-        args.tls_key_path.clone(),
-        args.tls_ca_path.clone(),
-        args.admission_paserk_ca_path.clone(),
+    crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
+        std::path::PathBuf::from(args.tls_cert_path.clone()),
+        std::path::PathBuf::from(args.tls_key_path.clone()),
+        std::path::PathBuf::from(args.tls_ca_path.clone()),
+        args.admission_paserk_ca_path
+            .clone()
+            .map(std::path::PathBuf::from),
     ));
     let issuer = args
         .admission_issuer
@@ -58,10 +58,7 @@ pub async fn execute(args: Args) -> Result<()> {
         .admission_audience
         .clone()
         .unwrap_or_else(|| "permesi".to_string());
-    let vault_addr = match args.vault_addr.clone() {
-        Some(addr) => addr,
-        None => vault_base_url(&args.vault_url).unwrap_or_else(|_| args.vault_url.clone()),
-    };
+    let vault_addr = vault_base_url(&args.vault_url).unwrap_or_else(|_| args.vault_url.clone());
     log_startup_args(&args, &issuer, &audience, &vault_addr);
 
     let admission_verifier = Arc::new(if args.admission_paserk_url.trim().starts_with('{') {
@@ -144,7 +141,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
 
     let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
-        .with_vault_policy(args.vault_policy.clone())
+        .with_vault_policy("permesi-operators".to_string())
         .with_admin_ttl_seconds(args.platform_admin_ttl_seconds)
         .with_recent_auth_seconds(args.platform_recent_auth_seconds);
 
@@ -176,7 +173,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
     let admission_paserk_ca = args
         .admission_paserk_ca_path
         .clone()
-        .unwrap_or_else(|| args.tls_ca_path.clone());
+        .unwrap_or_else(|| "none (using system roots)".to_string());
     let entries = [
         ("port", args.port.to_string()),
         ("dsn", redact_dsn(&args.dsn)),
@@ -197,7 +194,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             "vault_wrapped_token_set",
             args.vault_wrapped_token.is_some().to_string(),
         ),
-        ("vault_policy", args.vault_policy.clone()),
+        ("vault_policy", "permesi-operators".to_string()),
         ("tls_cert_path", args.tls_cert_path.clone()),
         ("tls_key_path", args.tls_key_path.clone()),
         ("tls_ca_path", args.tls_ca_path.clone()),

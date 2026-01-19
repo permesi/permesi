@@ -148,10 +148,15 @@ impl AdmissionVerifier {
         }
 
         let ca_cert = crate::tls::load_reqwest_ca()?;
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .use_rustls_tls()
-            .tls_certs_only(std::iter::once(ca_cert))
-            .user_agent(crate::APP_USER_AGENT)
+            .user_agent(crate::APP_USER_AGENT);
+
+        if let Some(cert) = ca_cert {
+            builder = builder.tls_certs_only(std::iter::once(cert));
+        }
+
+        let client = builder
             .build()
             .context("Failed to build PASERK HTTP client")?;
         // Startup fetch is best-effort: if genesis isn't ready yet, start with an empty, stale cache

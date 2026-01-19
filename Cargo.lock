@@ -1601,6 +1601,7 @@ dependencies = [
  "clap",
  "http",
  "http-body-util",
+ "hyper",
  "hyper-util",
  "hyperlocal",
  "once_cell",
@@ -1615,6 +1616,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "service_utils",
  "sqlx",
  "temp-env",
  "test_support",
@@ -3155,7 +3157,9 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "http",
+ "http-body-util",
  "hyper",
+ "hyper-util",
  "once_cell",
  "opaque-ke",
  "openssl",
@@ -3172,6 +3176,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "service_utils",
  "sha2",
  "sqlx",
  "temp-env",
@@ -4338,6 +4343,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "service_utils"
+version = "0.3.8"
+dependencies = [
+ "anyhow",
+ "http",
+ "rand 0.8.5",
+ "rcgen 0.14.7",
+ "reqwest 0.13.1",
+ "rustls",
+ "rustls-pemfile",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "temp-env",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "vault_client",
+ "wiremock",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5500,6 +5528,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "hyperlocal",
+ "libc",
  "reqwest 0.13.1",
  "secrecy",
  "serde_json",

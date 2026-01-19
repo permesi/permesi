@@ -135,6 +135,7 @@ impl VaultTransport {
                 VaultTransportInner::Tcp { client, base_url }
             }
             VaultTarget::AgentProxy { socket_path } => {
+                check_socket_accessibility(&socket_path)?;
                 let client =
                     Box::new(HyperClient::builder(TokioExecutor::new()).build(UnixConnector));
                 VaultTransportInner::AgentProxy {
@@ -270,7 +271,12 @@ impl VaultTransport {
                 let response = timeout(VAULT_REQUEST_TIMEOUT, client.request(request))
                     .await
                     .map_err(|_| anyhow!("vault request timed out"))?
-                    .map_err(|e| anyhow!("hyper request error: {e}"))?;
+                    .map_err(|e| {
+                        anyhow!(
+                            "hyper request error: {e}. Check permissions for socket: {}",
+                            socket_path.display()
+                        )
+                    })?;
                 let status = response.status();
                 let collected = response
                     .into_body()
@@ -388,6 +394,26 @@ impl std::fmt::Debug for VaultTransport {
                 .field("user_agent", &self.user_agent)
                 .finish(),
         }
+    }
+}
+
+fn check_socket_accessibility(path: &Path) -> Result<()> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            // Check if it is a socket? (std::os::unix::fs::MetadataExt required)
+            // For now, just existence is enough to rule out "missing file".
+            // We can add more checks if needed.
+            // Note: We cannot easily check for read/write access without trying to open it or parsing ACLs,
+            // which is overkill here. Metadata success implies we can stat it.
+            if !metadata.permissions().readonly() {
+                // It is not readonly, so might be writable.
+            }
+            Ok(())
+        }
+        Err(e) => Err(anyhow!(
+            "Vault Agent socket not accessible at {}: {e}",
+            path.display()
+        )),
     }
 }
 

@@ -22,10 +22,11 @@ pub struct Args {
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
-    crate::tls::set_runtime_paths(crate::tls::TlsPaths::from_cli(
-        args.tls_cert_path.clone(),
-        args.tls_key_path.clone(),
-        args.tls_ca_path.clone(),
+    crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
+        std::path::PathBuf::from(args.tls_cert_path.clone()),
+        std::path::PathBuf::from(args.tls_key_path.clone()),
+        std::path::PathBuf::from(args.tls_ca_path.clone()),
+        None,
     ));
     log_startup_args(&args);
     let vault_transport =

@@ -88,6 +88,14 @@ impl TestContext {
         let vault = VaultContainer::start(network.name()).await?;
         vault.enable_secrets_engine("database", "database").await?;
 
+        // Setup Transit
+        vault
+            .enable_secrets_engine("transit/permesi", "transit")
+            .await?;
+        vault
+            .create_transit_key("transit/permesi", "totp", "chacha20-poly1305")
+            .await?;
+
         // Provision OPAQUE seed and pepper
         vault
             .write_kv_v2(
@@ -132,6 +140,12 @@ path "auth/token/renew-self" {
   capabilities = ["update"]
 }
 path "sys/leases/renew" {
+  capabilities = ["update"]
+}
+path "transit/permesi/datakey/plaintext/totp" {
+  capabilities = ["update"]
+}
+path "transit/permesi/decrypt/totp" {
   capabilities = ["update"]
 }
 "#;

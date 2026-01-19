@@ -1,5 +1,7 @@
 use clap::{Arg, Command, builder::ValueParser};
 
+pub const ARG_VERBOSITY: &str = "verbosity";
+
 #[must_use]
 pub fn validator_log_level() -> ValueParser {
     ValueParser::from(move |level: &str| -> std::result::Result<u8, String> {
@@ -21,9 +23,10 @@ pub fn validator_log_level() -> ValueParser {
     })
 }
 
+#[must_use]
 pub fn with_args(command: Command) -> Command {
     command.arg(
-        Arg::new("verbosity")
+        Arg::new(ARG_VERBOSITY)
             .short('v')
             .long("verbose")
             .help("Verbosity level: ERROR, WARN, INFO, DEBUG, TRACE (default: ERROR)")

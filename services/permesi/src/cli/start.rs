@@ -22,8 +22,12 @@ pub fn start() -> Result<Action> {
     let matches = commands::new().get_matches();
 
     // 2. Extract verbosity level
-    let verbosity_level =
-        get_verbosity_level(matches.get_one::<u8>("verbosity").copied().unwrap_or(0));
+    let verbosity_level = get_verbosity_level(
+        matches
+            .get_one::<u8>(commands::logging::ARG_VERBOSITY)
+            .copied()
+            .unwrap_or(0),
+    );
 
     // 3. Initialize telemetry
     telemetry::init(verbosity_level)?;

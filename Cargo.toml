@@ -8,7 +8,7 @@ members = [
   "apps/web",
   "crates/admission_token",
   "crates/vault_client",
-  "crates/test_support",
+  "crates/test_support", "crates/service_utils",
 ]
 
 [workspace.package]

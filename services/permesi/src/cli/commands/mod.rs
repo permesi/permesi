@@ -1,31 +1,37 @@
-mod admission;
-mod auth;
-mod logging;
-mod tls;
-mod vault;
+pub mod admission;
+pub mod auth;
+pub mod logging;
+pub mod tls;
+pub mod vault;
 
 use clap::{
     Arg, ColorChoice, Command,
     builder::styling::{AnsiColor, Effects, Styles},
 };
 
+use self::vault::{ARG_VAULT_ROLE_ID, ARG_VAULT_SECRET_ID, ARG_VAULT_URL, ARG_VAULT_WRAPPED_TOKEN};
+
 /// Validate that TCP mode requirements are met if the URL implies TCP.
 ///
 /// # Errors
 /// Returns an error string if `vault-url` is HTTP(S) but auth arguments are missing.
 pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
-    let Some(url) = matches.get_one::<String>("vault-url") else {
+    let Some(url) = matches.get_one::<String>(ARG_VAULT_URL) else {
         return Ok(()); // Should be handled by required=true in clap
     };
 
     if url.starts_with("http://") || url.starts_with("https://") {
-        if !matches.contains_id("vault-role-id") {
-            return Err(
-                "Missing required argument: --vault-role-id (required for TCP mode)".to_string(),
-            );
+        if !matches.contains_id(ARG_VAULT_ROLE_ID) {
+            return Err(format!(
+                "Missing required argument: --{ARG_VAULT_ROLE_ID} (required for TCP mode)"
+            ));
         }
-        if !matches.contains_id("vault-secret-id") && !matches.contains_id("vault-wrapped-token") {
-            return Err("Missing required argument: --vault-secret-id or --vault-wrapped-token (required for TCP mode)".to_string());
+        if !matches.contains_id(ARG_VAULT_SECRET_ID)
+            && !matches.contains_id(ARG_VAULT_WRAPPED_TOKEN)
+        {
+            return Err(format!(
+                "Missing required argument: --{ARG_VAULT_SECRET_ID} or --{ARG_VAULT_WRAPPED_TOKEN} (required for TCP mode)"
+            ));
         }
     }
     Ok(())
@@ -127,15 +133,15 @@ mod tests {
             Some("postgres://user:password@localhost:5432/permesi".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>("vault-url").cloned(),
+            matches.get_one::<String>(ARG_VAULT_URL).cloned(),
             Some("https://vault.tld:8200".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>("vault-role-id").cloned(),
+            matches.get_one::<String>(ARG_VAULT_ROLE_ID).cloned(),
             Some("role-id".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>("vault-secret-id").cloned(),
+            matches.get_one::<String>(ARG_VAULT_SECRET_ID).cloned(),
             Some("secret-id".to_string())
         );
     }
@@ -170,10 +176,13 @@ mod tests {
                     Some("postgres://user:password@localhost:5432/permesi".to_string())
                 );
                 assert_eq!(
-                    matches.get_one::<String>("vault-url").cloned(),
+                    matches.get_one::<String>(ARG_VAULT_URL).cloned(),
                     Some("https://vault.tld:8200".to_string())
                 );
-                assert_eq!(matches.get_one::<u8>("verbosity").copied(), Some(2));
+                assert_eq!(
+                    matches.get_one::<u8>(logging::ARG_VERBOSITY).copied(),
+                    Some(2)
+                );
             },
         );
     }
@@ -205,7 +214,7 @@ mod tests {
                     let command = new();
                     let matches = command.get_matches_from(vec!["permesi"]);
                     assert_eq!(
-                        matches.get_one::<u8>("verbosity").copied(),
+                        matches.get_one::<u8>(logging::ARG_VERBOSITY).copied(),
                         u8::try_from(index).ok()
                     );
                 },
@@ -250,10 +259,192 @@ mod tests {
                 let matches = command.get_matches_from(args);
 
                 assert_eq!(
-                    matches.get_one::<u8>("verbosity").copied(),
+                    matches.get_one::<u8>(logging::ARG_VERBOSITY).copied(),
                     u8::try_from(index).ok()
                 );
             });
         }
+    }
+
+    #[test]
+    fn test_removed_args_fail() {
+        let command = new();
+        // vault-addr should be rejected
+        let result = command.clone().try_get_matches_from(vec![
+            "permesi",
+            "--dsn",
+            "postgres://localhost",
+            "--vault-addr",
+            "http://addr",
+        ]);
+        assert_eq!(
+            result.map_err(|e| e.kind()),
+            Err(clap::error::ErrorKind::UnknownArgument)
+        );
+
+        // vault-policy should be rejected
+        let result = command.try_get_matches_from(vec![
+            "permesi",
+            "--dsn",
+            "postgres://localhost",
+            "--vault-policy",
+            "policy",
+        ]);
+        assert_eq!(
+            result.map_err(|e| e.kind()),
+            Err(clap::error::ErrorKind::UnknownArgument)
+        );
+    }
+
+    // Helper to clear env vars for TCP validation tests
+    fn with_cleared_vault_env<F, R>(f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        temp_env::with_vars(
+            [
+                ("PERMESI_VAULT_ROLE_ID", None::<&str>),
+                ("PERMESI_VAULT_SECRET_ID", None::<&str>),
+                ("PERMESI_VAULT_WRAPPED_TOKEN", None::<&str>),
+            ],
+            f,
+        )
+    }
+
+    #[test]
+    fn test_validate_tcp_missing_role() -> Result<(), Box<dyn std::error::Error>> {
+        with_cleared_vault_env(|| {
+            let command = new();
+            // 1. TCP mode (http) missing role-id
+            let matches = command.try_get_matches_from(vec![
+                "permesi",
+                "--dsn",
+                "postgres://",
+                "--admission-paserk-url",
+                "https://url",
+                "--tls-cert-path",
+                "cert",
+                "--tls-key-path",
+                "key",
+                "--tls-ca-path",
+                "ca",
+                "--vault-url",
+                "http://vault:8200",
+            ])?;
+            assert!(validate(&matches).is_err(), "Should fail missing role-id");
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_validate_tcp_missing_secret() -> Result<(), Box<dyn std::error::Error>> {
+        with_cleared_vault_env(|| {
+            let command = new();
+            // 2. TCP mode (https) missing secret-id/wrapped-token
+            let matches = command.try_get_matches_from(vec![
+                "permesi",
+                "--dsn",
+                "postgres://",
+                "--admission-paserk-url",
+                "https://url",
+                "--tls-cert-path",
+                "cert",
+                "--tls-key-path",
+                "key",
+                "--tls-ca-path",
+                "ca",
+                "--vault-url",
+                "https://vault:8200",
+                "--vault-role-id",
+                "role",
+            ])?;
+            assert!(
+                validate(&matches).is_err(),
+                "Should fail missing secret-id/wrapped-token"
+            );
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_validate_tcp_valid() -> Result<(), Box<dyn std::error::Error>> {
+        with_cleared_vault_env(|| {
+            let command = new();
+            // 3. TCP mode (http) valid
+            let matches = command.try_get_matches_from(vec![
+                "permesi",
+                "--dsn",
+                "postgres://",
+                "--admission-paserk-url",
+                "https://url",
+                "--tls-cert-path",
+                "cert",
+                "--tls-key-path",
+                "key",
+                "--tls-ca-path",
+                "ca",
+                "--vault-url",
+                "http://vault:8200",
+                "--vault-role-id",
+                "role",
+                "--vault-secret-id",
+                "secret",
+            ])?;
+            assert!(
+                validate(&matches).is_ok(),
+                "Should pass with valid TCP args"
+            );
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_validate_agent_unix() -> Result<(), Box<dyn std::error::Error>> {
+        with_cleared_vault_env(|| {
+            let command = new();
+            // 4. Agent mode (unix socket) valid without auth
+            let matches = command.try_get_matches_from(vec![
+                "permesi",
+                "--dsn",
+                "postgres://",
+                "--admission-paserk-url",
+                "https://url",
+                "--tls-cert-path",
+                "cert",
+                "--tls-key-path",
+                "key",
+                "--tls-ca-path",
+                "ca",
+                "--vault-url",
+                "unix:///tmp/agent.sock",
+            ])?;
+            assert!(validate(&matches).is_ok(), "Should pass with unix socket");
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_validate_agent_path() -> Result<(), Box<dyn std::error::Error>> {
+        with_cleared_vault_env(|| {
+            let command = new();
+            // 5. Agent mode (path) valid without auth
+            let matches = command.try_get_matches_from(vec![
+                "permesi",
+                "--dsn",
+                "postgres://",
+                "--admission-paserk-url",
+                "https://url",
+                "--tls-cert-path",
+                "cert",
+                "--tls-key-path",
+                "key",
+                "--tls-ca-path",
+                "ca",
+                "--vault-url",
+                "/tmp/agent.sock",
+            ])?;
+            assert!(validate(&matches).is_ok(), "Should pass with socket path");
+            Ok(())
+        })
     }
 }

@@ -8,6 +8,8 @@ use crate::APP_USER_AGENT;
 use anyhow::Result;
 use tracing::instrument;
 
+pub use vault_client::{VaultMode, VaultTarget, VaultTransport};
+
 #[instrument]
 /// # Errors
 /// Returns an error if `url` cannot be parsed, has no host, or uses an unsupported scheme.
