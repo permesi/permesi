@@ -179,7 +179,22 @@ impl VaultContainer {
 
         let mut host_port = None;
         let mut last_error = None;
+
+        // Give the runtime a moment to initialize network mappings
+        sleep(Duration::from_millis(500)).await;
+
         for i in 0..60 {
+            if let Ok(ports) = container.ports().await {
+                if let Some(port) = ports.map_to_host_port_ipv4(VAULT_PORT.tcp()) {
+                    host_port = Some(port);
+                    break;
+                }
+                if let Some(port) = ports.map_to_host_port_ipv6(VAULT_PORT.tcp()) {
+                    host_port = Some(port);
+                    break;
+                }
+            }
+
             match container.get_host_port_ipv4(VAULT_PORT.tcp()).await {
                 Ok(port) => {
                     host_port = Some(port);
@@ -187,17 +202,10 @@ impl VaultContainer {
                 }
                 Err(e) => {
                     last_error = Some(e);
-                    // Fallback: try to find the port in all ports
-                    if let Ok(ports) = container.ports().await
-                        && let Some(mapping) = ports.map_to_host_port_ipv4(VAULT_PORT.tcp())
-                    {
-                        host_port = Some(mapping);
-                        break;
-                    }
                 }
             }
             sleep(Duration::from_millis(250)).await;
-            if i % 10 == 0 && i > 0 {
+            if i % 20 == 0 && i > 0 {
                 eprintln!("Still waiting for Vault port mapping (attempt {i})...");
             }
         }

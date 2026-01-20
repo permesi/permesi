@@ -80,8 +80,13 @@ runs:
         echo "Verifying Podman..."
         # Use the socket path explicitly to avoid environment propagation issues in the current step
         export DOCKER_HOST="unix://${SOCKET_PATH}"
-        podman info > /dev/null || { echo "Podman info failed, trying system migrate..."; podman system migrate; podman info; }
+        if ! podman --url "unix://${SOCKET_PATH}" info > /dev/null 2>&1; then
+          echo "Podman info failed, trying system migrate..."
+          podman system migrate
+          podman --url "unix://${SOCKET_PATH}" info
+        fi
 
         echo "Pre-pulling Postgres and Vault images..."
-        podman pull postgres:18 || true
-        podman pull hashicorp/vault:1.17.3 || true
+        # Pull using the explicit socket to ensure they are in the right store
+        podman --url "unix://${SOCKET_PATH}" pull postgres:18 || true
+        podman --url "unix://${SOCKET_PATH}" pull hashicorp/vault:1.17.3 || true
