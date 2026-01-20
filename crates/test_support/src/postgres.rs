@@ -96,10 +96,17 @@ impl PostgresContainer {
             .start()
             .await
             .context("Failed to start Postgres container")?;
-        let host_port = container
-            .get_host_port_ipv4(POSTGRES_PORT.tcp())
-            .await
-            .context("Failed to resolve Postgres host port")?;
+
+        let mut host_port = None;
+        for _ in 0..30 {
+            if let Ok(port) = container.get_host_port_ipv4(POSTGRES_PORT.tcp()).await {
+                host_port = Some(port);
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        let host_port = host_port.context("Failed to resolve Postgres host port after retries")?;
 
         Ok(Self {
             container,

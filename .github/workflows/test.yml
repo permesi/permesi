@@ -106,13 +106,14 @@ jobs:
       - name: DB schema verify
         run: |
           set -euo pipefail
+          CONTAINER_NAME="postgres-permesi-${GITHUB_RUN_ID}"
           VOLUME_NAME="postgres-permesi-data-${GITHUB_RUN_ID}"
 
-          if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
-            echo "postgres-permesi already running"
+          if [[ -n "$(podman ps -q --filter "name=^${CONTAINER_NAME}$")" ]]; then
+            echo "${CONTAINER_NAME} already running"
           else
             podman volume create "${VOLUME_NAME}"
-            podman run --replace -d --name postgres-permesi \
+            podman run --replace -d --name "${CONTAINER_NAME}" \
               -e PGDATA=/var/lib/postgresql/data \
               -e POSTGRES_USER=postgres \
               -e POSTGRES_HOST_AUTH_METHOD=trust \
@@ -121,7 +122,7 @@ jobs:
               postgres:18 \
               postgres
 
-            if ! podman ps -a --format '{{.Names}}' | grep -q '^postgres-permesi$'; then
+            if ! podman ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
               echo "Postgres container failed to create"
               podman ps -a
               exit 1
@@ -130,7 +131,7 @@ jobs:
 
           ready=0
           for _ in {1..150}; do
-            if podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; then
+            if podman exec "${CONTAINER_NAME}" pg_isready -U postgres > /dev/null 2>&1; then
               ready=1
               break
             fi
@@ -140,17 +141,18 @@ jobs:
           if [[ "$ready" -ne 1 ]]; then
             echo "Postgres failed to become ready"
             podman ps -a
-            podman logs postgres-permesi || true
+            podman logs "${CONTAINER_NAME}" || true
             exit 1
           fi
 
-          podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
-          podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
+          podman exec -i "${CONTAINER_NAME}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
+          podman exec -i "${CONTAINER_NAME}" psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
       - name: Stop postgres container
         if: always()
         run: |
+          CONTAINER_NAME="postgres-permesi-${GITHUB_RUN_ID}"
           VOLUME_NAME="postgres-permesi-data-${GITHUB_RUN_ID}"
-          podman stop postgres-permesi || true
-          podman rm postgres-permesi || true
+          podman stop "${CONTAINER_NAME}" || true
+          podman rm "${CONTAINER_NAME}" || true
           podman volume rm "${VOLUME_NAME}" || true

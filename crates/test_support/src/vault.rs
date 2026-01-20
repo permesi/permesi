@@ -7,6 +7,7 @@ use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
 };
+use tokio::time::{Duration, sleep};
 
 use crate::unique_name;
 
@@ -172,10 +173,17 @@ impl VaultContainer {
             .start()
             .await
             .context("Failed to start Vault container")?;
-        let host_port = container
-            .get_host_port_ipv4(VAULT_PORT.tcp())
-            .await
-            .context("Failed to resolve Vault host port")?;
+
+        let mut host_port = None;
+        for _ in 0..30 {
+            if let Ok(port) = container.get_host_port_ipv4(VAULT_PORT.tcp()).await {
+                host_port = Some(port);
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        let host_port = host_port.context("Failed to resolve Vault host port after retries")?;
 
         let base_url = format!("http://127.0.0.1:{host_port}");
         let client = reqwest::Client::new();

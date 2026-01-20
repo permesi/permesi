@@ -36,16 +36,26 @@ runs:
         echo "Migrating Podman system state..."
         podman system migrate || true
 
-        # 5. Start podman system service if socket is missing
+        # 5. Start podman system service if socket is missing or unresponsive
         SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
+        SERVICE_NEEDED=0
         if [[ ! -S "$SOCKET_PATH" ]]; then
+          SERVICE_NEEDED=1
+        elif ! podman info >/dev/null 2>&1; then
+          echo "Podman socket exists but is unresponsive. Removing stale socket."
+          rm -f "$SOCKET_PATH"
+          SERVICE_NEEDED=1
+        fi
+
+        if [[ "$SERVICE_NEEDED" -eq 1 ]]; then
           echo "Starting podman system service..."
           mkdir -p "$(dirname "$SOCKET_PATH")"
           podman system service --time=0 "unix://${SOCKET_PATH}" &
 
           # Wait for socket
-          for _ in {1..30}; do
-            [[ -S "$SOCKET_PATH" ]] && break
+          for i in {1..60}; do
+            [[ -S "$SOCKET_PATH" ]] && podman info >/dev/null 2>&1 && break
+            echo "Waiting for podman socket... ($i)"
             sleep 0.5
           done
         fi
@@ -57,5 +67,12 @@ runs:
           echo "DOCKER_HOST=unix://${SOCKET_PATH}"
         } >> "${GITHUB_ENV}"
 
-        # 7. Verify Podman
-        podman info || { echo "Podman info failed, trying migrate again"; podman system migrate; podman info; }
+        # 7. Final verification and pre-pull images
+        echo "Verifying Podman..."
+        # Use the socket path explicitly to avoid environment propagation issues in the current step
+        export DOCKER_HOST="unix://${SOCKET_PATH}"
+        podman info > /dev/null || { echo "Podman info failed, trying system migrate..."; podman system migrate; podman info; }
+
+        echo "Pre-pulling Postgres and Vault images..."
+        podman pull postgres:18 || true
+        podman pull hashicorp/vault:1.17.3 || true
