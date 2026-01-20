@@ -131,7 +131,7 @@ mod tests {
     use super::{BootstrapOutcome, bootstrap_operator, operator_enabled, platform_operator_count};
     use anyhow::{Context, Result};
     use sqlx::{PgPool, Row, postgres::PgPoolOptions};
-    use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
+    use test_support::{postgres::PostgresContainer, runtime};
     use uuid::Uuid;
 
     const SCHEMA_SQL: &str = include_str!(concat!(
@@ -140,8 +140,7 @@ mod tests {
     ));
 
     async fn get_test_pool() -> Result<(PgPool, PostgresContainer)> {
-        let network = TestNetwork::new("permesi-admin-storage-test");
-        let postgres = PostgresContainer::start(network.name()).await?;
+        let postgres = PostgresContainer::start("bridge").await?;
         postgres.wait_until_ready().await?;
 
         let pool = PgPoolOptions::new()

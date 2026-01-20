@@ -38,7 +38,7 @@ use rand_chacha::ChaCha20Rng;
 use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
 use std::sync::Arc;
-use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
+use test_support::{postgres::PostgresContainer, runtime};
 use tokio::time::Duration;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -74,8 +74,7 @@ impl TestDb {
             return Err(err);
         }
 
-        let network = TestNetwork::new("permesi-auth");
-        let postgres = PostgresContainer::start(network.name()).await?;
+        let postgres = PostgresContainer::start("bridge").await?;
         postgres.wait_until_ready().await?;
         apply_schema(&postgres).await?;
 

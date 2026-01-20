@@ -157,7 +157,7 @@ impl VaultContainer {
             "-dev-listen-address=0.0.0.0:8200".to_string(),
         ];
 
-        let image = GenericImage::new(&config.image, &config.tag)
+        let mut image = GenericImage::new(&config.image, &config.tag)
             .with_exposed_port(VAULT_PORT.tcp())
             .with_wait_for(WaitFor::http(
                 HttpWaitStrategy::new("/v1/sys/health")
@@ -166,8 +166,11 @@ impl VaultContainer {
                     .with_expected_status_code(200_u16),
             ))
             .with_cmd(command)
-            .with_network(network)
             .with_container_name(&container_name);
+
+        if network != "bridge" && network != "default" {
+            image = image.with_network(network);
+        }
 
         let container = image
             .start()
@@ -175,15 +178,35 @@ impl VaultContainer {
             .context("Failed to start Vault container")?;
 
         let mut host_port = None;
-        for _ in 0..30 {
-            if let Ok(port) = container.get_host_port_ipv4(VAULT_PORT.tcp()).await {
-                host_port = Some(port);
-                break;
+        let mut last_error = None;
+        for i in 0..60 {
+            match container.get_host_port_ipv4(VAULT_PORT.tcp()).await {
+                Ok(port) => {
+                    host_port = Some(port);
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    // Fallback: try to find the port in all ports
+                    if let Ok(ports) = container.ports().await
+                        && let Some(mapping) = ports.map_to_host_port_ipv4(VAULT_PORT.tcp())
+                    {
+                        host_port = Some(mapping);
+                        break;
+                    }
+                }
             }
-            sleep(Duration::from_millis(200)).await;
+            sleep(Duration::from_millis(250)).await;
+            if i % 10 == 0 && i > 0 {
+                eprintln!("Still waiting for Vault port mapping (attempt {i})...");
+            }
         }
 
-        let host_port = host_port.context("Failed to resolve Vault host port after retries")?;
+        let host_port = host_port.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to resolve Vault host port after 60 retries. Last error: {last_error:?}"
+            )
+        })?;
 
         let base_url = format!("http://127.0.0.1:{host_port}");
         let client = reqwest::Client::new();

@@ -50,12 +50,21 @@ runs:
         if [[ "$SERVICE_NEEDED" -eq 1 ]]; then
           echo "Starting podman system service..."
           mkdir -p "$(dirname "$SOCKET_PATH")"
-          podman system service --time=0 "unix://${SOCKET_PATH}" &
+          # Kill any existing service using the same socket
+          pkill -f "podman system service.*${SOCKET_PATH}" || true
+          
+          # Start with explicit env and time=0 (stay up)
+          XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+          podman system service --time=0 "unix://${SOCKET_PATH}" > /dev/null 2>&1 &
 
-          # Wait for socket
+          # Wait for socket and response
           for i in {1..60}; do
-            [[ -S "$SOCKET_PATH" ]] && podman info >/dev/null 2>&1 && break
-            echo "Waiting for podman socket... ($i)"
+            if [[ -S "$SOCKET_PATH" ]]; then
+              if DOCKER_HOST="unix://${SOCKET_PATH}" podman info >/dev/null 2>&1; then
+                break
+              fi
+            fi
+            echo "Waiting for podman socket and response... ($i)"
             sleep 0.5
           done
         fi

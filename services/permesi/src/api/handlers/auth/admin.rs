@@ -586,7 +586,7 @@ mod tests {
     use serde_json::json;
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use std::net::TcpListener;
-    use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
+    use test_support::{postgres::PostgresContainer, runtime};
     use uuid::Uuid;
     use vault_client::{VaultTarget, VaultTransport};
     use wiremock::matchers::{header, method, path};
@@ -607,10 +607,8 @@ mod tests {
     }
 
     async fn get_test_pool() -> Result<(PgPool, PostgresContainer)> {
-        let network = TestNetwork::new("permesi-admin-test");
-        let postgres = PostgresContainer::start(network.name()).await?;
+        let postgres = PostgresContainer::start("bridge").await?;
         postgres.wait_until_ready().await?;
-
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(std::time::Duration::from_secs(30))

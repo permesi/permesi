@@ -730,7 +730,7 @@ mod tests {
     use rand::RngCore;
     use rand::rngs::OsRng;
     use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
-    use test_support::{TestNetwork, postgres::PostgresContainer, runtime};
+    use test_support::{postgres::PostgresContainer, runtime};
     use tokio::time::Duration;
     use tower::ServiceExt;
 
@@ -751,8 +751,7 @@ mod tests {
                 return Err(err);
             }
 
-            let network = TestNetwork::new("permesi-passkeys");
-            let postgres = PostgresContainer::start(network.name()).await?;
+            let postgres = PostgresContainer::start("bridge").await?;
             postgres.wait_until_ready().await?;
             apply_schema(&postgres).await?;
 
