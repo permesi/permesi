@@ -544,7 +544,7 @@ permesi:
     source {{root}}/.envrc
   fi
   paserk_url="${PERMESI_ADMISSION_PASERK_URL:-}"
-  ca_path="${PERMESI_TLS_CA_PATH:-{{root}}/certs/permesi/ca.pem}"
+  ca_path="{{root}}/certs/permesi/ca.pem"
   paserk_ca_path="${PERMESI_ADMISSION_PASERK_CA_PATH:-$ca_path}"
   if [[ -n "${PERMESI_ADMISSION_PASERK_CA_PATH:-}" && ! -f "$paserk_ca_path" ]]; then
     echo "Missing ${paserk_ca_path}; falling back to ${ca_path}" >&2
@@ -1079,14 +1079,10 @@ dev-env:
     "$operator_block" \
     "" \
     "$genesis_block" \
-    "export GENESIS_TLS_CERT_PATH=\"{{root}}/certs/genesis/tls.crt\"" \
-    "export GENESIS_TLS_KEY_PATH=\"{{root}}/certs/genesis/tls.key\"" \
-    "export GENESIS_TLS_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
+    "export GENESIS_TLS_PEM_BUNDLE=\"{{root}}/certs/genesis/tls.bundle.pem\"" \
     "" \
     "$permesi_block" \
-    "export PERMESI_TLS_CERT_PATH=\"{{root}}/certs/permesi/tls.crt\"" \
-    "export PERMESI_TLS_KEY_PATH=\"{{root}}/certs/permesi/tls.key\"" \
-    "export PERMESI_TLS_CA_PATH=\"{{root}}/certs/permesi/ca.pem\"" \
+    "export PERMESI_TLS_PEM_BUNDLE=\"{{root}}/certs/permesi/tls.bundle.pem\"" \
     "export PERMESI_ADMISSION_PASERK_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
     "export PERMESI_ADMISSION_PASERK_URL=\"https://genesis.permesi.localhost:8000/paserk.json\"" \
     "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost\"" \
@@ -1388,22 +1384,27 @@ dev-tls-certs:
     write_file "${out_dir}/tls.crt" 0644 "$tls_cert"
     write_file "${out_dir}/tls.key" 0600 "$tls_key"
     if [[ -n "$ca_chain" ]]; then
-      write_file "${out_dir}/ca.pem" 0644 "$ca_chain"
+      full_ca="${ca_chain}"
     else
-      write_file "${out_dir}/ca.pem" 0644 "$issuing_ca"
+      full_ca="${issuing_ca}"
     fi
+    write_file "${out_dir}/ca.pem" 0644 "$full_ca"
+
+    # Create PEM bundle: Key + Cert + CA
+    bundle_content="$(printf '%s\n%s\n%s' "${tls_key}" "${tls_cert}" "${full_ca}")"
+    write_file "${out_dir}/tls.bundle.pem" 0600 "${bundle_content}"
   }
 
   issue_cert permesi "api.permesi.localhost" "api.permesi.localhost"
   issue_cert genesis "genesis.permesi.localhost" "genesis.permesi.localhost"
-  echo "Wrote TLS certs to ${certs_dir}/permesi and ${certs_dir}/genesis."
+  echo "Wrote TLS certs and bundles to ${certs_dir}/permesi and ${certs_dir}/genesis."
 
 haproxy-start:
   #!/usr/bin/env zsh
   set -euo pipefail
   cfg="{{root}}/config/haproxy/haproxy.cfg"
   cert="{{root}}/config/haproxy/certs/permesi.localhost.pem"
-  backend_ca="${PERMESI_TLS_CA_PATH:-{{root}}/certs/permesi/ca.pem}"
+  backend_ca="{{root}}/certs/permesi/ca.pem"
   if [[ ! -f "$cfg" ]]; then
     echo "Missing HAProxy config: $cfg" >&2
     exit 1

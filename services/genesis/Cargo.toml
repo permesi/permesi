@@ -91,6 +91,6 @@ built = { workspace = true, features = ["git2"] }
 
 [dev-dependencies]
 hyper = { workspace = true, features = ["full"] }
-rcgen = "0.13"
+rcgen = { workspace = true }
 test_support = { workspace = true }
 wiremock = "0.6"

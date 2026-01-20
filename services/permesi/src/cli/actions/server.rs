@@ -17,9 +17,7 @@ pub struct Args {
     pub admission_paserk_url: String,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
-    pub tls_cert_path: String,
-    pub tls_key_path: String,
-    pub tls_ca_path: String,
+    pub tls_pem_bundle: String,
     pub admission_paserk_ca_path: Option<String>,
     pub frontend_base_url: String,
     pub email_token_ttl_seconds: i64,
@@ -43,9 +41,7 @@ pub struct Args {
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
     crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
-        std::path::PathBuf::from(args.tls_cert_path.clone()),
-        std::path::PathBuf::from(args.tls_key_path.clone()),
-        std::path::PathBuf::from(args.tls_ca_path.clone()),
+        std::path::PathBuf::from(args.tls_pem_bundle.clone()),
         args.admission_paserk_ca_path
             .clone()
             .map(std::path::PathBuf::from),
@@ -195,9 +191,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             args.vault_wrapped_token.is_some().to_string(),
         ),
         ("vault_policy", "permesi-operators".to_string()),
-        ("tls_cert_path", args.tls_cert_path.clone()),
-        ("tls_key_path", args.tls_key_path.clone()),
-        ("tls_ca_path", args.tls_ca_path.clone()),
+        ("tls_pem_bundle", args.tls_pem_bundle.clone()),
         ("admission_paserk_url", args.admission_paserk_url.clone()),
         ("admission_paserk_ca_path", admission_paserk_ca),
         ("admission_issuer", issuer.to_string()),

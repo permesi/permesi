@@ -39,6 +39,7 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 rand = "0.8.5"
 rand_chacha = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rcgen = "0.14"
 rustls = "0.23"
 rustls-pemfile = "2.2"
 axum-server = { version = "0.8", features = ["tls-rustls"] }

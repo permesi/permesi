@@ -147,13 +147,13 @@ impl AdmissionVerifier {
             return Err(anyhow!("Admission PASERK URL must use https: {url}"));
         }
 
-        let ca_cert = crate::tls::load_reqwest_ca()?;
+        let ca_certs = crate::tls::load_reqwest_ca()?;
         let mut builder = Client::builder()
             .use_rustls_tls()
             .user_agent(crate::APP_USER_AGENT);
 
-        if let Some(cert) = ca_cert {
-            builder = builder.tls_certs_only(std::iter::once(cert));
+        for cert in ca_certs {
+            builder = builder.add_root_certificate(cert);
         }
 
         let client = builder

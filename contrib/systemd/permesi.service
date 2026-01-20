@@ -18,14 +18,10 @@ EnvironmentFile=/etc/permesi/permesi.env
 
 # Default configuration for Agent Mode (Sidecar)
 Environment=PERMESI_VAULT_URL=unix:///run/permesi/agent.sock
-Environment=PERMESI_TLS_CERT_PATH=/run/permesi/tls.crt
-Environment=PERMESI_TLS_KEY_PATH=/run/permesi/tls.key
-Environment=PERMESI_TLS_CA_PATH=/run/permesi/ca.pem
+Environment=PERMESI_TLS_PEM_BUNDLE=/run/permesi/tls.bundle.pem
 
-# Wait for Vault Agent to render TLS certificates and listen on the socket
-ExecStartPre=/usr/bin/test -s /run/permesi/tls.crt
-ExecStartPre=/usr/bin/test -s /run/permesi/tls.key
-ExecStartPre=/usr/bin/test -s /run/permesi/ca.pem
+# Wait for Vault Agent to render TLS bundle and listen on the socket
+ExecStartPre=/usr/bin/test -s /run/permesi/tls.bundle.pem
 ExecStartPre=/usr/bin/test -S /run/permesi/agent.sock
 
 ExecStart=/usr/bin/permesi

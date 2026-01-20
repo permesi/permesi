@@ -222,11 +222,9 @@ GENESIS_VAULT_URL=https://vault.example.com:8200
 ```
 
 Both services require Vault-issued TLS material and must trust a single Vault PKI CA shared by the services. Defaults are:
-`/run/permesi/tls.crt`, `/run/permesi/tls.key`, `/run/permesi/ca.pem` and
-`/run/genesis/tls.crt`, `/run/genesis/tls.key`, `/run/genesis/ca.pem`.
+`/run/permesi/tls.bundle.pem` and `/run/genesis/tls.bundle.pem`.
 Override paths with:
-`PERMESI_TLS_CERT_PATH`, `PERMESI_TLS_KEY_PATH`, `PERMESI_TLS_CA_PATH` and
-`GENESIS_TLS_CERT_PATH`, `GENESIS_TLS_KEY_PATH`, `GENESIS_TLS_CA_PATH`.
+`PERMESI_TLS_PEM_BUNDLE` and `GENESIS_TLS_PEM_BUNDLE`.
 If your PASERK URL is served by a different CA (for example, HAProxy with mkcert),
 set `PERMESI_ADMISSION_PASERK_CA_PATH` to that CA bundle. For direct Genesis access,
 use the Vault-issued Genesis CA bundle.

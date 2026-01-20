@@ -1,14 +1,10 @@
 use clap::{Arg, ArgMatches, Command};
 
-pub const ARG_TLS_CERT_PATH: &str = "tls-cert-path";
-pub const ARG_TLS_KEY_PATH: &str = "tls-key-path";
-pub const ARG_TLS_CA_PATH: &str = "tls-ca-path";
+pub const ARG_TLS_PEM_BUNDLE: &str = "tls-pem-bundle";
 
 #[derive(Debug, Clone)]
 pub struct Options {
-    pub cert_path: String,
-    pub key_path: String,
-    pub ca_path: String,
+    pub pem_bundle: String,
 }
 
 impl Options {
@@ -26,35 +22,18 @@ impl Options {
         };
 
         Ok(Self {
-            cert_path: read_required(ARG_TLS_CERT_PATH)?,
-            key_path: read_required(ARG_TLS_KEY_PATH)?,
-            ca_path: read_required(ARG_TLS_CA_PATH)?,
+            pem_bundle: read_required(ARG_TLS_PEM_BUNDLE)?,
         })
     }
 }
 
 #[must_use]
 pub fn with_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new(ARG_TLS_CERT_PATH)
-                .long(ARG_TLS_CERT_PATH)
-                .help("Path to TLS certificate (PEM)")
-                .env("PERMESI_TLS_CERT_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new(ARG_TLS_KEY_PATH)
-                .long(ARG_TLS_KEY_PATH)
-                .help("Path to TLS private key (PEM)")
-                .env("PERMESI_TLS_KEY_PATH")
-                .required(true),
-        )
-        .arg(
-            Arg::new(ARG_TLS_CA_PATH)
-                .long(ARG_TLS_CA_PATH)
-                .help("Path to TLS CA bundle (PEM)")
-                .env("PERMESI_TLS_CA_PATH")
-                .required(true),
-        )
+    command.arg(
+        Arg::new(ARG_TLS_PEM_BUNDLE)
+            .long(ARG_TLS_PEM_BUNDLE)
+            .help("Path to TLS bundle (Key + Cert + CA) (PEM)")
+            .env("PERMESI_TLS_PEM_BUNDLE")
+            .required(true),
+    )
 }

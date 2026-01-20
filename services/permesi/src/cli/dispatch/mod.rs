@@ -40,9 +40,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         admission_paserk_url: admission_opts.url,
         admission_issuer: admission_opts.issuer,
         admission_audience: admission_opts.audience,
-        tls_cert_path: tls_opts.cert_path,
-        tls_key_path: tls_opts.key_path,
-        tls_ca_path: tls_opts.ca_path,
+        tls_pem_bundle: tls_opts.pem_bundle,
         admission_paserk_ca_path: admission_opts.paserk_ca_path,
         frontend_base_url: auth_opts.frontend_base_url,
         email_token_ttl_seconds: auth_opts.email_token_ttl_seconds,
@@ -71,9 +69,7 @@ mod tests {
         temp_env::with_vars(
             [
                 ("PERMESI_ADMISSION_PASERK_URL", None::<&str>),
-                ("PERMESI_TLS_CERT_PATH", Some("/tmp/permesi-cert.pem")),
-                ("PERMESI_TLS_KEY_PATH", Some("/tmp/permesi-key.pem")),
-                ("PERMESI_TLS_CA_PATH", Some("/tmp/permesi-ca.pem")),
+                ("PERMESI_TLS_PEM_BUNDLE", Some("/tmp/permesi-bundle.pem")),
                 (
                     "PERMESI_DSN",
                     Some("postgres://user@localhost:5432/permesi"),

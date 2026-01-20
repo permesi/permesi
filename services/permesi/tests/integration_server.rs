@@ -9,6 +9,7 @@
 //! 5. Executing real HTTPS requests against the running service.
 
 use anyhow::{Context, Result, bail};
+use rcgen::{CertificateParams, KeyPair};
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::{Connection, PgConnection};
@@ -39,9 +40,8 @@ impl Drop for ChildGuard {
 }
 
 struct TestTlsPaths {
-    ca: String,
-    cert: String,
-    key: String,
+    _ca: String,
+    bundle: String,
 }
 
 struct TestContext {
@@ -260,21 +260,30 @@ fn prepare_tls_assets() -> Result<Option<TestTlsPaths>> {
         return Err(err).context("Failed to create temp TLS directory");
     }
 
-    let cert = rcgen::generate_simple_self_signed(vec!["api.permesi.localhost".to_string()])
+    let key_pair = KeyPair::generate()?;
+    let params = CertificateParams::new(vec!["api.permesi.localhost".to_string()])
+        .context("Failed to build certificate params")?;
+    let cert = params
+        .self_signed(&key_pair)
         .context("Failed to generate self-signed cert")?;
 
     let ca_path = tls_dir.join("ca.pem");
-    let cert_path = tls_dir.join("tls.crt");
-    let key_path = tls_dir.join("tls.key");
+    let bundle_path = tls_dir.join("tls.bundle.pem");
 
-    fs::write(&ca_path, cert.cert.pem())?;
-    fs::write(&cert_path, cert.cert.pem())?;
-    fs::write(&key_path, cert.signing_key.serialize_pem())?;
+    let cert_pem = cert.pem();
+    let key_pem = key_pair.serialize_pem();
+
+    fs::write(&ca_path, &cert_pem)?;
+
+    let mut bundle_content = String::new();
+    bundle_content.push_str(&key_pem);
+    bundle_content.push_str(&cert_pem);
+
+    fs::write(&bundle_path, bundle_content)?;
 
     Ok(Some(TestTlsPaths {
-        ca: ca_path.display().to_string(),
-        cert: cert_path.display().to_string(),
-        key: key_path.display().to_string(),
+        _ca: ca_path.display().to_string(),
+        bundle: bundle_path.display().to_string(),
     }))
 }
 
@@ -335,12 +344,8 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
                 &ctx.role_id,
                 "--vault-secret-id",
                 &ctx.secret_id,
-                "--tls-cert-path",
-                &ctx.tls.cert,
-                "--tls-key-path",
-                &ctx.tls.key,
-                "--tls-ca-path",
-                &ctx.tls.ca,
+                "--tls-pem-bundle",
+                &ctx.tls.bundle,
                 "--admission-paserk-url",
                 &keyset_json,
                 "--vault-kv-mount",

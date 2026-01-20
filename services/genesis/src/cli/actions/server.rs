@@ -13,9 +13,7 @@ pub struct Args {
     pub vault_role_id: Option<String>,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
-    pub tls_cert_path: String,
-    pub tls_key_path: String,
-    pub tls_ca_path: String,
+    pub tls_pem_bundle: String,
 }
 
 /// Execute the server action.
@@ -23,9 +21,7 @@ pub struct Args {
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
     crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
-        std::path::PathBuf::from(args.tls_cert_path.clone()),
-        std::path::PathBuf::from(args.tls_key_path.clone()),
-        std::path::PathBuf::from(args.tls_ca_path.clone()),
+        std::path::PathBuf::from(args.tls_pem_bundle.clone()),
         None,
     ));
     log_startup_args(&args);
@@ -101,9 +97,7 @@ fn log_startup_args(args: &Args) {
             "vault_wrapped_token_set",
             args.vault_wrapped_token.is_some().to_string(),
         ),
-        ("tls_cert_path", args.tls_cert_path.clone()),
-        ("tls_key_path", args.tls_key_path.clone()),
-        ("tls_ca_path", args.tls_ca_path.clone()),
+        ("tls_pem_bundle", args.tls_pem_bundle.clone()),
     ];
     log_entries("Startup configuration", &entries, mode);
 }

@@ -168,21 +168,18 @@ listener "unix" {
 cache {}
 
 template {
-  destination = "/run/permesi/tls.crt"
-  contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"common_name=api.permesi.localhost\" \"alt_names=api.permesi.localhost\" \"ttl=24h\" }}{{ .Data.certificate }}{{ end }}"
-}
-
-template {
-  destination = "/run/permesi/tls.key"
-  # Note: set to 0644 to allow container users to read the key when mounted as a volume.
-  # Restrict access at the directory level (/run/permesi) on the host.
-  perms = "0644"
-  contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"common_name=api.permesi.localhost\" \"alt_names=api.permesi.localhost\" \"ttl=24h\" }}{{ .Data.private_key }}{{ end }}"
-}
-
-template {
-  destination = "/run/permesi/ca.pem"
-  contents = "{{ with secret \"pki-int/issue/permesi-runtime\" \"ttl=24h\" \"alt_names=api.permesi.localhost\" \"common_name=api.permesi.localhost\" }}{{ range .Data.ca_chain }}{{ . }}\n{{ end }}{{ end }}"
+  destination = "/run/permesi/tls.bundle.pem"
+  # Note: set to 0640 or 0600 to protect the private key.
+  perms = "0640"
+  contents = <<EOH
+{{- with secret "pki-int/issue/permesi-runtime" "ttl=24h" "common_name=api.permesi.dev" "alt_names=api.permesi.dev" -}}
+{{ .Data.private_key }}
+{{ .Data.certificate }}
+{{- range .Data.ca_chain }}
+{{ . }}
+{{- end }}
+{{- end -}}
+EOH
 }
 ```
 
@@ -230,21 +227,17 @@ listener "unix" {
 cache {}
 
 template {
-  destination = "/run/genesis/tls.crt"
-  contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ .Data.certificate }}{{ end }}"
-}
-
-template {
-  destination = "/run/genesis/tls.key"
-  # Note: set to 0644 to allow container users to read the key when mounted as a volume.
-  # Restrict access at the directory level (/run/genesis) on the host.
-  perms = "0644"
-  contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ .Data.private_key }}{{ end }}"
-}
-
-template {
-  destination = "/run/genesis/ca.pem"
-  contents = "{{ with secret \"pki-int/issue/genesis-runtime\" \"common_name=genesis.permesi.localhost\" \"alt_names=genesis.permesi.localhost\" \"ttl=24h\" }}{{ range .Data.ca_chain }}{{ . }}\n{{ end }}{{ end }}"
+  destination = "/run/genesis/tls.bundle.pem"
+  perms = "0640"
+  contents = <<EOH
+{{- with secret "pki-int/issue/genesis-runtime" "ttl=24h" "common_name=genesis.permesi.dev" "alt_names=genesis.permesi.dev" -}}
+{{ .Data.private_key }}
+{{ .Data.certificate }}
+{{- range .Data.ca_chain }}
+{{ . }}
+{{- end }}
+{{- end -}}
+EOH
 }
 ```
 

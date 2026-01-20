@@ -111,8 +111,8 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
 
     let tls_paths = crate::tls::runtime_paths()?;
     info!(
-        "TLS enabled; cert loaded from {}",
-        tls_paths.cert_path().display()
+        "TLS enabled; bundle loaded from {}",
+        tls_paths.pem_bundle_path().display()
     );
     info!("Listening on https://[::]:{}", port);
 

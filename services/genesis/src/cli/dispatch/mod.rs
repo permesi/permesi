@@ -23,9 +23,8 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let vault_role_id = matches.get_one::<String>("vault-role-id").cloned();
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
-    let tls_cert_path = read_required_path_arg(matches, "tls-cert-path", "GENESIS_TLS_CERT_PATH")?;
-    let tls_key_path = read_required_path_arg(matches, "tls-key-path", "GENESIS_TLS_KEY_PATH")?;
-    let tls_ca_path = read_required_path_arg(matches, "tls-ca-path", "GENESIS_TLS_CA_PATH")?;
+    let tls_pem_bundle =
+        read_required_path_arg(matches, "tls-pem-bundle", "GENESIS_TLS_PEM_BUNDLE")?;
 
     Ok(Action::Server(Args {
         port,
@@ -35,9 +34,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_role_id,
         vault_secret_id,
         vault_wrapped_token,
-        tls_cert_path,
-        tls_key_path,
-        tls_ca_path,
+        tls_pem_bundle,
     }))
 }
 

@@ -24,6 +24,6 @@ http.workspace = true
 [dev-dependencies]
 serde_json = { workspace = true }
 wiremock = "0.6"
-rcgen = "0.14"
+rcgen = { workspace = true }
 temp-env = { workspace = true }
 uuid = { workspace = true }

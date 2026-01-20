@@ -264,14 +264,10 @@ to (re)apply schemas and runtime roles, then `just db-verify` to confirm constra
 
 Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/logs`).
 
-`just dev-envrc` emits Vault credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single Vault PKI CA (the CA written to `certs/<service>/ca.pem`). `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis Vault CA bundle when fetching `paserk.json` directly from the Genesis service.
-- `PERMESI_TLS_CERT_PATH=.../certs/permesi/tls.crt`
-- `PERMESI_TLS_KEY_PATH=.../certs/permesi/tls.key`
-- `PERMESI_TLS_CA_PATH=.../certs/permesi/ca.pem`
+`just dev-envrc` emits Vault credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single Vault PKI CA. `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis Vault CA bundle when fetching `paserk.json` directly from the Genesis service.
+- `PERMESI_TLS_PEM_BUNDLE=.../certs/permesi/tls.bundle.pem`
 - `PERMESI_ADMISSION_PASERK_CA_PATH=.../certs/genesis/ca.pem`
-- `GENESIS_TLS_CERT_PATH=.../certs/genesis/tls.crt`
-- `GENESIS_TLS_KEY_PATH=.../certs/genesis/tls.key`
-- `GENESIS_TLS_CA_PATH=.../certs/genesis/ca.pem`
+- `GENESIS_TLS_PEM_BUNDLE=.../certs/genesis/tls.bundle.pem`
 - `PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json`
 - `PERMESI_FRONTEND_BASE_URL=https://permesi.localhost`
 - `PERMESI_API_BASE_URL=https://api.permesi.localhost`

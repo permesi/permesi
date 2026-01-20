@@ -20,14 +20,10 @@ EnvironmentFile=/etc/genesis/genesis.env
 # Agent socket must be accessible. If Agent writes to /run/genesis/agent.sock,
 # ensure the socket path matches what is configured in the Agent.
 Environment=GENESIS_VAULT_URL=unix:///run/genesis/agent.sock
-Environment=GENESIS_TLS_CERT_PATH=/run/genesis/tls.crt
-Environment=GENESIS_TLS_KEY_PATH=/run/genesis/tls.key
-Environment=GENESIS_TLS_CA_PATH=/run/genesis/ca.pem
+Environment=GENESIS_TLS_PEM_BUNDLE=/run/genesis/tls.bundle.pem
 
-# Wait for Vault Agent to render TLS certificates and listen on the socket
-ExecStartPre=/usr/bin/test -s /run/genesis/tls.crt
-ExecStartPre=/usr/bin/test -s /run/genesis/tls.key
-ExecStartPre=/usr/bin/test -s /run/genesis/ca.pem
+# Wait for Vault Agent to render TLS bundle and listen on the socket
+ExecStartPre=/usr/bin/test -s /run/genesis/tls.bundle.pem
 ExecStartPre=/usr/bin/test -S /run/genesis/agent.sock
 
 ExecStart=/usr/bin/genesis

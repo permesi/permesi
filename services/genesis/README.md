@@ -61,6 +61,7 @@ CLI args (also available via env vars):
 - `GENESIS_PORT` (default: `8080`)
 - `GENESIS_DSN` (required) base DSN; username/password are overwritten with Vault DB creds (e.g. `postgres://postgres@localhost:5432/genesis`)
 - `GENESIS_VAULT_URL` (required) Vault base URL (`https://vault.tld:8200`) or unix socket path (`/run/vault/proxy.sock` or `unix:///run/vault/proxy.sock`)
+- `GENESIS_TLS_PEM_BUNDLE` (required) Path to TLS bundle (Key + Cert + CA) (PEM)
 - `GENESIS_VAULT_ROLE_ID` (required for TCP mode)
 - `GENESIS_VAULT_SECRET_ID` (required for TCP mode unless `GENESIS_VAULT_WRAPPED_TOKEN` is set)
 - `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id for TCP mode)
@@ -78,6 +79,7 @@ Use when connecting via HTTP/HTTPS. Requires `role-id` and `secret-id` (or wrapp
 cargo run -p genesis --bin genesis -- \
   --port 8000 \
   --dsn "postgres://postgres@localhost:5432/genesis" \
+  --tls-pem-bundle "certs/genesis/tls.bundle.pem" \
   --vault-url "http://vault:8200" \
   --vault-role-id "$GENESIS_ROLE_ID" \
   --vault-secret-id "$GENESIS_SECRET_ID"
@@ -91,6 +93,7 @@ Use when connecting via a Vault Agent `api_proxy` socket. No credentials require
 cargo run -p genesis --bin genesis -- \
   --port 8000 \
   --dsn "postgres://postgres@localhost:5432/genesis" \
+  --tls-pem-bundle "/run/genesis/tls.bundle.pem" \
   --vault-url "/run/vault/proxy.sock"
 ```
 

@@ -24,27 +24,28 @@ Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAP
 `--vault-url` points to the AppRole login endpoint. Requires role-id and secret-id (or wrapped token).
 
 ```sh
-cargo run -p permesi --bin permesi -- \
-  --port 8001 \
-  --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
-  --vault-url "http://vault:8200/v1/auth/approle/login" \
-  --vault-role-id "$PERMESI_ROLE_ID" \
-  --vault-secret-id "$PERMESI_SECRET_ID"
-```
-
-### Agent Mode (Unix Socket)
-
-`--vault-url` points to the Vault Agent `api_proxy` socket. No authentication args required.
-
-```sh
-cargo run -p permesi --bin permesi -- \
-  --port 8001 \
-  --dsn "postgres://postgres@localhost:5432/permesi" \
-  --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
-  --vault-url "/run/vault/proxy.sock"
-```
-
+ cargo run -p permesi --bin permesi -- \
+   --port 8001 \
+   --dsn "postgres://postgres@localhost:5432/permesi" \
+   --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
+   --tls-pem-bundle "certs/permesi/tls.bundle.pem" \
+   --vault-url "http://vault:8200/v1/auth/approle/login" \
+   --vault-role-id "$PERMESI_ROLE_ID" \
+   --vault-secret-id "$PERMESI_SECRET_ID"
+ ```
+ 
+ ### Agent Mode (Unix Socket)
+ 
+ `--vault-url` points to the Vault Agent `api_proxy` socket. No authentication args required.
+ 
+ ```sh
+ cargo run -p permesi --bin permesi -- \
+   --port 8001 \
+   --dsn "postgres://postgres@localhost:5432/permesi" \
+   --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
+   --tls-pem-bundle "/run/permesi/tls.bundle.pem" \
+   --vault-url "/run/vault/proxy.sock"
+ ```
 ## Database schema
 
 The base schema lives in `db/sql/02_permesi.sql`. Load it into Postgres with (only if you did not

@@ -103,7 +103,7 @@ base32 = "0.5.1"
 http-body-util.workspace = true
 hyper = { workspace = true }
 hyper-util.workspace = true
-rcgen = "0.14.6"
+rcgen = { workspace = true }
 test_support = { workspace = true }
 wiremock = "0.6"
 
