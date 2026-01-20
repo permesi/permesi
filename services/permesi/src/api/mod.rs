@@ -159,10 +159,17 @@ pub async fn new(
             AUTHORIZATION,
             HeaderName::from_static("x-permesi-zero-token"),
         ])
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .expose_headers([AUTHORIZATION])
         .allow_origin(AllowOrigin::exact(frontend_origin))
-        .allow_credentials(true);
+        .allow_credentials(true)
+        .max_age(Duration::from_secs(86400));
 
     // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
