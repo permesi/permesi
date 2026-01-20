@@ -8,14 +8,33 @@ runs:
       run: |
         set -euo pipefail
 
-        # 1. Ensure Podman and its core dependencies are installed
+        # 1. Detect environment
+        # On GitHub-hosted runners, we prefer the system Docker daemon as it is 
+        # pre-configured and reliable for port mapping.
+        if [[ "${{ runner.environment }}" == "github-hosted" ]]; then
+          echo "GitHub-hosted runner detected. Using system Docker daemon."
+          if [[ -S "/var/run/docker.sock" ]]; then
+            {
+              echo "DOCKER_HOST=unix:///var/run/docker.sock"
+            } >> "${GITHUB_ENV}"
+            echo "Verifying Docker..."
+            docker info > /dev/null
+            echo "Pre-pulling Postgres and Vault images..."
+            docker pull postgres:18 || true
+            docker pull hashicorp/vault:1.17.3 || true
+            exit 0
+          fi
+          echo "Warning: GitHub-hosted runner but /var/run/docker.sock not found. Falling back to Podman."
+        fi
+
+        # 2. For self-hosted or if Docker is missing, ensure Podman is installed
         if ! command -v podman >/dev/null 2>&1; then
           echo "Installing Podman and dependencies..."
           sudo apt-get update
           sudo apt-get install -y podman dbus-user-session slirp4netns
         fi
 
-        # 2. Determine the best runtime directory
+        # 3. Determine the best runtime directory
         USER_ID=$(id -u)
         if [[ -d "/run/user/${USER_ID}" ]]; then
           export XDG_RUNTIME_DIR="/run/user/${USER_ID}"
@@ -25,23 +44,19 @@ runs:
           chmod 700 "$XDG_RUNTIME_DIR"
         fi
 
-        # 3. Configure D-Bus address for netavark/aardvark-dns
+        # 4. Configure D-Bus address for netavark/aardvark-dns
         if [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
         else
           export DBUS_SESSION_BUS_ADDRESS=""
         fi
 
-        # 4. Recover from potential corrupted state
-        echo "Migrating Podman system state..."
-        podman system migrate || true
-
         # 5. Start podman system service if socket is missing or unresponsive
         SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
         SERVICE_NEEDED=0
         if [[ ! -S "$SOCKET_PATH" ]]; then
           SERVICE_NEEDED=1
-        elif ! podman info >/dev/null 2>&1; then
+        elif ! podman --url "unix://${SOCKET_PATH}" info >/dev/null 2>&1;
           echo "Podman socket exists but is unresponsive. Removing stale socket."
           rm -f "$SOCKET_PATH"
           SERVICE_NEEDED=1
@@ -78,7 +93,6 @@ runs:
 
         # 7. Final verification and pre-pull images
         echo "Verifying Podman..."
-        # Use the socket path explicitly to avoid environment propagation issues in the current step
         export DOCKER_HOST="unix://${SOCKET_PATH}"
         if ! podman --url "unix://${SOCKET_PATH}" info > /dev/null 2>&1; then
           echo "Podman info failed, trying system migrate..."
@@ -87,6 +101,5 @@ runs:
         fi
 
         echo "Pre-pulling Postgres and Vault images..."
-        # Pull using the explicit socket to ensure they are in the right store
         podman --url "unix://${SOCKET_PATH}" pull postgres:18 || true
         podman --url "unix://${SOCKET_PATH}" pull hashicorp/vault:1.17.3 || true
