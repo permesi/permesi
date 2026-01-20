@@ -11,7 +11,16 @@ runs:
         # 1. Detect environment
         # On GitHub-hosted runners, we prefer the system Docker daemon as it is 
         # pre-configured and reliable for port mapping.
+        USE_DOCKER=0
         if [[ "${{ runner.environment }}" == "github-hosted" ]]; then
+          USE_DOCKER=1
+        elif [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
+          USE_DOCKER=1
+        elif [[ -S "/var/run/docker.sock" && "${RUNNER_NAME:-}" == *"GitHub Actions"* ]]; then
+          USE_DOCKER=1
+        fi
+
+        if [[ "$USE_DOCKER" -eq 1 ]]; then
           echo "GitHub-hosted runner detected. Using system Docker daemon."
           if [[ -S "/var/run/docker.sock" ]]; then
             {
@@ -24,7 +33,7 @@ runs:
             docker pull hashicorp/vault:1.17.3 || true
             exit 0
           fi
-          echo "Warning: GitHub-hosted runner but /var/run/docker.sock not found. Falling back to Podman."
+          echo "Warning: GitHub-hosted environment detected but /var/run/docker.sock not found. Falling back to Podman."
         fi
 
         # 2. For self-hosted or if Docker is missing, ensure Podman is installed
@@ -56,7 +65,7 @@ runs:
         SERVICE_NEEDED=0
         if [[ ! -S "$SOCKET_PATH" ]]; then
           SERVICE_NEEDED=1
-        elif ! podman --url "unix://${SOCKET_PATH}" info >/dev/null 2>&1;
+        elif ! podman --url "unix://${SOCKET_PATH}" info >/dev/null 2>&1; then
           echo "Podman socket exists but is unresponsive. Removing stale socket."
           rm -f "$SOCKET_PATH"
           SERVICE_NEEDED=1
