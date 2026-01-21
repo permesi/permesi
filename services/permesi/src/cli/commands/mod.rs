@@ -56,6 +56,13 @@ pub fn new() -> Command {
         .color(ColorChoice::Auto)
         .styles(styles)
         .arg(
+            Arg::new("socket-path")
+                .long("socket-path")
+                .help("Bind to Unix domain socket instead of TCP port")
+                .env("PERMESI_SOCKET_PATH")
+                .conflicts_with_all(["port", tls::ARG_TLS_PEM_BUNDLE]),
+        )
+        .arg(
             Arg::new("port")
                 .short('p')
                 .long("port")
@@ -414,5 +421,40 @@ mod tests {
             assert!(validate(&matches).is_ok(), "Should pass with socket path");
             Ok(())
         })
+    }
+
+    #[test]
+    fn test_socket_conflicts() {
+        let command = new();
+
+        // Conflict: socket-path AND port
+        let result = command.clone().try_get_matches_from(vec![
+            "permesi",
+            "--dsn",
+            "postgres://",
+            "--socket-path",
+            "/tmp/permesi.sock",
+            "--port",
+            "9090",
+        ]);
+        assert_eq!(
+            result.map_err(|e| e.kind()),
+            Err(clap::error::ErrorKind::ArgumentConflict)
+        );
+
+        // Conflict: socket-path AND tls-pem-bundle
+        let result = command.try_get_matches_from(vec![
+            "permesi",
+            "--dsn",
+            "postgres://",
+            "--socket-path",
+            "/tmp/permesi.sock",
+            "--tls-pem-bundle",
+            "/tmp/bundle.pem",
+        ]);
+        assert_eq!(
+            result.map_err(|e| e.kind()),
+            Err(clap::error::ErrorKind::ArgumentConflict)
+        );
     }
 }

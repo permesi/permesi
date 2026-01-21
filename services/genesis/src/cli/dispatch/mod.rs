@@ -23,11 +23,12 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let vault_role_id = matches.get_one::<String>("vault-role-id").cloned();
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
-    let tls_pem_bundle =
-        read_required_path_arg(matches, "tls-pem-bundle", "GENESIS_TLS_PEM_BUNDLE")?;
+    let tls_pem_bundle = matches.get_one::<String>("tls-pem-bundle").cloned();
+    let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     Ok(Action::Server(Args {
         port,
+        socket_path,
         dsn,
         vault_url,
         vault_target,
@@ -36,18 +37,4 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_wrapped_token,
         tls_pem_bundle,
     }))
-}
-
-fn read_required_path_arg(
-    matches: &clap::ArgMatches,
-    name: &str,
-    env_name: &str,
-) -> Result<String> {
-    match matches.get_one::<String>(name) {
-        Some(value) if value.trim().is_empty() => {
-            anyhow::bail!("{env_name} must not be empty");
-        }
-        Some(value) => Ok(value.clone()),
-        None => anyhow::bail!("missing required argument: --{name}"),
-    }
 }

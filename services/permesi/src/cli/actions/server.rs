@@ -8,6 +8,7 @@ use url::Url;
 #[derive(Debug)]
 pub struct Args {
     pub port: u16,
+    pub socket_path: Option<String>,
     pub dsn: String,
     pub vault_url: String,
     pub vault_target: vault_client::VaultTarget,
@@ -17,7 +18,7 @@ pub struct Args {
     pub admission_paserk_url: String,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
-    pub tls_pem_bundle: String,
+    pub tls_pem_bundle: Option<String>,
     pub admission_paserk_ca_path: Option<String>,
     pub frontend_base_url: String,
     pub email_token_ttl_seconds: i64,
@@ -40,12 +41,8 @@ pub struct Args {
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
-    crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
-        std::path::PathBuf::from(args.tls_pem_bundle.clone()),
-        args.admission_paserk_ca_path
-            .clone()
-            .map(std::path::PathBuf::from),
-    ));
+    configure_tls_paths(&args);
+
     let issuer = args
         .admission_issuer
         .clone()
@@ -120,6 +117,7 @@ pub async fn execute(args: Args) -> Result<()> {
 
     api::new(
         args.port,
+        args.socket_path,
         dsn.to_string(),
         &globals,
         admission_verifier,
@@ -170,8 +168,15 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         .admission_paserk_ca_path
         .clone()
         .unwrap_or_else(|| "none (using system roots)".to_string());
+
+    let listen_addr = if let Some(sock) = &args.socket_path {
+        format!("unix:{sock}")
+    } else {
+        format!("tcp:{}", args.port)
+    };
+
     let entries = [
-        ("port", args.port.to_string()),
+        ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
         ("vault_addr", vault_addr.to_string()),
@@ -191,7 +196,12 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             args.vault_wrapped_token.is_some().to_string(),
         ),
         ("vault_policy", "permesi-operators".to_string()),
-        ("tls_pem_bundle", args.tls_pem_bundle.clone()),
+        (
+            "tls_pem_bundle",
+            args.tls_pem_bundle
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        ),
         ("admission_paserk_url", args.admission_paserk_url.clone()),
         ("admission_paserk_ca_path", admission_paserk_ca),
         ("admission_issuer", issuer.to_string()),
@@ -313,4 +323,100 @@ fn vault_base_url(url: &str) -> Result<String> {
         .port_or_known_default()
         .ok_or_else(|| anyhow!("Vault URL missing port"))?;
     Ok(format!("{}://{}:{}", parsed.scheme(), host, port))
+}
+
+fn configure_tls_paths(args: &Args) {
+    if let Some(bundle_path) = &args.tls_pem_bundle {
+        crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
+            std::path::PathBuf::from(bundle_path),
+            args.admission_paserk_ca_path
+                .clone()
+                .map(std::path::PathBuf::from),
+        ));
+    } else if let Some(ca_path) = &args.admission_paserk_ca_path {
+        // Socket mode: no server TLS bundle, but we need CA for client (AdmissionVerifier).
+        // Initialize TlsPaths with the CA path as a placeholder for the bundle.
+        // This allows runtime_paths() to succeed.
+        // load_server_config() would fail, but it's not called in socket mode.
+        crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
+            std::path::PathBuf::from(ca_path),
+            Some(std::path::PathBuf::from(ca_path)),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_args() -> Args {
+        Args {
+            port: 8080,
+            socket_path: None,
+            dsn: "postgres://user:pass@localhost:5432/db".to_string(),
+            vault_url: "http://localhost:8200".to_string(),
+            vault_target: vault_client::VaultTarget::Tcp {
+                base_url: "http://localhost:8200".to_string(),
+            },
+            vault_role_id: None,
+            vault_secret_id: None,
+            vault_wrapped_token: None,
+            admission_paserk_url: "https://genesis.example.com/paserk.json".to_string(),
+            admission_issuer: None,
+            admission_audience: None,
+            tls_pem_bundle: None,
+            admission_paserk_ca_path: None,
+            frontend_base_url: "https://permesi.example.com".to_string(),
+            email_token_ttl_seconds: 300,
+            email_resend_cooldown_seconds: 60,
+            session_ttl_seconds: 3600,
+            email_outbox_poll_seconds: 10,
+            email_outbox_batch_size: 100,
+            email_outbox_max_attempts: 3,
+            email_outbox_backoff_base_seconds: 2,
+            email_outbox_backoff_max_seconds: 60,
+            opaque_server_id: "server-id".to_string(),
+            opaque_login_ttl_seconds: 60,
+            platform_admin_ttl_seconds: 3600,
+            platform_recent_auth_seconds: 60,
+            vault_kv_mount: "kv".to_string(),
+            vault_kv_path: "config".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_socket_mode_sets_tls_paths() {
+        let mut args = default_args();
+        // Socket mode simulation: No bundle, but CA path present
+        args.tls_pem_bundle = None;
+        args.admission_paserk_ca_path = Some("/tmp/ca.pem".to_string());
+
+        configure_tls_paths(&args);
+
+        // Verify that runtime paths are set
+        // Note: In a shared test environment (cargo test), this might fail if another test set it differently.
+        // However, for unit testing permesi crate, this should be consistent if run in isolation or first.
+        let paths = crate::tls::runtime_paths();
+        assert!(
+            paths.is_ok(),
+            "TLS paths should be configured in socket mode"
+        );
+
+        if let Ok(p) = paths {
+            // Check if the extra CA path matches what we set
+            assert_eq!(p.extra_ca_path(), Some(std::path::Path::new("/tmp/ca.pem")));
+        }
+    }
+
+    #[test]
+    fn test_tls_mode_sets_tls_paths() {
+        let mut args = default_args();
+        args.tls_pem_bundle = Some("/tmp/bundle.pem".to_string());
+        args.admission_paserk_ca_path = Some("/tmp/ca.pem".to_string());
+
+        configure_tls_paths(&args);
+
+        let paths = crate::tls::runtime_paths();
+        assert!(paths.is_ok(), "TLS paths should be configured in TLS mode");
+    }
 }

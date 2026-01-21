@@ -7,23 +7,26 @@ use url::Url;
 #[derive(Debug)]
 pub struct Args {
     pub port: u16,
+    pub socket_path: Option<String>,
     pub dsn: String,
     pub vault_url: String,
     pub vault_target: vault::VaultTarget,
     pub vault_role_id: Option<String>,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
-    pub tls_pem_bundle: String,
+    pub tls_pem_bundle: Option<String>,
 }
 
 /// Execute the server action.
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
-    crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
-        std::path::PathBuf::from(args.tls_pem_bundle.clone()),
-        None,
-    ));
+    if let Some(bundle_path) = &args.tls_pem_bundle {
+        crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
+            std::path::PathBuf::from(bundle_path),
+            None,
+        ));
+    }
     log_startup_args(&args);
     let vault_transport =
         vault::VaultTransport::from_target(crate::APP_USER_AGENT, args.vault_target.clone())?;
@@ -70,7 +73,7 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    api::new(args.port, dsn.to_string(), &globals).await
+    api::new(args.port, args.socket_path, dsn.to_string(), &globals).await
 }
 
 fn log_startup_args(args: &Args) {
@@ -78,8 +81,13 @@ fn log_startup_args(args: &Args) {
         vault::VaultTarget::Tcp { .. } => "TCP",
         vault::VaultTarget::AgentProxy { .. } => "AGENT",
     };
+    let listen_addr = if let Some(sock) = &args.socket_path {
+        format!("unix:{sock}")
+    } else {
+        format!("tcp:{}", args.port)
+    };
     let entries = [
-        ("port", args.port.to_string()),
+        ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
         ("vault_mode", mode.to_lowercase()),
@@ -97,7 +105,12 @@ fn log_startup_args(args: &Args) {
             "vault_wrapped_token_set",
             args.vault_wrapped_token.is_some().to_string(),
         ),
-        ("tls_pem_bundle", args.tls_pem_bundle.clone()),
+        (
+            "tls_pem_bundle",
+            args.tls_pem_bundle
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        ),
     ];
     log_entries("Startup configuration", &entries, mode);
 }

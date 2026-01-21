@@ -6,6 +6,6 @@ pub fn with_args(command: Command) -> Command {
             .long("tls-pem-bundle")
             .help("Path to TLS bundle (Key + Cert + CA) (PEM)")
             .env("GENESIS_TLS_PEM_BUNDLE")
-            .required(true),
+            .required_unless_present("socket-path"),
     )
 }

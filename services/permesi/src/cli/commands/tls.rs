@@ -11,8 +11,12 @@ impl Options {
     /// Parse TLS arguments from matches.
     ///
     /// # Errors
-    /// Returns an error if required arguments are missing.
-    pub fn parse(matches: &ArgMatches) -> anyhow::Result<Self> {
+    /// Returns an error if required arguments are missing and not in socket mode.
+    pub fn parse(matches: &ArgMatches) -> anyhow::Result<Option<Self>> {
+        if matches.contains_id("socket-path") {
+            return Ok(None);
+        }
+
         let read_required = |id: &str| -> anyhow::Result<String> {
             matches
                 .get_one::<String>(id)
@@ -21,9 +25,9 @@ impl Options {
                 .ok_or_else(|| anyhow::anyhow!("missing required argument: --{id}"))
         };
 
-        Ok(Self {
+        Ok(Some(Self {
             pem_bundle: read_required(ARG_TLS_PEM_BUNDLE)?,
-        })
+        }))
     }
 }
 
@@ -34,6 +38,6 @@ pub fn with_args(command: Command) -> Command {
             .long(ARG_TLS_PEM_BUNDLE)
             .help("Path to TLS bundle (Key + Cert + CA) (PEM)")
             .env("PERMESI_TLS_PEM_BUNDLE")
-            .required(true),
+            .required_unless_present("socket-path"),
     )
 }

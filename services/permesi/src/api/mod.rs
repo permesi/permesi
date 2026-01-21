@@ -20,6 +20,7 @@ use axum::{
 use sqlx::postgres::PgPoolOptions;
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
+    os::unix::fs::PermissionsExt,
     sync::Arc,
     time::Duration,
 };
@@ -76,6 +77,7 @@ pub struct AppConfig {
 /// Return error if failed to start the server
 pub async fn new(
     port: u16,
+    socket_path: Option<String>,
     dsn: String,
     globals: &GlobalArgs,
     admission: Arc<handlers::AdmissionVerifier>,
@@ -152,6 +154,37 @@ pub async fn new(
     // Initialize Passkeys (preview mode supported via env)
     let passkey_service = init_passkey_service(&config.auth)?;
 
+    let app = build_router(
+        auth_state,
+        admin_state,
+        admission,
+        globals,
+        pool,
+        totp_service,
+        security_key_service,
+        passkey_service,
+    )?;
+
+    if let Some(path) = socket_path {
+        serve_socket(app, path, rx).await?;
+    } else {
+        serve_tls(app, port, rx).await?;
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_router(
+    auth_state: Arc<auth::AuthState>,
+    admin_state: Arc<auth::AdminState>,
+    admission: Arc<handlers::AdmissionVerifier>,
+    globals: &GlobalArgs,
+    pool: sqlx::PgPool,
+    totp_service: TotpService,
+    security_key_service: SecurityKeyService,
+    passkey_service: PasskeyService,
+) -> Result<Router> {
     let frontend_origin = frontend_origin(auth_state.config().frontend_base_url())?;
     let cors = CorsLayer::new()
         .allow_headers([
@@ -188,9 +221,9 @@ pub async fn new(
                 )))
                 .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
-                .layer(Extension(auth_state.clone()))
-                .layer(Extension(admin_state.clone()))
-                .layer(Extension(admission.clone()))
+                .layer(Extension(auth_state))
+                .layer(Extension(admin_state))
+                .layer(Extension(admission))
                 .layer(Extension(globals.clone()))
                 .layer(Extension(pool.clone()))
                 .layer(Extension(totp_service))
@@ -198,9 +231,33 @@ pub async fn new(
                 .layer(Extension(Arc::new(passkey_service))),
         )
         .layer(Extension(pool));
+    Ok(app)
+}
 
-    serve_tls(app, port, rx).await?;
+async fn serve_socket(
+    app: Router,
+    path: String,
+    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
+) -> Result<()> {
+    let path = std::path::Path::new(&path);
+    if path.exists() {
+        tokio::fs::remove_file(path)
+            .await
+            .context("Failed to remove existing socket file")?;
+    }
+    let listener = tokio::net::UnixListener::bind(path).context("Failed to bind Unix socket")?;
 
+    // Set permissions to 666 so Nginx (different user) can read/write
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
+        .context("Failed to set socket permissions")?;
+
+    info!("Listening on unix:{}", path.display());
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_rx.recv().await;
+            info!("Gracefully shutdown");
+        })
+        .await?;
     Ok(())
 }
 

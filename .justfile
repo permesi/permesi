@@ -543,6 +543,9 @@ permesi:
   if [[ -f {{root}}/.envrc ]]; then
     source {{root}}/.envrc
   fi
+  if [[ -n "${PERMESI_SOCKET_MODE:-}" ]]; then
+    export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost/paserk.json"
+  fi
   paserk_url="${PERMESI_ADMISSION_PASERK_URL:-}"
   ca_path="{{root}}/certs/permesi/ca.pem"
   paserk_ca_path="${PERMESI_ADMISSION_PASERK_CA_PATH:-$ca_path}"
@@ -582,6 +585,48 @@ permesi:
     exit 1
   fi
   cargo watch --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi -- --port 8001 -vvv'
+
+genesis-socket:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  mkdir -p {{root}}/.tmp
+  rm -f {{root}}/.tmp/genesis.sock
+  if [[ -f {{root}}/.envrc ]]; then
+    source {{root}}/.envrc
+  fi
+  # Unset TLS bundle to avoid conflict with --socket-path
+  unset GENESIS_TLS_PEM_BUNDLE
+  if ! command -v vault >/dev/null 2>&1; then
+    echo "vault CLI not found; install it or set GENESIS_VAULT_SECRET_ID manually before running." >&2
+    exit 1
+  fi
+  echo "Starting genesis on socket: {{root}}/.tmp/genesis.sock"
+  cargo watch --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis -- --socket-path {{root}}/.tmp/genesis.sock -vvv'
+
+permesi-socket:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  mkdir -p {{root}}/.tmp
+  rm -f {{root}}/.tmp/permesi.sock
+  if [[ -f {{root}}/.envrc ]]; then
+    source {{root}}/.envrc
+  fi
+  export PERMESI_SOCKET_MODE=1
+  # Unset TLS bundle to avoid conflict with --socket-path
+  unset PERMESI_TLS_PEM_BUNDLE
+  # Override PASERK URL to go through HAProxy (HTTPS on port 443)
+  export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost/paserk.json"
+  # Override CA path to trust mkcert (HAProxy) instead of internal Vault CA
+  if [[ -f "{{root}}/certs/mkcert-root.pem" ]]; then
+    export PERMESI_ADMISSION_PASERK_CA_PATH="{{root}}/certs/mkcert-root.pem"
+  fi
+
+  if ! command -v vault >/dev/null 2>&1; then
+    echo "vault CLI not found; install it or set PERMESI_VAULT_SECRET_ID manually before running." >&2
+    exit 1
+  fi
+  echo "Starting permesi on socket: {{root}}/.tmp/permesi.sock"
+  cargo watch --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi -- --socket-path {{root}}/.tmp/permesi.sock -vvv'
 
 # ----------------------
 # ----------------------
@@ -1430,7 +1475,7 @@ haproxy-start:
   port_args=(-p 443:8080)
   if [[ "$(uname -s)" == "Linux" ]] && sysctl -n net.ipv6.conf.all.disable_ipv6 >/dev/null 2>&1; then
     if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "0" ]]; then
-      port_args+=(-p "[::]:443:8080")
+      port_args=(-p "[::]:443:8080")
     fi
   fi
   add_host_arg=()
@@ -1460,6 +1505,63 @@ haproxy-start:
     fi
   fi
 
+haproxy-socket-start:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  cfg="{{root}}/config/haproxy/haproxy-socket.cfg"
+  cert="{{root}}/config/haproxy/certs/permesi.localhost.pem"
+  backend_ca="{{root}}/certs/permesi/ca.pem"
+  socket_dir="{{root}}/.tmp"
+
+  if [[ ! -f "$cfg" ]]; then
+    echo "Missing HAProxy socket config: $cfg" >&2
+    exit 1
+  fi
+  # Ensure socket dir exists
+  mkdir -p "$socket_dir"
+  chmod 755 "$socket_dir" 2>/dev/null || true
+
+  if [[ ! -f "$cert" ]]; then
+    if command -v mkcert >/dev/null 2>&1; then
+      echo "Missing TLS cert; generating with mkcert..."
+      just --quiet mkcert-local
+    else
+      echo "Missing TLS cert: $cert" >&2
+      echo "Run: just mkcert-local" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -n "$(podman ps -q --filter 'name=^permesi-haproxy$')" ]]; then
+    echo "permesi-haproxy already running. Restarting with socket config..."
+    podman stop permesi-haproxy >/dev/null
+  fi
+
+  port_args=(-p 443:8080)
+  if [[ "$(uname -s)" == "Linux" ]] && sysctl -n net.ipv6.conf.all.disable_ipv6 >/dev/null 2>&1; then
+    if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "0" ]]; then
+      port_args=(-p "[::]:443:8080")
+    fi
+  fi
+
+  add_host_arg=()
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    add_host_arg=(--add-host=host.containers.internal:host-gateway)
+  fi
+
+  echo "Starting HAProxy (socket mode)..."
+  if ! podman run --replace -d --name permesi-haproxy \
+    "${add_host_arg[@]}" \
+    "${port_args[@]}" \
+    -v "$cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+    -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
+    -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
+    -v "${socket_dir}:/var/run/permesi:z" \
+    docker.io/haproxy:latest; then
+      echo "Failed to start HAProxy."
+      exit 1
+  fi
+
 haproxy-stop:
   podman stop permesi-haproxy || true
 
@@ -1476,6 +1578,55 @@ haproxy-sysctl:
 
 # Restart everything: stop infra and tmux, then start again
 restart: stop start
+
+start-socket:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ! command -v tmux >/dev/null 2>&1; then
+    just dev-start-infra
+    just haproxy-socket-start
+    just dev-envrc
+  export PERMESI_SOCKET_MODE=1
+    echo "tmux not found; starting web here. Run: just genesis-socket / just permesi-socket in other shells."
+    just web
+    exit 0
+  fi
+  session="permesi"
+  start_session() {
+    local left_pane
+    local right_pane
+    left_pane="$(
+      tmux new-session -d -s "$session" -c "{{root}}" -P -F "#{pane_id}" "just genesis-socket"
+    )"
+    right_pane="$(
+      tmux split-window -t "$left_pane" -h -c "{{root}}" -P -F "#{pane_id}" "just permesi-socket"
+    )"
+    tmux split-window -t "$left_pane" -v -c "{{root}}" "just web"
+    tmux split-window -t "$right_pane" -v -c "{{root}}"
+  }
+  if [[ -n "${TMUX-}" ]]; then
+    just dev-start-infra
+    just haproxy-socket-start
+    just dev-envrc
+    if tmux has-session -t "$session" 2>/dev/null; then
+      echo "tmux session '${session}' already exists."
+      echo "Attach with: tmux attach -t ${session}"
+      exit 0
+    fi
+    start_session
+    echo "Created tmux session '${session}'."
+    echo "Attach with: tmux attach -t ${session}"
+    exit 0
+  fi
+  if tmux has-session -t "$session" 2>/dev/null; then
+    tmux attach -t "$session"
+    exit 0
+  fi
+  just dev-start-infra
+  just haproxy-socket-start
+  just dev-envrc
+  start_session
+  tmux attach -t "$session"
 
 start:
   #!/usr/bin/env zsh

@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use axum::{
-    Extension,
+    Extension, Router,
     body::Body,
     http::{HeaderName, HeaderValue, Method, Request},
     routing::{get, options},
@@ -18,6 +18,7 @@ use axum::{
 use sqlx::postgres::PgPoolOptions;
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
+    os::unix::fs::PermissionsExt,
     sync::Arc,
     time::Duration,
 };
@@ -51,9 +52,14 @@ pub fn router() -> OpenApiRouter {
 /// # Errors
 /// Returns an error if database connectivity fails, Vault initialization fails,
 /// or the TLS server fails to start.
-pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
+pub async fn new(
+    port: u16,
+    socket_path: Option<String>,
+    dsn: String,
+    globals: &GlobalArgs,
+) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::unbounded_channel();
 
     vault::renew::try_renew(globals, tx).await?;
 
@@ -95,6 +101,47 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
         .route("/health", options(health::health))
         .layer(Extension(pool));
 
+    if let Some(path) = socket_path {
+        serve_socket(app, path, rx).await?;
+    } else {
+        serve_tls(app, port, rx).await?;
+    }
+
+    Ok(())
+}
+
+async fn serve_socket(
+    app: Router,
+    path: String,
+    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
+) -> Result<()> {
+    let path = std::path::Path::new(&path);
+    if path.exists() {
+        tokio::fs::remove_file(path)
+            .await
+            .context("Failed to remove existing socket file")?;
+    }
+    let listener = tokio::net::UnixListener::bind(path).context("Failed to bind Unix socket")?;
+
+    // Set permissions to 666 so Nginx (different user) can read/write
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
+        .context("Failed to set socket permissions")?;
+
+    info!("Listening on unix:{}", path.display());
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_rx.recv().await;
+            info!("Gracefully shutdown");
+        })
+        .await?;
+    Ok(())
+}
+
+async fn serve_tls(
+    app: Router,
+    port: u16,
+    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
+) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
@@ -103,7 +150,7 @@ pub async fn new(port: u16, dsn: String, globals: &GlobalArgs) -> Result<()> {
     tokio::spawn({
         let handle = handle.clone();
         async move {
-            rx.recv().await;
+            shutdown_rx.recv().await;
             info!("Gracefully shutdown");
             handle.graceful_shutdown(Some(Duration::from_secs(30)));
         }
