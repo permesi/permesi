@@ -181,7 +181,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
         ("vault_addr", vault_addr.to_string()),
-        ("vault_mode", mode.to_lowercase()),
+        ("vault_mode", mode.to_string()),
         (
             "vault_role_id",
             args.vault_role_id

@@ -94,7 +94,10 @@ pub fn load_server_config() -> Result<ServerConfig> {
 /// # Errors
 /// Returns an error if the configured CA bundle cannot be read or parsed.
 pub fn load_reqwest_ca() -> Result<Vec<Certificate>> {
-    let paths = runtime_paths()?;
+    let paths = match runtime_paths() {
+        Ok(p) => p,
+        Err(_) => return Ok(Vec::new()),
+    };
     if let Some(path) = paths.extra_ca_path() {
         return load_reqwest_ca_from(path);
     }
