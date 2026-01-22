@@ -146,16 +146,16 @@ jobs:
       - uses: ./.github/actions/ensure-container-runtime
 
       - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}"
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | ${CONTAINER_TOOL} login ghcr.io -u "${{ github.actor }}"
           --password-stdin
 
-      - name: Build & Push images (podman)
+      - name: Build & Push images
         shell: bash
         run: |-
           set -euo pipefail
           for service in permesi genesis; do
             image="ghcr.io/permesi/${service}"
             dockerfile="services/${service}/Dockerfile"
-            podman build -f "${dockerfile}" -t "${image}:develop" .
-            podman push "${image}:develop"
+            ${CONTAINER_TOOL} build -f "${dockerfile}" -t "${image}:develop" .
+            ${CONTAINER_TOOL} push "${image}:develop"
           done

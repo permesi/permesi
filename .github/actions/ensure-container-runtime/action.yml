@@ -25,6 +25,7 @@ runs:
           if [[ -S "/var/run/docker.sock" ]]; then
             {
               echo "DOCKER_HOST=unix:///var/run/docker.sock"
+              echo "CONTAINER_TOOL=docker"
             } >> "${GITHUB_ENV}"
             echo "Verifying Docker..."
             docker info > /dev/null
@@ -60,12 +61,16 @@ runs:
           export DBUS_SESSION_BUS_ADDRESS=""
         fi
 
+        # 4. Recover from potential corrupted state (match commit a1544514)
+        echo "Migrating Podman system state..."
+        podman system migrate || true
+
         # 5. Start podman system service if socket is missing or unresponsive
         SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
         SERVICE_NEEDED=0
         if [[ ! -S "$SOCKET_PATH" ]]; then
           SERVICE_NEEDED=1
-        elif ! podman --url "unix://${SOCKET_PATH}" info >/dev/null 2>&1; then
+        elif ! podman info >/dev/null 2>&1; then
           echo "Podman socket exists but is unresponsive. Removing stale socket."
           rm -f "$SOCKET_PATH"
           SERVICE_NEEDED=1
@@ -98,16 +103,13 @@ runs:
           echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
           echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}"
           echo "DOCKER_HOST=unix://${SOCKET_PATH}"
+          echo "CONTAINER_TOOL=podman"
         } >> "${GITHUB_ENV}"
-
+        
         # 7. Final verification and pre-pull images
         echo "Verifying Podman..."
         export DOCKER_HOST="unix://${SOCKET_PATH}"
-        if ! podman --url "unix://${SOCKET_PATH}" info > /dev/null 2>&1; then
-          echo "Podman info failed, trying system migrate..."
-          podman system migrate
-          podman --url "unix://${SOCKET_PATH}" info
-        fi
+        podman info > /dev/null || { echo "Podman info failed, trying system migrate..."; podman system migrate; podman info; }
 
         echo "Pre-pulling Postgres and Vault images..."
         podman --url "unix://${SOCKET_PATH}" pull postgres:18 || true

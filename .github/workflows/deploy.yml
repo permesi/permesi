@@ -219,7 +219,7 @@ jobs:
       - uses: ./.github/actions/ensure-container-runtime
 
       - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}"
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | ${CONTAINER_TOOL} login ghcr.io -u "${{ github.actor }}"
           --password-stdin
 
       - name: Compute image tags
@@ -245,7 +245,7 @@ jobs:
           echo "should_build=${should_build}" >> "$GITHUB_OUTPUT"
           echo "tags=${tags[*]}" >> "$GITHUB_OUTPUT"
 
-      - name: Build & Push images (podman)
+      - name: Build & Push images
         if: steps.meta.outputs.should_build == 'true'
         shell: bash
         run: |-
@@ -261,9 +261,9 @@ jobs:
               build_tags+=(-t "${image}:${tag}")
             done
 
-            podman build -f "${dockerfile}" "${build_tags[@]}" .
+            ${CONTAINER_TOOL} build -f "${dockerfile}" "${build_tags[@]}" .
 
             for tag in "${tags[@]}"; do
-              podman push "${image}:${tag}"
+              ${CONTAINER_TOOL} push "${image}:${tag}"
             done
           done
