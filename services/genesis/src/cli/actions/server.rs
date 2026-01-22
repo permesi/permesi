@@ -78,8 +78,8 @@ pub async fn execute(args: Args) -> Result<()> {
 
 fn log_startup_args(args: &Args) {
     let mode = match args.vault_target {
-        vault::VaultTarget::Tcp { .. } => "TCP",
-        vault::VaultTarget::AgentProxy { .. } => "AGENT",
+        vault::VaultTarget::Tcp { .. } => "Direct Access (TCP)",
+        vault::VaultTarget::AgentProxy { .. } => "Agent (Sidecar)",
     };
     let listen_addr = if let Some(sock) = &args.socket_path {
         format!("unix:{sock}")
@@ -112,7 +112,7 @@ fn log_startup_args(args: &Args) {
                 .unwrap_or_else(|| "none".to_string()),
         ),
     ];
-    log_entries("Startup configuration", &entries, mode);
+    log_entries("Startup configuration", &entries);
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -127,17 +127,9 @@ fn redact_dsn(dsn: &str) -> String {
     }
 }
 
-fn log_entries(title: &str, entries: &[(&str, String)], mode: &str) {
-    let mode_desc = if mode == "AGENT" {
-        "Agent (Sidecar)"
-    } else {
-        "Direct Access (TCP)"
-    };
+fn log_entries(title: &str, entries: &[(&str, String)]) {
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!(
-        "{}\n\nVault mode: {mode_desc}\n\n{title}:",
-        genesis_banner()
-    );
+    let mut message = format!("{}\n\n{title}:", genesis_banner());
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =

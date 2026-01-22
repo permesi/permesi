@@ -161,9 +161,10 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
 
 fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str) {
     let mode = match args.vault_target {
-        vault_client::VaultTarget::Tcp { .. } => "TCP",
-        vault_client::VaultTarget::AgentProxy { .. } => "AGENT",
+        vault_client::VaultTarget::Tcp { .. } => "Direct Access (TCP)",
+        vault_client::VaultTarget::AgentProxy { .. } => "Agent (Sidecar)",
     };
+
     let admission_paserk_ca = args
         .admission_paserk_ca_path
         .clone()
@@ -250,7 +251,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             args.platform_recent_auth_seconds.to_string(),
         ),
     ];
-    log_entries("Startup configuration", &entries, mode);
+    log_entries("Startup configuration", &entries);
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -265,17 +266,9 @@ fn redact_dsn(dsn: &str) -> String {
     }
 }
 
-fn log_entries(title: &str, entries: &[(&str, String)], mode: &str) {
-    let mode_desc = if mode == "AGENT" {
-        "Agent (Sidecar)"
-    } else {
-        "Direct Access (TCP)"
-    };
+fn log_entries(title: &str, entries: &[(&str, String)]) {
     let max_key_len = entries.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-    let mut message = format!(
-        "{}\n\nVault mode: {mode_desc}\n\n{title}:",
-        permesi_banner()
-    );
+    let mut message = format!("{}\n\n{title}:", permesi_banner());
     for (key, value) in entries {
         let padding = " ".repeat(max_key_len.saturating_sub(key.len()));
         let _ =
