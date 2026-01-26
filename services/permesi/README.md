@@ -11,6 +11,8 @@ TL;DR:
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
+When Vault token renewal or the DB lease renewal fails repeatedly, `permesi` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions).
+
 ## CLI example
 
 The `dsn` can omit username/password because Vault injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).

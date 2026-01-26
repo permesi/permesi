@@ -74,7 +74,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
 
     Effect::new(move |_| {
         if let Some(result) = verify_action.value().get() {
-            if status.get() == VerifyStatus::Success {
+            if status.get_untracked() == VerifyStatus::Success {
                 return;
             }
             match result {

@@ -22,6 +22,26 @@ use tokio::{
 };
 use tracing::{debug, error, info, instrument, warn};
 
+/// Reason for triggering a process shutdown after failed Vault renewals.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShutdownSignal {
+    /// The Vault auth token could not be renewed after retrying.
+    TokenRenewalFailed,
+    /// The Vault database lease could not be renewed after retrying.
+    DbLeaseRenewalFailed,
+}
+
+impl ShutdownSignal {
+    /// Human-readable reason for logs and shutdown errors.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShutdownSignal::TokenRenewalFailed => "vault_token_renewal_failed",
+            ShutdownSignal::DbLeaseRenewalFailed => "vault_db_lease_renewal_failed",
+        }
+    }
+}
+
 /// Spawn background tasks to keep Vault and database leases renewed.
 ///
 /// If running in Agent mode, the Vault token renewal is skipped as the Agent
@@ -31,7 +51,10 @@ use tracing::{debug, error, info, instrument, warn};
 /// # Errors
 /// Returns an error if the tasks cannot be initialized.
 #[instrument(skip(globals, tx))]
-pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> Result<()> {
+pub async fn try_renew(
+    globals: &GlobalArgs,
+    tx: mpsc::UnboundedSender<ShutdownSignal>,
+) -> Result<()> {
     // In Agent Proxy mode, the Agent handles its own auth token renewal.
     // The app only needs to renew its own (TCP mode) token.
     if globals.vault_transport.is_agent_proxy() {
@@ -45,7 +68,7 @@ pub async fn try_renew(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) -> R
     Ok(())
 }
 
-fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
+fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<ShutdownSignal>) {
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
         let mut jittered_lease_duration: Duration = Duration::default();
@@ -90,7 +113,7 @@ fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
 
                             if attempt == 3 {
                                 error!("Failed to renew token after 3 attempts: {}", e);
-                                let _ = tx.send(());
+                                let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
                                 return;
                             }
                         }
@@ -108,7 +131,7 @@ fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
     });
 }
 
-fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
+fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<ShutdownSignal>) {
     tokio::spawn({
         let mut rng = StdRng::from_entropy();
         let mut jittered_lease_duration: Duration = Duration::default();
@@ -158,7 +181,7 @@ fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
 
                             if attempt == 3 {
                                 error!("Failed to renew DB lease after 3 attempts: {}", e);
-                                let _ = tx.send(());
+                                let _ = tx.send(ShutdownSignal::DbLeaseRenewalFailed);
                                 return;
                             }
                         }
@@ -179,7 +202,7 @@ fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<()>) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::try_renew;
+    use super::{ShutdownSignal, try_renew};
     use crate::globals::GlobalArgs;
     use anyhow::{Result, bail};
     use secrecy::SecretString;
@@ -206,9 +229,11 @@ mod tests {
         GlobalArgs::new(url.to_string(), transport)
     }
 
-    async fn wait_for_shutdown(rx: &mut mpsc::UnboundedReceiver<()>) -> Result<()> {
+    async fn wait_for_shutdown(
+        rx: &mut mpsc::UnboundedReceiver<ShutdownSignal>,
+    ) -> Result<ShutdownSignal> {
         match timeout(Duration::from_secs(15), rx.recv()).await {
-            Ok(Some(())) => Ok(()),
+            Ok(Some(signal)) => Ok(signal),
             Ok(None) => bail!("shutdown channel disconnected unexpectedly"),
             Err(_) => bail!("expected shutdown signal after 3 failed renew attempts"),
         }
@@ -254,7 +279,10 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         try_renew(&globals, tx).await?;
 
-        wait_for_shutdown(&mut rx).await?;
+        let signal = wait_for_shutdown(&mut rx).await?;
+        if signal != ShutdownSignal::TokenRenewalFailed {
+            bail!("expected token renewal failure, got {:?}", signal);
+        }
 
         let Some(requests) = server.received_requests().await else {
             bail!("wiremock request recording is disabled");
@@ -310,7 +338,10 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         try_renew(&globals, tx).await?;
 
-        wait_for_shutdown(&mut rx).await?;
+        let signal = wait_for_shutdown(&mut rx).await?;
+        if signal != ShutdownSignal::DbLeaseRenewalFailed {
+            bail!("expected DB lease renewal failure, got {:?}", signal);
+        }
 
         let Some(requests) = server.received_requests().await else {
             bail!("wiremock request recording is disabled");

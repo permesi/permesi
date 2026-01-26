@@ -8,7 +8,7 @@ use crate::{
     cli::globals::GlobalArgs,
     tls, vault,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use axum::{
     Extension, Router,
     body::Body,
@@ -22,7 +22,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -30,7 +30,7 @@ use tower_http::{
     set_header::SetRequestHeaderLayer,
     trace::TraceLayer,
 };
-use tracing::{Span, debug_span, info};
+use tracing::{Span, debug_span, info, warn};
 use ulid::Ulid;
 use utoipa_axum::router::OpenApiRouter;
 
@@ -110,49 +110,75 @@ pub async fn new(
     Ok(())
 }
 
+/// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
+///
+/// # Errors
+/// Returns an error if the socket cannot be created, permissions cannot be set,
+/// the server fails to start, or a shutdown signal is received.
+/// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
+///
+/// # Errors
+/// Returns an error if the socket cannot be created, permissions cannot be set,
+/// the server fails to start, or a shutdown signal is received.
 async fn serve_socket(
     app: Router,
     path: String,
-    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
+    mut shutdown_rx: mpsc::UnboundedReceiver<vault::renew::ShutdownSignal>,
 ) -> Result<()> {
-    let path = std::path::Path::new(&path);
+    let path = std::path::PathBuf::from(path);
     if path.exists() {
-        tokio::fs::remove_file(path)
+        tokio::fs::remove_file(&path)
             .await
             .context("Failed to remove existing socket file")?;
     }
-    let listener = tokio::net::UnixListener::bind(path).context("Failed to bind Unix socket")?;
+    let listener = tokio::net::UnixListener::bind(&path).context("Failed to bind Unix socket")?;
 
     // Set permissions to 666 so Nginx (different user) can read/write
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
         .context("Failed to set socket permissions")?;
+
+    let shutdown_reason = Arc::new(Mutex::new(None));
+    let shutdown_reason_task = shutdown_reason.clone();
 
     info!("Listening on unix:{}", path.display());
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            shutdown_rx.recv().await;
-            info!("Gracefully shutdown");
+            if let Some(signal) = shutdown_rx.recv().await {
+                *shutdown_reason_task.lock().await = Some(signal);
+                info!(reason = signal.as_str(), "Gracefully shutdown");
+            }
         })
         .await?;
+    if let Err(err) = tokio::fs::remove_file(&path).await {
+        warn!(error = %err, "Failed to remove unix socket on shutdown");
+    }
+    if let Some(signal) = shutdown_reason.lock().await.take() {
+        return Err(anyhow!("Shutdown requested: {}", signal.as_str()));
+    }
     Ok(())
 }
 
 async fn serve_tls(
     app: Router,
     port: u16,
-    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
+    mut shutdown_rx: mpsc::UnboundedReceiver<vault::renew::ShutdownSignal>,
 ) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
     let handle = axum_server::Handle::new();
 
+    let shutdown_reason = Arc::new(Mutex::new(None));
+    let shutdown_reason_task = shutdown_reason.clone();
+
     tokio::spawn({
         let handle = handle.clone();
         async move {
-            shutdown_rx.recv().await;
-            info!("Gracefully shutdown");
-            handle.graceful_shutdown(Some(Duration::from_secs(30)));
+            if let Some(signal) = shutdown_rx.recv().await {
+                *shutdown_reason_task.lock().await = Some(signal);
+                info!(reason = signal.as_str(), "Gracefully shutdown");
+                handle.graceful_shutdown(Some(Duration::from_secs(30)));
+            }
         }
     });
 
@@ -168,6 +194,10 @@ async fn serve_tls(
         .serve(app.into_make_service())
         .await?;
 
+    if let Some(signal) = shutdown_reason.lock().await.take() {
+        return Err(anyhow!("Shutdown requested: {}", signal.as_str()));
+    }
+
     Ok(())
 }
 
@@ -181,4 +211,66 @@ fn make_span(request: &Request<Body>) -> Span {
         .unwrap_or("none");
 
     debug_span!("http-request", path, ?headers, request_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serve_socket;
+    use crate::vault::renew::ShutdownSignal;
+    use anyhow::{Context, Result};
+    use axum::Router;
+    use std::fs;
+    use tokio::{
+        sync::mpsc,
+        time::{Duration, sleep, timeout},
+    };
+    use ulid::Ulid;
+
+    #[tokio::test]
+    async fn serve_socket_returns_error_on_shutdown_signal() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::new()));
+        fs::create_dir_all(&dir).context("create temp dir failed")?;
+        let socket_path = dir.join("genesis.sock");
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
+        });
+
+        let result =
+            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx).await;
+        assert!(result.is_err(), "expected shutdown error");
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn serve_socket_removes_file_on_shutdown() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::new()));
+        fs::create_dir_all(&dir).context("create temp dir failed")?;
+        let socket_path = dir.join("genesis.sock");
+        let socket_path_wait = socket_path.clone();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let _ = timeout(Duration::from_secs(1), async {
+                while !socket_path_wait.exists() {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
+        });
+
+        let result =
+            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx).await;
+        assert!(result.is_err(), "expected shutdown error");
+        assert!(
+            !socket_path.exists(),
+            "expected socket file to be removed on shutdown"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
 }
