@@ -155,6 +155,9 @@ jobs:
         working-directory: apps/web
         run: npm run css:build
 
+      - name: Clean Frontend Target
+        run: cargo clean -p permesi_web --target wasm32-unknown-unknown
+
       - name: Build Frontend
         working-directory: apps/web
         run: trunk build --release
