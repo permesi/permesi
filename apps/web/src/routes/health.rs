@@ -2,11 +2,14 @@
 //! It exposes only non-sensitive data like frontend/backend versions, commit hashes,
 //! and component health.
 
-use crate::features::auth::{client, types::HealthResponse};
+use crate::{
+    app_lib::GIT_COMMIT_HASH,
+    features::auth::{client, types::HealthResponse},
+};
 use leptos::{prelude::*, task::spawn_local};
 
 const FRONTEND_VERSION: &str = env!("CARGO_PKG_VERSION");
-const FRONTEND_COMMIT: &str = env!("PERMESI_WEB_GIT_SHA");
+const FRONTEND_COMMIT: &str = GIT_COMMIT_HASH;
 
 /// Renders the build version and system health card.
 #[component]

@@ -20,9 +20,18 @@
 //! callers must still avoid logging sensitive data.
 
 pub(crate) mod api;
+#[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
+pub(crate) mod built_info {
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
 pub(crate) mod config;
 pub(crate) mod errors;
 pub(crate) mod theme;
+
+pub(crate) const GIT_COMMIT_HASH: &str = match built_info::GIT_COMMIT_HASH {
+    Some(hash) => hash,
+    None => "unknown",
+};
 
 pub(crate) use api::{
     delete_json_with_headers_with_credentials, get_json_with_base, get_json_with_credentials,

@@ -3207,6 +3207,7 @@ version = "0.3.17"
 dependencies = [
  "argon2",
  "base64 0.22.1",
+ "built",
  "getrandom 0.3.4",
  "gloo-net",
  "gloo-timers",
