@@ -1,8 +1,12 @@
 //! Health route that displays build metadata and system status for quick diagnostics.
-//! It exposes only non-sensitive data like version, commit hash, and component health.
+//! It exposes only non-sensitive data like frontend/backend versions, commit hashes,
+//! and component health.
 
 use crate::features::auth::{client, types::HealthResponse};
 use leptos::{prelude::*, task::spawn_local};
+
+const FRONTEND_VERSION: &str = env!("CARGO_PKG_VERSION");
+const FRONTEND_COMMIT: &str = env!("PERMESI_WEB_GIT_SHA");
 
 /// Renders the build version and system health card.
 #[component]
@@ -36,9 +40,12 @@ pub fn HealthPage() -> impl IntoView {
                         }.into_any(),
                         Some(Ok(info)) => view! {
                             <div class="space-y-4">
-                                <HealthItem label="Service Name" value=info.name />
-                                <HealthItem label="Version" value=info.version />
-                                <HealthItem label="Commit" value=info.commit monospace=true />
+                                <HealthItem label="Frontend Version" value=FRONTEND_VERSION.to_string() />
+                                <HealthItem label="Frontend Commit" value=FRONTEND_COMMIT.to_string() monospace=true />
+                                <div class="my-4 border-t border-gray-100 dark:border-gray-700"></div>
+                                <HealthItem label="Backend Service" value=info.name />
+                                <HealthItem label="Backend Version" value=info.version />
+                                <HealthItem label="Backend Commit" value=info.commit monospace=true />
                                 <div class="my-4 border-t border-gray-100 dark:border-gray-700"></div>
                                 <StatusItem label="Database" status=info.database />
                                 <StatusItem label="Admission Keyset" status=info.admission_keyset />

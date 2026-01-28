@@ -143,7 +143,10 @@ sequenceDiagram
   4. **Commit Record**: The client seals the new password into a registration record and commits it to the server.
   5. **Revocation**: The server replaces the old record and immediately revokes all active sessions for the user to ensure security.
   
-  ## Current UI state
+## Current UI state
+
+The health page at `/health` shows frontend build metadata (version and commit)
+alongside backend health details so deploys can be verified quickly.
 - Home (`/`) is a placeholder ("Home").
 - Header shows "Sign In" or "Sign Up" depending on the current route; authenticated sessions see "Sign Out".
 - Login performs OPAQUE (`/v1/auth/opaque/login/start` + `/finish`) and fetches a Genesis zero token for each step; permesi sets an HttpOnly session cookie and the frontend reads `/v1/auth/session` to hydrate state.
