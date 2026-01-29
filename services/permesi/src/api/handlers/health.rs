@@ -3,6 +3,10 @@
 //! This module provides endpoints to verify the status of the service's
 //! primary dependencies, including the database and the remote admission
 //! PASERK endpoint.
+//! Remote admission checks use cached freshness to avoid per-request keyset
+//! fetches when the cache is still valid.
+//! Health checks apply short timeouts so reverse proxies do not wait on
+//! slow dependency probes.
 
 use super::{AdmissionVerifier, DependencyStatus};
 use crate::GIT_COMMIT_HASH;
@@ -15,8 +19,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, PgPool};
 use std::sync::Arc;
-use tracing::{Instrument, debug, error, info_span};
+use tokio::time::{Duration, timeout};
+use tracing::{Instrument, debug, error, info_span, warn};
 use utoipa::ToSchema;
+
+const HEALTH_DB_TIMEOUT_SECONDS: u64 = 2;
+const HEALTH_DEPENDENCY_TIMEOUT_SECONDS: u64 = 2;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct Health {
@@ -47,27 +55,48 @@ pub async fn health(
         db.system = "postgresql",
         db.operation = "ACQUIRE"
     );
-    let result = match pool.0.acquire().instrument(acquire_span).await {
-        Ok(mut conn) => {
-            let ping_span = info_span!("db.ping", db.system = "postgresql", db.operation = "PING");
-            match conn.ping().instrument(ping_span).await {
-                Ok(()) => Ok(()),
+    let result = if let Ok(result) =
+        timeout(Duration::from_secs(HEALTH_DB_TIMEOUT_SECONDS), async {
+            match pool.0.acquire().instrument(acquire_span).await {
+                Ok(mut conn) => {
+                    let ping_span =
+                        info_span!("db.ping", db.system = "postgresql", db.operation = "PING");
+                    match conn.ping().instrument(ping_span).await {
+                        Ok(()) => Ok(()),
+                        Err(error) => {
+                            error!("Failed to ping database: {}", error);
+
+                            Err(StatusCode::SERVICE_UNAVAILABLE)
+                        }
+                    }
+                }
+
                 Err(error) => {
-                    error!("Failed to ping database: {}", error);
+                    error!("Failed to acquire database connection: {}", error);
 
                     Err(StatusCode::SERVICE_UNAVAILABLE)
                 }
             }
-        }
-
-        Err(error) => {
-            error!("Failed to acquire database connection: {}", error);
-
-            Err(StatusCode::SERVICE_UNAVAILABLE)
-        }
+        })
+        .await
+    {
+        result
+    } else {
+        warn!("Database health check timed out");
+        Err(StatusCode::SERVICE_UNAVAILABLE)
     };
 
-    let admission_status = admission.0.dependency_status().await;
+    let admission_status = if let Ok(status) = timeout(
+        Duration::from_secs(HEALTH_DEPENDENCY_TIMEOUT_SECONDS),
+        admission.0.dependency_status(),
+    )
+    .await
+    {
+        status
+    } else {
+        warn!("Admission keyset health check timed out");
+        DependencyStatus::Error
+    };
     let is_healthy = result.is_ok() && admission_status.is_healthy();
 
     // Create a health struct
