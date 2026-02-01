@@ -275,22 +275,31 @@ impl AdmissionVerifier {
         Ok(())
     }
 
-    /// Report dependency status for `/health` by attempting a refresh.
+    /// Report dependency status for `/health` using cached freshness.
+    ///
+    /// When the keyset cache is fresh, return `Ok` without hitting genesis.
+    /// Stale caches trigger a refresh attempt, and failures report `Error`.
     async fn dependency_status(&self) -> DependencyStatus {
         match &self.keyset_source {
             KeysetSource::Static => DependencyStatus::Static,
-            KeysetSource::Remote { url, .. } => match self.refresh_keyset().await {
-                Ok(()) => DependencyStatus::Ok,
-                Err(err) => {
-                    // /health reports dependency errors when refresh fails.
-                    warn!(
-                        error = %err,
-                        url = %url,
-                        "paserk keyset fetch failed during health check"
-                    );
-                    DependencyStatus::Error
+            KeysetSource::Remote { url, .. } => {
+                let is_fresh = self.keyset_cache.read().await.is_fresh();
+                if is_fresh {
+                    return DependencyStatus::Ok;
                 }
-            },
+                match self.refresh_keyset().await {
+                    Ok(()) => DependencyStatus::Ok,
+                    Err(err) => {
+                        // /health reports dependency errors when refresh fails.
+                        warn!(
+                            error = %err,
+                            url = %url,
+                            "paserk keyset fetch failed during health check"
+                        );
+                        DependencyStatus::Error
+                    }
+                }
+            }
         }
     }
 
