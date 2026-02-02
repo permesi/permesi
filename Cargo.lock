@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admission_token"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -125,9 +125,9 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "arc-swap"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
+checksum = "9ded5f9a03ac8f24d1b8a25101ee812cd32cdc8c50a4c50237de2c4915850e73"
 dependencies = [
  "rustversion",
 ]
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "genesis"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -1665,9 +1665,9 @@ dependencies = [
 
 [[package]]
 name = "git2"
-version = "0.20.3"
+version = "0.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e2b37e2f62729cdada11f0e6b3b6fe383c69c29fc619e391223e12856af308c"
+checksum = "7b88256088d75a56f8ecfa070513a775dd9107f6530ef14919dac831af9cfe2b"
 dependencies = [
  "bitflags",
  "libc",
@@ -1991,14 +1991,13 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
+checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-channel",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
@@ -3140,7 +3139,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permesi"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3203,7 +3202,7 @@ dependencies = [
 
 [[package]]
 name = "permesi_web"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -4332,7 +4331,7 @@ dependencies = [
 
 [[package]]
 name = "service_utils"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "anyhow",
  "http",
@@ -4809,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "test_support"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "anyhow",
  "reqwest 0.13.1",
@@ -5507,7 +5506,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault_client"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "anyhow",
  "bytes",
