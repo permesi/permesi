@@ -22,7 +22,9 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 ## Workflow Overview
 
 - **`test.yml`**: Handles formatting, linting (clippy), and unit/integration tests.
-- **`build.yml`**: Compiles the Rust services and builds the Leptos frontend.
+- **`build.yml`**: Compiles the Rust services and builds the Leptos frontend. The frontend build clears the
+  `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
+  reuse stale build artifacts when deploying Cloudflare Pages.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
 - **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow.

@@ -112,8 +112,11 @@ jobs:
         working-directory: apps/web
         run: npm run css:build
 
-      - name: Clean Frontend Target
-        run: cargo clean -p permesi_web --target wasm32-unknown-unknown
+      - name: Clean Frontend Artifacts
+        shell: bash
+        run: |
+          rm -rf apps/web/dist
+          cargo clean -p permesi_web
 
       - name: Build Frontend
         working-directory: apps/web
