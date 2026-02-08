@@ -33,14 +33,16 @@ pub enum Permission {
 impl Principal {
     /// Returns `true` if the principal holds the requested permission.
     ///
-    /// NOTE: Currently placeholder logic; in production this should check
-    /// verified scopes or server-side roles.
+    /// Authorization is deny-by-default. Only server-issued scopes are trusted.
     #[must_use]
-    pub fn allows(&self, _permission: Permission) -> bool {
-        // Placeholder: allow all for now to restore compilation.
-        // TODO: Implement actual scope/role check using self.user_id.
-        let _ = self.user_id;
-        true
+    pub fn allows(&self, permission: Permission) -> bool {
+        let has = |scope: &str| self.scopes.iter().any(|value| value == scope);
+        has("platform:admin")
+            || match permission {
+                Permission::Write => has("users:write"),
+                Permission::Delete => has("users:delete"),
+                Permission::AssignRole => has("users:assign-role"),
+            }
     }
 }
 

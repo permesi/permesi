@@ -432,3 +432,79 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
 fn normalize_role(value: &str) -> String {
     value.trim().to_lowercase()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{UserRoleRequest, UserUpdateRequest, delete_user, patch_user, set_user_role};
+    use crate::api::handlers::auth::principal::Principal;
+    use anyhow::Result;
+    use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
+    use sqlx::postgres::PgPoolOptions;
+    use uuid::Uuid;
+
+    fn non_admin_principal() -> Principal {
+        Principal {
+            user_id: Uuid::new_v4(),
+            email: "member@example.com".to_string(),
+            scopes: Vec::new(),
+            session_issued_at_unix: 0,
+            session_auth_time_unix: None,
+        }
+    }
+
+    fn lazy_pool() -> Result<sqlx::PgPool> {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://postgres@localhost/postgres")
+            .map_err(Into::into)
+    }
+
+    #[tokio::test]
+    async fn patch_user_forbids_non_admin() -> Result<()> {
+        let response = patch_user(
+            Path(Uuid::new_v4().to_string()),
+            Extension(non_admin_principal()),
+            Extension(lazy_pool()?),
+            Json(UserUpdateRequest {
+                display_name: Some("Example".to_string()),
+                locale: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_user_forbids_non_admin() -> Result<()> {
+        let response = delete_user(
+            Path(Uuid::new_v4().to_string()),
+            Extension(non_admin_principal()),
+            Extension(lazy_pool()?),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_user_role_forbids_non_admin() -> Result<()> {
+        let response = set_user_role(
+            Path(Uuid::new_v4().to_string()),
+            Extension(non_admin_principal()),
+            Extension(lazy_pool()?),
+            Json(UserRoleRequest {
+                role: "admin".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    }
+}
