@@ -16,13 +16,7 @@ pub async fn list_security_keys() -> Result<Vec<SecurityKeySummary>, AppError> {
 }
 
 /// Delete a security key by credential ID.
-pub async fn delete_security_key(credential_id: &str, token: Option<&str>) -> Result<(), AppError> {
-    let headers = token
-        .map(|t| vec![("Authorization".to_string(), format!("Bearer {t}"))])
-        .unwrap_or_default();
-    delete_json_with_headers_with_credentials(
-        &format!("/v1/me/mfa/webauthn/{credential_id}"),
-        &headers,
-    )
-    .await
+pub async fn delete_security_key(credential_id: &str) -> Result<(), AppError> {
+    delete_json_with_headers_with_credentials(&format!("/v1/me/mfa/webauthn/{credential_id}"), &[])
+        .await
 }

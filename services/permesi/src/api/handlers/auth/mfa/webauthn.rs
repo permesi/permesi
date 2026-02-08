@@ -21,7 +21,7 @@ use crate::{
 use axum::{
     Json,
     extract::{Extension, Path},
-    http::{HeaderMap, HeaderValue, StatusCode, header::AUTHORIZATION},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use sqlx::PgPool;
@@ -282,10 +282,6 @@ pub async fn authenticate_finish(
             match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
                 Ok(cookie) => {
                     response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-                    if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", token.as_str()))
-                    {
-                        response_headers.insert(AUTHORIZATION, value);
-                    }
                     (StatusCode::NO_CONTENT, response_headers).into_response()
                 }
                 Err(err) => {

@@ -1,7 +1,7 @@
 //! Authenticated principal extraction and authorization helpers.
 //!
 //! This module provides functions to extract and verify the user principal
-//! from session cookies or bearer tokens, supporting different session kinds
+//! from session cookies, supporting different session kinds
 //! (full, bootstrap, challenge).
 
 use axum::http::{HeaderMap, StatusCode};

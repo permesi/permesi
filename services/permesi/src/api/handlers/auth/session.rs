@@ -1,14 +1,15 @@
 //! Session handlers for active authentication state management.
 //!
-//! This module provides endpoints for session lookup, logout, and token extraction.
-//! It handles the different session kinds and manages cookie generation.
+//! This module provides endpoints for session lookup and logout using the
+//! `permesi_session` cookie. It handles the different session kinds and manages
+//! cookie generation.
 
 use axum::{
     Json,
     extract::Extension,
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{AUTHORIZATION, InvalidHeaderValue, SET_COOKIE},
+        header::{InvalidHeaderValue, SET_COOKIE},
     },
     response::IntoResponse,
 };
@@ -161,11 +162,8 @@ pub(crate) fn clear_session_cookie(
     HeaderValue::from_str(&cookie)
 }
 
-/// Extract a session token from Authorization or Cookie headers.
+/// Extract a session token from the `permesi_session` cookie.
 pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
-    if let Some(token) = extract_bearer_token(headers) {
-        return Some(token);
-    }
     let header = headers.get(axum::http::header::COOKIE)?;
     let value = header.to_str().ok()?;
     for pair in value.split(';') {
@@ -178,20 +176,6 @@ pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
-}
-
-fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let trimmed = value.trim();
-    let token = trimmed
-        .strip_prefix("Bearer ")
-        .or_else(|| trimmed.strip_prefix("bearer "))?
-        .trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
 }
 
 async fn lookup_any_session(

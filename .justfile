@@ -415,7 +415,7 @@ web: web-clean
     PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
     PERMESI_TOKEN_BASE_URL="${PERMESI_TOKEN_BASE_URL}" \
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
-  trunk serve --address 0.0.0.0 --port 8081 --dist dist-dev
+  env -u NO_COLOR trunk serve --verbose --address 0.0.0.0 --port 8081 --dist dist-dev
 
 web-build: web-node-setup
   #!/usr/bin/env zsh
@@ -440,7 +440,7 @@ web-build: web-node-setup
     PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
     PERMESI_TOKEN_BASE_URL="${PERMESI_TOKEN_BASE_URL}" \
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
-    trunk build --release --dist "${dist_dir}"
+    env -u NO_COLOR trunk build --release --dist "${dist_dir}"
   if [[ "${dist_dir}" != "dist" ]]; then
     echo "Build output available at apps/web/${dist_dir}"
   fi
@@ -458,7 +458,7 @@ web-clean: web-node-setup
   rm -rf {{root}}/.tmp/xdg-cache
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
-  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" trunk clean --dist dist-dev
+  XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" env -u NO_COLOR trunk clean --dist dist-dev
   npm run css:build
   if [[ ! -s assets/app.gen.css ]]; then
     echo "Missing generated CSS: apps/web/assets/app.gen.css" >&2
@@ -1579,7 +1579,7 @@ haproxy-sysctl:
 # Restart everything: stop infra and tmux, then start again
 restart: stop start
 
-start-socket:
+start:
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v tmux >/dev/null 2>&1; then
@@ -1628,7 +1628,7 @@ start-socket:
   start_session
   tmux attach -t "$session"
 
-start:
+start-http:
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v tmux >/dev/null 2>&1; then

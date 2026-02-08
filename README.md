@@ -8,6 +8,43 @@
 
 <img src="permesi.svg" height="400">
 
+## ⚡ Quick Start (Full Local Stack)
+
+**Prerequisites (intentional):**
+- **System**: `zsh`, `podman`, `tmux`, `jq`, `curl`, `xh`, `ripgrep` (rg)
+- **Languages**: `rust` (stable), `node` (LTS)
+- **Infrastructure**: `just`, `terraform`, `vault`, `mkcert`, `direnv`
+> These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, Vault-backed cryptography, and reproducible infrastructure.
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/permesi/permesi.git
+cd permesi
+
+# 2. Allow listening on privileged ports (Linux only, for HAProxy on :443)
+just haproxy-sysctl
+
+# 3. Ignite the engine, This will open a tmux session with all services running in panes.
+just start
+
+# 4. (Optional) run firefox in deveper mode:
+just firefox
+```
+
+[![asciicast](https://asciinema.org/a/782038.svg)](https://asciinema.org/a/782038)
+
+*`just start` launches the full infrastructure (Postgres, Vault, Jaeger,
+HAProxy) and starts the services (`genesis`, `permesi`, and the `web` console)
+in a `tmux` session using Unix domain sockets for backend communication. If
+`tmux` is not installed, it will start the infra and you can run the services
+manually.*
+
+**Verify the stack is healthy:**
+- **Web Console:** [https://permesi.localhost](https://permesi.localhost)
+- **API (Permesi):** [https://api.permesi.localhost/health](https://api.permesi.localhost/health)
+- **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
+- **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
+
 ## Workspace Layout
 
 This repository is a Rust workspace (monorepo) containing:
@@ -247,8 +284,8 @@ Default ports: genesis `8000`, permesi `8001`, web `8080`.
 Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443`. The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
 If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
 
-1) One command: `just start` (infra + `.envrc` + web).
-2) Run services: `just genesis` and `just permesi` (they auto-source `.envrc`, so direnv is optional).
+If you want to run services manually instead of using the all-in-one `just start` (socket mode):
+1) Run services: `just genesis-socket` and `just permesi-socket` (or `just start-http` for the TCP flow). They auto-source `.envrc`, so direnv is optional.
 
 `just start` uses tmux when available to start a `permesi` session with genesis + permesi + web panes, plus a fourth pane for ad hoc commands.
 If you're already inside tmux, it creates the `permesi` session in the background and prints attach instructions.
@@ -275,7 +312,15 @@ Cleanup: `just stop` to stop containers, and `just reset` to remove the infra co
 - `PERMESI_PASSKEYS_ALLOWED_ORIGINS=https://permesi.localhost`
 - `PERMESI_OPERATOR_TOKEN` (used for `/admin/claim`)
 
-Passkey registration is available in preview mode by default and does not persist credentials without additional storage. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`. Persisting passkeys would require a dedicated table to store `credential_id` (bytes), `user_id`, `public_key` (serialized passkey), `sign_count`, `transports`, `created_at`, and `last_used_at` (nullable).
+### Useful Development Recipes
+
+- `just signup-verify-url`: Extract the latest email verification link from the database.
+- `just operator-token`: Generate a fresh platform operator token for admin claim/elevation.
+- `just db-verify`: Confirm database constraints and schema state.
+- `just openapi`: Regenerate OpenAPI specs from code.
+
+Passkey registration is available in preview mode by default and does not persist credentials without additional storage.
+ Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`. Persisting passkeys would require a dedicated table to store `credential_id` (bytes), `user_id`, `public_key` (serialized passkey), `sign_count`, `transports`, `created_at`, and `last_used_at` (nullable).
 
 ### Local HTTPS for Passkeys (mkcert + HAProxy)
 
@@ -344,6 +389,17 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
 Open the Jaeger UI at http://localhost:16686 to inspect traces.
+
+## 🤝 Contributing
+
+We welcome contributions of all kinds!
+
+1.  **Read the [Agent & Contributor Contract](AGENTS.md)**: It contains mandatory guidelines on code style, security invariants, and module organization.
+2.  **Pick an issue**: Check the [TODO.md](TODO.md) or open issues.
+3.  **Run tests**: `just test` covers the full workspace.
+4.  **Linting**: We use strict Clippy rules. Run `just clippy` before submitting.
+
+*Note: This project uses a "Reference Quality" approach. We prefer small, well-documented, and secure diffs over large refactors.*
 
 ## CI Commands
 

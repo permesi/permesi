@@ -37,38 +37,31 @@ pub fn MfaSetupPage() -> impl IntoView {
             let code = code.clone();
             let credential_id = credential_id.clone();
             async move {
-                let (recovery_codes, session_token) =
-                    client::mfa_totp_enroll_finish(&MfaTotpEnrollFinishRequest {
-                        code,
-                        credential_id,
-                    })
-                    .await?;
+                let recovery_codes = client::mfa_totp_enroll_finish(&MfaTotpEnrollFinishRequest {
+                    code,
+                    credential_id,
+                })
+                .await?;
 
-                // After successful enrollment, fetch the new full session using the updated token
-                let session = client::fetch_session(session_token.as_deref())
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::Config("Enrollment succeeded but session not found.".to_string())
-                    })?;
+                // After successful enrollment, fetch the new full session.
+                let session = client::fetch_session().await?.ok_or_else(|| {
+                    AppError::Config("Enrollment succeeded but session not found.".to_string())
+                })?;
 
                 Ok::<
                     (
                         RecoveryCodesResponse,
                         crate::features::auth::types::UserSession,
-                        Option<String>,
                     ),
                     AppError,
-                >((recovery_codes, session, session_token))
+                >((recovery_codes, session))
             }
         });
 
     Effect::new(move |_| {
-        if let Some(Ok((codes, session, session_token))) = enroll_finish_action.value().get() {
+        if let Some(Ok((codes, session))) = enroll_finish_action.value().get() {
             set_recovery_codes.set(Some(codes));
             _auth.set_session(session);
-            if let Some(token) = session_token {
-                _auth.set_session_token(token);
-            }
         } else if let Some(Err(err)) = enroll_finish_action.value().get() {
             set_error.set(Some(err));
         }

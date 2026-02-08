@@ -22,7 +22,7 @@ use anyhow::Result;
 use axum::{
     Json,
     extract::Extension,
-    http::{HeaderMap, HeaderValue, StatusCode, header::AUTHORIZATION},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -311,9 +311,6 @@ pub async fn totp_enroll_finish(
     match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
         Ok(cookie) => {
             response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", token.as_str())) {
-                response_headers.insert(AUTHORIZATION, value);
-            }
             (
                 StatusCode::OK,
                 response_headers,
@@ -409,9 +406,6 @@ pub async fn totp_verify(
     match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
         Ok(cookie) => {
             response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                response_headers.insert(AUTHORIZATION, value);
-            }
             (StatusCode::NO_CONTENT, response_headers).into_response()
         }
         Err(err) => {
@@ -589,9 +583,6 @@ pub async fn mfa_recovery(
     ) {
         Ok(cookie) => {
             response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", token.as_str())) {
-                response_headers.insert(AUTHORIZATION, value);
-            }
             info!(user_id = %principal.user_id, "MFA recovery accepted");
             (StatusCode::NO_CONTENT, response_headers).into_response()
         }

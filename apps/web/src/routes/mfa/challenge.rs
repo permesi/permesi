@@ -47,7 +47,7 @@ pub fn MfaChallengePage() -> impl IntoView {
                     .await?;
 
             // 3. Finish authentication
-            let session_token = client::mfa_webauthn_authenticate_finish(
+            client::mfa_webauthn_authenticate_finish(
                 &crate::features::auth::types::WebauthnAuthenticateFinishRequest {
                     auth_id: start_response.auth_id,
                     response: auth_response,
@@ -56,16 +56,11 @@ pub fn MfaChallengePage() -> impl IntoView {
             .await?;
 
             // 4. Fetch the full session
-            let session = client::fetch_session(session_token.as_deref())
-                .await?
-                .ok_or_else(|| {
-                    AppError::Config("Authentication succeeded but session not found.".to_string())
-                })?;
+            let session = client::fetch_session().await?.ok_or_else(|| {
+                AppError::Config("Authentication succeeded but session not found.".to_string())
+            })?;
 
-            Ok::<(crate::features::auth::types::UserSession, Option<String>), AppError>((
-                session,
-                session_token,
-            ))
+            Ok::<crate::features::auth::types::UserSession, AppError>(session)
         }
     });
 
@@ -86,23 +81,18 @@ pub fn MfaChallengePage() -> impl IntoView {
         let code = code.clone();
         let is_recovery = show_recovery.get_untracked();
         async move {
-            let session_token = if is_recovery {
+            if is_recovery {
                 client::mfa_recovery(&MfaRecoveryRequest { code }).await?
             } else {
                 client::mfa_totp_verify(&MfaTotpVerifyRequest { code }).await?
-            };
+            }
 
-            // After successful verification, fetch the new full session using the updated token
-            let session = client::fetch_session(session_token.as_deref())
-                .await?
-                .ok_or_else(|| {
-                    AppError::Config("Verification succeeded but session not found.".to_string())
-                })?;
+            // After successful verification, fetch the new full session.
+            let session = client::fetch_session().await?.ok_or_else(|| {
+                AppError::Config("Verification succeeded but session not found.".to_string())
+            })?;
 
-            Ok::<(crate::features::auth::types::UserSession, Option<String>), AppError>((
-                session,
-                session_token,
-            ))
+            Ok::<crate::features::auth::types::UserSession, AppError>(session)
         }
     });
 
@@ -110,11 +100,8 @@ pub fn MfaChallengePage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(result) = authenticate_key_action.value().get() {
             match result {
-                Ok((session, session_token)) => {
+                Ok(session) => {
                     _auth.set_session(session);
-                    if let Some(token) = session_token {
-                        _auth.set_session_token(token);
-                    }
                     if let Some(storage) = web_sys::window()
                         .and_then(|w| w.local_storage().ok())
                         .flatten()
@@ -132,12 +119,9 @@ pub fn MfaChallengePage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(result) = verify_action.value().get() {
             match result {
-                Ok((session, session_token)) => {
+                Ok(session) => {
                     // Update global state immediately
                     _auth.set_session(session.clone());
-                    if let Some(token) = session_token {
-                        _auth.set_session_token(token);
-                    }
 
                     if show_recovery.get() {
                         navigate_for_verify(paths::MFA_SETUP, Default::default());

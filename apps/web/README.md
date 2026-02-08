@@ -132,6 +132,11 @@ sequenceDiagram
   2. **PASETO Admin Token**: Subsequent administrative requests use this token in the `Authorization: Bearer` header. The backend verifies the signature offline using its internal signing key.
   3. **In-Memory Only**: The admin token is kept strictly in-memory. Reloading the page or closing the tab clears the elevation state, requiring re-entry of a Vault token for security.
   4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the Vault token once creates the first operator and immediately issues an elevated admin token.
+
+  Endpoint auth split for admin:
+  - `/v1/auth/admin/status`, `/v1/auth/admin/bootstrap`, and `/v1/auth/admin/elevate` use the session cookie (`credentials: include`).
+  - Vault token is sent in JSON payload for bootstrap/elevate (`{ "vault_token": "..." }`).
+  - `/v1/auth/admin/infra` uses `Authorization: Bearer <admin_token>` (admin token only).
   
   ## Password Change Flow (OPAQUE)
   
@@ -150,6 +155,7 @@ alongside backend health details so deploys can be verified quickly.
 - Home (`/`) is a placeholder ("Home").
 - Header shows "Sign In" or "Sign Up" depending on the current route; authenticated sessions see "Sign Out".
 - Login performs OPAQUE (`/v1/auth/opaque/login/start` + `/finish`) and fetches a Genesis zero token for each step; permesi sets an HttpOnly session cookie and the frontend reads `/v1/auth/session` to hydrate state.
+- Session-authenticated frontend calls rely on the HttpOnly cookie (`credentials: include`); the UI does not use `Authorization: Bearer` for normal session flows.
 - Signup performs an OPAQUE registration (`/v1/auth/opaque/signup/start` + `/finish`) with Genesis zero tokens and shows a verify-email prompt.
 - Verify email reads the fragment token and POSTs to `/v1/auth/verify-email`; resend is available on the same page (both require zero tokens).
 - Auth is UX-only; real access control must be enforced by the API.

@@ -30,15 +30,15 @@ pub async fn get_json_with_credentials<T: DeserializeOwned>(path: &str) -> Resul
     handle_json_response(response).await
 }
 
-/// Fetches JSON with custom headers and cookies for session-authenticated APIs.
-pub async fn get_json_with_headers_with_credentials<T: DeserializeOwned>(
+/// Fetches JSON with custom headers and no cookies.
+pub async fn get_json_with_headers<T: DeserializeOwned>(
     path: &str,
     headers: &[(String, String)],
 ) -> Result<T, AppError> {
     let url = build_url(path);
     let response = send_with_timeout(|signal| {
         let mut builder = Request::get(&url)
-            .credentials(RequestCredentials::Include)
+            .credentials(RequestCredentials::Omit)
             .abort_signal(Some(signal));
 
         for (name, value) in headers {
@@ -62,6 +62,7 @@ pub async fn get_json_with_base<T: DeserializeOwned>(
     let url = build_url_with_base(base_url, path);
     let response = send_with_timeout(|signal| {
         Request::get(&url)
+            .credentials(RequestCredentials::Omit)
             .abort_signal(Some(signal))
             .build()
             .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
@@ -83,6 +84,7 @@ pub async fn post_json_with_headers<B: Serialize>(
     let response = send_with_timeout(move |signal| {
         let mut builder = Request::post(&url)
             .header("Content-Type", "application/json")
+            .credentials(RequestCredentials::Omit)
             .abort_signal(Some(signal));
 
         for (name, value) in headers {
@@ -110,6 +112,7 @@ pub async fn post_json_with_headers_response<B: Serialize, T: DeserializeOwned>(
     let response = send_with_timeout(move |signal| {
         let mut builder = Request::post(&url)
             .header("Content-Type", "application/json")
+            .credentials(RequestCredentials::Omit)
             .abort_signal(Some(signal));
 
         for (name, value) in headers {
@@ -182,44 +185,6 @@ pub async fn post_json_with_headers_with_credentials_response<B: Serialize, T: D
     handle_json_response(response).await
 }
 
-/// Posts JSON with custom headers and cookies, returning the raw response.
-pub async fn post_json_with_headers_with_credentials_raw<B: Serialize>(
-    path: &str,
-    body: &B,
-    headers: &[(String, String)],
-) -> Result<gloo_net::http::Response, AppError> {
-    let url = build_url(path);
-    let payload = to_string(body)
-        .map_err(|err| AppError::Serialization(format!("Failed to encode request: {err}")))?;
-    let response = send_with_timeout(move |signal| {
-        let mut builder = Request::post(&url)
-            .header("Content-Type", "application/json")
-            .credentials(RequestCredentials::Include)
-            .abort_signal(Some(signal));
-
-        for (name, value) in headers {
-            builder = builder.header(name.as_str(), value.as_str());
-        }
-
-        builder
-            .body(payload)
-            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
-    })
-    .await?;
-
-    if response.ok() {
-        Ok(response)
-    } else {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        let sanitized = body.chars().take(MAX_ERROR_CHARS).collect::<String>();
-        Err(AppError::Http {
-            status,
-            message: sanitized,
-        })
-    }
-}
-
 /// Posts an empty body with cookies, used to clear a session.
 pub async fn post_empty_with_credentials(path: &str) -> Result<(), AppError> {
     let url = build_url(path);
@@ -268,30 +233,6 @@ pub async fn get_optional_json_with_credentials<T: DeserializeOwned>(
         Request::get(&url)
             .credentials(RequestCredentials::Include)
             .abort_signal(Some(signal))
-            .build()
-            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
-    })
-    .await?;
-
-    handle_optional_json_response(response).await
-}
-
-/// Fetches JSON with custom headers and cookies, returning `None` on 204 or 401.
-pub async fn get_optional_json_with_headers_with_credentials<T: DeserializeOwned>(
-    path: &str,
-    headers: &[(String, String)],
-) -> Result<Option<T>, AppError> {
-    let url = build_url(path);
-    let response = send_with_timeout(|signal| {
-        let mut builder = Request::get(&url)
-            .credentials(RequestCredentials::Include)
-            .abort_signal(Some(signal));
-
-        for (name, value) in headers {
-            builder = builder.header(name.as_str(), value.as_str());
-        }
-
-        builder
             .build()
             .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
     })

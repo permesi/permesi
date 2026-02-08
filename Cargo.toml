@@ -26,9 +26,9 @@ argon2 = "0.5"
 anyhow = "1"
 axum = { version = "0.8", features = ["tracing"] }
 base64 = "0.22"
-base64ct = { version = "1.6.0", features = ["alloc"] }
+base64ct = { version = "1.8.3", features = ["alloc"] }
 blake2 = "0.10"
-ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 pasetors = "0.7"
 once_cell = "1.21"
 opaque-ke = { version = "3.0.0", features = ["argon2", "std"] }
@@ -82,7 +82,7 @@ ulid = "1.2"
 url = "2.5"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
-uuid = { version = "1.11", features = ["v1", "v4", "v7", "serde"] }
+uuid = { version = "1.20", features = ["v1", "v4", "v7", "serde"] }
 built = { version = "0.7", features = ["git2"] }
 
 [profile.release]

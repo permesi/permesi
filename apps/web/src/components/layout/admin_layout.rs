@@ -11,11 +11,19 @@ use leptos_router::hooks::use_location;
 pub fn AdminLayout() -> impl IntoView {
     let auth = use_auth();
     let location = use_location();
+    let status_key = Signal::derive(move || auth.session.get().map(|session| session.user_id));
 
     // Resource to fetch admin status (bootstrap mode and operator status).
     let status = LocalResource::new(move || {
-        let token = auth.session_token.get();
-        async move { client::admin_status(token.as_deref()).await }
+        let user_id = status_key.get();
+        async move {
+            if user_id.is_none() {
+                return Err(crate::app_lib::AppError::Config(
+                    "Sign in required.".to_string(),
+                ));
+            }
+            client::admin_status().await
+        }
     });
 
     view! {

@@ -199,7 +199,6 @@ fn build_router(
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .expose_headers([AUTHORIZATION])
         .allow_origin(AllowOrigin::exact(frontend_origin))
         .allow_credentials(true)
         .max_age(Duration::from_secs(86400));

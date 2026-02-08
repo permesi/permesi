@@ -160,8 +160,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                 auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
 
                 // 2. Call delete
-                let token = auth.session_token.get_untracked();
-                client::delete_security_key(&credential_id, token.as_deref()).await
+                client::delete_security_key(&credential_id).await
             }
         });
 
@@ -311,7 +310,6 @@ pub fn MeSecurityPage() -> impl IntoView {
 
     let regenerate_codes_action = Action::new_local(move |input: &MfaAuthInput| {
         let input = input.clone();
-        let auth = auth.clone();
         async move {
             let config = AppConfig::load();
             let client_id = normalize_email(&input.email);
@@ -357,8 +355,7 @@ pub fn MeSecurityPage() -> impl IntoView {
             auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
 
             // 2. Call regeneration endpoint
-            let token = auth.session_token.get_untracked();
-            let response = auth_client::regenerate_recovery_codes(token.as_deref()).await?;
+            let response = auth_client::regenerate_recovery_codes().await?;
             Ok::<Vec<String>, AppError>(response.codes)
         }
     });
@@ -373,7 +370,6 @@ pub fn MeSecurityPage() -> impl IntoView {
 
     let disable_totp_action = Action::new_local(move |input: &MfaAuthInput| {
         let input = input.clone();
-        let auth = auth.clone();
         async move {
             let config = AppConfig::load();
             let client_id = normalize_email(&input.email);
@@ -419,8 +415,7 @@ pub fn MeSecurityPage() -> impl IntoView {
             auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
 
             // 2. Call disable endpoint
-            let token = auth.session_token.get_untracked();
-            auth_client::mfa_totp_disable(token.as_deref()).await
+            auth_client::mfa_totp_disable().await
         }
     });
 

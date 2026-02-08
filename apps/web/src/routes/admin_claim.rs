@@ -17,7 +17,7 @@ use crate::{
     routes::paths,
 };
 use leptos::{ev::SubmitEvent, prelude::*};
-use leptos_router::components::A;
+use leptos_router::{components::A, hooks::use_navigate};
 
 #[derive(Clone)]
 struct ClaimInput {
@@ -40,27 +40,23 @@ enum PageState {
 #[component]
 pub fn AdminClaimPage() -> impl IntoView {
     let auth = use_auth();
+    let navigate = use_navigate();
     let (vault_token, set_vault_token) = signal(String::new());
     let (note, set_note) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
     let (page_state, set_page_state) = signal(PageState::Form);
 
-    let status_key = Signal::derive(move || {
-        (
-            auth.session.get().map(|session| session.user_id),
-            auth.session_token.get(),
-        )
-    });
+    let status_key = Signal::derive(move || auth.session.get().map(|session| session.user_id));
 
     let status_resource = LocalResource::new(move || {
-        let (user_id, token) = status_key.get();
+        let user_id = status_key.get();
         async move {
             if user_id.is_none() {
                 // Should not happen if AuthLayout works, but safe fallback
                 return Err(AppError::Config("Sign in required.".to_string()));
             }
-            client::admin_status(token.as_deref()).await
+            client::admin_status().await
         }
     });
 
@@ -86,7 +82,6 @@ pub fn AdminClaimPage() -> impl IntoView {
 
     let claim_action = Action::new_local(move |input: &ClaimInput| {
         let input = input.clone();
-        let auth_header = auth.session_token.get_untracked();
         async move {
             // 1. If bootstrap is needed, do it first.
             if input.status.bootstrap_open && !input.status.operator {
@@ -94,7 +89,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                     vault_token: input.token.clone(),
                     note: input.note.clone(),
                 };
-                let response = client::admin_bootstrap(auth_header.as_deref(), &request).await?;
+                let response = client::admin_bootstrap(&request).await?;
                 if !response.ok {
                     return Err(AppError::Config("Bootstrap failed.".to_string()));
                 }
@@ -105,7 +100,7 @@ pub fn AdminClaimPage() -> impl IntoView {
             let request = AdminElevateRequest {
                 vault_token: input.token.clone(),
             };
-            let response = client::admin_elevate(auth_header.as_deref(), &request).await?;
+            let response = client::admin_elevate(&request).await?;
             Ok(ClaimOutcome::Elevated(response))
         }
     });
@@ -189,16 +184,19 @@ pub fn AdminClaimPage() -> impl IntoView {
                          <div class="space-y-4">
                              {move || success.get().map(|msg| view! { <Alert kind=AlertKind::Success message=msg /> })}
                              <div class="mt-4">
-                                <A
-                                    href={paths::ADMIN}
-                                    {..}
-                                    class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all"
+                                <button
+                                    type="button"
+                                    on:click={
+                                        let navigate = navigate.clone();
+                                        move |_| navigate(paths::ADMIN, Default::default())
+                                    }
+                                    class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all cursor-pointer"
                                 >
                                     <span class="material-symbols-outlined mr-2 text-base">
                                         "settings"
                                     </span>
                                     "Go Admin"
-                                </A>
+                                </button>
                              </div>
                          </div>
                      }.into_any()

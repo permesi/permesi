@@ -1,7 +1,7 @@
 //! Platform operator bootstrap and admin elevation endpoints.
 //!
 //! Flow Overview:
-//! 1) Authenticate via session cookie or bearer token.
+//! 1) Authenticate via session cookie.
 //! 2) Apply bootstrap gating + recent-auth checks + rate limits.
 //! 3) Validate Vault step-up tokens on every elevation.
 //! 4) Issue short-lived admin PASETOs scoped to platform actions.
@@ -199,7 +199,7 @@ pub async fn admin_status(
     path = "/v1/auth/admin/infra",
     responses(
         (status = 200, description = "Detailed infrastructure status.", body = AdminInfraResponse),
-        (status = 401, description = "Missing or invalid session."),
+        (status = 401, description = "Missing or invalid admin token."),
         (status = 403, description = "Not an operator."),
     ),
     tag = "auth"
@@ -209,10 +209,19 @@ pub async fn admin_infra(
     pool: Extension<sqlx::PgPool>,
     admin_state: Extension<Arc<AdminState>>,
 ) -> impl IntoResponse {
-    let _user_id = match verify_admin_token(&headers, &admin_state) {
+    let user_id = match verify_admin_token(&headers, &admin_state) {
         Ok(id) => id,
         Err(status) => return status.into_response(),
     };
+
+    match operator_enabled(&pool, user_id).await {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::FORBIDDEN.into_response(),
+        Err(err) => {
+            error!("Failed to lookup operator status: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
 
     let db_status = if pool.acquire().await.is_ok() {
         "ok"
@@ -703,7 +712,7 @@ mod tests {
             types::AdminBootstrapRequest,
             utils::{generate_session_token, hash_session_token},
         };
-        use axum::{Extension, Json, http::header::AUTHORIZATION, response::IntoResponse};
+        use axum::{Extension, Json, http::header::COOKIE, response::IntoResponse};
         use std::sync::Arc;
 
         if !can_bind_localhost() {
@@ -759,7 +768,7 @@ mod tests {
 
         // 3. Prepare Request
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
+        headers.insert(COOKIE, format!("permesi_session={token}").parse()?);
 
         let payload = AdminBootstrapRequest {
             vault_token: "s.validtoken".to_string(),
@@ -792,6 +801,53 @@ mod tests {
                 .await?;
         assert!(enabled);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn admin_infra_rejects_non_operator() -> Result<()> {
+        use crate::api::handlers::auth::admin::admin_infra;
+        use axum::{Extension, http::header::AUTHORIZATION, response::IntoResponse};
+        use std::sync::Arc;
+
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        if let Err(err) = runtime::ensure_container_runtime() {
+            eprintln!("Skipping integration test: {err}");
+            return Ok(());
+        }
+
+        let (pool, _container) = get_test_pool().await?;
+        sqlx::query("TRUNCATE users, platform_operators, admin_attempts, user_sessions CASCADE")
+            .execute(&pool)
+            .await?;
+
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email, status, opaque_registration_record) VALUES ($1, 'non-operator@example.com', 'active', $2)")
+            .bind(user_id)
+            .bind(vec![0u8; 16])
+            .execute(&pool)
+            .await?;
+
+        let server = MockServer::start().await;
+        let config = AdminConfig::new(server.uri());
+        let state = Arc::new(AdminState::new(
+            config,
+            pool.clone(),
+            create_transport(&server.uri()),
+        )?);
+
+        let admin_token = state.token_signer().issue(user_id, 60)?.token;
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {admin_token}").parse()?);
+
+        let response = admin_infra(headers, Extension(pool), Extension(state))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
         Ok(())
     }
 }

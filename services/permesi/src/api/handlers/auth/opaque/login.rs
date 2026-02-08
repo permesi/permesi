@@ -23,10 +23,7 @@ use anyhow::anyhow;
 use axum::{
     Json,
     extract::Extension,
-    http::{
-        HeaderMap, HeaderValue, StatusCode,
-        header::{AUTHORIZATION, SET_COOKIE},
-    },
+    http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
 use base64::Engine;
@@ -360,9 +357,6 @@ pub async fn opaque_login_finish(
                 Ok(cookie) => {
                     // Attach the cookie so the browser can present it on future requests.
                     response_headers.insert(SET_COOKIE, cookie);
-                    if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                        response_headers.insert(AUTHORIZATION, value);
-                    }
                     (StatusCode::NO_CONTENT, response_headers).into_response()
                 }
                 Err(err) => {

@@ -120,9 +120,20 @@ Endpoints:
 - `POST /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
 - `GET /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
 
-All auth POSTs require `X-Permesi-Zero-Token` minted by `genesis`. Tokens are validated offline
-using the PASERK keyset (same as Admission Tokens). Password changes require a recent re-auth
-(default 10 minutes) and revoke all sessions once the new registration record is stored.
+Zero tokens (`X-Permesi-Zero-Token`, minted by `genesis`) are required on abuse-sensitive auth
+entrypoints such as OPAQUE start/finish, passkey login start/finish, and email
+verify/resend flows. Tokens are validated offline using the PASERK keyset (same as Admission
+Tokens). Session-bound routes (for example `/v1/auth/session`, `/v1/auth/logout`, `/v1/auth/admin/*`,
+`/v1/me/*`, and `/v1/orgs/*`) use the session cookie instead. Password changes require a recent
+re-auth (default 10 minutes) and revoke all sessions once the new registration record is stored.
+
+### Session and Admin Step-up Flow
+
+Browser clients authenticate with the `permesi_session` cookie. Admin bootstrap/elevation calls
+(`POST /v1/auth/admin/bootstrap` and `POST /v1/auth/admin/elevate`) require this cookie-backed
+session and accept the Vault token in the JSON request body. On successful elevation, `permesi`
+returns a short-lived admin `PASETO` (`v4.public`) token. That admin token is then sent as
+`Authorization: Bearer <admin_token>` for elevated endpoints such as `GET /v1/auth/admin/infra`.
 
 ### Passkeys (WebAuthn)
 
@@ -136,6 +147,8 @@ registration verification (useful for staged rollouts).
 ### Organization endpoints and authorization
 
 Self-service user operations must use `/v1/me/*` and resolve the user from the session cookie.
+Session authentication is cookie-based for browser flows; `Authorization: Bearer` is reserved for
+explicit step-up/admin tokens rather than normal user sessions.
 Organization, project, environment, and application routes are scoped by org slug and require
 active membership. Org roles (`owner`, `admin`, `member`, `readonly`) are enforced server-side:
 owner/admin can mutate org resources; member/readonly are read-only. Unauthorized access is

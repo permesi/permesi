@@ -1,6 +1,6 @@
 //! Login route that implements the client-side OPAQUE exchange. It keeps passwords
 //! local, uses zero-token headers for permesi calls, and hydrates session state
-//! via cookie-based auth while capturing the bearer token for future requests.
+//! via cookie-based auth.
 //!
 //! Flow Overview: Start OPAQUE with the server, finish the exchange, then fetch
 //! the session and redirect to the home route.
@@ -39,7 +39,6 @@ struct LoginInput {
 #[derive(Clone)]
 struct LoginResult {
     session: UserSession,
-    session_token: Option<String>,
 }
 
 fn webauthn_supported() -> bool {
@@ -126,17 +125,12 @@ pub fn LoginPage() -> impl IntoView {
             };
             let zero_token = token::fetch_zero_token().await?;
             // Finish login so the server can mint the session cookie.
-            let session_token = client::opaque_login_finish(&finish_request, &zero_token).await?;
-            // Hydrate auth state by fetching the session established via cookie or bearer token.
-            let session = client::fetch_session(session_token.as_deref())
-                .await?
-                .ok_or_else(|| {
-                    AppError::Config("Login succeeded but no session found.".to_string())
-                })?;
-            Ok(LoginResult {
-                session,
-                session_token,
-            })
+            client::opaque_login_finish(&finish_request, &zero_token).await?;
+            // Hydrate auth state by fetching the session established via cookie.
+            let session = client::fetch_session().await?.ok_or_else(|| {
+                AppError::Config("Login succeeded but no session found.".to_string())
+            })?;
+            Ok(LoginResult { session })
         }
     });
 
@@ -146,9 +140,6 @@ pub fn LoginPage() -> impl IntoView {
             match result {
                 Ok(login) => {
                     auth.set_session(login.session.clone());
-                    if let Some(token) = login.session_token {
-                        auth.set_session_token(token);
-                    }
                     match login.session.session_kind {
                         SessionKind::Full => {
                             if let Some(storage) = web_sys::window()
@@ -507,7 +498,7 @@ fn start_passkey_auth<N>(
         let result: Result<LoginResult, AppError> = async {
             let response = webauthn::finish_authenticate_key(promise).await?;
             let zero_token = token::fetch_zero_token().await?;
-            let session_token = client::passkey_login_finish(
+            client::passkey_login_finish(
                 &PasskeyLoginFinishRequest {
                     auth_id: options.auth_id,
                     response,
@@ -515,24 +506,16 @@ fn start_passkey_auth<N>(
                 &zero_token,
             )
             .await?;
-            let session = client::fetch_session(session_token.as_deref())
-                .await?
-                .ok_or_else(|| {
-                    AppError::Config("Login succeeded but no session found.".to_string())
-                })?;
-            Ok(LoginResult {
-                session,
-                session_token,
-            })
+            let session = client::fetch_session().await?.ok_or_else(|| {
+                AppError::Config("Login succeeded but no session found.".to_string())
+            })?;
+            Ok(LoginResult { session })
         }
         .await;
 
         match result {
             Ok(login) => {
                 auth.set_session(login.session.clone());
-                if let Some(token) = login.session_token {
-                    auth.set_session_token(token);
-                }
                 match login.session.session_kind {
                     SessionKind::Full => {
                         if let Some(storage) = web_sys::window()

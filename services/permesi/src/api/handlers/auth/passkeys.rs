@@ -28,10 +28,7 @@ use axum::{
     Json,
     body::Bytes,
     extract::Extension,
-    http::{
-        HeaderMap, HeaderValue, StatusCode,
-        header::{AUTHORIZATION, SET_COOKIE},
-    },
+    http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -671,9 +668,6 @@ async fn issue_session_for_user(
     match session_cookie_with_ttl(auth_state, &token, ttl_seconds) {
         Ok(cookie) => {
             response_headers.insert(SET_COOKIE, cookie);
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                response_headers.insert(AUTHORIZATION, value);
-            }
             (StatusCode::NO_CONTENT, response_headers).into_response()
         }
         Err(err) => {

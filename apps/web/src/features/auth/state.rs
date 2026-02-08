@@ -1,7 +1,7 @@
 //! Auth session state and context for the frontend. The provider hydrates the
 //! session once on mount using cookie-based API calls and exposes derived auth
-//! signals for guards and routes. Session tokens stay in memory, and admin
-//! elevation tokens are also kept in-memory only for security.
+//! signals for guards and routes. Admin elevation tokens are kept in-memory
+//! only for security.
 
 use crate::features::auth::{
     client,
@@ -13,7 +13,6 @@ use leptos::{prelude::*, task::spawn_local};
 /// Auth session context shared through Leptos.
 pub struct AuthContext {
     pub session: RwSignal<Option<UserSession>>,
-    pub session_token: RwSignal<Option<String>>,
     pub admin_token: RwSignal<Option<AdminElevateResponse>>,
     pub is_authenticated: Signal<bool>,
     pub is_full_session: Signal<bool>,
@@ -25,7 +24,6 @@ impl AuthContext {
     /// Builds a context around the provided session signal.
     fn new(
         session: RwSignal<Option<UserSession>>,
-        session_token: RwSignal<Option<String>>,
         admin_token: RwSignal<Option<AdminElevateResponse>>,
         is_loading: RwSignal<bool>,
     ) -> Self {
@@ -44,7 +42,6 @@ impl AuthContext {
         });
         Self {
             session,
-            session_token,
             admin_token,
             is_authenticated,
             is_full_session,
@@ -58,11 +55,6 @@ impl AuthContext {
         self.session.set(Some(session));
     }
 
-    /// Stores the session token for Authorization headers.
-    pub fn set_session_token(&self, token: String) {
-        self.session_token.set(Some(token));
-    }
-
     /// Stores the admin elevation token (in-memory only).
     pub fn set_admin_token(&self, token: AdminElevateResponse) {
         self.admin_token.set(Some(token));
@@ -71,7 +63,6 @@ impl AuthContext {
     /// Clears the in-memory session, typically on logout.
     pub fn clear_session(&self) {
         self.session.set(None);
-        self.session_token.set(None);
         self.admin_token.set(None);
     }
 
@@ -83,9 +74,8 @@ impl AuthContext {
     /// Refetches the session from the server to update roles/flags.
     pub fn refresh_session(&self) {
         let auth = self.clone();
-        let token = self.session_token.get_untracked();
         spawn_local(async move {
-            if let Ok(Some(session)) = client::fetch_session(token.as_deref()).await {
+            if let Ok(Some(session)) = client::fetch_session().await {
                 auth.set_session(session);
             }
         });
@@ -96,10 +86,9 @@ impl AuthContext {
 #[component]
 pub fn AuthProvider(children: Children) -> impl IntoView {
     let session = RwSignal::new(None);
-    let session_token = RwSignal::new(None);
     let admin_token = RwSignal::new(None);
     let is_loading = RwSignal::new(true);
-    let auth = AuthContext::new(session, session_token, admin_token, is_loading);
+    let auth = AuthContext::new(session, admin_token, is_loading);
     provide_context(auth.clone());
 
     // Automatically clear admin token when it expires.
@@ -141,7 +130,7 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
             .unwrap_or(false);
 
         if should_fetch {
-            match client::fetch_session(None).await {
+            match client::fetch_session().await {
                 Ok(Some(session)) => {
                     auth_for_fetch.set_session(session);
                 }
@@ -167,9 +156,8 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
 pub fn use_auth() -> AuthContext {
     use_context::<AuthContext>().unwrap_or_else(|| {
         let session = RwSignal::new(None);
-        let session_token = RwSignal::new(None);
         let admin_token = RwSignal::new(None);
         let is_loading = RwSignal::new(false); // Not loading if provider is missing
-        AuthContext::new(session, session_token, admin_token, is_loading)
+        AuthContext::new(session, admin_token, is_loading)
     })
 }
