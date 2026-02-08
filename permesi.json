@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.20"
+    "version": "0.3.21"
   },
   "paths": {
     "/health": {
@@ -263,7 +263,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session."
+            "description": "Missing or invalid admin token."
           },
           "403": {
             "description": "Not an operator."
