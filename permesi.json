@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.22"
+    "version": "0.3.23"
   },
   "paths": {
     "/health": {
@@ -27,10 +27,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Health"
-                  }
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -40,10 +37,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Health"
-                  }
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -70,12 +64,19 @@
           "200": {
             "description": "Login successful",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserLogin"
-                  }
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -83,12 +84,9 @@
           "401": {
             "description": "Unauthorized",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserLogin"
-                  }
+                  "type": "string"
                 }
               }
             }
@@ -115,12 +113,19 @@
           "201": {
             "description": "Registration successful",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserRegister"
-                  }
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -128,12 +133,9 @@
           "409": {
             "description": "User with the specified email already exists",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserRegister"
-                  }
+                  "type": "string"
                 }
               }
             }
@@ -339,14 +341,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "Unauthorized"
           },
           "429": {
             "description": "Rate limited",
@@ -1360,6 +1355,9 @@
           "204": {
             "description": "Security key deleted successfully"
           },
+          "400": {
+            "description": "Invalid credential id"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -1415,6 +1413,9 @@
         "responses": {
           "204": {
             "description": "Session revoked."
+          },
+          "400": {
+            "description": "Invalid session id."
           },
           "401": {
             "description": "Missing or invalid session cookie."
@@ -1480,6 +1481,9 @@
         "responses": {
           "204": {
             "description": "Passkey deleted"
+          },
+          "400": {
+            "description": "Invalid credential id or missing zero token"
           },
           "401": {
             "description": "Unauthorized"
@@ -2140,6 +2144,7 @@
         "tags": [
           "users"
         ],
+        "summary": "List users only for requests with a valid full-session cookie.",
         "operationId": "list_users",
         "responses": {
           "200": {
@@ -2169,6 +2174,7 @@
         "tags": [
           "users"
         ],
+        "summary": "Fetch one user only for requests with a valid full-session cookie.",
         "operationId": "get_user",
         "parameters": [
           {
@@ -2210,6 +2216,7 @@
         "tags": [
           "users"
         ],
+        "summary": "Delete a user after session authentication and scope authorization.",
         "operationId": "delete_user",
         "parameters": [
           {
@@ -2243,6 +2250,7 @@
         "tags": [
           "users"
         ],
+        "summary": "Update user profile fields after session authentication and scope authorization.",
         "operationId": "patch_user",
         "parameters": [
           {
@@ -2295,6 +2303,7 @@
         "tags": [
           "users"
         ],
+        "summary": "Assign a global role after session authentication and scope authorization.",
         "operationId": "set_user_role",
         "parameters": [
           {
