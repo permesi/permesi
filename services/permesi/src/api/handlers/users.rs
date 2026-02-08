@@ -6,7 +6,7 @@
 use axum::{
     Json,
     extract::{Extension, Path},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ use tracing::error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::auth::principal::{Permission, Principal};
+use super::auth::principal::{Permission, Principal, require_auth};
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UserSummary {
@@ -65,16 +65,16 @@ pub struct UserRoleResponse {
     ),
     tag = "users"
 )]
-pub async fn list_users(
-    Extension(_principal): Extension<Principal>,
-    pool: Extension<PgPool>,
-) -> impl IntoResponse {
-    match fetch_user_summaries(&pool).await {
+/// List users only for requests with a valid full-session cookie.
+pub async fn list_users(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
+    match list_user_summaries_for_principal(&pool, &principal).await {
         Ok(list) => (StatusCode::OK, Json(list)).into_response(),
-        Err(err) => {
-            error!("Failed to list users: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => err.into_response(),
     }
 }
 
@@ -93,22 +93,25 @@ pub async fn list_users(
     ),
     tag = "users"
 )]
+/// Fetch one user only for requests with a valid full-session cookie.
 pub async fn get_user(
     Path(id): Path<String>,
-    Extension(_principal): Extension<Principal>,
+    headers: HeaderMap,
     pool: Extension<PgPool>,
 ) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
     let Ok(user_id) = Uuid::parse_str(id.trim()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    match fetch_user_detail(&pool, user_id).await {
+    match fetch_user_detail_for_principal(&pool, &principal, user_id).await {
         Ok(Some(detail)) => (StatusCode::OK, Json(detail)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to fetch user detail: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => err.into_response(),
     }
 }
 
@@ -125,12 +128,18 @@ pub async fn get_user(
     ),
     tag = "users"
 )]
+/// Update user profile fields after session authentication and scope authorization.
 pub async fn patch_user(
+    headers: HeaderMap,
     Path(id): Path<String>,
-    Extension(principal): Extension<Principal>,
     pool: Extension<PgPool>,
     Json(payload): Json<UserUpdateRequest>,
 ) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
     let Ok(user_id) = Uuid::parse_str(id.trim()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
@@ -161,11 +170,17 @@ pub async fn patch_user(
     ),
     tag = "users"
 )]
+/// Delete a user after session authentication and scope authorization.
 pub async fn delete_user(
+    headers: HeaderMap,
     Path(id): Path<String>,
-    Extension(principal): Extension<Principal>,
     pool: Extension<PgPool>,
 ) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
     let Ok(user_id) = Uuid::parse_str(id.trim()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
@@ -190,12 +205,18 @@ pub async fn delete_user(
     ),
     tag = "users"
 )]
+/// Assign a global role after session authentication and scope authorization.
 pub async fn set_user_role(
+    headers: HeaderMap,
     Path(id): Path<String>,
-    Extension(principal): Extension<Principal>,
     pool: Extension<PgPool>,
     Json(payload): Json<UserRoleRequest>,
 ) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+
     let Ok(user_id) = Uuid::parse_str(id.trim()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
@@ -239,6 +260,17 @@ fn ensure_permission(principal: &Principal, permission: Permission) -> Result<()
     } else {
         Err(ServiceError::Forbidden)
     }
+}
+
+/// Lists users after verifying that the caller has global user-management read access.
+async fn list_user_summaries_for_principal(
+    pool: &PgPool,
+    principal: &Principal,
+) -> Result<Vec<UserSummary>, ServiceError> {
+    ensure_permission(principal, Permission::Read)?;
+    fetch_user_summaries(pool)
+        .await
+        .map_err(ServiceError::Database)
 }
 
 async fn fetch_user_summaries(pool: &PgPool) -> Result<Vec<UserSummary>, sqlx::Error> {
@@ -289,6 +321,18 @@ async fn fetch_user_detail(
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
+}
+
+/// Fetches one user after verifying that the caller has global user-management read access.
+async fn fetch_user_detail_for_principal(
+    pool: &PgPool,
+    principal: &Principal,
+    user_id: Uuid,
+) -> Result<Option<UserDetail>, ServiceError> {
+    ensure_permission(principal, Permission::Read)?;
+    fetch_user_detail(pool, user_id)
+        .await
+        .map_err(ServiceError::Database)
 }
 
 async fn update_user_profile(
@@ -435,10 +479,20 @@ fn normalize_role(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{UserRoleRequest, UserUpdateRequest, delete_user, patch_user, set_user_role};
-    use crate::api::handlers::auth::principal::Principal;
+    use super::{
+        ServiceError, UserRoleRequest, UserUpdateRequest, assign_user_role, delete_user,
+        delete_user_record, fetch_user_detail_for_principal, get_user,
+        list_user_summaries_for_principal, list_users, patch_user, set_user_role,
+        update_user_profile,
+    };
+    use crate::api::handlers::auth::principal::{Permission, Principal};
     use anyhow::Result;
-    use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
+    use axum::{
+        Extension, Json,
+        extract::Path,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+    };
     use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
@@ -452,6 +506,16 @@ mod tests {
         }
     }
 
+    fn writer_principal() -> Principal {
+        Principal {
+            user_id: Uuid::new_v4(),
+            email: "writer@example.com".to_string(),
+            scopes: vec!["users:write".to_string()],
+            session_issued_at_unix: 0,
+            session_auth_time_unix: None,
+        }
+    }
+
     fn lazy_pool() -> Result<sqlx::PgPool> {
         PgPoolOptions::new()
             .max_connections(1)
@@ -460,10 +524,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn patch_user_forbids_non_admin() -> Result<()> {
-        let response = patch_user(
+    async fn list_users_requires_auth() -> Result<()> {
+        let response = list_users(HeaderMap::new(), Extension(lazy_pool()?))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_user_requires_auth() -> Result<()> {
+        let response = get_user(
             Path(Uuid::new_v4().to_string()),
-            Extension(non_admin_principal()),
+            HeaderMap::new(),
+            Extension(lazy_pool()?),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn patch_user_requires_auth() -> Result<()> {
+        let response = patch_user(
+            HeaderMap::new(),
+            Path(Uuid::new_v4().to_string()),
             Extension(lazy_pool()?),
             Json(UserUpdateRequest {
                 display_name: Some("Example".to_string()),
@@ -473,29 +561,29 @@ mod tests {
         .await
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         Ok(())
     }
 
     #[tokio::test]
-    async fn delete_user_forbids_non_admin() -> Result<()> {
+    async fn delete_user_requires_auth() -> Result<()> {
         let response = delete_user(
+            HeaderMap::new(),
             Path(Uuid::new_v4().to_string()),
-            Extension(non_admin_principal()),
             Extension(lazy_pool()?),
         )
         .await
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         Ok(())
     }
 
     #[tokio::test]
-    async fn set_user_role_forbids_non_admin() -> Result<()> {
+    async fn set_user_role_requires_auth() -> Result<()> {
         let response = set_user_role(
+            HeaderMap::new(),
             Path(Uuid::new_v4().to_string()),
-            Extension(non_admin_principal()),
             Extension(lazy_pool()?),
             Json(UserRoleRequest {
                 role: "admin".to_string(),
@@ -504,7 +592,81 @@ mod tests {
         .await
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_user_profile_forbids_non_admin() -> Result<()> {
+        let result = update_user_profile(
+            &lazy_pool()?,
+            &non_admin_principal(),
+            Uuid::new_v4(),
+            Some("Example".to_string()),
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_user_record_forbids_non_admin() -> Result<()> {
+        let result =
+            delete_user_record(&lazy_pool()?, &non_admin_principal(), Uuid::new_v4()).await;
+
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn assign_user_role_forbids_non_admin() -> Result<()> {
+        let result = assign_user_role(
+            &lazy_pool()?,
+            &non_admin_principal(),
+            Uuid::new_v4(),
+            "admin".to_string(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_users_forbids_non_admin() -> Result<()> {
+        let result = list_user_summaries_for_principal(&lazy_pool()?, &non_admin_principal()).await;
+
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_user_forbids_non_admin() -> Result<()> {
+        let result =
+            fetch_user_detail_for_principal(&lazy_pool()?, &non_admin_principal(), Uuid::new_v4())
+                .await;
+
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_permission_forbids_non_admin() {
+        let result = super::ensure_permission(&non_admin_principal(), Permission::Delete);
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+    }
+
+    #[test]
+    fn ensure_permission_forbids_read_for_non_admin() {
+        let result = super::ensure_permission(&non_admin_principal(), Permission::Read);
+        assert!(matches!(result, Err(ServiceError::Forbidden)));
+    }
+
+    #[test]
+    fn ensure_permission_allows_read_for_writer() {
+        let result = super::ensure_permission(&writer_principal(), Permission::Read);
+        assert!(result.is_ok());
     }
 }

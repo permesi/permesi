@@ -323,6 +323,7 @@ pub async fn authenticate_finish(
     ),
     responses(
         (status = 204, description = "Security key deleted successfully"),
+        (status = 400, description = "Invalid credential id"),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Security key not found")
     ),

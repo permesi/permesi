@@ -1,0 +1,12 @@
+[phases.examples]
+enabled = true
+
+[phases.coverage]
+enabled = true
+
+[checks]
+not_a_server_error = true
+status_code_conformance = true
+content_type_conformance = true
+response_headers_conformance = true
+response_schema_conformance = true

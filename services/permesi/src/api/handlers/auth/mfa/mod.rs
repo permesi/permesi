@@ -423,7 +423,7 @@ pub async fn totp_verify(
     responses(
         (status = 204, description = "Recovery accepted"),
         (status = 400, description = "Validation error", body = String),
-        (status = 401, description = "Unauthorized", body = String),
+        (status = 401, description = "Unauthorized"),
         (status = 429, description = "Rate limited", body = String)
     ),
     tag = "auth"

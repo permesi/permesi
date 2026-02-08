@@ -120,6 +120,8 @@ Endpoints:
 - `POST /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
 - `GET /v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps`
 
+For API testing workflows, this service keeps request collections in `services/permesi/openapi/` and Schemathesis contract-test configuration in `services/permesi/openapi/schemathesis/`. The workspace recipe `just schemathesis-permesi` runs OpenAPI-driven checks against `docs/openapi/permesi.json` and supports optional authenticated headers via environment variables.
+
 Zero tokens (`X-Permesi-Zero-Token`, minted by `genesis`) are required on abuse-sensitive auth
 entrypoints such as OPAQUE start/finish, passkey login start/finish, and email
 verify/resend flows. Tokens are validated offline using the PASERK keyset (same as Admission

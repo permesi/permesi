@@ -25,6 +25,10 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 - **`build.yml`**: Compiles the Rust services and builds the Leptos frontend. The frontend build clears the
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages.
+- **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
+  It is triggered only by a successful `Deploy` workflow run (`workflow_run`), waits for `/health`,
+  verifies the deployed commit hash matches the deploy run SHA, and then runs GET-only checks.
+  Base URLs are resolved from the deployed branch (`develop` -> `*.permesi.dev`, all others -> `*.permesi.com`).
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
 - **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow.

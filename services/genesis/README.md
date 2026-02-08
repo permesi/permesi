@@ -242,6 +242,10 @@ Check the status of the cron job with the following SQL command:
 SELECT * FROM cron.job_run_details order by start_time DESC limit 5;
 ```
 
+## API Docs & Contract Testing
+
+For API testing workflows, this service keeps Bruno request collections in `services/genesis/api_docs/` and Schemathesis contract-test configuration in `services/genesis/openapi/schemathesis/`. The workspace recipe `just schemathesis-genesis` runs OpenAPI-driven checks against `docs/openapi/genesis.json`.
+
 ## TODO / Roadmap
 
 The repository-level docs describe `genesis` as “the edge / bouncer”. The following pieces are

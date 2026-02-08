@@ -22,8 +22,8 @@ pub struct Health {
     get,
     path= "/health",
     responses (
-        (status = 200, description = "Database connection is healthy", body = [Health]),
-        (status = 503, description = "Database connection is unhealthy", body = [Health])
+        (status = 200, description = "Database connection is healthy", body = Health),
+        (status = 503, description = "Database connection is unhealthy", body = Health)
     ),
     tag = "health",
 )]

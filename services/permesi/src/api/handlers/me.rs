@@ -223,6 +223,7 @@ pub async fn list_security_keys(headers: HeaderMap, pool: Extension<PgPool>) -> 
     params(("sid" = String, Path, description = "Session id")),
     responses(
         (status = 204, description = "Session revoked."),
+        (status = 400, description = "Invalid session id."),
         (status = 401, description = "Missing or invalid session cookie."),
         (status = 404, description = "Session not found."),
     ),

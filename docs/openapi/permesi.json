@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.2"
+    "version": "0.3.22"
   },
   "paths": {
     "/health": {
@@ -19,6 +19,7 @@
         "tags": [
           "health"
         ],
+        "summary": "Perform a health check of the service and its dependencies.",
         "operationId": "health",
         "responses": {
           "200": {
@@ -26,10 +27,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Health"
-                  }
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -39,10 +37,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Health"
-                  }
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -69,12 +64,19 @@
           "200": {
             "description": "Login successful",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserLogin"
-                  }
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -82,12 +84,9 @@
           "401": {
             "description": "Unauthorized",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserLogin"
-                  }
+                  "type": "string"
                 }
               }
             }
@@ -114,12 +113,19 @@
           "201": {
             "description": "Registration successful",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserRegister"
-                  }
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -127,12 +133,9 @@
           "409": {
             "description": "User with the specified email already exists",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UserRegister"
-                  }
+                  "type": "string"
                 }
               }
             }
@@ -262,7 +265,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session."
+            "description": "Missing or invalid admin token."
           },
           "403": {
             "description": "Not an operator."
@@ -338,14 +341,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "Unauthorized"
           },
           "429": {
             "description": "Rate limited",
@@ -1359,6 +1355,9 @@
           "204": {
             "description": "Security key deleted successfully"
           },
+          "400": {
+            "description": "Invalid credential id"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -1414,6 +1413,9 @@
         "responses": {
           "204": {
             "description": "Session revoked."
+          },
+          "400": {
+            "description": "Invalid session id."
           },
           "401": {
             "description": "Missing or invalid session cookie."
@@ -1479,6 +1481,9 @@
         "responses": {
           "204": {
             "description": "Passkey deleted"
+          },
+          "400": {
+            "description": "Invalid credential id or missing zero token"
           },
           "401": {
             "description": "Unauthorized"
@@ -2130,6 +2135,218 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List users only for requests with a valid full-session cookie.",
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "description": "List users (role-based).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          },
+          "403": {
+            "description": "Forbidden."
+          }
+        }
+      }
+    },
+    "/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Fetch one user only for requests with a valid full-session cookie.",
+        "operationId": "get_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User detail (role-based).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user id."
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "404": {
+            "description": "User not found."
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Delete a user after session authentication and scope authorization.",
+        "operationId": "delete_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User deleted (admin-only)."
+          },
+          "400": {
+            "description": "Invalid user id."
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "404": {
+            "description": "User not found."
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update user profile fields after session authentication and scope authorization.",
+        "operationId": "patch_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "User updated (editor/admin).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input."
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "404": {
+            "description": "User not found."
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/role": {
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Assign a global role after session authentication and scope authorization.",
+        "operationId": "set_user_role",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated (admin-only).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRoleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role."
+          },
+          "401": {
+            "description": "Missing or invalid session cookie."
+          },
+          "403": {
+            "description": "Forbidden."
+          },
+          "404": {
+            "description": "User not found."
           }
         }
       }
@@ -3036,6 +3253,47 @@
           }
         }
       },
+      "UserDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
       "UserLogin": {
         "type": "object",
         "required": [
@@ -3085,6 +3343,76 @@
             "type": "string"
           }
         }
+      },
+      "UserRoleRequest": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserRoleResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "assigned_at"
+        ],
+        "properties": {
+          "assigned_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "UserSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "UserUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "VaultStatus": {
         "type": "object",
@@ -3186,6 +3514,10 @@
     {
       "name": "me",
       "description": "Current user self-service endpoints"
+    },
+    {
+      "name": "users",
+      "description": "Global user management"
     },
     {
       "name": "orgs",

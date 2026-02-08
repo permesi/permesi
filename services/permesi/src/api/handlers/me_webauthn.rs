@@ -381,6 +381,7 @@ pub async fn list_credentials(
     ),
     responses(
         (status = 204, description = "Passkey deleted"),
+        (status = 400, description = "Invalid credential id or missing zero token"),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Not found")
     ),
@@ -723,7 +724,7 @@ mod tests {
         Extension, Router,
         body::{Body, to_bytes},
         http::{Request, StatusCode, header::CONTENT_TYPE},
-        routing::{get, post},
+        routing::{delete, get, post},
     };
     use chrono::Utc;
     use ed25519_dalek::Signer;
@@ -982,6 +983,123 @@ mod tests {
                 .map(Vec::len),
             Some(0)
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_credential_requires_zero_token() -> anyhow::Result<()> {
+        let Ok(db) = TestDb::new().await else {
+            return Ok(());
+        };
+
+        let (user_id, _email) = insert_user(&db.pool).await?;
+        let session_token = insert_session(&db.pool, user_id).await?;
+
+        let auth_config = AuthConfig::new("https://permesi.dev".to_string());
+        let auth_state = Arc::new(AuthState::new(
+            auth_config.clone(),
+            OpaqueState::from_seed(
+                [0u8; 32],
+                "api.permesi.dev".to_string(),
+                Duration::from_secs(300),
+            ),
+            Arc::new(NoopRateLimiter),
+            crate::api::handlers::auth::mfa::MfaConfig::new(),
+        ));
+
+        let passkey_config = crate::webauthn::PasskeyConfig::new(
+            auth_config.webauthn_rp_id().to_string(),
+            "Permesi".to_string(),
+            vec![auth_config.webauthn_rp_origin().to_string()],
+            Duration::from_secs(300),
+            false,
+        )?;
+        let passkey_service = Arc::new(PasskeyService::new(passkey_config)?);
+        let (admission, _zero_token) = build_admission()?;
+
+        let app = Router::new()
+            .route(
+                "/v1/me/webauthn/credentials/:credential_id",
+                delete(delete_credential),
+            )
+            .layer(Extension(auth_state))
+            .layer(Extension(admission))
+            .layer(Extension(passkey_service))
+            .layer(Extension(db.pool));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/me/webauthn/credentials/AA")
+                    .header("Cookie", format!("permesi_session={session_token}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await?;
+        assert_eq!(std::str::from_utf8(&body)?, "Missing zero token");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_credential_rejects_invalid_credential_id() -> anyhow::Result<()> {
+        let Ok(db) = TestDb::new().await else {
+            return Ok(());
+        };
+
+        let (user_id, _email) = insert_user(&db.pool).await?;
+        let session_token = insert_session(&db.pool, user_id).await?;
+
+        let auth_config = AuthConfig::new("https://permesi.dev".to_string());
+        let auth_state = Arc::new(AuthState::new(
+            auth_config.clone(),
+            OpaqueState::from_seed(
+                [0u8; 32],
+                "api.permesi.dev".to_string(),
+                Duration::from_secs(300),
+            ),
+            Arc::new(NoopRateLimiter),
+            crate::api::handlers::auth::mfa::MfaConfig::new(),
+        ));
+
+        let passkey_config = crate::webauthn::PasskeyConfig::new(
+            auth_config.webauthn_rp_id().to_string(),
+            "Permesi".to_string(),
+            vec![auth_config.webauthn_rp_origin().to_string()],
+            Duration::from_secs(300),
+            false,
+        )?;
+        let passkey_service = Arc::new(PasskeyService::new(passkey_config)?);
+        let (admission, zero_token) = build_admission()?;
+
+        let app = Router::new()
+            .route(
+                "/v1/me/webauthn/credentials/:credential_id",
+                delete(delete_credential),
+            )
+            .layer(Extension(auth_state))
+            .layer(Extension(admission))
+            .layer(Extension(passkey_service))
+            .layer(Extension(db.pool));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/me/webauthn/credentials/0")
+                    .header("Cookie", format!("permesi_session={session_token}"))
+                    .header("X-Permesi-Zero-Token", zero_token)
+                    .body(Body::empty())?,
+            )
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await?;
+        assert_eq!(std::str::from_utf8(&body)?, "Invalid credential id");
 
         Ok(())
     }

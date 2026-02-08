@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.2"
+    "version": "0.3.22"
   },
   "paths": {
     "/headers": {
@@ -39,10 +39,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Health"
-                  }
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -52,10 +49,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Health"
-                  }
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             }
@@ -74,9 +68,7 @@
             "description": "PASERK public keys",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "string"
-                }
+                "schema": {}
               }
             }
           }

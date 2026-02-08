@@ -22,8 +22,9 @@ pub struct UserLogin {
     post,
     path= "/user/login",
     responses (
-        (status = 200, description = "Login successful", body = [UserLogin], content_type = "application/json"),
-        (status = 401, description = "Unauthorized", body = [UserLogin]),
+        (status = 200, description = "Login successful", body = String),
+        (status = 400, description = "Validation error", body = String),
+        (status = 401, description = "Unauthorized", body = String),
     ),
     tag= "login"
 )]

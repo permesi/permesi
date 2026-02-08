@@ -22,8 +22,9 @@ pub struct UserRegister {
     post,
     path= "/user/register",
     responses (
-        (status = 201, description = "Registration successful", body = [UserRegister], content_type = "application/json"),
-        (status = 409, description = "User with the specified email already exists", body = [UserRegister]),
+        (status = 201, description = "Registration successful", body = String),
+        (status = 400, description = "Validation error", body = String),
+        (status = 409, description = "User with the specified email already exists", body = String),
     ),
     tag= "register"
 )]

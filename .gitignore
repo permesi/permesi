@@ -23,6 +23,7 @@ flycheck*.rs
 
 # test artifacts
 /tests/tmp/
+.hypothesis/
 *.db
 
 # docs

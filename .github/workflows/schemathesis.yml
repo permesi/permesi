@@ -1,0 +1,190 @@
+---
+name: API Contract (Schemathesis)
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy
+    types:
+      - completed
+
+concurrency:
+  group: schemathesis-contract-shared
+  cancel-in-progress: false
+
+jobs:
+  permesi:
+    name: Schemathesis / permesi
+    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
+
+      - name: Resolve permesi base URL
+        id: permesi_base
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          domain="permesi.com"
+          if [[ "${HEAD_BRANCH}" == "develop" ]]; then
+            domain="permesi.dev"
+          fi
+          base_url="https://api.${domain}"
+          echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
+          echo "Using permesi base URL: ${base_url}"
+
+      - name: Wait for permesi readiness
+        shell: bash
+        env:
+          BASE_URL: ${{ steps.permesi_base.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            if curl -fsS "${BASE_URL%/}/health" >/tmp/permesi-health.json; then
+              echo "permesi is ready"
+              exit 0
+            fi
+            echo "waiting for permesi (${i}/60)"
+            sleep 5
+          done
+          echo "permesi did not become ready in time" >&2
+          exit 1
+
+      - name: Verify deployed commit (permesi)
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          commit="$(python -c "import json; print(json.load(open('/tmp/permesi-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
+          if [[ -z "${commit}" ]]; then
+            echo "missing commit in permesi /health response" >&2
+            exit 1
+          fi
+          if [[ "${commit}" != "${EXPECTED_SHA}" ]]; then
+            echo "permesi commit mismatch: expected ${EXPECTED_SHA}, got ${commit}" >&2
+            exit 1
+          fi
+
+      - name: Run Schemathesis (permesi core)
+        uses: schemathesis/action@v2
+        with:
+          schema: docs/openapi/permesi.json
+          base-url: ${{ steps.permesi_base.outputs.base_url }}
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_headers_conformance,response_schema_conformance
+          max-examples: 25
+          args: >-
+            --phases examples,coverage
+            -m positive
+            --include-method GET
+            --exclude-path /v1/auth/logout
+            --report junit
+            --report-dir schemathesis-report/core
+
+      - name: Run Schemathesis (permesi logout)
+        uses: schemathesis/action@v2
+        with:
+          schema: docs/openapi/permesi.json
+          base-url: ${{ steps.permesi_base.outputs.base_url }}
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_headers_conformance,response_schema_conformance
+          max-examples: 5
+          args: >-
+            --phases coverage
+            -m positive
+            --include-method POST
+            --include-path /v1/auth/logout
+            --report junit
+            --report-dir schemathesis-report/logout
+
+      - name: Upload Schemathesis report (permesi)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: schemathesis-permesi-report
+          path: schemathesis-report/
+          if-no-files-found: ignore
+
+  genesis:
+    name: Schemathesis / genesis
+    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
+
+      - name: Resolve genesis base URL
+        id: genesis_base
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          domain="permesi.com"
+          if [[ "${HEAD_BRANCH}" == "develop" ]]; then
+            domain="permesi.dev"
+          fi
+          base_url="https://genesis.${domain}"
+          echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
+          echo "Using genesis base URL: ${base_url}"
+
+      - name: Wait for genesis readiness
+        shell: bash
+        env:
+          BASE_URL: ${{ steps.genesis_base.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            if curl -fsS "${BASE_URL%/}/health" >/tmp/genesis-health.json; then
+              echo "genesis is ready"
+              exit 0
+            fi
+            echo "waiting for genesis (${i}/60)"
+            sleep 5
+          done
+          echo "genesis did not become ready in time" >&2
+          exit 1
+
+      - name: Verify deployed commit (genesis)
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          commit="$(python -c "import json; print(json.load(open('/tmp/genesis-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
+          if [[ -z "${commit}" ]]; then
+            echo "missing commit in genesis /health response" >&2
+            exit 1
+          fi
+          if [[ "${commit}" != "${EXPECTED_SHA}" ]]; then
+            echo "genesis commit mismatch: expected ${EXPECTED_SHA}, got ${commit}" >&2
+            exit 1
+          fi
+
+      - name: Run Schemathesis (genesis)
+        uses: schemathesis/action@v2
+        with:
+          schema: docs/openapi/genesis.json
+          base-url: ${{ steps.genesis_base.outputs.base_url }}
+          checks: not_a_server_error,status_code_conformance,content_type_conformance,response_headers_conformance,response_schema_conformance
+          max-examples: 25
+          args: >-
+            --phases examples,coverage
+            -m positive
+            --include-method GET
+            --report junit
+            --report-dir schemathesis-report
+
+      - name: Upload Schemathesis report (genesis)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: schemathesis-genesis-report
+          path: schemathesis-report/
+          if-no-files-found: ignore

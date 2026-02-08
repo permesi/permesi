@@ -21,17 +21,18 @@ use axum::{
     body::{Body, to_bytes},
     http::{
         Request, StatusCode,
-        header::{CONTENT_TYPE, COOKIE},
+        header::{CONTENT_TYPE, COOKIE, SET_COOKIE},
     },
-    routing::{delete, get},
+    routing::{delete, get, post},
 };
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use opaque_ke::{
-    ClientRegistration, ClientRegistrationFinishParameters, Identifiers, ServerRegistration,
-    ServerSetup,
+    ClientLogin, ClientLoginFinishParameters, ClientRegistration,
+    ClientRegistrationFinishParameters, CredentialResponse, Identifiers, RegistrationResponse,
+    ServerRegistration, ServerSetup,
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -393,6 +394,161 @@ fn auth_state() -> Arc<AuthState> {
     ))
 }
 
+fn opaque_router(
+    auth_state: Arc<AuthState>,
+    admission: Arc<crate::api::handlers::AdmissionVerifier>,
+    pool: PgPool,
+) -> Router {
+    Router::new()
+        .route(
+            "/v1/auth/opaque/signup/start",
+            post(super::opaque::signup::opaque_signup_start),
+        )
+        .route(
+            "/v1/auth/opaque/signup/finish",
+            post(super::opaque::signup::opaque_signup_finish),
+        )
+        .route(
+            "/v1/auth/opaque/login/start",
+            post(super::opaque::login::opaque_login_start),
+        )
+        .route(
+            "/v1/auth/opaque/login/finish",
+            post(super::opaque::login::opaque_login_finish),
+        )
+        .layer(Extension(auth_state))
+        .layer(Extension(admission))
+        .layer(Extension(pool))
+}
+
+/// Build a verifier/signer pair so tests can mint valid zero-tokens accepted by handlers.
+fn test_admission_context() -> Result<(
+    Arc<crate::api::handlers::AdmissionVerifier>,
+    ed25519_dalek::SigningKey,
+    String,
+)> {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+    let verifying_key = signing_key.verifying_key();
+    let key = admission_token::PaserkKey::from_ed25519_public_key_bytes(&verifying_key.to_bytes())?;
+    let keyset = admission_token::PaserkKeySet {
+        version: "v4".to_string(),
+        purpose: "public".to_string(),
+        active_kid: key.kid.clone(),
+        keys: vec![key.clone()],
+    };
+    let verifier = Arc::new(crate::api::handlers::AdmissionVerifier::new(
+        keyset,
+        "https://genesis.test".to_string(),
+        "permesi".to_string(),
+    ));
+    Ok((verifier, signing_key, key.kid))
+}
+
+/// Mint a short-lived zero-token used by OPAQUE endpoints in integration-style tests.
+fn issue_zero_token(signing_key: &ed25519_dalek::SigningKey, kid: &str) -> Result<String> {
+    use admission_token::{
+        AdmissionTokenClaims, AdmissionTokenFooter, build_token, encode_signing_input,
+        rfc3339_from_unix,
+    };
+    use ed25519_dalek::Signer;
+
+    let now_unix = unix_now();
+    let claims = AdmissionTokenClaims {
+        iss: "https://genesis.test".to_string(),
+        aud: "permesi".to_string(),
+        iat: rfc3339_from_unix(now_unix)?,
+        exp: rfc3339_from_unix(now_unix + 600)?,
+        jti: Uuid::new_v4().to_string(),
+        sub: None,
+        action: "zero".to_string(),
+    };
+    let footer = AdmissionTokenFooter {
+        kid: kid.to_string(),
+    };
+    let signing_input = encode_signing_input(&claims, &footer)?;
+    let signature = signing_key.sign(&signing_input.pre_auth);
+    Ok(build_token(
+        &signing_input.payload,
+        &signing_input.footer,
+        &signature.to_bytes(),
+    ))
+}
+
+/// Run OPAQUE signup start+finish through HTTP handlers to populate registration records.
+async fn run_opaque_signup(
+    app: &Router,
+    email: &str,
+    password: &[u8],
+    zero_token: &str,
+    seed: [u8; 32],
+) -> Result<()> {
+    let mut rng = ChaCha20Rng::from_seed(seed);
+    let ksf = argon2::Argon2::default();
+    let client_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password)?;
+
+    let start_payload = json!({
+        "email": email,
+        "registration_request": STANDARD.encode(client_start.message.serialize())
+    });
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/signup/start")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", zero_token)
+                .body(Body::from(start_payload.to_string()))?,
+        )
+        .await?;
+    assert_eq!(start_response.status(), StatusCode::OK);
+
+    let start_body = to_bytes(start_response.into_body(), usize::MAX).await?;
+    let start_json: serde_json::Value = serde_json::from_slice(&start_body)?;
+    let registration_response = start_json
+        .get("registration_response")
+        .and_then(serde_json::Value::as_str)
+        .context("missing registration_response")?;
+    let response_bytes = STANDARD.decode(registration_response)?;
+    let response = RegistrationResponse::<OpaqueSuite>::deserialize(&response_bytes)?;
+
+    let finish_params = ClientRegistrationFinishParameters::new(
+        identifiers(email.as_bytes(), b"api.permesi.dev"),
+        Some(&ksf),
+    );
+    let client_finish = client_start
+        .state
+        .finish(&mut rng, password, response, finish_params)?;
+
+    let finish_payload = json!({
+        "email": email,
+        "registration_record": STANDARD.encode(client_finish.message.serialize())
+    });
+    let finish_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/signup/finish")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", zero_token)
+                .body(Body::from(finish_payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(finish_response.status(), StatusCode::CREATED);
+    Ok(())
+}
+
+fn extract_session_cookie_token(set_cookie: &str) -> Option<String> {
+    let cookie_name = "permesi_session=";
+    set_cookie
+        .split(';')
+        .next()
+        .and_then(|part| part.trim().strip_prefix(cookie_name))
+        .map(str::to_string)
+}
+
 async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
     let user_id = Uuid::new_v4();
     let query = r"
@@ -565,6 +721,227 @@ async fn me_ignores_other_user_ids() -> Result<()> {
     let name_b: Option<String> = row_b.get("display_name");
     assert_eq!(name_a.as_deref(), Some("User A"));
     assert_eq!(name_b.as_deref(), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn me_revoke_session_rejects_invalid_session_id() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let email = "revoke-invalid@example.com";
+    let user_id = insert_active_user(&db.pool, email).await?;
+    let token = insert_session(&db.pool, user_id).await?;
+
+    let app = app_router(auth_state(), db.pool.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/me/sessions/0")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn opaque_signup_login_flow_success() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let (admission, signing_key, kid) = test_admission_context()?;
+    let zero_token = issue_zero_token(&signing_key, &kid)?;
+    let app = opaque_router(auth_state(), admission, db.pool.clone());
+
+    let email = "opaque-flow@example.com";
+    let password = b"OpaquePassword123!";
+    run_opaque_signup(&app, email, password, &zero_token, [11u8; 32]).await?;
+
+    let row = sqlx::query("SELECT id, status::text FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&db.pool)
+        .await?;
+    let user_id: Uuid = row.get("id");
+    let status: String = row.get("status");
+    assert_eq!(status, "pending_verification");
+
+    sqlx::query("UPDATE users SET status = 'active', email_verified_at = NOW() WHERE id = $1")
+        .bind(user_id)
+        .execute(&db.pool)
+        .await?;
+
+    let mut rng = ChaCha20Rng::from_seed([12u8; 32]);
+    let ksf = argon2::Argon2::default();
+    let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
+
+    let login_start_payload = json!({
+        "email": email,
+        "credential_request": STANDARD.encode(login_start.message.serialize())
+    });
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/login/start")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", &zero_token)
+                .body(Body::from(login_start_payload.to_string()))?,
+        )
+        .await?;
+    assert_eq!(start_response.status(), StatusCode::OK);
+
+    let start_body = to_bytes(start_response.into_body(), usize::MAX).await?;
+    let start_json: serde_json::Value = serde_json::from_slice(&start_body)?;
+    let login_id = start_json
+        .get("login_id")
+        .and_then(serde_json::Value::as_str)
+        .context("missing login_id")?
+        .to_string();
+    let credential_response = start_json
+        .get("credential_response")
+        .and_then(serde_json::Value::as_str)
+        .context("missing credential_response")?;
+    let credential_response_bytes = STANDARD.decode(credential_response)?;
+    let credential_response =
+        CredentialResponse::<OpaqueSuite>::deserialize(&credential_response_bytes)?;
+
+    let login_finish_params = ClientLoginFinishParameters::new(
+        None,
+        identifiers(email.as_bytes(), b"api.permesi.dev"),
+        Some(&ksf),
+    );
+    let login_finish =
+        login_start
+            .state
+            .finish(password, credential_response, login_finish_params)?;
+
+    let login_finish_payload = json!({
+        "login_id": login_id,
+        "credential_finalization": STANDARD.encode(login_finish.message.serialize())
+    });
+    let finish_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/login/finish")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", &zero_token)
+                .body(Body::from(login_finish_payload.to_string()))?,
+        )
+        .await?;
+    assert_eq!(finish_response.status(), StatusCode::NO_CONTENT);
+
+    let set_cookie = finish_response
+        .headers()
+        .get(SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .context("missing set-cookie header")?;
+    let session_token =
+        extract_session_cookie_token(set_cookie).context("missing session token")?;
+
+    let session_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_hash = $2)",
+    )
+    .bind(user_id)
+    .bind(hash_session_token(&session_token))
+    .fetch_one(&db.pool)
+    .await?;
+    assert!(session_exists);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let (admission, signing_key, kid) = test_admission_context()?;
+    let zero_token = issue_zero_token(&signing_key, &kid)?;
+    let app = opaque_router(auth_state(), admission, db.pool.clone());
+
+    let email = "opaque-wrong-password@example.com";
+    let real_password = b"CorrectPassword123!";
+    let wrong_password = b"WrongPassword123!";
+    run_opaque_signup(&app, email, real_password, &zero_token, [13u8; 32]).await?;
+
+    sqlx::query("UPDATE users SET status = 'active', email_verified_at = NOW() WHERE email = $1")
+        .bind(email)
+        .execute(&db.pool)
+        .await?;
+
+    let mut rng = ChaCha20Rng::from_seed([14u8; 32]);
+    let ksf = argon2::Argon2::default();
+    let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, wrong_password)?;
+
+    let login_start_payload = json!({
+        "email": email,
+        "credential_request": STANDARD.encode(login_start.message.serialize())
+    });
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/login/start")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", &zero_token)
+                .body(Body::from(login_start_payload.to_string()))?,
+        )
+        .await?;
+    assert_eq!(start_response.status(), StatusCode::OK);
+
+    let start_body = to_bytes(start_response.into_body(), usize::MAX).await?;
+    let start_json: serde_json::Value = serde_json::from_slice(&start_body)?;
+    let login_id = start_json
+        .get("login_id")
+        .and_then(serde_json::Value::as_str)
+        .context("missing login_id")?
+        .to_string();
+    let credential_response = start_json
+        .get("credential_response")
+        .and_then(serde_json::Value::as_str)
+        .context("missing credential_response")?;
+    let credential_response_bytes = STANDARD.decode(credential_response)?;
+    let credential_response =
+        CredentialResponse::<OpaqueSuite>::deserialize(&credential_response_bytes)?;
+
+    let login_finish_params = ClientLoginFinishParameters::new(
+        None,
+        identifiers(email.as_bytes(), b"api.permesi.dev"),
+        Some(&ksf),
+    );
+    let login_finish =
+        login_start
+            .state
+            .finish(wrong_password, credential_response, login_finish_params)?;
+
+    let login_finish_payload = json!({
+        "login_id": login_id,
+        "credential_finalization": STANDARD.encode(login_finish.message.serialize())
+    });
+    let finish_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/login/finish")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", &zero_token)
+                .body(Body::from(login_finish_payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(finish_response.status(), StatusCode::UNAUTHORIZED);
+    assert!(finish_response.headers().get(SET_COOKIE).is_none());
     Ok(())
 }
 

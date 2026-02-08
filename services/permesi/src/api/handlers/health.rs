@@ -39,8 +39,8 @@ pub struct Health {
     get,
     path= "/health",
     responses (
-        (status = 200, description = "Database and admission PASERK endpoint are healthy", body = [Health]),
-        (status = 503, description = "Database or admission PASERK endpoint is unhealthy", body = [Health])
+        (status = 200, description = "Database and admission PASERK endpoint are healthy", body = Health),
+        (status = 503, description = "Database or admission PASERK endpoint is unhealthy", body = Health)
     ),
     tag= "health"
 )]

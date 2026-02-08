@@ -419,6 +419,31 @@ async fn security_key_preserves_totp() -> Result<()> {
 }
 
 #[tokio::test]
+async fn security_key_delete_rejects_invalid_hex_credential_id() -> Result<()> {
+    let Ok(ctx) = TestContext::new().await else {
+        return Ok(());
+    };
+
+    let email = "invalid-key-id@example.com";
+    let user_id = insert_active_user(&ctx.pool, email).await?;
+    let token = insert_session(&ctx.pool, user_id).await?;
+
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/me/mfa/webauthn/0")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
 async fn totp_deletion_preserves_security_key() -> Result<()> {
     let Ok(ctx) = TestContext::new().await else {
         return Ok(());
