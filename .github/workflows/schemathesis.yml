@@ -61,7 +61,7 @@ jobs:
           EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          commit="$(python -c "import json; print(json.load(open('/tmp/permesi-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
+          commit="$(python3 -c "import json; print(json.load(open('/tmp/permesi-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
           if [[ -z "${commit}" ]]; then
             echo "missing commit in permesi /health response" >&2
             exit 1
@@ -157,7 +157,7 @@ jobs:
           EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          commit="$(python -c "import json; print(json.load(open('/tmp/genesis-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
+          commit="$(python3 -c "import json; print(json.load(open('/tmp/genesis-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
           if [[ -z "${commit}" ]]; then
             echo "missing commit in genesis /health response" >&2
             exit 1
