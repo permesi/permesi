@@ -55,10 +55,10 @@ pub fn HealthPage() -> impl IntoView {
                             </div>
                         }.into_any(),
                         Some(Err(err)) => view! {
-                            <div class="flex flex-col items-center justify-center py-6 text-center text-red-600 dark:text-red-400">
+                            <div class="flex w-full flex-col items-center justify-center py-6 text-center text-red-600 dark:text-red-400">
                                 <span class="material-symbols-outlined text-4xl mb-2">"error"</span>
                                 <p class="font-medium">"System Unreachable"</p>
-                                <p class="text-sm mt-1 opacity-80">{err}</p>
+                                <p class="mt-1 w-full max-w-full break-words text-sm opacity-80">{err}</p>
                             </div>
                         }.into_any(),
                     }}

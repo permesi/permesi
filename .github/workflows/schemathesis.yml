@@ -41,11 +41,20 @@ jobs:
         id: permesi_base
         shell: bash
         env:
-          HEAD_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_branch || github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET_BRANCH: ${{ github.event.inputs.target_branch || '' }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
+          head_branch="${WORKFLOW_RUN_HEAD_BRANCH}"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            head_branch="${INPUT_TARGET_BRANCH}"
+          fi
+          if [[ -z "${head_branch}" || "${head_branch}" == "null" ]]; then
+            head_branch="main"
+          fi
           domain="permesi.com"
-          if [[ "${HEAD_BRANCH}" == "develop" ]]; then
+          if [[ "${head_branch}" == "develop" ]]; then
             domain="permesi.dev"
           fi
           base_url="https://api.${domain}"
@@ -60,8 +69,11 @@ jobs:
           set -euo pipefail
           for i in {1..60}; do
             if curl -fsS "${BASE_URL%/}/health" >/tmp/permesi-health.json; then
-              echo "permesi is ready"
-              exit 0
+              if python3 -c "import json; json.load(open('/tmp/permesi-health.json', 'r', encoding='utf-8'))" >/dev/null 2>&1; then
+                echo "permesi is ready"
+                exit 0
+              fi
+              echo "permesi /health returned non-JSON payload; retrying (${i}/60)"
             fi
             echo "waiting for permesi (${i}/60)"
             sleep 5
@@ -72,18 +84,27 @@ jobs:
       - name: Verify deployed commit (permesi)
         shell: bash
         env:
-          EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_sha || github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_EXPECTED_SHA: ${{ github.event.inputs.expected_sha || '' }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
           set -euo pipefail
           commit="$(python3 -c "import json; print(json.load(open('/tmp/permesi-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
+          expected_sha="${WORKFLOW_RUN_HEAD_SHA}"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            expected_sha="${INPUT_EXPECTED_SHA}"
+          fi
+          if [[ "${expected_sha}" == "null" ]]; then
+            expected_sha=""
+          fi
           if [[ -z "${commit}" ]]; then
             echo "missing commit in permesi /health response" >&2
             exit 1
           fi
-          if [[ -z "${EXPECTED_SHA}" ]]; then
+          if [[ -z "${expected_sha}" ]]; then
             echo "No EXPECTED_SHA provided; skipping commit match check."
-          elif [[ "${commit}" != "${EXPECTED_SHA}" ]]; then
-            echo "permesi commit mismatch: expected ${EXPECTED_SHA}, got ${commit}" >&2
+          elif [[ "${commit}" != "${expected_sha}" ]]; then
+            echo "permesi commit mismatch: expected ${expected_sha}, got ${commit}" >&2
             exit 1
           fi
 
@@ -139,11 +160,20 @@ jobs:
         id: genesis_base
         shell: bash
         env:
-          HEAD_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_branch || github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET_BRANCH: ${{ github.event.inputs.target_branch || '' }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
+          head_branch="${WORKFLOW_RUN_HEAD_BRANCH}"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            head_branch="${INPUT_TARGET_BRANCH}"
+          fi
+          if [[ -z "${head_branch}" || "${head_branch}" == "null" ]]; then
+            head_branch="main"
+          fi
           domain="permesi.com"
-          if [[ "${HEAD_BRANCH}" == "develop" ]]; then
+          if [[ "${head_branch}" == "develop" ]]; then
             domain="permesi.dev"
           fi
           base_url="https://genesis.${domain}"
@@ -158,8 +188,11 @@ jobs:
           set -euo pipefail
           for i in {1..60}; do
             if curl -fsS "${BASE_URL%/}/health" >/tmp/genesis-health.json; then
-              echo "genesis is ready"
-              exit 0
+              if python3 -c "import json; json.load(open('/tmp/genesis-health.json', 'r', encoding='utf-8'))" >/dev/null 2>&1; then
+                echo "genesis is ready"
+                exit 0
+              fi
+              echo "genesis /health returned non-JSON payload; retrying (${i}/60)"
             fi
             echo "waiting for genesis (${i}/60)"
             sleep 5
@@ -170,18 +203,27 @@ jobs:
       - name: Verify deployed commit (genesis)
         shell: bash
         env:
-          EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_sha || github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_EXPECTED_SHA: ${{ github.event.inputs.expected_sha || '' }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
           set -euo pipefail
           commit="$(python3 -c "import json; print(json.load(open('/tmp/genesis-health.json', 'r', encoding='utf-8')).get('commit', ''))")"
+          expected_sha="${WORKFLOW_RUN_HEAD_SHA}"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            expected_sha="${INPUT_EXPECTED_SHA}"
+          fi
+          if [[ "${expected_sha}" == "null" ]]; then
+            expected_sha=""
+          fi
           if [[ -z "${commit}" ]]; then
             echo "missing commit in genesis /health response" >&2
             exit 1
           fi
-          if [[ -z "${EXPECTED_SHA}" ]]; then
+          if [[ -z "${expected_sha}" ]]; then
             echo "No EXPECTED_SHA provided; skipping commit match check."
-          elif [[ "${commit}" != "${EXPECTED_SHA}" ]]; then
-            echo "genesis commit mismatch: expected ${EXPECTED_SHA}, got ${commit}" >&2
+          elif [[ "${commit}" != "${expected_sha}" ]]; then
+            echo "genesis commit mismatch: expected ${expected_sha}, got ${commit}" >&2
             exit 1
           fi
 
