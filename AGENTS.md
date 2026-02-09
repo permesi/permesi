@@ -60,7 +60,7 @@ Authorization helper rule:
 - Build: `cargo build -p permesi` / `cargo build -p genesis`
 - Frontend: `just web` / `just web-build` / `just web-check`
 - Dev: `just start` (starts infra + services in a `tmux` session named `permesi` when `tmux` is available)
-- Just recipes live in `.justfile`.
+- Just entrypoint is `.justfile`; recipe modules are split under `.justfiles/*.just` and imported from `.justfile`.
 - Verify link helper: `just signup-verify-url`
 - Tests: `cargo test --workspace`
 - Lint/format gates (run after any change):

@@ -18,6 +18,7 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     *   Create or update `CI_RUNNER`.
 3.  **Exceptions:**
     *   `deploy.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
+    *   `schemathesis.yml`: This workflow is hardcoded to use `ubuntu-latest` so API contract checks always run on GitHub-hosted runners.
 
 ## Workflow Overview
 
@@ -26,8 +27,11 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
-  It is triggered only by a successful `Deploy` workflow run (`workflow_run`), waits for `/health`,
+  It can run automatically after a successful `Deploy` workflow run (`workflow_run`) or manually via
+  `workflow_dispatch` (for delayed infra rollout cases). It waits for `/health`,
   verifies the deployed commit hash matches the deploy run SHA, and then runs GET-only checks.
+  For manual dispatch, choose `target_branch` (`main` or `develop`) and optionally provide
+  `expected_sha`; if `expected_sha` is empty, commit-match enforcement is skipped.
   Base URLs are resolved from the deployed branch (`develop` -> `*.permesi.dev`, all others -> `*.permesi.com`).
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
