@@ -1,0 +1,15 @@
+# cargo-audit policy for this repository.
+#
+# Reviewed on: 2026-02-09
+# Revisit when:
+# - sqlx no longer resolves `sqlx-mysql` transitively in Cargo.lock, or
+# - a fixed advisory path is available for RUSTSEC-2023-0071.
+
+[advisories]
+# `RUSTSEC-2023-0071` is currently triggered through an inactive transitive path:
+# rsa <- sqlx-mysql <- sqlx-macros-core <- sqlx.
+# The workspace uses PostgreSQL only and does not enable SQLx MySQL features.
+ignore = ["RUSTSEC-2023-0071"]
+
+# Keep surfacing maintenance risk without failing CI on these warnings.
+informational_warnings = ["unmaintained"]

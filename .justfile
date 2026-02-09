@@ -8,6 +8,10 @@ subnet := "172.31.20.0/24"
 
 branch := if `git rev-parse --abbrev-ref HEAD` == "main" { "latest" } else { `git rev-parse --abbrev-ref HEAD` }
 
+[default]
+_default:
+  @just default
+
 import '.justfiles/core.just'
 import '.justfiles/web.just'
 import '.justfiles/services.just'

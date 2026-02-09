@@ -133,8 +133,8 @@ async fn serve_socket(
     }
     let listener = tokio::net::UnixListener::bind(&path).context("Failed to bind Unix socket")?;
 
-    // Set permissions to 666 so Nginx (different user) can read/write
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
+    // Restrict socket access to owner/group; reverse proxies should join the same group.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))
         .context("Failed to set socket permissions")?;
 
     let shutdown_reason = Arc::new(Mutex::new(None));
@@ -201,16 +201,19 @@ async fn serve_tls(
     Ok(())
 }
 
-// span
+/// Build a request tracing span without recording request headers.
+///
+/// This avoids leaking secret-bearing headers (for example authorization cookies
+/// or tokens) into logs and tracing backends.
 fn make_span(request: &Request<Body>) -> Span {
-    let headers = request.headers();
     let path = request.uri().path();
-    let request_id = headers
+    let request_id = request
+        .headers()
         .get("x-request-id")
         .and_then(|val| val.to_str().ok())
         .unwrap_or("none");
 
-    debug_span!("http-request", path, ?headers, request_id)
+    debug_span!("http-request", path, request_id)
 }
 
 #[cfg(test)]

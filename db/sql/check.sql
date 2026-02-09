@@ -33,6 +33,18 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
         RAISE EXCEPTION 'Missing role: permesi_runtime';
     END IF;
+    IF NOT pg_has_role('vault_genesis', 'genesis_runtime', 'MEMBER') THEN
+        RAISE EXCEPTION 'Missing role membership: vault_genesis -> genesis_runtime';
+    END IF;
+    IF NOT pg_has_role('vault_permesi', 'permesi_runtime', 'MEMBER') THEN
+        RAISE EXCEPTION 'Missing role membership: vault_permesi -> permesi_runtime';
+    END IF;
+    IF NOT has_database_privilege('genesis_runtime', 'genesis', 'CONNECT') THEN
+        RAISE EXCEPTION 'Missing grant: genesis_runtime CONNECT on genesis';
+    END IF;
+    IF NOT has_database_privilege('permesi_runtime', 'permesi', 'CONNECT') THEN
+        RAISE EXCEPTION 'Missing grant: permesi_runtime CONNECT on permesi';
+    END IF;
 END;
 $$;
 
@@ -56,11 +68,27 @@ $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'genesis_tokens_rollover') THEN
-        RAISE EXCEPTION 'Missing cron job: genesis_tokens_rollover';
+    IF NOT EXISTS (
+        SELECT 1
+        FROM cron.job
+        WHERE jobname = 'genesis_tokens_rollover'
+          AND schedule = '5 0 * * *'
+          AND command = 'SELECT genesis_tokens_rollover(7, 2);'
+          AND "database" = 'genesis'
+          AND username = 'vault_genesis'
+    ) THEN
+        RAISE EXCEPTION 'Missing/misconfigured cron job: genesis_tokens_rollover';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'permesi_cleanup_expired_tokens') THEN
-        RAISE EXCEPTION 'Missing cron job: permesi_cleanup_expired_tokens';
+    IF NOT EXISTS (
+        SELECT 1
+        FROM cron.job
+        WHERE jobname = 'permesi_cleanup_expired_tokens'
+          AND schedule = '15 0 * * *'
+          AND command = 'SELECT cleanup_expired_tokens();'
+          AND "database" = 'permesi'
+          AND username = 'vault_permesi'
+    ) THEN
+        RAISE EXCEPTION 'Missing/misconfigured cron job: permesi_cleanup_expired_tokens';
     END IF;
 END;
 $$;
@@ -70,16 +98,14 @@ $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'clients') THEN
+    IF to_regclass('public.clients') IS NULL THEN
         RAISE EXCEPTION 'Missing genesis table: clients';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'tokens') THEN
+    IF to_regclass('public.tokens') IS NULL THEN
         RAISE EXCEPTION 'Missing genesis table: tokens';
     END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_proc WHERE proname = 'genesis_tokens_rollover'
-    ) THEN
-        RAISE EXCEPTION 'Missing function: genesis_tokens_rollover';
+    IF to_regprocedure('public.genesis_tokens_rollover(integer, integer)') IS NULL THEN
+        RAISE EXCEPTION 'Missing function: public.genesis_tokens_rollover(integer, integer)';
     END IF;
 END;
 $$;
@@ -89,42 +115,40 @@ $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'users') THEN
+    IF to_regclass('public.users') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: users';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'user_sessions') THEN
+    IF to_regclass('public.user_sessions') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: user_sessions';
     END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_proc WHERE proname = 'cleanup_expired_tokens'
-    ) THEN
-        RAISE EXCEPTION 'Missing function: cleanup_expired_tokens';
+    IF to_regprocedure('public.cleanup_expired_tokens()') IS NULL THEN
+        RAISE EXCEPTION 'Missing function: public.cleanup_expired_tokens()';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'citext') THEN
         RAISE EXCEPTION 'Missing extension: citext';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_deks') THEN
+    IF to_regclass('public.totp_deks') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: totp_deks';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_credentials') THEN
+    IF to_regclass('public.totp_credentials') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: totp_credentials';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'totp_audit_log') THEN
+    IF to_regclass('public.totp_audit_log') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: totp_audit_log';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'passkeys') THEN
+    IF to_regclass('public.passkeys') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: passkeys';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'passkey_audit_log') THEN
+    IF to_regclass('public.passkey_audit_log') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: passkey_audit_log';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'user_mfa_state') THEN
+    IF to_regclass('public.user_mfa_state') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: user_mfa_state';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'security_keys') THEN
+    IF to_regclass('public.security_keys') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: security_keys';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'security_key_audit_log') THEN
+    IF to_regclass('public.security_key_audit_log') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: security_key_audit_log';
     END IF;
 END;

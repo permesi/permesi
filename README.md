@@ -64,7 +64,7 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 #### 1. `genesis` (The Edge / "The Bouncer")
 * **Role:** Public-facing edge service.
-* **Responsibility:** Handles raw TCP/HTTP connections, enforces strict rate limits, performs PoW (Proof of Work) challenges for abuse prevention, and sanitizes inputs.
+* **Responsibility:** Handles raw TCP/HTTP connections, sanitizes inputs, and issues short-lived admission tokens. Abuse controls (for example, rate limiting and challenges) are currently enforced at the edge layer (for example, Cloudflare WAF) while native controls remain on the Genesis hardening roadmap.
 * **Output:** Issues a short-lived, cryptographically signed **Admission Token**.
 * **State:** Stateless / Ephemeral.
 * **Key Publication:** Publishes a PASERK keyset at `GET /paserk.json`.

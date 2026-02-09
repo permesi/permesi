@@ -250,10 +250,13 @@ For API testing workflows, this service keeps Bruno request collections in `serv
 
 The repository-level docs describe `genesis` as “the edge / bouncer”. The following pieces are
 either not implemented yet in this service or need hardening:
+Current production posture expects abuse filtering at the network edge (for example, Cloudflare WAF),
+with service-native controls tracked below.
 
 - Add strict rate limiting (per IP / per `client_id`) and configurable policies
 - Add PoW (proof-of-work) challenge flow for abuse prevention
 - Improve issuance semantics (explicit allow/deny for unknown `client_id`, avoid silent fallbacks)
 - Optional internal-only token introspection/revocation tooling (auth + rate limits)
 - Split header configuration (separate env vars for IP header vs country header selection)
+- Avoid logging raw request headers in traces; log only safe selected fields
 - Add structured audit logging around issuance/validation and optionally export metrics

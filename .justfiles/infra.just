@@ -27,6 +27,10 @@ postgres-stop:
 db-verify:
   #!/usr/bin/env zsh
   set -euo pipefail
+  if [[ -z "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
+    echo "postgres-permesi is not running. Run: just postgres" >&2
+    exit 1
+  fi
   podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
 db-bootstrap:

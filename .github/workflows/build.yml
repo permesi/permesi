@@ -8,8 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   test:
@@ -144,6 +143,9 @@ jobs:
     needs: [build, frontend-build]
     if: github.ref_name == 'develop'
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 

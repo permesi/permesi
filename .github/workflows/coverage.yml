@@ -7,10 +7,13 @@ on:
       CODECOV_TOKEN:
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   coverage:
     name: Coverage
-    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/pre-clean-workspace
@@ -24,6 +27,11 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Verify cargo-llvm-cov
+        run: |
+          command -v cargo-llvm-cov
+          cargo llvm-cov --version
 
       - name: Run llvm-cov
         run: cargo llvm-cov --workspace --lcov --output-path coverage.lcov

@@ -17,6 +17,8 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     *   Navigate to: `Settings` > `Secrets and variables` > `Actions` > `Variables`.
     *   Create or update `CI_RUNNER`.
 3.  **Exceptions:**
+    *   `test.yml` pull-request jobs are hardcoded to use `ubuntu-latest` for safer execution of untrusted PR code.
+    *   `coverage.yml`: This workflow is hardcoded to use `ubuntu-latest` for stable tool/runtime behavior.
     *   `deploy.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
     *   `schemathesis.yml`: This workflow is hardcoded to use `ubuntu-latest` so API contract checks always run on GitHub-hosted runners.
 
@@ -27,12 +29,10 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
-  It can run automatically after a successful `Deploy` workflow run (`workflow_run`) or manually via
-  `workflow_dispatch` (for delayed infra rollout cases). It waits for `/health`,
-  verifies the deployed commit hash matches the deploy run SHA, and then runs GET-only checks.
-  For manual dispatch, choose `target_branch` (`main` or `develop`) and optionally provide
-  `expected_sha`; if `expected_sha` is empty, commit-match enforcement is skipped.
-  Base URLs are resolved from the deployed branch (`develop` -> `*.permesi.dev`, all others -> `*.permesi.com`).
+  It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
+  It waits for `/health`, verifies the deployed commit hash matches the selected workflow ref SHA
+  (`github.sha`), and then runs GET-only checks. Base URLs are resolved from the selected run branch
+  (`develop` -> `*.permesi.dev`, all others -> `*.permesi.com`).
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.

@@ -27,6 +27,21 @@ BEGIN
     INSERT INTO users (id, email, opaque_registration_record, status)
     VALUES (v_user_id, 'owner-' || suffix || '@example.com', decode('00', 'hex'), 'active');
 
+    -- Ensure users.updated_at advances only when tracked fields change.
+    PERFORM pg_sleep(0.001);
+    UPDATE users
+    SET display_name = 'Owner ' || suffix
+    WHERE id = v_user_id;
+
+    PERFORM 1
+    FROM users
+    WHERE id = v_user_id
+      AND updated_at > created_at;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'expected users.updated_at to advance on tracked field updates';
+    END IF;
+
     -- Reject uppercase email normalization (users.email).
     BEGIN
         INSERT INTO users (id, email, opaque_registration_record)
@@ -124,14 +139,14 @@ BEGIN
     BEGIN
         INSERT INTO org_roles (org_id, name) VALUES (org_id_reuse, 'Admin');
         RAISE EXCEPTION 'expected invalid role name to fail';
-    EXCEPTION WHEN others THEN
+    EXCEPTION WHEN check_violation THEN
         -- expected
     END;
 
     -- Reject member-role assignment when role does not exist.
     BEGIN
         INSERT INTO org_member_roles (org_id, user_id, role_name)
-    VALUES (org_id_reuse, v_user_id, 'missing');
+        VALUES (org_id_reuse, v_user_id, 'missing');
         RAISE EXCEPTION 'expected org_member_roles FK to fail';
     EXCEPTION WHEN foreign_key_violation THEN
         -- expected
@@ -380,6 +395,93 @@ BEGIN
     EXCEPTION WHEN check_violation THEN
         -- expected
     END;
+
+    -- Cleanup function should delete expired rows and retain active rows.
+    INSERT INTO user_sessions (id, user_id, session_hash, created_at, expires_at)
+    VALUES (
+        uuidv4(),
+        v_user_id,
+        decode(repeat('02', 32), 'hex'),
+        NOW() - INTERVAL '9 days',
+        NOW() - INTERVAL '8 days'
+    );
+
+    INSERT INTO user_sessions (id, user_id, session_hash, created_at, expires_at)
+    VALUES (
+        uuidv4(),
+        v_user_id,
+        decode(repeat('03', 32), 'hex'),
+        NOW() - INTERVAL '1 hour',
+        NOW() + INTERVAL '1 hour'
+    );
+
+    INSERT INTO email_verification_tokens (id, user_id, token_hash, created_at, expires_at)
+    VALUES (
+        uuidv4(),
+        v_user_id,
+        decode(repeat('04', 32), 'hex'),
+        NOW() - INTERVAL '9 days',
+        NOW() - INTERVAL '8 days'
+    );
+
+    INSERT INTO email_verification_tokens (id, user_id, token_hash, created_at, expires_at)
+    VALUES (
+        uuidv4(),
+        v_user_id,
+        decode(repeat('05', 32), 'hex'),
+        NOW() - INTERVAL '1 hour',
+        NOW() + INTERVAL '1 hour'
+    );
+
+    INSERT INTO admin_attempts (id, user_id, ip_address, created_at)
+    VALUES (uuidv4(), v_user_id, '203.0.113.10', NOW() - INTERVAL '2 days');
+
+    INSERT INTO admin_attempts (id, user_id, ip_address, created_at)
+    VALUES (uuidv4(), v_user_id, '203.0.113.11', NOW() - INTERVAL '1 hour');
+
+    PERFORM cleanup_expired_tokens();
+
+    PERFORM 1
+    FROM user_sessions
+    WHERE session_hash = decode(repeat('02', 32), 'hex');
+    IF FOUND THEN
+        RAISE EXCEPTION 'expected expired user_session to be deleted by cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM user_sessions
+    WHERE session_hash = decode(repeat('03', 32), 'hex');
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'expected active user_session to remain after cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM email_verification_tokens
+    WHERE token_hash = decode(repeat('04', 32), 'hex');
+    IF FOUND THEN
+        RAISE EXCEPTION 'expected expired email_verification_token to be deleted by cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM email_verification_tokens
+    WHERE token_hash = decode(repeat('05', 32), 'hex');
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'expected active email_verification_token to remain after cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM admin_attempts
+    WHERE ip_address = '203.0.113.10';
+    IF FOUND THEN
+        RAISE EXCEPTION 'expected old admin_attempt to be deleted by cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM admin_attempts
+    WHERE ip_address = '203.0.113.11';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'expected recent admin_attempt to remain after cleanup_expired_tokens';
+    END IF;
 
     -- Cascade deletions: ensure deleting a user removes their operator record.
     DELETE FROM organizations WHERE created_by = v_op_id;

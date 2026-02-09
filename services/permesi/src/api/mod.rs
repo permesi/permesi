@@ -251,8 +251,8 @@ async fn serve_socket(
     }
     let listener = tokio::net::UnixListener::bind(&path).context("Failed to bind Unix socket")?;
 
-    // Set permissions to 666 so Nginx (different user) can read/write
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
+    // Restrict socket access to owner/group; reverse proxies should join the same group.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))
         .context("Failed to set socket permissions")?;
 
     let shutdown_reason = Arc::new(Mutex::new(None));

@@ -13,10 +13,13 @@ on:
     branches:
       - '*'
 
+permissions:
+  contents: read
+
 jobs:
   format:
     name: Format
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/pre-clean-workspace
@@ -27,7 +30,7 @@ jobs:
 
   lint:
     name: Clippy
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/pre-clean-workspace
@@ -38,7 +41,7 @@ jobs:
 
   check:
     name: Check
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/pre-clean-workspace
@@ -47,12 +50,48 @@ jobs:
       - name: Check
         run: cargo check --workspace
 
+  cargo-audit:
+    name: Security Audit (Rust)
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+
+      - name: Cargo audit
+        run: cargo audit
+
+  npm-audit:
+    name: Security Audit (Web)
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pre-clean-workspace
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: NPM audit
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
+
   test:
     name: Unit Tests
     strategy:
       matrix:
         os:
-          - ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+          - ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
         rust:
           - stable
     runs-on: ${{ matrix.os }}
@@ -73,7 +112,7 @@ jobs:
 
   integration:
     name: Integration Tests
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     needs:
       - format
       - lint
@@ -91,11 +130,13 @@ jobs:
 
   db-schema:
     name: DB Schema
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     needs:
       - format
       - lint
       - check
+      - cargo-audit
+      - npm-audit
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/pre-clean-workspace
