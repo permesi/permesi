@@ -149,6 +149,7 @@ auto_auth {
       reload      = "true"
     }
   }
+}
 
 api_proxy {
   use_auto_auth_token = true
@@ -280,6 +281,10 @@ RuntimeDirectoryMode=0750
 [Install]
 WantedBy=multi-user.target
 ```
+
+For reboot safety, keep the bootstrap cert/key on persistent disk and rotate them before expiration at the same paths referenced by `client_cert` and `client_key` in the agent config. `reload = "true"` allows Vault Agent to pick up refreshed files, and `Restart=always` helps it recover after host restarts, but an expired bootstrap certificate will still block `auth/cert/login` until a valid replacement is written.
+
+In practice, automate bootstrap re-issuance (for example with a systemd timer), atomically replace the bootstrap files, and restart or reload the Vault Agent. This prevents outages when a VM reboots after the previous bootstrap certificate has expired.
 
 ## Tests
 Terraform tests in `vault/contrib/terraform/tests` validate the PKI and cert-auth wiring at plan time. Run them from this directory with:
