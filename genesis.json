@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.27"
+    "version": "0.3.28"
   },
   "paths": {
     "/headers": {
@@ -32,6 +32,8 @@
         "tags": [
           "health"
         ],
+        "summary": "Perform a health check for genesis.",
+        "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh Vault\nDB credentials.",
         "operationId": "health",
         "responses": {
           "200": {
