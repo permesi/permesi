@@ -18,7 +18,7 @@ use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use std::{
     env, fs,
-    io::ErrorKind,
+    io::{ErrorKind, Read},
     net::TcpListener,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     process::{Child, Command, Stdio},
@@ -49,7 +49,7 @@ struct TestConfig {
 
 struct TestContext {
     postgres: PostgresContainer,
-    _vault: VaultContainer,
+    vault: VaultContainer,
     tls: TestTlsPaths,
     config: TestConfig,
 }
@@ -95,7 +95,7 @@ impl TestContext {
 
         Ok(Self {
             postgres,
-            _vault: vault,
+            vault,
             tls,
             config,
         })
@@ -243,6 +243,36 @@ async fn wait_for_ready(client: &reqwest::Client, base: &str) -> Result<()> {
     bail!("genesis did not become ready at {base}");
 }
 
+async fn wait_for_healthy(client: &reqwest::Client, base: &str) -> Result<()> {
+    for _ in 0..40 {
+        match client.get(format!("{base}/health")).send().await {
+            Ok(resp) if resp.status() == StatusCode::OK => return Ok(()),
+            _ => sleep(Duration::from_millis(250)).await,
+        }
+    }
+    bail!("genesis did not report healthy at {base}");
+}
+
+async fn wait_for_exit(
+    child: &mut ChildGuard,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(status) = child
+            .0
+            .try_wait()
+            .context("Failed while waiting for child process")?
+        {
+            return Ok(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("genesis process did not exit within {timeout:?}");
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn request_token(client: &reqwest::Client, base: &str, client_id: &str) -> Result<String> {
     let response = client
         .get(format!("{base}/token?client_id={client_id}"))
@@ -350,6 +380,104 @@ async fn token_endpoint_mints_and_persists() -> Result<()> {
         .bind(token_id)
         .execute(&pool)
         .await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
+    if let Err(err) = runtime::ensure_container_runtime() {
+        eprintln!("Skipping integration test: {err}");
+        return Ok(());
+    }
+
+    let Some(tls) = prepare_tls_assets()? else {
+        return Ok(());
+    };
+
+    let context = TestContext::new(tls).await?;
+    let config = &context.config;
+    let base = format!("https://genesis.permesi.localhost:{}", config.port);
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_genesis"));
+    command.env("GENESIS_LOG_LEVEL", "error");
+    command.env_remove("GENESIS_VAULT_SECRET_ID");
+    command.env_remove("GENESIS_VAULT_WRAPPED_TOKEN");
+
+    let mut child = ChildGuard(
+        command
+            .args([
+                "--port",
+                &config.port.to_string(),
+                "--dsn",
+                &config.dsn,
+                "--tls-pem-bundle",
+                &context.tls.bundle,
+                "--vault-url",
+                &config.vault_url,
+                "--vault-role-id",
+                &config.role_id,
+                "--vault-wrapped-token",
+                &config.wrapped_token,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn genesis binary")?,
+    );
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .resolve(
+            "genesis.permesi.localhost",
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.port),
+        )
+        .build()
+        .context("Failed to build HTTPS client")?;
+    wait_for_ready(&client, &base).await?;
+    wait_for_healthy(&client, &base).await?;
+
+    context
+        .vault
+        .revoke_lease_prefix("database/creds/genesis")
+        .await
+        .context("Failed to revoke genesis DB lease prefix")?;
+
+    let mut observed_unhealthy = false;
+    for _ in 0..30 {
+        match client.get(format!("{base}/health")).send().await {
+            Ok(response) if response.status() == StatusCode::SERVICE_UNAVAILABLE => {
+                observed_unhealthy = true;
+                break;
+            }
+            Ok(_) => sleep(Duration::from_millis(200)).await,
+            Err(_) => {
+                observed_unhealthy = true;
+                break;
+            }
+        }
+    }
+    if !observed_unhealthy {
+        bail!("Expected unhealthy health-check response after lease revocation");
+    }
+
+    let status = wait_for_exit(&mut child, Duration::from_secs(10)).await?;
+    ensure!(
+        !status.success(),
+        "Expected non-zero exit after revoked DB lease, got {status:?}"
+    );
+
+    let mut stderr_output = String::new();
+    if let Some(mut stderr) = child.0.stderr.take() {
+        stderr
+            .read_to_string(&mut stderr_output)
+            .context("Failed to read genesis stderr output")?;
+    }
+    ensure!(
+        stderr_output.contains("database_healthcheck_failed"),
+        "Expected shutdown reason in stderr, got: {}",
+        stderr_output.trim()
+    );
 
     Ok(())
 }

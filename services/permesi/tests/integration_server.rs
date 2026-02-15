@@ -15,7 +15,7 @@ use serde_json::json;
 use sqlx::{Connection, PgConnection};
 use std::{
     env, fs,
-    io::ErrorKind,
+    io::{ErrorKind, Read},
     net::TcpListener,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     process::{Child, Command, Stdio},
@@ -46,7 +46,7 @@ struct TestTlsPaths {
 
 struct TestContext {
     _postgres: PostgresContainer,
-    _vault: VaultContainer,
+    vault: VaultContainer,
     tls: TestTlsPaths,
     port: u16,
     vault_url: String,
@@ -62,74 +62,108 @@ impl TestContext {
         // 1. Setup Postgres
         let postgres = PostgresContainer::start(network.name()).await?;
         postgres.wait_until_ready().await?;
+        setup_permesi_database(&postgres).await?;
 
-        let mut admin = PgConnection::connect(&postgres.admin_dsn())
-            .await
-            .context("Failed to connect to Postgres admin DB")?;
-
-        sqlx::query("CREATE ROLE vault_permesi WITH LOGIN PASSWORD 'vault_permesi' CREATEROLE")
-            .execute(&mut admin)
-            .await?;
-        sqlx::query("GRANT pg_signal_backend TO vault_permesi")
-            .execute(&mut admin)
-            .await?;
-        sqlx::query("CREATE DATABASE permesi OWNER vault_permesi")
-            .execute(&mut admin)
-            .await?;
-
-        let mut permesi_conn = PgConnection::connect(&postgres.admin_dsn_for_db("permesi"))
-            .await
-            .context("Failed to connect to permesi DB for schema setup")?;
-        apply_schema(&mut permesi_conn, PERMESI_SCHEMA_SQL).await?;
-
-        bootstrap_runtime_role(&mut permesi_conn).await?;
-
-        // 2. Setup Vault
-        let vault = VaultContainer::start(network.name()).await?;
-        vault.enable_secrets_engine("database", "database").await?;
-
-        // Setup Transit
-        vault
-            .enable_secrets_engine("transit/permesi", "transit")
-            .await?;
-        vault
-            .create_transit_key("transit/permesi", "totp", "chacha20-poly1305")
-            .await?;
-
-        // Provision OPAQUE seed and pepper
-        vault
-            .write_kv_v2(
-                "secret",
-                "permesi/config",
-                json!({
-                    "opaque_server_seed": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
-                    "mfa_recovery_pepper": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
-                }),
-            )
-            .await?;
-
-        // 3. Configure Database Engine
-        let db_config = test_support::vault::DatabaseConfig::new(
-            postgres.vault_connection_url_for_db("permesi"),
-            "vault_permesi",
-            "vault_permesi",
-            vec!["permesi".to_string()],
+        let (vault, vault_url, role_id, secret_id) =
+            setup_permesi_vault(network.name(), &postgres).await?;
+        let dsn = format!(
+            "postgres://127.0.0.1:{}/permesi?sslmode=disable",
+            postgres.host_port()
         );
-        vault
-            .configure_database_connection("permesi", &db_config)
-            .await?;
 
-        let creation = vec![
-            r#"CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';"#.to_string(),
-            r#"GRANT permesi_runtime TO "{{name}}";"#.to_string(),
-        ];
-        vault
-            .create_database_role("permesi", "permesi", &creation, "1h", "4h")
-            .await?;
+        Ok(Self {
+            _postgres: postgres,
+            vault,
+            tls,
+            port: pick_port()?,
+            vault_url,
+            role_id,
+            secret_id,
+            dsn,
+        })
+    }
+}
 
-        // 4. Configure AppRole
-        vault.enable_auth("approle", "approle").await?;
-        let policy = r#" 
+async fn setup_permesi_database(postgres: &PostgresContainer) -> Result<()> {
+    let mut admin = PgConnection::connect(&postgres.admin_dsn())
+        .await
+        .context("Failed to connect to Postgres admin DB")?;
+
+    sqlx::query("CREATE ROLE vault_permesi WITH LOGIN PASSWORD 'vault_permesi' CREATEROLE")
+        .execute(&mut admin)
+        .await?;
+    sqlx::query("GRANT pg_signal_backend TO vault_permesi")
+        .execute(&mut admin)
+        .await?;
+    sqlx::query("CREATE DATABASE permesi OWNER vault_permesi")
+        .execute(&mut admin)
+        .await?;
+
+    let mut permesi_conn = PgConnection::connect(&postgres.admin_dsn_for_db("permesi"))
+        .await
+        .context("Failed to connect to permesi DB for schema setup")?;
+    apply_schema(&mut permesi_conn, PERMESI_SCHEMA_SQL).await?;
+    bootstrap_runtime_role(&mut permesi_conn).await?;
+    Ok(())
+}
+
+async fn setup_permesi_vault(
+    network_name: &str,
+    postgres: &PostgresContainer,
+) -> Result<(VaultContainer, String, String, String)> {
+    let vault = VaultContainer::start(network_name).await?;
+    vault.enable_secrets_engine("database", "database").await?;
+
+    vault
+        .enable_secrets_engine("transit/permesi", "transit")
+        .await?;
+    vault
+        .create_transit_key("transit/permesi", "totp", "chacha20-poly1305")
+        .await?;
+
+    vault
+        .write_kv_v2(
+            "secret",
+            "permesi/config",
+            json!({
+                "opaque_server_seed": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+                "mfa_recovery_pepper": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
+            }),
+        )
+        .await?;
+
+    let db_config = test_support::vault::DatabaseConfig::new(
+        postgres.vault_connection_url_for_db("permesi"),
+        "vault_permesi",
+        "vault_permesi",
+        vec!["permesi".to_string()],
+    );
+    vault
+        .configure_database_connection("permesi", &db_config)
+        .await?;
+
+    let creation = vec![
+        r#"CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';"#.to_string(),
+        r#"GRANT permesi_runtime TO "{{name}}";"#.to_string(),
+    ];
+    let revocation = vec![
+        r"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.usename = '{{name}}';".to_string(),
+        r#"REVOKE permesi_runtime FROM "{{name}}";"#.to_string(),
+        r#"DROP ROLE IF EXISTS "{{name}}";"#.to_string(),
+    ];
+    vault
+        .create_database_role_with_revocation(
+            "permesi",
+            "permesi",
+            &creation,
+            &revocation,
+            "1h",
+            "4h",
+        )
+        .await?;
+
+    vault.enable_auth("approle", "approle").await?;
+    let policy = r#" 
 path "database/creds/permesi" {
   capabilities = ["read"]
 }
@@ -149,31 +183,15 @@ path "transit/permesi/decrypt/totp" {
   capabilities = ["update"]
 }
 "#;
-        vault.write_policy("permesi-runtime", policy).await?;
+    vault.write_policy("permesi-runtime", policy).await?;
 
-        vault
-            .create_approle("approle", "permesi", &["permesi-runtime"])
-            .await?;
-        let role_id = vault.read_role_id("approle", "permesi").await?;
-        let secret_id = vault.create_secret_id("approle", "permesi").await?;
-
-        let vault_url = vault.login_url("approle");
-        let dsn = format!(
-            "postgres://127.0.0.1:{}/permesi?sslmode=disable",
-            postgres.host_port()
-        );
-
-        Ok(Self {
-            _postgres: postgres,
-            _vault: vault,
-            tls,
-            port: pick_port()?,
-            vault_url,
-            role_id,
-            secret_id,
-            dsn,
-        })
-    }
+    vault
+        .create_approle("approle", "permesi", &["permesi-runtime"])
+        .await?;
+    let role_id = vault.read_role_id("approle", "permesi").await?;
+    let secret_id = vault.create_secret_id("approle", "permesi").await?;
+    let vault_url = vault.login_url("approle");
+    Ok((vault, vault_url, role_id, secret_id))
 }
 
 async fn bootstrap_runtime_role(conn: &mut PgConnection) -> Result<()> {
@@ -297,6 +315,26 @@ async fn wait_for_ready(client: &reqwest::Client, base: &str) -> Result<()> {
     bail!("permesi did not become ready at {base}");
 }
 
+async fn wait_for_exit(
+    child: &mut ChildGuard,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(status) = child
+            .0
+            .try_wait()
+            .context("Failed while waiting for child process")?
+        {
+            return Ok(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("permesi process did not exit within {timeout:?}");
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn server_starts_and_connects_to_deps() -> Result<()> {
     if let Err(err) = runtime::ensure_container_runtime() {
@@ -372,6 +410,119 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
 
     let resp = client.get(format!("{base}/health")).send().await?;
     assert_eq!(resp.status(), StatusCode::OK);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
+    if let Err(err) = runtime::ensure_container_runtime() {
+        eprintln!("Skipping integration test: {err}");
+        return Ok(());
+    }
+
+    let Some(tls) = prepare_tls_assets()? else {
+        return Ok(());
+    };
+
+    let keyset_json = json!({
+        "version": "v4",
+        "purpose": "public",
+        "active_kid": "k4.pid.9ShR3xc8-qVJ_di0tc9nx0IDIqbatdeM2mqLFBJsKRHs",
+        "keys": [
+            {
+                "kid": "k4.pid.9ShR3xc8-qVJ_di0tc9nx0IDIqbatdeM2mqLFBJsKRHs",
+                "paserk": "k4.public.cHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo8"
+            }
+        ]
+    })
+    .to_string();
+
+    let ctx = TestContext::new(tls).await?;
+    let base = format!("https://api.permesi.localhost:{}", ctx.port);
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_permesi"));
+    command.env("PERMESI_LOG_LEVEL", "error");
+    command.env_remove("PERMESI_VAULT_SECRET_ID");
+    command.env_remove("PERMESI_VAULT_WRAPPED_TOKEN");
+
+    let mut child = ChildGuard(
+        command
+            .args([
+                "--port",
+                &ctx.port.to_string(),
+                "--dsn",
+                &ctx.dsn,
+                "--vault-url",
+                &ctx.vault_url,
+                "--vault-role-id",
+                &ctx.role_id,
+                "--vault-secret-id",
+                &ctx.secret_id,
+                "--tls-pem-bundle",
+                &ctx.tls.bundle,
+                "--admission-paserk-url",
+                &keyset_json,
+                "--vault-kv-mount",
+                "secret",
+                "--vault-kv-path",
+                "permesi/config",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn permesi binary")?,
+    );
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .resolve(
+            "api.permesi.localhost",
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ctx.port),
+        )
+        .build()?;
+    wait_for_ready(&client, &base).await?;
+
+    ctx.vault
+        .revoke_lease_prefix("database/creds/permesi")
+        .await
+        .context("Failed to revoke permesi DB lease prefix")?;
+
+    let mut observed_unhealthy = false;
+    for _ in 0..30 {
+        match client.get(format!("{base}/health")).send().await {
+            Ok(response) if response.status() == StatusCode::SERVICE_UNAVAILABLE => {
+                observed_unhealthy = true;
+                break;
+            }
+            Ok(_) => sleep(Duration::from_millis(200)).await,
+            Err(_) => {
+                observed_unhealthy = true;
+                break;
+            }
+        }
+    }
+    if !observed_unhealthy {
+        bail!("Expected unhealthy health-check response after lease revocation");
+    }
+
+    let status = wait_for_exit(&mut child, Duration::from_secs(10)).await?;
+    if status.success() {
+        bail!("Expected non-zero exit after revoked DB lease, got {status:?}");
+    }
+
+    let mut stderr_output = String::new();
+    if let Some(mut stderr) = child.0.stderr.take() {
+        stderr
+            .read_to_string(&mut stderr_output)
+            .context("Failed to read permesi stderr output")?;
+    }
+    if !stderr_output.contains("database_healthcheck_failed") {
+        bail!(
+            "Expected shutdown reason in stderr, got: {}",
+            stderr_output.trim()
+        );
+    }
 
     Ok(())
 }

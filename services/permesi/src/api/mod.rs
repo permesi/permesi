@@ -84,9 +84,9 @@ pub async fn new(
     config: AppConfig,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, rx) = mpsc::unbounded_channel();
 
-    vault::renew::try_renew(globals, tx).await?;
+    vault::renew::try_renew(globals, shutdown_tx.clone()).await?;
 
     // Connect to database
     let pool = PgPoolOptions::new()
@@ -159,6 +159,7 @@ pub async fn new(
         admin_state,
         admission,
         globals,
+        shutdown_tx,
         pool,
         totp_service,
         security_key_service,
@@ -180,6 +181,7 @@ fn build_router(
     admin_state: Arc<auth::AdminState>,
     admission: Arc<handlers::AdmissionVerifier>,
     globals: &GlobalArgs,
+    shutdown_tx: mpsc::UnboundedSender<vault::renew::ShutdownSignal>,
     pool: sqlx::PgPool,
     totp_service: TotpService,
     security_key_service: SecurityKeyService,
@@ -224,6 +226,7 @@ fn build_router(
                 .layer(Extension(admin_state))
                 .layer(Extension(admission))
                 .layer(Extension(globals.clone()))
+                .layer(Extension(shutdown_tx))
                 .layer(Extension(pool.clone()))
                 .layer(Extension(totp_service))
                 .layer(Extension(Arc::new(security_key_service)))

@@ -133,8 +133,21 @@ pub async fn configure_genesis_vault(
         r#"GRANT SELECT, INSERT ON TABLE tokens_default TO "{{name}}";"#.to_string(),
     ];
 
+    let revocation_statements = vec![
+        r"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.usename = '{{name}}';".to_string(),
+        format!(r#"REASSIGN OWNED BY "{{{{name}}}}" TO "{}";"#, postgres.user()),
+        r#"DROP OWNED BY "{{name}}";"#.to_string(),
+        r#"DROP ROLE IF EXISTS "{{name}}";"#.to_string(),
+    ];
     vault
-        .create_database_role(ROLE_NAME, DATABASE_NAME, &creation_statements, "1h", "4h")
+        .create_database_role_with_revocation(
+            ROLE_NAME,
+            DATABASE_NAME,
+            &creation_statements,
+            &revocation_statements,
+            "1h",
+            "4h",
+        )
         .await
         .context("Failed to create database role")?;
 

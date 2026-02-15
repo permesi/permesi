@@ -27,7 +27,7 @@ TL;DR:
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
-When Vault token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions).
+When Vault token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `genesis` also fails closed when `/health` sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
 In the workspace “Split-Trust” flow:
 

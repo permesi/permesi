@@ -531,6 +531,23 @@ impl VaultContainer {
         Ok(())
     }
 
+    /// Revoke all Vault leases matching a prefix.
+    ///
+    /// # Errors
+    /// Returns an error if the Vault API request fails.
+    pub async fn revoke_lease_prefix(&self, prefix: &str) -> Result<()> {
+        let prefix = prefix.trim_matches('/');
+        self.request(
+            Method::POST,
+            &format!("/v1/sys/leases/revoke-prefix/{prefix}"),
+            Some(json!({})),
+            None,
+        )
+        .await
+        .context("Failed to revoke lease prefix")?;
+        Ok(())
+    }
+
     /// Write a secret to a KV-v2 mount.
     ///
     /// # Errors

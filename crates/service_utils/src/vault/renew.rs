@@ -11,6 +11,8 @@
 //!    thundering herds.
 //! 5. If renewal fails repeatedly (3 attempts), a signal is sent via `tx` to
 //!    trigger a graceful application shutdown, failing closed.
+//! 6. Services may also reuse `ShutdownSignal` for fail-closed runtime probes
+//!    (for example database liveness checks).
 
 use crate::globals::GlobalArgs;
 use anyhow::Result;
@@ -29,6 +31,8 @@ pub enum ShutdownSignal {
     TokenRenewalFailed,
     /// The Vault database lease could not be renewed after retrying.
     DbLeaseRenewalFailed,
+    /// A service-level database liveness probe failed and requested shutdown.
+    DatabaseHealthcheckFailed,
 }
 
 impl ShutdownSignal {
@@ -38,6 +42,7 @@ impl ShutdownSignal {
         match self {
             ShutdownSignal::TokenRenewalFailed => "vault_token_renewal_failed",
             ShutdownSignal::DbLeaseRenewalFailed => "vault_db_lease_renewal_failed",
+            ShutdownSignal::DatabaseHealthcheckFailed => "database_healthcheck_failed",
         }
     }
 }

@@ -82,7 +82,7 @@ ulid = "1.2"
 url = "2.5"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
-uuid = { version = "1.20", features = ["v1", "v4", "v7", "serde"] }
+uuid = { version = "1.21", features = ["v1", "v4", "v7", "serde"] }
 built = { version = "0.7", features = ["git2"] }
 
 [profile.release]

@@ -145,23 +145,28 @@ jobs:
           fi
           base_url="https://genesis.${domain}"
           echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
+          echo "health_url=${base_url%/}/health" >> "${GITHUB_OUTPUT}"
           echo "Using genesis base URL: ${base_url}"
 
       - name: Wait for genesis readiness
         shell: bash
         env:
-          BASE_URL: ${{ steps.genesis_base.outputs.base_url }}
+          HEALTH_URL: ${{ steps.genesis_base.outputs.health_url }}
         run: |
           set -euo pipefail
-          for i in {1..60}; do
-            if curl -fsS "${BASE_URL%/}/health" >/tmp/genesis-health.json; then
+          echo "Polling genesis health URL: ${HEALTH_URL}"
+          for i in {1..120}; do
+            status="$(curl -sS -o /tmp/genesis-health.json -w '%{http_code}' "${HEALTH_URL}")"
+            if [[ "${status}" == "200" ]]; then
               if python3 -c "import json; json.load(open('/tmp/genesis-health.json', 'r', encoding='utf-8'))" >/dev/null 2>&1; then
                 echo "genesis is ready"
                 exit 0
               fi
-              echo "genesis /health returned non-JSON payload; retrying (${i}/60)"
+              echo "genesis /health returned HTTP 200 but non-JSON payload; retrying (${i}/120)"
+            else
+              echo "genesis /health returned HTTP ${status}; retrying (${i}/120)"
             fi
-            echo "waiting for genesis (${i}/60)"
+            echo "waiting for genesis (${i}/120)"
             sleep 5
           done
           echo "genesis did not become ready in time" >&2

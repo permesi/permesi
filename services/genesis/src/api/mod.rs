@@ -59,9 +59,9 @@ pub async fn new(
     globals: &GlobalArgs,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, rx) = mpsc::unbounded_channel();
 
-    vault::renew::try_renew(globals, tx).await?;
+    vault::renew::try_renew(globals, shutdown_tx.clone()).await?;
 
     // Connect to database
     let pool = PgPoolOptions::new()
@@ -95,6 +95,7 @@ pub async fn new(
                 .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
                 .layer(Extension(admission.clone()))
+                .layer(Extension(shutdown_tx))
                 .layer(Extension(pool.clone())),
         )
         .route("/", get(root::root))

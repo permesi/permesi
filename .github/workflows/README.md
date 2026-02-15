@@ -30,8 +30,9 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   reuse stale build artifacts when deploying Cloudflare Pages.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
-  It waits for `/health`, verifies the deployed commit hash matches the selected workflow ref SHA
-  (`github.sha`), and then runs GET-only checks. Base URLs are resolved from the selected run branch
+  It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed
+  commit hash matches the selected workflow ref SHA (`github.sha`), and then runs GET-only checks.
+  Base URLs are resolved from the selected run branch
   (`develop` -> `*.permesi.dev`, all others -> `*.permesi.com`).
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
