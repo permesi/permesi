@@ -12,6 +12,7 @@ Tailwind runs via Node at build/dev time only (no Node at runtime).
 - `just web-node-setup`: install Node deps for Tailwind CLI.
 - `just web-setup`: install Trunk + wasm target.
 - `just web-check`: `cargo check -p permesi_web`.
+- `podman build -f apps/web/Dockerfile -t web:dev .`: build a container image that serves `dist/` with nginx.
 
 Note: running `trunk serve` directly will skip CSS generation unless you also run `npm run css:watch`.
 
@@ -181,6 +182,10 @@ Session hydration happens once on app mount by calling `/v1/auth/session`. Navig
 The UI can override build-time config by loading `public/config.js`, which sets `window.PERMESI_CONFIG`.
 This keeps the build static but lets deployers change endpoints and client IDs without rebuilding.
 All values are public, so never store secrets in this file.
+
+The container image (`apps/web/Dockerfile`) serves the built assets with nginx using a production cache profile:
+`config.js` and `index.html` are `no-store`, while fingerprinted assets (`*.wasm`, `*.js`, `*.css`) are served with
+long-lived immutable caching headers.
 
 ## Admission token configuration
 

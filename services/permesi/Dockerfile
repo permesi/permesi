@@ -1,5 +1,6 @@
 # Stage 1: build a static binary with musl.
 FROM messense/rust-musl-cross:x86_64-musl as builder
+ARG TARGET=x86_64-unknown-linux-musl
 
 # Keep the builder minimal; we only need git for Cargo deps.
 RUN apt-get update && \
@@ -10,19 +11,21 @@ WORKDIR /app
 
 COPY . .
 
-RUN cargo build --release --locked -p permesi --target x86_64-unknown-linux-musl && \
-    strip target/x86_64-unknown-linux-musl/release/permesi
+RUN cargo build --release --locked -p permesi --target "${TARGET}" && \
+    strip "target/${TARGET}/release/permesi"
 
 # Stage 2: grab CA certs from Alpine (for TLS).
-FROM alpine:latest AS certs
+FROM alpine:3.21 AS certs
 RUN apk add --no-cache ca-certificates
 
 # Stage 3: ultra-small runtime (scratch + binary + certs).
 FROM scratch
+ARG TARGET=x86_64-unknown-linux-musl
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 WORKDIR /app
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/permesi /app/
+COPY --from=builder /app/target/${TARGET}/release/permesi /app/permesi
 USER 65532:65532
 
-CMD ["./permesi"]
+EXPOSE 8080
+ENTRYPOINT ["/app/permesi"]

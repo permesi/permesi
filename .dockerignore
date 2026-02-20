@@ -1,2 +1,14 @@
 /target
 .postgres-volume
+.git
+.github
+.tmp
+.hypothesis
+db/data
+db/log
+vault/contrib
+apps/web/node_modules
+apps/web/dist-build
+apps/web/dist-dev
+apps/web/.trunk
+**/*.tar.gz

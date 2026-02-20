@@ -38,6 +38,15 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
 - **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow.
+- **`dispatch-helm-release.yml`**: On GitHub Release publish, sends a `repository_dispatch` event to `permesi/permesi-helm` so that repo can open a PR bumping chart `appVersion` and image tags.
+
+## Required Secrets
+
+- **`PERMESI_HELM_APP_PRIVATE_KEY`**: GitHub App private key PEM used to mint a short-lived installation token in `dispatch-helm-release.yml`.
+
+## Required Variables
+
+- **`PERMESI_HELM_APP_ID`**: Numeric GitHub App ID used by `dispatch-helm-release.yml`.
 
 ## Composite Actions
 

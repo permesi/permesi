@@ -230,6 +230,23 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | ${CONTAINER_TOOL} login ghcr.io -u "${{ github.actor }}"
           --password-stdin
 
+      - name: Download Frontend Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/web/dist
+
+      - name: Verify Frontend Dist layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d apps/web/dist/dist && ! -f apps/web/dist/index.html ]]; then
+            shopt -s dotglob
+            mv apps/web/dist/dist/* apps/web/dist/
+            rmdir apps/web/dist/dist
+          fi
+          test -f apps/web/dist/index.html
+
       - name: Compute image tags
         id: meta
         shell: bash
@@ -260,9 +277,12 @@ jobs:
           set -euo pipefail
           IFS=' ' read -r -a tags <<< "${{ steps.meta.outputs.tags }}"
 
-          for service in permesi genesis; do
+          for service in permesi genesis web; do
             image="ghcr.io/permesi/${service}"
             dockerfile="services/${service}/Dockerfile"
+            if [[ "${service}" == "web" ]]; then
+              dockerfile="apps/web/Dockerfile"
+            fi
             build_tags=()
 
             for tag in "${tags[@]}"; do

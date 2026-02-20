@@ -18,7 +18,9 @@ Permesi provides production-ready artifacts for every release. You do not need t
 
 - **Genesis Service**: `ghcr.io/permesi/genesis` ([Package Info](https://github.com/orgs/permesi/packages/container/package/genesis))
 - **Permesi Service**: `ghcr.io/permesi/permesi` ([Package Info](https://github.com/orgs/permesi/packages/container/package/permesi))
-- **Frontend (Web Console)**: Download the `permesi-web-dist-[version].tar.gz` from the [Latest Releases](https://github.com/permesi/permesi/releases).
+- **Frontend (Web Console)**:
+  - Container image: `ghcr.io/permesi/web`
+  - Static artifact: `permesi-web-dist-[version].tar.gz` from the [Latest Releases](https://github.com/permesi/permesi/releases).
 
 ---
 
@@ -408,12 +410,12 @@ Both services are configured via environment variables.
 
 ## 6. Frontend Deployment
 
-The frontend is a static bundle that runs entirely in the browser.
+The frontend is a static bundle that runs entirely in the browser. You can deploy it either as static files or from the published `ghcr.io/permesi/web` image.
 
 1.  **Download**: Get the latest `permesi-web-dist.tar.gz` from the release page.
 2.  **Extract**: Unpack the archive into your web server's root directory (e.g., `/var/www/permesi`).
-3.  **Configure**: The frontend reads its configuration from `config.js` in the extracted folder.
-    - Edit `config.js` and set `PERMESI_API_HOST` to the public URL of your Permesi backend.
+3.  **Configure**: The frontend reads runtime overrides from `config.js` in the extracted folder.
+    - Set `api_base_url` and `token_base_url` to your public endpoints.
 4.  **Serve**: Configure your web server to serve the directory. Ensure it handles Single Page Application (SPA) routing by redirecting unknown paths to `index.html`.
 
 ---

@@ -379,6 +379,7 @@ Regenerate them from code:
 
 - `podman build -f services/permesi/Dockerfile -t permesi:dev .`
 - `podman build -f services/genesis/Dockerfile -t genesis:dev .`
+- `podman build -f apps/web/Dockerfile -t web:dev .`
 
 ## Local Tracing (Jaeger)
 
