@@ -1,12 +1,13 @@
 //! Health check handlers for service monitoring.
 //!
-//! This module provides endpoints to verify the status of the service's
-//! primary dependencies, including the database and the remote admission
-//! PASERK endpoint.
+//! This module exposes three probes:
+//! - `/live`: process liveness only (no dependency checks)
+//! - `/ready`: dependency-aware readiness for orchestrators
+//! - `/health`: dependency-aware status with detailed JSON payload
+//!
 //! Remote admission checks use cached freshness to avoid per-request keyset
-//! fetches when the cache is still valid.
-//! Health checks apply short timeouts so reverse proxies do not wait on
-//! slow dependency probes.
+//! fetches when the cache is still valid. Dependency checks apply short
+//! timeouts so reverse proxies and probes do not wait on slow dependencies.
 
 use super::{AdmissionVerifier, DependencyStatus};
 use crate::GIT_COMMIT_HASH;
@@ -36,6 +37,58 @@ pub struct Health {
     admission_keyset: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProbeStatus {
+    db_healthy: bool,
+    db_auth_error: bool,
+    admission_status: DependencyStatus,
+}
+
+#[utoipa::path(
+    get,
+    path= "/live",
+    responses (
+        (status = 200, description = "Process is alive")
+    ),
+    tag= "health"
+)]
+/// Report process liveness without checking external dependencies.
+///
+/// This endpoint is suitable for liveness probes to avoid restart loops during
+/// transient dependency outages.
+pub async fn live() -> impl IntoResponse {
+    StatusCode::OK
+}
+
+#[utoipa::path(
+    get,
+    path= "/ready",
+    responses (
+        (status = 200, description = "Service is ready to receive traffic"),
+        (status = 503, description = "Service dependencies are not ready")
+    ),
+    tag= "health"
+)]
+/// Report readiness based on database and admission dependency health.
+///
+/// Returns `503` when dependencies are unhealthy so orchestrators can stop
+/// routing traffic to this instance.
+pub async fn ready(
+    pool: Extension<PgPool>,
+    admission: Extension<Arc<AdmissionVerifier>>,
+    shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+) -> impl IntoResponse {
+    let status = evaluate_probe_status(&pool.0, &admission.0).await;
+    maybe_signal_shutdown(status, &shutdown_tx.0);
+    log_probe_status(status);
+
+    if is_ready(status) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
 #[utoipa::path(
     get,
     path= "/health",
@@ -45,7 +98,7 @@ pub struct Health {
     ),
     tag= "health"
 )]
-/// Perform a health check of the service and its dependencies.
+/// Perform a detailed dependency health check.
 ///
 /// When the database probe fails due to credential/auth errors, this handler
 /// requests graceful shutdown so the supervisor can restart with fresh Vault
@@ -56,68 +109,20 @@ pub async fn health(
     admission: Extension<Arc<AdmissionVerifier>>,
     shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
-    let acquire_span = info_span!(
-        "db.acquire",
-        db.system = "postgresql",
-        db.operation = "ACQUIRE"
-    );
-    let mut should_shutdown = false;
-    let result = if let Ok(result) =
-        timeout(Duration::from_secs(HEALTH_DB_TIMEOUT_SECONDS), async {
-            match pool.0.acquire().instrument(acquire_span).await {
-                Ok(mut conn) => {
-                    let ping_span =
-                        info_span!("db.ping", db.system = "postgresql", db.operation = "PING");
-                    match conn.ping().instrument(ping_span).await {
-                        Ok(()) => Ok(()),
-                        Err(error) => {
-                            should_shutdown = should_shutdown_on_db_error(&error);
-                            error!("Failed to ping database: {}", error);
-                            Err(StatusCode::SERVICE_UNAVAILABLE)
-                        }
-                    }
-                }
-                Err(error) => {
-                    should_shutdown = should_shutdown_on_db_error(&error);
-                    error!("Failed to acquire database connection: {}", error);
-                    Err(StatusCode::SERVICE_UNAVAILABLE)
-                }
-            }
-        })
-        .await
-    {
-        result
-    } else {
-        warn!("Database health check timed out");
-        Err(StatusCode::SERVICE_UNAVAILABLE)
-    };
-    if result.is_err() && should_shutdown {
-        let _ = shutdown_tx
-            .0
-            .send(crate::vault::renew::ShutdownSignal::DatabaseHealthcheckFailed);
-    }
-    let admission_status = if let Ok(status) = timeout(
-        Duration::from_secs(HEALTH_DEPENDENCY_TIMEOUT_SECONDS),
-        admission.0.dependency_status(),
-    )
-    .await
-    {
-        status
-    } else {
-        warn!("Admission keyset health check timed out");
-        DependencyStatus::Error
-    };
-    let is_healthy = result.is_ok() && admission_status.is_healthy();
+    let status = evaluate_probe_status(&pool.0, &admission.0).await;
+    maybe_signal_shutdown(status, &shutdown_tx.0);
+    log_probe_status(status);
+
     let health = Health {
         commit: GIT_COMMIT_HASH.to_string(),
         name: env!("CARGO_PKG_NAME").to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        database: if result.is_ok() {
+        database: if status.db_healthy {
             "ok".to_string()
         } else {
             "error".to_string()
         },
-        admission_keyset: admission_status.as_str().to_string(),
+        admission_keyset: status.admission_status.as_str().to_string(),
     };
 
     let body = if method == Method::GET {
@@ -127,22 +132,98 @@ pub async fn health(
     };
     let headers = x_app_headers(&health);
 
-    match admission_status {
+    if is_ready(status) {
+        (StatusCode::OK, headers, body)
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, headers, body)
+    }
+}
+
+/// Run dependency checks shared by `/ready` and `/health`.
+async fn evaluate_probe_status(pool: &PgPool, admission: &AdmissionVerifier) -> ProbeStatus {
+    let acquire_span = info_span!(
+        "db.acquire",
+        db.system = "postgresql",
+        db.operation = "ACQUIRE"
+    );
+
+    let mut db_auth_error = false;
+    let db_healthy = if let Ok(result) =
+        timeout(Duration::from_secs(HEALTH_DB_TIMEOUT_SECONDS), async {
+            match pool.acquire().instrument(acquire_span).await {
+                Ok(mut conn) => {
+                    let ping_span =
+                        info_span!("db.ping", db.system = "postgresql", db.operation = "PING");
+                    match conn.ping().instrument(ping_span).await {
+                        Ok(()) => true,
+                        Err(error) => {
+                            db_auth_error = should_shutdown_on_db_error(&error);
+                            error!("Failed to ping database: {}", error);
+                            false
+                        }
+                    }
+                }
+                Err(error) => {
+                    db_auth_error = should_shutdown_on_db_error(&error);
+                    error!("Failed to acquire database connection: {}", error);
+                    false
+                }
+            }
+        })
+        .await
+    {
+        result
+    } else {
+        warn!("Database health check timed out");
+        false
+    };
+
+    let admission_status = if let Ok(status) = timeout(
+        Duration::from_secs(HEALTH_DEPENDENCY_TIMEOUT_SECONDS),
+        admission.dependency_status(),
+    )
+    .await
+    {
+        status
+    } else {
+        warn!("Admission keyset health check timed out");
+        DependencyStatus::Error
+    };
+
+    ProbeStatus {
+        db_healthy,
+        db_auth_error,
+        admission_status,
+    }
+}
+
+/// Return true when this instance should receive traffic.
+const fn is_ready(status: ProbeStatus) -> bool {
+    status.db_healthy && status.admission_status.is_healthy()
+}
+
+/// Trigger graceful shutdown when DB authentication errors imply stale Vault creds.
+fn maybe_signal_shutdown(
+    status: ProbeStatus,
+    shutdown_tx: &mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>,
+) {
+    if !status.db_healthy && status.db_auth_error {
+        let _ = shutdown_tx.send(crate::vault::renew::ShutdownSignal::DatabaseHealthcheckFailed);
+    }
+}
+
+/// Emit probe diagnostics without changing probe outcomes.
+fn log_probe_status(status: ProbeStatus) {
+    match status.admission_status {
         DependencyStatus::Ok => debug!("Admission keyset is healthy"),
         DependencyStatus::Error => debug!("Admission keyset is unhealthy"),
         DependencyStatus::Static => debug!("Admission keyset is static"),
     }
 
-    if result.is_ok() {
+    if status.db_healthy {
         debug!("Database connection is healthy");
     } else {
         debug!("Database connection is unhealthy");
-    }
-
-    if is_healthy {
-        (StatusCode::OK, headers, body)
-    } else {
-        (StatusCode::SERVICE_UNAVAILABLE, headers, body)
     }
 }
 
@@ -193,7 +274,7 @@ fn should_shutdown_on_db_error(error: &sqlx::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::should_shutdown_on_db_error;
+    use super::{DependencyStatus, ProbeStatus, is_ready, should_shutdown_on_db_error};
     use sqlx::error::{DatabaseError, ErrorKind};
     use std::{borrow::Cow, error::Error as StdError, fmt};
 
@@ -235,6 +316,33 @@ mod tests {
         fn kind(&self) -> ErrorKind {
             ErrorKind::Other
         }
+    }
+
+    #[test]
+    fn ready_requires_database_and_admission_dependency() {
+        assert!(is_ready(ProbeStatus {
+            db_healthy: true,
+            db_auth_error: false,
+            admission_status: DependencyStatus::Ok,
+        }));
+
+        assert!(is_ready(ProbeStatus {
+            db_healthy: true,
+            db_auth_error: false,
+            admission_status: DependencyStatus::Static,
+        }));
+
+        assert!(!is_ready(ProbeStatus {
+            db_healthy: false,
+            db_auth_error: false,
+            admission_status: DependencyStatus::Ok,
+        }));
+
+        assert!(!is_ready(ProbeStatus {
+            db_healthy: true,
+            db_auth_error: false,
+            admission_status: DependencyStatus::Error,
+        }));
     }
 
     #[test]

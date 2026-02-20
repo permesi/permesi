@@ -11,7 +11,7 @@ TL;DR:
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
-When Vault token renewal or the DB lease renewal fails repeatedly, `permesi` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `permesi` also fails closed when `/health` sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
+When Vault token renewal or the DB lease renewal fails repeatedly, `permesi` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `permesi` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
 ## CLI example
 
@@ -89,6 +89,9 @@ let (router, openapi) = permesi::api::router().split_for_parts();
 
 Endpoints:
 
+- `GET /live`
+- `GET /ready`
+- `GET /health`
 - `POST /v1/auth/opaque/signup/start`
 - `POST /v1/auth/opaque/signup/finish`
 - `POST /v1/auth/opaque/login/start`

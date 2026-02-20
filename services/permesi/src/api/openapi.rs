@@ -17,6 +17,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 pub(crate) fn api_router() -> OpenApiRouter {
     // `routes!` reads #[utoipa::path] to bind HTTP method + path and add the route to OpenAPI.
     let mut router = OpenApiRouter::with_openapi(cargo_openapi())
+        .routes(routes!(health::live))
+        .routes(routes!(health::ready))
         .routes(routes!(health::health))
         .routes(routes!(user_register::register))
         .routes(routes!(user_login::login))
@@ -209,6 +211,9 @@ mod tests {
         let tags = spec.tags.clone().unwrap_or_default();
         assert!(tags.iter().any(|tag| tag.name == "permesi"));
         assert!(tags.iter().any(|tag| tag.name == "auth"));
+        assert!(spec.paths.paths.contains_key("/live"));
+        assert!(spec.paths.paths.contains_key("/ready"));
+        assert!(spec.paths.paths.contains_key("/health"));
         assert!(
             spec.paths
                 .paths

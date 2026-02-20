@@ -27,7 +27,7 @@ TL;DR:
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
-When Vault token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `genesis` also fails closed when `/health` sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
+When Vault token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
 In the workspace “Split-Trust” flow:
 
@@ -45,6 +45,8 @@ Implemented routes (see `services/genesis/src/genesis/mod.rs`):
 |---|---|---|
 | `GET` | `/token?client_id=<uuid>` | Mints an Admission Token and stores `jti` + metadata in Postgres |
 | `GET` | `/paserk.json` | PASERK keyset derived from the configured signing key |
+| `GET` | `/live` | Liveness probe (process-only) |
+| `GET` | `/ready` | Readiness probe (Postgres connectivity) |
 | `GET` | `/health` | Checks Postgres connectivity; returns build info; sets `X-App` header |
 | `OPTIONS` | `/health` | Health preflight |
 | `GET` | `/headers` | Debug: echoes request headers |

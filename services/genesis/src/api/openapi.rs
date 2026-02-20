@@ -17,6 +17,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 pub(crate) fn api_router() -> OpenApiRouter {
     // `routes!` reads #[utoipa::path] to bind HTTP method + path and add the route to OpenAPI.
     let mut router = OpenApiRouter::with_openapi(cargo_openapi())
+        .routes(routes!(health::live))
+        .routes(routes!(health::ready))
         .routes(routes!(health::health))
         .routes(routes!(headers::headers))
         .routes(routes!(token::token))
@@ -88,5 +90,20 @@ fn parse_author(author: &str) -> (Option<&str>, Option<&str>) {
     } else {
         let name = author.trim();
         (if name.is_empty() { None } else { Some(name) }, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openapi_contains_health_probe_paths() {
+        let spec = openapi();
+        assert!(spec.paths.paths.contains_key("/live"));
+        assert!(spec.paths.paths.contains_key("/ready"));
+        assert!(spec.paths.paths.contains_key("/health"));
+        assert!(spec.paths.paths.contains_key("/token"));
+        assert!(spec.paths.paths.contains_key("/paserk.json"));
     }
 }

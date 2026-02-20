@@ -1,3 +1,10 @@
+//! Health probe handlers for genesis.
+//!
+//! This module exposes three probe endpoints:
+//! - `/live`: process liveness only (no dependency checks)
+//! - `/ready`: database-aware readiness for orchestrators
+//! - `/health`: database-aware status with detailed JSON payload
+
 use crate::GIT_COMMIT_HASH;
 use axum::{
     body::Body,
@@ -8,8 +15,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, PgPool};
 use tokio::sync::mpsc;
-use tracing::{Instrument, debug, error, info_span};
+use tokio::time::{Duration, timeout};
+use tracing::{Instrument, debug, error, info_span, warn};
 use utoipa::ToSchema;
+
+const HEALTH_DB_TIMEOUT_SECONDS: u64 = 2;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct Health {
@@ -17,6 +27,50 @@ pub struct Health {
     name: String,
     version: String,
     database: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DatabaseProbeStatus {
+    db_healthy: bool,
+    db_auth_error: bool,
+}
+
+#[utoipa::path(
+    get,
+    path= "/live",
+    responses (
+        (status = 200, description = "Process is alive")
+    ),
+    tag = "health",
+)]
+/// Report process liveness without checking external dependencies.
+pub async fn live() -> impl IntoResponse {
+    StatusCode::OK
+}
+
+#[utoipa::path(
+    get,
+    path= "/ready",
+    responses (
+        (status = 200, description = "Service is ready to receive traffic"),
+        (status = 503, description = "Service dependencies are not ready")
+    ),
+    tag = "health",
+)]
+/// Report readiness based on database connectivity.
+pub async fn ready(
+    pool: Extension<PgPool>,
+    shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+) -> impl IntoResponse {
+    let status = evaluate_database_probe(&pool.0).await;
+    maybe_signal_shutdown(status, &shutdown_tx.0);
+    log_db_probe_status(status);
+
+    if status.db_healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 #[utoipa::path(
@@ -28,7 +82,7 @@ pub struct Health {
     ),
     tag = "health",
 )]
-/// Perform a health check for genesis.
+/// Perform a detailed health check for genesis.
 ///
 /// When the database probe fails due to credential/auth errors, this handler
 /// requests graceful shutdown so the supervisor can restart with fresh Vault
@@ -38,45 +92,15 @@ pub async fn health(
     pool: Extension<PgPool>,
     shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
-    let acquire_span = info_span!(
-        "db.acquire",
-        db.system = "postgresql",
-        db.operation = "ACQUIRE"
-    );
-    let mut should_shutdown = false;
-    let result = match pool.0.acquire().instrument(acquire_span).await {
-        Ok(mut conn) => {
-            let ping_span = info_span!("db.ping", db.system = "postgresql", db.operation = "PING");
-            match conn.ping().instrument(ping_span).await {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    should_shutdown = should_shutdown_on_db_error(&error);
-                    error!("Failed to ping database: {}", error);
+    let status = evaluate_database_probe(&pool.0).await;
+    maybe_signal_shutdown(status, &shutdown_tx.0);
+    log_db_probe_status(status);
 
-                    Err(StatusCode::SERVICE_UNAVAILABLE)
-                }
-            }
-        }
-
-        Err(error) => {
-            should_shutdown = should_shutdown_on_db_error(&error);
-            error!("Failed to acquire database connection: {}", error);
-
-            Err(StatusCode::SERVICE_UNAVAILABLE)
-        }
-    };
-    if result.is_err() && should_shutdown {
-        let _ = shutdown_tx
-            .0
-            .send(crate::vault::renew::ShutdownSignal::DatabaseHealthcheckFailed);
-    }
-
-    // Create a health struct
     let health = Health {
         commit: GIT_COMMIT_HASH.to_string(),
         name: env!("CARGO_PKG_NAME").to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        database: if result.is_ok() {
+        database: if status.db_healthy {
             "ok".to_string()
         } else {
             "error".to_string()
@@ -95,37 +119,89 @@ pub async fn health(
         ""
     };
 
-    // Create headers using the map method
     let headers = format!("{}:{}:{}", health.name, health.version, short_hash)
         .parse::<HeaderValue>()
         .map(|x_app_header_value| {
             debug!("X-App header: {:?}", x_app_header_value);
 
             let mut headers = HeaderMap::new();
-
             headers.insert("X-App", x_app_header_value);
-
             headers
         })
         .map_err(|err| {
             debug!("Failed to parse X-App header: {}", err);
-        });
+        })
+        .unwrap_or_else(|()| HeaderMap::new());
 
-    // Unwrap the headers or provide a default value (empty headers) in case of an error
-    let headers = headers.unwrap_or_else(|()| HeaderMap::new());
+    if status.db_healthy {
+        (StatusCode::OK, headers, body)
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, headers, body)
+    }
+}
 
-    match result {
-        Ok(()) => {
-            debug!("Database connection is healthy");
+/// Probe database connectivity used by `/ready` and `/health`.
+async fn evaluate_database_probe(pool: &PgPool) -> DatabaseProbeStatus {
+    let acquire_span = info_span!(
+        "db.acquire",
+        db.system = "postgresql",
+        db.operation = "ACQUIRE"
+    );
+    let mut db_auth_error = false;
 
-            (StatusCode::OK, headers, body)
-        }
+    let db_healthy = if let Ok(result) =
+        timeout(Duration::from_secs(HEALTH_DB_TIMEOUT_SECONDS), async {
+            match pool.acquire().instrument(acquire_span).await {
+                Ok(mut conn) => {
+                    let ping_span =
+                        info_span!("db.ping", db.system = "postgresql", db.operation = "PING");
+                    match conn.ping().instrument(ping_span).await {
+                        Ok(()) => true,
+                        Err(error) => {
+                            db_auth_error = should_shutdown_on_db_error(&error);
+                            error!("Failed to ping database: {}", error);
+                            false
+                        }
+                    }
+                }
 
-        Err(status_code) => {
-            debug!("Database connection is unhealthy");
+                Err(error) => {
+                    db_auth_error = should_shutdown_on_db_error(&error);
+                    error!("Failed to acquire database connection: {}", error);
+                    false
+                }
+            }
+        })
+        .await
+    {
+        result
+    } else {
+        warn!("Database health check timed out");
+        false
+    };
 
-            (status_code, headers, body)
-        }
+    DatabaseProbeStatus {
+        db_healthy,
+        db_auth_error,
+    }
+}
+
+/// Trigger graceful shutdown when DB authentication errors imply stale Vault creds.
+fn maybe_signal_shutdown(
+    status: DatabaseProbeStatus,
+    shutdown_tx: &mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>,
+) {
+    if !status.db_healthy && status.db_auth_error {
+        let _ = shutdown_tx.send(crate::vault::renew::ShutdownSignal::DatabaseHealthcheckFailed);
+    }
+}
+
+/// Emit probe diagnostics without changing probe outcomes.
+fn log_db_probe_status(status: DatabaseProbeStatus) {
+    if status.db_healthy {
+        debug!("Database connection is healthy");
+    } else {
+        debug!("Database connection is unhealthy");
     }
 }
 
