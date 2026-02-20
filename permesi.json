@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.29"
+    "version": "0.3.30"
   },
   "paths": {
     "/health": {
@@ -19,7 +19,7 @@
         "tags": [
           "health"
         ],
-        "summary": "Perform a health check of the service and its dependencies.",
+        "summary": "Perform a detailed dependency health check.",
         "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh Vault\nDB credentials.",
         "operationId": "health",
         "responses": {
@@ -42,6 +42,39 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/live": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Report process liveness without checking external dependencies.",
+        "description": "This endpoint is suitable for liveness probes to avoid restart loops during\ntransient dependency outages.",
+        "operationId": "live",
+        "responses": {
+          "200": {
+            "description": "Process is alive"
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Report readiness based on database and admission dependency health.",
+        "description": "Returns `503` when dependencies are unhealthy so orchestrators can stop\nrouting traffic to this instance.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "Service is ready to receive traffic"
+          },
+          "503": {
+            "description": "Service dependencies are not ready"
           }
         }
       }
