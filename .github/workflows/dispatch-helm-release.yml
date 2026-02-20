@@ -2,6 +2,9 @@
 name: Dispatch Helm Release
 
 on:
+  push:
+    tags:
+      - '*'
   release:
     types: [published]
   workflow_dispatch:
@@ -28,6 +31,9 @@ jobs:
           if [[ "${{ github.event_name }}" == "release" ]]; then
             raw="${{ github.event.release.tag_name }}"
             source_tag="${{ github.event.release.tag_name }}"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            raw="${GITHUB_REF#refs/tags/}"
+            source_tag="${GITHUB_REF#refs/tags/}"
           else
             raw="${{ inputs.version }}"
             source_tag="${{ inputs.version }}"
