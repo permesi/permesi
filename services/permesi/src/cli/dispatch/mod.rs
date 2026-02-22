@@ -5,7 +5,24 @@
 
 use crate::cli::actions::{Action, server::Args};
 use crate::cli::commands::{admission, auth, tls, vault};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+
+/// Normalize a Vault mount path received from CLI/env.
+///
+/// Mounts are stored without leading/trailing slashes and must not be empty
+/// after normalization.
+fn normalize_vault_mount(arg: &str, value: &str) -> Result<String> {
+    let normalized = value.trim_matches('/').to_string();
+    if normalized.is_empty() {
+        return Err(anyhow!("invalid argument: --{arg} must not be empty"));
+    }
+    if normalized.chars().any(char::is_whitespace) {
+        return Err(anyhow!(
+            "invalid argument: --{arg} must not contain whitespace"
+        ));
+    }
+    Ok(normalized)
+}
 
 /// Map validated CLI matches to a server action.
 ///
@@ -22,6 +39,9 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     crate::cli::commands::validate(matches).map_err(|e| anyhow::anyhow!(e))?;
 
     let vault_opts = vault::Options::parse(matches)?;
+    let vault_kv_mount = normalize_vault_mount(vault::ARG_VAULT_KV_MOUNT, &vault_opts.kv_mount)?;
+    let vault_transit_mount =
+        normalize_vault_mount(vault::ARG_VAULT_TRANSIT_MOUNT, &vault_opts.transit_mount)?;
     let vault_target =
         vault_client::VaultTarget::parse(&vault_opts.url).context("invalid PERMESI_VAULT_URL")?;
 
@@ -57,9 +77,9 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
         platform_admin_ttl_seconds: auth_opts.admin.ttl_seconds,
         platform_recent_auth_seconds: auth_opts.admin.recent_auth_seconds,
-        vault_kv_mount: vault_opts.kv_mount,
+        vault_kv_mount,
         vault_kv_path: vault_opts.kv_path,
-        vault_transit_mount: vault_opts.transit_mount,
+        vault_transit_mount,
     }))
 }
 
@@ -97,5 +117,64 @@ mod tests {
                 }
             },
         );
+    }
+
+    #[test]
+    fn vault_mounts_are_normalized_in_dispatch() {
+        let command = crate::cli::commands::new();
+        let matches = command.get_matches_from(vec![
+            "permesi",
+            "--dsn",
+            "postgres://",
+            "--admission-paserk-url",
+            "https://url",
+            "--tls-pem-bundle",
+            "bundle",
+            "--vault-url",
+            "http://vault:8200",
+            "--vault-role-id",
+            "role",
+            "--vault-secret-id",
+            "secret",
+            "--vault-kv-mount",
+            "/secret/permesi/",
+            "--vault-transit-mount",
+            "/transit/permesi/",
+        ]);
+
+        let action = handler(&matches);
+        assert!(action.is_ok(), "dispatch should succeed");
+        if let Ok(Action::Server(args)) = action {
+            assert_eq!(args.vault_kv_mount, "secret/permesi");
+            assert_eq!(args.vault_transit_mount, "transit/permesi");
+        }
+    }
+
+    #[test]
+    fn empty_transit_mount_is_rejected() {
+        let command = crate::cli::commands::new();
+        let matches = command.get_matches_from(vec![
+            "permesi",
+            "--dsn",
+            "postgres://",
+            "--admission-paserk-url",
+            "https://url",
+            "--tls-pem-bundle",
+            "bundle",
+            "--vault-url",
+            "http://vault:8200",
+            "--vault-role-id",
+            "role",
+            "--vault-secret-id",
+            "secret",
+            "--vault-transit-mount",
+            "///",
+        ]);
+
+        let result = handler(&matches);
+        assert!(result.is_err(), "expected validation error");
+        if let Err(err) = result {
+            assert!(err.to_string().contains("--vault-transit-mount"));
+        }
     }
 }

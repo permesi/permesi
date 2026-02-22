@@ -145,6 +145,7 @@ mod tests {
                 ("GENESIS_VAULT_URL", Some("https://vault.tld:8200")),
                 ("GENESIS_VAULT_ROLE_ID", Some("role_id")),
                 ("GENESIS_VAULT_SECRET_ID", Some("secret_id")),
+                ("GENESIS_TRANSIT_MOUNT", Some("transit/custom")),
                 ("GENESIS_PORT", Some("443")),
                 (
                     "GENESIS_DSN",
@@ -164,9 +165,44 @@ mod tests {
                     matches.get_one::<String>("vault-url").cloned(),
                     Some("https://vault.tld:8200".to_string())
                 );
+                assert_eq!(
+                    matches
+                        .get_one::<String>("vault-transit-mount")
+                        .map(String::as_str),
+                    Some("transit/custom")
+                );
                 assert_eq!(matches.get_one::<u8>("verbosity").copied(), Some(2));
             },
         );
+    }
+
+    #[test]
+    fn test_vault_transit_mount_default() {
+        temp_env::with_vars([("GENESIS_TRANSIT_MOUNT", None::<&str>)], || {
+            let command = new();
+            let matches = command.get_matches_from(vec![
+                "genesis",
+                "--port",
+                "8080",
+                "--dsn",
+                "postgres://user:password@localhost:5432/genesis",
+                "--tls-pem-bundle",
+                "/tmp/genesis-bundle.pem",
+                "--vault-url",
+                "https://vault.tld:8200",
+                "--vault-role-id",
+                "role-id",
+                "--vault-secret-id",
+                "secret-id",
+            ]);
+
+            assert_eq!(
+                matches
+                    .get_one::<String>("vault-transit-mount")
+                    .map(String::as_str),
+                Some("transit/genesis")
+            );
+        });
     }
 
     #[test]

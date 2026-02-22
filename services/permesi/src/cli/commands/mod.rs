@@ -9,6 +9,8 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
 };
 
+#[cfg(test)]
+use self::vault::{ARG_VAULT_KV_MOUNT, ARG_VAULT_KV_PATH, ARG_VAULT_TRANSIT_MOUNT};
 use self::vault::{ARG_VAULT_ROLE_ID, ARG_VAULT_SECRET_ID, ARG_VAULT_URL, ARG_VAULT_WRAPPED_TOKEN};
 
 /// Validate that TCP mode requirements are met if the URL implies TCP.
@@ -167,6 +169,9 @@ mod tests {
                     Some("postgres://user:password@localhost:5432/permesi"),
                 ),
                 ("PERMESI_LOG_LEVEL", Some("info")),
+                ("PERMESI_VAULT_KV_MOUNT", Some("secret/custom")),
+                ("PERMESI_VAULT_KV_PATH", Some("config/custom")),
+                ("PERMESI_VAULT_TRANSIT_MOUNT", Some("transit/custom")),
             ],
             || {
                 let command = new();
@@ -183,6 +188,72 @@ mod tests {
                 assert_eq!(
                     matches.get_one::<u8>(logging::ARG_VERBOSITY).copied(),
                     Some(2)
+                );
+                assert_eq!(
+                    matches
+                        .get_one::<String>(ARG_VAULT_KV_MOUNT)
+                        .map(String::as_str),
+                    Some("secret/custom")
+                );
+                assert_eq!(
+                    matches
+                        .get_one::<String>(ARG_VAULT_KV_PATH)
+                        .map(String::as_str),
+                    Some("config/custom")
+                );
+                assert_eq!(
+                    matches
+                        .get_one::<String>(ARG_VAULT_TRANSIT_MOUNT)
+                        .map(String::as_str),
+                    Some("transit/custom")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_vault_mount_defaults() {
+        temp_env::with_vars(
+            [
+                ("PERMESI_VAULT_KV_MOUNT", None::<&str>),
+                ("PERMESI_VAULT_KV_PATH", None::<&str>),
+                ("PERMESI_VAULT_TRANSIT_MOUNT", None::<&str>),
+            ],
+            || {
+                let command = new();
+                let matches = command.get_matches_from(vec![
+                    "permesi",
+                    "--dsn",
+                    "postgres://user:password@localhost:5432/permesi",
+                    "--admission-paserk-url",
+                    "https://genesis.permesi.localhost:8000/paserk.json",
+                    "--tls-pem-bundle",
+                    "/tmp/permesi-bundle.pem",
+                    "--vault-url",
+                    "https://vault.tld:8200",
+                    "--vault-role-id",
+                    "role-id",
+                    "--vault-secret-id",
+                    "secret-id",
+                ]);
+
+                assert_eq!(
+                    matches
+                        .get_one::<String>(ARG_VAULT_KV_MOUNT)
+                        .map(String::as_str),
+                    Some("secret/permesi")
+                );
+                assert_eq!(
+                    matches
+                        .get_one::<String>(ARG_VAULT_KV_PATH)
+                        .map(String::as_str),
+                    Some("config")
+                );
+                assert_eq!(
+                    matches
+                        .get_one::<String>(ARG_VAULT_TRANSIT_MOUNT)
+                        .map(String::as_str),
+                    Some("transit/permesi")
                 );
             },
         );
