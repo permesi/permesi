@@ -23,6 +23,8 @@ pub struct GlobalArgs {
     pub vault_transport: VaultTransport,
     /// The current Vault authentication token (if using TCP mode).
     pub vault_token: SecretString,
+    /// The Vault Transit secrets engine mount path.
+    pub vault_transit_mount: String,
     /// The lease ID for the current database credentials.
     pub vault_db_lease_id: String,
     /// The duration (in seconds) of the current database lease.
@@ -45,6 +47,7 @@ impl GlobalArgs {
             vault_url: vurl,
             vault_transport: transport,
             vault_token: SecretString::default(),
+            vault_transit_mount: String::new(),
             vault_db_lease_id: String::new(),
             vault_db_lease_duration: 0,
             vault_db_username: String::new(),
@@ -64,6 +67,7 @@ impl std::fmt::Debug for GlobalArgs {
             .field("vault_url", &self.vault_url)
             .field("vault_transport", &self.vault_transport)
             .field("vault_token", &"***")
+            .field("vault_transit_mount", &self.vault_transit_mount)
             .field("vault_db_lease_id", &self.vault_db_lease_id)
             .field("vault_db_lease_duration", &self.vault_db_lease_duration)
             .field("vault_db_username", &self.vault_db_username)

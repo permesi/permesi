@@ -38,11 +38,12 @@ pub async fn encrypt(globals: &GlobalArgs, plaintext: &str, context: &str) -> Re
     map.insert("plaintext", Base64::encode_string(plaintext.as_bytes()));
     map.insert("context", Base64::encode_string(context.as_bytes()));
 
+    let mount = globals.vault_transit_mount.trim_matches('/');
     let response = globals
         .vault_transport
         .request_json(
             Method::POST,
-            "/v1/transit/permesi/encrypt/users",
+            &format!("/v1/{mount}/encrypt/users"),
             token,
             Some(&serde_json::to_value(&map)?),
         )
@@ -77,11 +78,12 @@ pub async fn decrypt(globals: &GlobalArgs, ciphertext: &str, context: &str) -> R
     map.insert("ciphertext", ciphertext.to_string());
     map.insert("context", Base64::encode_string(context.as_bytes()));
 
+    let mount = globals.vault_transit_mount.trim_matches('/');
     let response = globals
         .vault_transport
         .request_json(
             Method::POST,
-            "/v1/transit/permesi/decrypt/users",
+            &format!("/v1/{mount}/decrypt/users"),
             token,
             Some(&serde_json::to_value(&map)?),
         )

@@ -59,6 +59,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         platform_recent_auth_seconds: auth_opts.admin.recent_auth_seconds,
         vault_kv_mount: vault_opts.kv_mount,
         vault_kv_path: vault_opts.kv_path,
+        vault_transit_mount: vault_opts.transit_mount,
     }))
 }
 

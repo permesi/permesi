@@ -35,6 +35,7 @@ pub struct Args {
     pub platform_recent_auth_seconds: i64,
     pub vault_kv_mount: String,
     pub vault_kv_path: String,
+    pub vault_transit_mount: String,
 }
 
 /// Execute the server action.
@@ -72,6 +73,7 @@ pub async fn execute(args: Args) -> Result<()> {
         args.vault_target.clone(),
     )?;
     let mut globals = GlobalArgs::new(args.vault_url.clone(), vault_transport);
+    globals.vault_transit_mount = args.vault_transit_mount.clone();
 
     if args.vault_target.is_tcp() {
         let vault_role_id = args
@@ -374,6 +376,7 @@ mod tests {
             platform_recent_auth_seconds: 60,
             vault_kv_mount: "kv".to_string(),
             vault_kv_path: "config".to_string(),
+            vault_transit_mount: "transit/permesi".to_string(),
         }
     }
 

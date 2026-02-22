@@ -148,14 +148,16 @@ impl DekManager {
         .await?;
 
         // Insert new
+        let transit_mount = self.globals.vault_transit_mount.trim_matches('/');
         sqlx::query(
             r"
             INSERT INTO totp_deks (dek_id, status, wrapped_dek, kek_mount, kek_key)
-            VALUES ($1, 'active', $2, 'transit/permesi', 'totp')
+            VALUES ($1, 'active', $2, $3, 'totp')
             ",
         )
         .bind(new_dek_id)
         .bind(ciphertext)
+        .bind(transit_mount)
         .execute(&mut *tx)
         .await?;
 
@@ -178,7 +180,13 @@ impl DekManager {
             .user_agent(crate::APP_USER_AGENT)
             .build()?;
 
-        let url = vault::endpoint_url(&self.globals.vault_url, "/v1/transit/permesi/decrypt/totp")?;
+        let url = vault::endpoint_url(
+            &self.globals.vault_url,
+            &format!(
+                "/v1/{}/decrypt/totp",
+                self.globals.vault_transit_mount.trim_matches('/')
+            ),
+        )?;
 
         let payload = json!({
             "ciphertext": wrapped_dek,
@@ -216,7 +224,10 @@ impl DekManager {
 
         let url = vault::endpoint_url(
             &self.globals.vault_url,
-            "/v1/transit/permesi/datakey/plaintext/totp",
+            &format!(
+                "/v1/{}/datakey/plaintext/totp",
+                self.globals.vault_transit_mount.trim_matches('/')
+            ),
         )?;
 
         let span = info_span!("vault.transit.generate_datakey", http.method = "POST", url = %url);

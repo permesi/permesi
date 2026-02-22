@@ -87,6 +87,7 @@ impl TestContext {
             .expect("test transport built");
         let mut globals = GlobalArgs::new(vurl, transport);
         globals.set_token(SecretString::from("root-token".to_string()));
+        globals.vault_transit_mount = "transit/permesi".to_string();
 
         let dek_manager = DekManager::new(globals);
 

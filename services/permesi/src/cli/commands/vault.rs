@@ -6,6 +6,7 @@ pub const ARG_VAULT_SECRET_ID: &str = "vault-secret-id";
 pub const ARG_VAULT_WRAPPED_TOKEN: &str = "vault-wrapped-token";
 pub const ARG_VAULT_KV_MOUNT: &str = "vault-kv-mount";
 pub const ARG_VAULT_KV_PATH: &str = "vault-kv-path";
+pub const ARG_VAULT_TRANSIT_MOUNT: &str = "vault-transit-mount";
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -15,6 +16,7 @@ pub struct Options {
     pub wrapped_token: Option<String>,
     pub kv_mount: String,
     pub kv_path: String,
+    pub transit_mount: String,
 }
 
 impl Options {
@@ -41,6 +43,10 @@ impl Options {
                 .get_one::<String>(ARG_VAULT_KV_PATH)
                 .cloned()
                 .unwrap_or_else(|| "config".to_string()),
+            transit_mount: matches
+                .get_one::<String>(ARG_VAULT_TRANSIT_MOUNT)
+                .cloned()
+                .unwrap_or_else(|| "transit/permesi".to_string()),
         })
     }
 }
@@ -87,6 +93,13 @@ pub fn with_args(command: Command) -> Command {
                 .help("Vault KV-v2 secret path for configuration secrets")
                 .env("PERMESI_VAULT_KV_PATH")
                 .default_value("config"),
+        )
+        .arg(
+            Arg::new(ARG_VAULT_TRANSIT_MOUNT)
+                .long(ARG_VAULT_TRANSIT_MOUNT)
+                .help("Vault Transit secrets engine mount path")
+                .env("PERMESI_VAULT_TRANSIT_MOUNT")
+                .default_value("transit/permesi"),
         )
         .group(
             ArgGroup::new("vault-auth")
