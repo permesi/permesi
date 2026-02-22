@@ -29,6 +29,7 @@ use crate::{cli::globals::GlobalArgs, vault};
 
 const PASERK_CACHE_TTL_SECONDS: u64 = 300;
 const TRANSIT_KEY_NAME: &str = "genesis-signing";
+#[cfg(test)]
 const TRANSIT_MOUNT_DEFAULT: &str = "transit/genesis";
 const ADMISSION_ACTION: &str = "admission";
 
@@ -81,8 +82,7 @@ impl AdmissionSigner {
         let audience =
             std::env::var("GENESIS_ADMISSION_AUD").unwrap_or_else(|_| "permesi".to_string());
 
-        let transit_mount = std::env::var("GENESIS_TRANSIT_MOUNT")
-            .unwrap_or_else(|_| TRANSIT_MOUNT_DEFAULT.to_string());
+        let transit_mount = globals.vault_transit_mount.clone();
 
         let vault_transport = globals.vault_transport.clone();
         let vault_token = if vault_transport.is_tcp() {

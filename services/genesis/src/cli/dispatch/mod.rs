@@ -23,6 +23,10 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let vault_role_id = matches.get_one::<String>("vault-role-id").cloned();
     let vault_secret_id = matches.get_one::<String>("vault-secret-id").cloned();
     let vault_wrapped_token = matches.get_one::<String>("vault-wrapped-token").cloned();
+    let vault_transit_mount = matches
+        .get_one::<String>("vault-transit-mount")
+        .cloned()
+        .context("missing required argument: --vault-transit-mount")?;
     let tls_pem_bundle = matches.get_one::<String>("tls-pem-bundle").cloned();
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
@@ -35,6 +39,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         vault_role_id,
         vault_secret_id,
         vault_wrapped_token,
+        vault_transit_mount,
         tls_pem_bundle,
     }))
 }

@@ -14,6 +14,7 @@ pub struct Args {
     pub vault_role_id: Option<String>,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
+    pub vault_transit_mount: String,
     pub tls_pem_bundle: Option<String>,
 }
 
@@ -31,6 +32,7 @@ pub async fn execute(args: Args) -> Result<()> {
     let vault_transport =
         vault::VaultTransport::from_target(crate::APP_USER_AGENT, args.vault_target.clone())?;
     let mut globals = GlobalArgs::new(args.vault_url, vault_transport);
+    globals.vault_transit_mount = args.vault_transit_mount;
 
     if matches!(args.vault_target, vault::VaultTarget::Tcp { .. }) {
         let vault_role_id = args

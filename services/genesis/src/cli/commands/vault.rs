@@ -28,6 +28,13 @@ pub fn with_args(command: Command) -> Command {
                 .help("Vault wrapped token (TCP mode only)")
                 .env("GENESIS_VAULT_WRAPPED_TOKEN")
         )
+        .arg(
+            Arg::new("vault-transit-mount")
+                .long("vault-transit-mount")
+                .help("Vault Transit secrets engine mount path")
+                .env("GENESIS_TRANSIT_MOUNT")
+                .default_value("transit/genesis"),
+        )
         .group(
             ArgGroup::new("vault-auth")
                 .args(["vault-role-id", "vault-secret-id", "vault-wrapped-token"])
