@@ -1,6 +1,7 @@
 use clap::{Arg, ArgMatches, Command};
 
 pub const ARG_FRONTEND_BASE_URL: &str = "frontend-base-url";
+pub const ARG_CORS_ALLOWED_ORIGINS: &str = "cors-allowed-origins";
 pub const ARG_EMAIL_TOKEN_TTL: &str = "email-token-ttl-seconds";
 pub const ARG_EMAIL_RESEND_COOLDOWN: &str = "email-resend-cooldown-seconds";
 pub const ARG_SESSION_TTL: &str = "session-ttl-seconds";
@@ -41,6 +42,7 @@ pub struct AdminOptions {
 #[derive(Debug, Clone)]
 pub struct Options {
     pub frontend_base_url: String,
+    pub cors_allowed_origins: Vec<String>,
     pub email_token_ttl_seconds: i64,
     pub email_resend_cooldown_seconds: i64,
     pub session_ttl_seconds: i64,
@@ -62,8 +64,19 @@ impl Options {
                 anyhow::anyhow!("missing required argument: --{ARG_FRONTEND_BASE_URL}")
             })?;
 
+        let cors_allowed_origins: Vec<String> = matches
+            .get_one::<String>(ARG_CORS_ALLOWED_ORIGINS)
+            .map(|s| {
+                s.split(',')
+                    .map(|o| o.trim().to_string())
+                    .filter(|o| !o.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(Self {
             frontend_base_url,
+            cors_allowed_origins,
             email_token_ttl_seconds: matches
                 .get_one::<i64>(ARG_EMAIL_TOKEN_TTL)
                 .copied()
@@ -138,6 +151,12 @@ fn with_auth_email_args(command: Command) -> Command {
                 .help("Frontend base URL used for verification links")
                 .env("PERMESI_FRONTEND_BASE_URL")
                 .default_value("https://permesi.dev"),
+        )
+        .arg(
+            Arg::new(ARG_CORS_ALLOWED_ORIGINS)
+                .long(ARG_CORS_ALLOWED_ORIGINS)
+                .help("Comma-separated list of additional CORS allowed origins (frontend-base-url is always included)")
+                .env("PERMESI_CORS_ALLOWED_ORIGINS"),
         )
         .arg(
             Arg::new(ARG_EMAIL_TOKEN_TTL)

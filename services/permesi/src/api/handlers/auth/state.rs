@@ -27,6 +27,8 @@ const DEFAULT_OPAQUE_SERVER_ID: &str = "api.permesi.dev";
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
     frontend_base_url: String,
+    /// All allowed CORS origins (includes the primary `frontend_base_url`).
+    cors_allowed_origins: Vec<String>,
     email_token_ttl_seconds: i64,
     resend_cooldown_seconds: i64,
     session_ttl_seconds: i64,
@@ -49,6 +51,7 @@ impl AuthConfig {
         let rp_origin = frontend_base_url.trim_end_matches('/').to_string();
 
         Self {
+            cors_allowed_origins: vec![frontend_base_url.clone()],
             frontend_base_url,
             email_token_ttl_seconds: DEFAULT_TOKEN_TTL_SECONDS,
             resend_cooldown_seconds: DEFAULT_RESEND_COOLDOWN_SECONDS,
@@ -109,6 +112,18 @@ impl AuthConfig {
         self
     }
 
+    /// Override the set of allowed CORS origins. The primary `frontend_base_url`
+    /// is always included automatically.
+    #[must_use]
+    pub fn with_cors_allowed_origins(mut self, origins: Vec<String>) -> Self {
+        self.cors_allowed_origins = origins;
+        if !self.cors_allowed_origins.contains(&self.frontend_base_url) {
+            self.cors_allowed_origins
+                .insert(0, self.frontend_base_url.clone());
+        }
+        self
+    }
+
     #[must_use]
     pub fn webauthn_rp_id(&self) -> &str {
         &self.webauthn_rp_id
@@ -136,6 +151,10 @@ impl AuthConfig {
 
     pub(crate) fn frontend_base_url(&self) -> &str {
         &self.frontend_base_url
+    }
+
+    pub(crate) fn cors_allowed_origins(&self) -> &[String] {
+        &self.cors_allowed_origins
     }
 
     pub(super) fn email_token_ttl_seconds(&self) -> i64 {
@@ -333,5 +352,52 @@ mod tests {
         let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
         let state = AuthState::new(config, opaque, limiter, super::MfaConfig::new());
         assert_eq!(state.opaque().server_id(), b"api.permesi.dev");
+    }
+
+    #[test]
+    fn cors_defaults_to_frontend_base_url() {
+        let config = AuthConfig::new("https://permesi.dev".to_string());
+        assert_eq!(
+            config.cors_allowed_origins(),
+            &["https://permesi.dev".to_string()]
+        );
+    }
+
+    #[test]
+    fn cors_with_empty_origins_keeps_frontend() {
+        let config =
+            AuthConfig::new("https://permesi.dev".to_string()).with_cors_allowed_origins(vec![]);
+        assert_eq!(
+            config.cors_allowed_origins(),
+            &["https://permesi.dev".to_string()]
+        );
+    }
+
+    #[test]
+    fn cors_with_extra_origins() {
+        let config =
+            AuthConfig::new("https://permesi.dev".to_string()).with_cors_allowed_origins(vec![
+                "https://k8s.permesi.dev".to_string(),
+                "https://www.permesi.dev".to_string(),
+            ]);
+        let origins = config.cors_allowed_origins();
+        assert!(origins.contains(&"https://permesi.dev".to_string()));
+        assert!(origins.contains(&"https://k8s.permesi.dev".to_string()));
+        assert!(origins.contains(&"https://www.permesi.dev".to_string()));
+    }
+
+    #[test]
+    fn cors_does_not_duplicate_frontend() {
+        let config =
+            AuthConfig::new("https://permesi.dev".to_string()).with_cors_allowed_origins(vec![
+                "https://permesi.dev".to_string(),
+                "https://k8s.permesi.dev".to_string(),
+            ]);
+        let count = config
+            .cors_allowed_origins()
+            .iter()
+            .filter(|o| *o == "https://permesi.dev")
+            .count();
+        assert_eq!(count, 1);
     }
 }

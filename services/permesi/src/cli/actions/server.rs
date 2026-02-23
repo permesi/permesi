@@ -21,6 +21,7 @@ pub struct Args {
     pub tls_pem_bundle: Option<String>,
     pub admission_paserk_ca_path: Option<String>,
     pub frontend_base_url: String,
+    pub cors_allowed_origins: Vec<String>,
     pub email_token_ttl_seconds: i64,
     pub email_resend_cooldown_seconds: i64,
     pub session_ttl_seconds: i64,
@@ -130,6 +131,7 @@ pub async fn execute(args: Args) -> Result<()> {
 
 fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
     let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url.clone())
+        .with_cors_allowed_origins(args.cors_allowed_origins.clone())
         .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
         .with_session_ttl_seconds(args.session_ttl_seconds)
@@ -210,6 +212,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         ("admission_issuer", issuer.to_string()),
         ("admission_audience", audience.to_string()),
         ("frontend_base_url", args.frontend_base_url.clone()),
+        ("cors_allowed_origins", args.cors_allowed_origins.join(", ")),
         (
             "email_token_ttl_seconds",
             args.email_token_ttl_seconds.to_string(),
@@ -362,6 +365,7 @@ mod tests {
             tls_pem_bundle: None,
             admission_paserk_ca_path: None,
             frontend_base_url: "https://permesi.example.com".to_string(),
+            cors_allowed_origins: vec![],
             email_token_ttl_seconds: 300,
             email_resend_cooldown_seconds: 60,
             session_ttl_seconds: 3600,

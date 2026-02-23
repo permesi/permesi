@@ -187,7 +187,7 @@ fn build_router(
     security_key_service: SecurityKeyService,
     passkey_service: PasskeyService,
 ) -> Result<Router> {
-    let frontend_origin = frontend_origin(auth_state.config().frontend_base_url())?;
+    let allowed_origins = frontend_origins(auth_state.config().cors_allowed_origins())?;
     let cors = CorsLayer::new()
         .allow_headers([
             CONTENT_TYPE,
@@ -201,7 +201,11 @@ fn build_router(
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_origin(AllowOrigin::exact(frontend_origin))
+        .allow_origin(AllowOrigin::predicate(move |origin, _| {
+            origin
+                .to_str()
+                .is_ok_and(|o| allowed_origins.iter().any(|a| a == o))
+        }))
         .allow_credentials(true)
         .max_age(Duration::from_secs(86400));
 
@@ -345,17 +349,20 @@ fn make_span(request: &Request<Body>) -> Span {
     )
 }
 
-fn frontend_origin(frontend_base_url: &str) -> Result<HeaderValue> {
-    let parsed = Url::parse(frontend_base_url)
-        .with_context(|| format!("Invalid frontend base URL: {frontend_base_url}"))?;
-    let host = parsed.host_str().ok_or_else(|| {
-        anyhow!("Frontend base URL must include a valid host: {frontend_base_url}")
-    })?;
-    let port = parsed
-        .port()
-        .map_or_else(String::new, |port| format!(":{port}"));
-    let origin = format!("{}://{}{}", parsed.scheme(), host, port);
-    HeaderValue::from_str(&origin).context("Failed to build frontend origin header")
+fn frontend_origins(urls: &[String]) -> Result<Vec<String>> {
+    urls.iter()
+        .map(|url| {
+            let parsed =
+                Url::parse(url).with_context(|| format!("Invalid frontend base URL: {url}"))?;
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| anyhow!("Frontend base URL must include a valid host: {url}"))?;
+            let port = parsed
+                .port()
+                .map_or_else(String::new, |port| format!(":{port}"));
+            Ok(format!("{}://{}{}", parsed.scheme(), host, port))
+        })
+        .collect()
 }
 
 fn init_passkey_service(auth_config: &auth::AuthConfig) -> Result<PasskeyService> {
@@ -426,5 +433,44 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&dir);
         Ok(())
+    }
+
+    #[test]
+    fn frontend_origins_parses_multiple_urls() -> Result<()> {
+        let urls = vec![
+            "https://permesi.dev".to_string(),
+            "https://k8s.permesi.dev".to_string(),
+            "https://www.permesi.dev".to_string(),
+        ];
+        let origins = super::frontend_origins(&urls)?;
+        assert_eq!(
+            origins,
+            vec![
+                "https://permesi.dev",
+                "https://k8s.permesi.dev",
+                "https://www.permesi.dev",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn frontend_origins_strips_paths_and_ports() -> Result<()> {
+        let urls = vec![
+            "https://permesi.dev/some/path".to_string(),
+            "http://localhost:3000".to_string(),
+        ];
+        let origins = super::frontend_origins(&urls)?;
+        assert_eq!(
+            origins,
+            vec!["https://permesi.dev", "http://localhost:3000"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn frontend_origins_rejects_invalid_url() {
+        let urls = vec!["not-a-url".to_string()];
+        assert!(super::frontend_origins(&urls).is_err());
     }
 }

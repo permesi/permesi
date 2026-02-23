@@ -65,6 +65,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         tls_pem_bundle: tls_opts.map(|o| o.pem_bundle),
         admission_paserk_ca_path: admission_opts.paserk_ca_path,
         frontend_base_url: auth_opts.frontend_base_url,
+        cors_allowed_origins: auth_opts.cors_allowed_origins,
         email_token_ttl_seconds: auth_opts.email_token_ttl_seconds,
         email_resend_cooldown_seconds: auth_opts.email_resend_cooldown_seconds,
         session_ttl_seconds: auth_opts.session_ttl_seconds,
