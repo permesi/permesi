@@ -13,6 +13,8 @@ clippy:
 test:
   cargo test --workspace
 
+verify-release: fmt clippy test web-build
+
 coverage:
   cargo llvm-cov --all-features --workspace
 
@@ -179,8 +181,8 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
     echo "🧹 Running clean build..."
     cargo clean
 
-    echo "🧪 Running tests with new version (via just test)..."
-    just test
+    echo "🧪 Running release verification (including frontend build)..."
+    just verify-release
 
     git add Cargo.toml Cargo.lock
     git commit -m "bump version to ${new_version}"
@@ -293,7 +295,7 @@ deploy-minor: bump-minor _deploy-merge-and-tag
 deploy-major: bump-major _deploy-merge-and-tag
 
 # Deploy current version without bumping
-deploy-current: check-develop check-clean test _deploy-merge-and-tag
+deploy-current: check-develop check-clean verify-release _deploy-merge-and-tag
 
 # ----------------------
 # Sandbox branch helpers
@@ -384,4 +386,3 @@ t-deploy message="CI test": check-develop check-clean _require-tag-signing test
     echo "✅ Pushed ${tag}"
     echo "🧹 To remove it:"
     echo "   git push origin :refs/tags/${tag} && git tag -d ${tag}"
-
