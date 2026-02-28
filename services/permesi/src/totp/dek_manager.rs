@@ -1,7 +1,7 @@
-use crate::{cli::globals::GlobalArgs, totp::models::TotpDek, vault};
+use crate::{cli::globals::GlobalArgs, totp::models::TotpDek};
 use anyhow::{Context, Result, anyhow};
 use base64ct::{Base64, Encoding};
-use reqwest::Client;
+use http::Method;
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-use tracing::{Instrument, error, info, info_span, instrument, warn};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -175,40 +175,37 @@ impl DekManager {
 
     // --- Vault Helpers ---
 
-    async fn unwrap_dek(&self, wrapped_dek: &str) -> Result<Vec<u8>> {
-        let client = Client::builder()
-            .user_agent(crate::APP_USER_AGENT)
-            .build()?;
+    fn vault_token(&self) -> Option<&str> {
+        self.globals
+            .vault_transport
+            .is_tcp()
+            .then(|| self.globals.vault_token.expose_secret())
+    }
 
-        let url = vault::endpoint_url(
-            &self.globals.vault_url,
-            &format!(
-                "/v1/{}/decrypt/totp",
-                self.globals.vault_transit_mount.trim_matches('/')
-            ),
-        )?;
+    async fn unwrap_dek(&self, wrapped_dek: &str) -> Result<Vec<u8>> {
+        let mount = self.globals.vault_transit_mount.trim_matches('/');
+        let path = format!("/v1/{mount}/decrypt/totp");
 
         let payload = json!({
             "ciphertext": wrapped_dek,
         });
 
-        let span = info_span!("vault.transit.decrypt_dek", http.method = "POST", url = %url);
-        let response = client
-            .post(&url)
-            .header("X-Vault-Token", self.globals.vault_token.expose_secret())
-            .json(&payload)
-            .send()
-            .instrument(span)
+        let response = self
+            .globals
+            .vault_transport
+            .request_json(Method::POST, &path, self.vault_token(), Some(&payload))
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body: Value = response.json().await.unwrap_or_default();
-            return Err(anyhow!("Vault decrypt failed: {status} - {body:?}"));
+        if !response.status.is_success() {
+            return Err(anyhow!(
+                "Vault decrypt failed: {} - {:?}",
+                response.status,
+                response.body
+            ));
         }
 
-        let body: Value = response.json().await?;
-        let plaintext_b64 = body
+        let plaintext_b64 = response
+            .body
             .get("data")
             .and_then(|d| d.get("plaintext"))
             .and_then(Value::as_str)
@@ -218,34 +215,24 @@ impl DekManager {
     }
 
     async fn generate_datakey(&self) -> Result<(String, String)> {
-        let client = Client::builder()
-            .user_agent(crate::APP_USER_AGENT)
-            .build()?;
-
-        let url = vault::endpoint_url(
-            &self.globals.vault_url,
-            &format!(
-                "/v1/{}/datakey/plaintext/totp",
-                self.globals.vault_transit_mount.trim_matches('/')
-            ),
-        )?;
-
-        let span = info_span!("vault.transit.generate_datakey", http.method = "POST", url = %url);
-        let response = client
-            .post(&url)
-            .header("X-Vault-Token", self.globals.vault_token.expose_secret())
-            .send()
-            .instrument(span)
+        let mount = self.globals.vault_transit_mount.trim_matches('/');
+        let path = format!("/v1/{mount}/datakey/plaintext/totp");
+        let response = self
+            .globals
+            .vault_transport
+            .request_json(Method::POST, &path, self.vault_token(), None)
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body: Value = response.json().await.unwrap_or_default();
-            return Err(anyhow!("Vault datakey gen failed: {status} - {body:?}"));
+        if !response.status.is_success() {
+            return Err(anyhow!(
+                "Vault datakey gen failed: {} - {:?}",
+                response.status,
+                response.body
+            ));
         }
 
-        let body: Value = response.json().await?;
-        let data = body
+        let data = response
+            .body
             .get("data")
             .ok_or_else(|| anyhow!("No data in response"))?;
 
@@ -262,5 +249,95 @@ impl DekManager {
             .to_string();
 
         Ok((ciphertext, plaintext))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::DekManager;
+    use crate::cli::globals::GlobalArgs;
+    use anyhow::Result;
+    use http::{Method, Request, Response, StatusCode};
+    use http_body_util::Full;
+    use hyper::{body::Bytes, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use tokio::net::UnixListener;
+    use vault_client::{VaultTarget, VaultTransport};
+
+    async fn mock_agent_service(
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        let path = req.uri().path();
+        let method = req.method();
+
+        if method == Method::POST && path == "/v1/transit/permesi/datakey/plaintext/totp" {
+            let body = json!({
+                "data": {
+                    "ciphertext": "vault:v1:ciphertext",
+                    "plaintext": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
+                }
+            });
+            return Ok(Response::new(Full::new(Bytes::from(
+                serde_json::to_vec(&body).expect("failed to serialize json"),
+            ))));
+        }
+
+        Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Full::new(Bytes::from(r#"{"errors":["path not found"]}"#)))
+            .expect("failed to build response"))
+    }
+
+    struct SocketGuard {
+        path: PathBuf,
+    }
+
+    impl Drop for SocketGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_datakey_supports_agent_socket_mode() -> Result<()> {
+        let socket_path = std::env::temp_dir().join(format!(
+            "vault-agent-dek-manager-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let _guard = SocketGuard {
+            path: socket_path.clone(),
+        };
+
+        let listener = UnixListener::bind(&socket_path)?;
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let io = TokioIo::new(stream);
+                tokio::spawn(async move {
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, service_fn(mock_agent_service))
+                        .await;
+                });
+            }
+        });
+
+        let target = VaultTarget::parse(&format!("unix://{}", socket_path.display()))?;
+        let transport = VaultTransport::from_target("test-suite", target)?;
+        let mut globals = GlobalArgs::new(socket_path.display().to_string(), transport);
+        globals.vault_transit_mount = "transit/permesi".to_string();
+
+        let manager = DekManager::new(globals);
+        let (ciphertext, plaintext) = manager.generate_datakey().await?;
+
+        assert_eq!(ciphertext, "vault:v1:ciphertext");
+        assert_eq!(plaintext, "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=");
+
+        server_handle.abort();
+        Ok(())
     }
 }

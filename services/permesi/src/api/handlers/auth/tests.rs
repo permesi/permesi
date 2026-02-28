@@ -945,6 +945,86 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn opaque_login_finish_rejects_unknown_user_after_client_completes_dummy_flow() -> Result<()>
+{
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let (admission, signing_key, kid) = test_admission_context()?;
+    let zero_token = issue_zero_token(&signing_key, &kid)?;
+    let app = opaque_router(auth_state(), admission, db.pool.clone());
+
+    let email = "opaque-unknown-user@example.com";
+    let password = b"OpaquePassword123!";
+
+    let mut rng = ChaCha20Rng::from_seed([15u8; 32]);
+    let ksf = argon2::Argon2::default();
+    let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
+
+    let login_start_payload = json!({
+        "email": email,
+        "credential_request": STANDARD.encode(login_start.message.serialize())
+    });
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/login/start")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", &zero_token)
+                .body(Body::from(login_start_payload.to_string()))?,
+        )
+        .await?;
+    assert_eq!(start_response.status(), StatusCode::OK);
+
+    let start_body = to_bytes(start_response.into_body(), usize::MAX).await?;
+    let start_json: serde_json::Value = serde_json::from_slice(&start_body)?;
+    let login_id = start_json
+        .get("login_id")
+        .and_then(serde_json::Value::as_str)
+        .context("missing login_id")?
+        .to_string();
+    let credential_response = start_json
+        .get("credential_response")
+        .and_then(serde_json::Value::as_str)
+        .context("missing credential_response")?;
+    let credential_response_bytes = STANDARD.decode(credential_response)?;
+    let credential_response =
+        CredentialResponse::<OpaqueSuite>::deserialize(&credential_response_bytes)?;
+
+    let login_finish_params = ClientLoginFinishParameters::new(
+        None,
+        identifiers(email.as_bytes(), b"api.permesi.dev"),
+        Some(&ksf),
+    );
+    let login_finish =
+        login_start
+            .state
+            .finish(password, credential_response, login_finish_params)?;
+
+    let login_finish_payload = json!({
+        "login_id": login_id,
+        "credential_finalization": STANDARD.encode(login_finish.message.serialize())
+    });
+    let finish_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/opaque/login/finish")
+                .header(CONTENT_TYPE, "application/json")
+                .header("X-Permesi-Zero-Token", &zero_token)
+                .body(Body::from(login_finish_payload.to_string()))?,
+        )
+        .await?;
+
+    assert_eq!(finish_response.status(), StatusCode::UNAUTHORIZED);
+    assert!(finish_response.headers().get(SET_COOKIE).is_none());
+    Ok(())
+}
+
 /// Verifies the full OPAQUE password rotation flow.
 ///
 /// This test executes the "4-step handshake" where the client:

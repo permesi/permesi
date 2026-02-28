@@ -21,6 +21,49 @@ postgres version="18":
       postgres -c config_file=/etc/postgresql/config/postgresql.conf
   until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do sleep 0.2; done
 
+k8s-logs target="permesi" since="10m":
+  #!/usr/bin/env zsh
+  set -euo pipefail
+
+  case "{{ target }}" in
+    permesi|genesis|web)
+      namespace="permesi-test"
+      selector="app.kubernetes.io/name={{ target }}"
+      container="{{ target }}"
+      ;;
+    gateway|envoy)
+      namespace="envoy-gateway-system"
+      selector="gateway.envoyproxy.io/owning-gateway-name=shared"
+      container="envoy"
+      ;;
+    *)
+      echo "Unknown target: {{ target }}" >&2
+      echo "Use one of: permesi, genesis, web, gateway" >&2
+      exit 1
+      ;;
+  esac
+
+  kubectl logs \
+    -n "$namespace" \
+    -l "$selector" \
+    -c "$container" \
+    --since "{{ since }}" \
+    --prefix \
+    --max-log-requests=10 \
+    -f
+
+k8s-logs-permesi since="10m":
+  just k8s-logs permesi "{{ since }}"
+
+k8s-logs-genesis since="10m":
+  just k8s-logs genesis "{{ since }}"
+
+k8s-logs-web since="10m":
+  just k8s-logs web "{{ since }}"
+
+k8s-logs-gateway since="10m":
+  just k8s-logs gateway "{{ since }}"
+
 postgres-stop:
   podman stop postgres-permesi || true
 
