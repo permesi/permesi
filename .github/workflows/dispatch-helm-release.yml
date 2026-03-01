@@ -2,17 +2,52 @@
 name: Dispatch Helm Release
 
 on:
-  push:
-    tags:
-      - '*'
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Release tag to dispatch (X.Y.Z or vX.Y.Z)
+        required: true
+        type: string
+      permesi_digest:
+        description: Published GHCR digest for ghcr.io/permesi/permesi.
+        required: false
+        default: ''
+        type: string
+      genesis_digest:
+        description: Published GHCR digest for ghcr.io/permesi/genesis.
+        required: false
+        default: ''
+        type: string
+      web_digest:
+        description: Published GHCR digest for ghcr.io/permesi/web.
+        required: false
+        default: ''
+        type: string
   workflow_dispatch:
     inputs:
       version:
         description: Release tag to dispatch (X.Y.Z or vX.Y.Z)
         required: true
         type: string
+      permesi_digest:
+        description: Published GHCR digest for ghcr.io/permesi/permesi.
+        required: false
+        default: ''
+        type: string
+      genesis_digest:
+        description: Published GHCR digest for ghcr.io/permesi/genesis.
+        required: false
+        default: ''
+        type: string
+      web_digest:
+        description: Published GHCR digest for ghcr.io/permesi/web.
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: dispatch-helm-release-${{ inputs.version }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -28,16 +63,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            raw="${{ github.event.release.tag_name }}"
-            source_tag="${{ github.event.release.tag_name }}"
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            raw="${GITHUB_REF#refs/tags/}"
-            source_tag="${GITHUB_REF#refs/tags/}"
-          else
-            raw="${{ inputs.version }}"
-            source_tag="${{ inputs.version }}"
-          fi
+          raw="${{ inputs.version }}"
+          source_tag="${{ inputs.version }}"
+          permesi_digest="${{ inputs.permesi_digest }}"
+          genesis_digest="${{ inputs.genesis_digest }}"
+          web_digest="${{ inputs.web_digest }}"
 
           version="${raw#v}"
           if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -45,8 +75,18 @@ jobs:
             exit 1
           fi
 
+          for digest in "${permesi_digest}" "${genesis_digest}" "${web_digest}"; do
+            if [[ -n "${digest}" && ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Invalid digest '${digest}'." >&2
+              exit 1
+            fi
+          done
+
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "source_tag=${source_tag}" >> "$GITHUB_OUTPUT"
+          echo "permesi_digest=${permesi_digest}" >> "$GITHUB_OUTPUT"
+          echo "genesis_digest=${genesis_digest}" >> "$GITHUB_OUTPUT"
+          echo "web_digest=${web_digest}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub App token
         id: app-token
@@ -69,7 +109,24 @@ jobs:
               "version": "${{ steps.meta.outputs.version }}",
               "source_repo": "${{ github.repository }}",
               "source_sha": "${{ github.sha }}",
-              "source_tag": "${{ steps.meta.outputs.source_tag }}"
+              "source_tag": "${{ steps.meta.outputs.source_tag }}",
+              "images": {
+                "permesi": {
+                  "repository": "ghcr.io/permesi/permesi",
+                  "tag": "${{ steps.meta.outputs.version }}",
+                  "digest": "${{ steps.meta.outputs.permesi_digest }}"
+                },
+                "genesis": {
+                  "repository": "ghcr.io/permesi/genesis",
+                  "tag": "${{ steps.meta.outputs.version }}",
+                  "digest": "${{ steps.meta.outputs.genesis_digest }}"
+                },
+                "web": {
+                  "repository": "ghcr.io/permesi/web",
+                  "tag": "${{ steps.meta.outputs.version }}",
+                  "digest": "${{ steps.meta.outputs.web_digest }}"
+                }
+              }
             }
           }
           JSON

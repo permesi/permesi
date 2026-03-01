@@ -7,6 +7,10 @@ on:
       - '*'
   workflow_dispatch:
 
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
@@ -219,6 +223,10 @@ jobs:
     name: Package GHCR
     runs-on: ubuntu-latest
     needs: [build, frontend-build]
+    outputs:
+      permesi_digest: ${{ steps.registry.outputs.permesi_digest }}
+      genesis_digest: ${{ steps.registry.outputs.genesis_digest }}
+      web_digest: ${{ steps.registry.outputs.web_digest }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -295,3 +303,65 @@ jobs:
               ${CONTAINER_TOOL} push "${image}:${tag}"
             done
           done
+
+      - name: Verify published images and resolve digests
+        id: registry
+        if: steps.meta.outputs.should_build == 'true'
+        shell: bash
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          version_tag="${GITHUB_REF#refs/tags/}"
+          accept='application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json'
+
+          verify_manifest() {
+            local service="$1"
+            local digest=""
+
+            for attempt in {1..12}; do
+              headers="$(
+                curl -fsSI \
+                  -u "${GHCR_USER}:${GHCR_TOKEN}" \
+                  -H "Accept: ${accept}" \
+                  "https://ghcr.io/v2/permesi/${service}/manifests/${version_tag}" || true
+              )"
+
+              digest="$(printf '%s\n' "${headers}" | awk 'BEGIN { IGNORECASE = 1 } /^docker-content-digest:/ { gsub("\r", "", $2); print $2; exit }')"
+              if [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "${service}:${version_tag} is readable from GHCR (${digest})" >&2
+                printf '%s\n' "${digest}"
+                return 0
+              fi
+
+              echo "Waiting for ghcr.io/permesi/${service}:${version_tag} to become readable (${attempt}/12)..." >&2
+              sleep 10
+            done
+
+            echo "Timed out waiting for ghcr.io/permesi/${service}:${version_tag} to become readable from GHCR." >&2
+            return 1
+          }
+
+          permesi_digest="$(verify_manifest permesi)"
+          genesis_digest="$(verify_manifest genesis)"
+          web_digest="$(verify_manifest web)"
+
+          echo "permesi_digest=${permesi_digest}" >> "$GITHUB_OUTPUT"
+          echo "genesis_digest=${genesis_digest}" >> "$GITHUB_OUTPUT"
+          echo "web_digest=${web_digest}" >> "$GITHUB_OUTPUT"
+
+  dispatch-helm-release:
+    name: Dispatch Helm Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    uses: ./.github/workflows/dispatch-helm-release.yml
+    permissions:
+      contents: read
+    with:
+      version: ${{ github.ref_name }}
+      permesi_digest: ${{ needs.package.outputs.permesi_digest }}
+      genesis_digest: ${{ needs.package.outputs.genesis_digest }}
+      web_digest: ${{ needs.package.outputs.web_digest }}
+    secrets: inherit

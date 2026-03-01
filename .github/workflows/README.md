@@ -37,8 +37,8 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow.
-- **`dispatch-helm-release.yml`**: On tag push (and on GitHub Release publish), sends a `repository_dispatch` event to `permesi/permesi-helm` so that repo can open a PR bumping chart `appVersion` and image tags.
+- **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow, serializes deploy runs with a workflow-level concurrency gate, and waits until the pushed GHCR tags are readable before it triggers downstream Helm automation.
+- **`dispatch-helm-release.yml`**: Sends a `repository_dispatch` event to `permesi/permesi-helm` so that repo can open a PR bumping chart `appVersion` and image tags. It is invoked from `deploy.yml` only after the GHCR package job succeeds, which avoids racing Helm updates ahead of published container images, and it now carries the published image digests in the dispatch payload so Helm can pin exact artifacts.
 
 ## Required Secrets
 
