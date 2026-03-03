@@ -144,10 +144,14 @@ pub async fn new(
     let totp_service = TotpService::new(dek_manager, pool.clone(), "Permesi".to_string());
 
     // Initialize Security Keys (WebAuthn)
+    let webauthn_allowed_origins = config
+        .auth
+        .webauthn_allowed_origins()
+        .context("Failed to derive WebAuthn allowed origins")?;
     let security_key_service = SecurityKeyService::new(
         pool.clone(),
         config.auth.webauthn_rp_id(),
-        config.auth.webauthn_rp_origin(),
+        &webauthn_allowed_origins,
     )
     .context("Failed to initialize Security Key service")?;
 
@@ -366,11 +370,11 @@ fn frontend_origins(urls: &[String]) -> Result<Vec<String>> {
 }
 
 fn init_passkey_service(auth_config: &auth::AuthConfig) -> Result<PasskeyService> {
-    let passkey_config = PasskeyConfig::from_env(
-        auth_config.webauthn_rp_id(),
-        auth_config.webauthn_rp_origin(),
-    )
-    .context("Failed to load passkey configuration")?;
+    let default_origins = auth_config
+        .webauthn_allowed_origins()
+        .context("Failed to derive passkey origins")?;
+    let passkey_config = PasskeyConfig::from_env(auth_config.webauthn_rp_id(), &default_origins)
+        .context("Failed to load passkey configuration")?;
     PasskeyService::new(passkey_config).context("Failed to initialize Passkey service")
 }
 

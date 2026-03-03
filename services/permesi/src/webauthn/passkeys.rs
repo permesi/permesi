@@ -50,7 +50,7 @@ impl PasskeyConfig {
     ///
     /// # Errors
     /// Returns error if any configured origin cannot be parsed.
-    pub fn from_env(rp_id: &str, rp_origin: &str) -> Result<Self> {
+    pub fn from_env(rp_id: &str, default_allowed_origins: &[String]) -> Result<Self> {
         let rp_id = std::env::var(ENV_PASSKEYS_RP_ID)
             .ok()
             .map(|val| val.trim().to_string())
@@ -70,7 +70,7 @@ impl PasskeyConfig {
                 .filter(|origin| !origin.is_empty())
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
-            Err(_) => vec![rp_origin.to_string()],
+            Err(_) => default_allowed_origins.to_vec(),
         };
 
         let challenge_ttl = std::env::var(ENV_PASSKEYS_CHALLENGE_TTL_SECONDS)

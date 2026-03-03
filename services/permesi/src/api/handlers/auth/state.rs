@@ -4,6 +4,7 @@
 //! used across all authentication handlers. It handles OPAQUE registration
 //! and login state management.
 
+use anyhow::{Result, anyhow};
 use opaque_ke::{CipherSuite, ServerLogin, ServerSetup, key_exchange::tripledh::TripleDh};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -134,6 +135,43 @@ impl AuthConfig {
         &self.webauthn_rp_origin
     }
 
+    /// Return normalized `WebAuthn` origins that are valid for the configured RP ID.
+    ///
+    /// `WebAuthn` only permits origins whose host is the RP ID itself or a
+    /// subdomain of it, so unrelated CORS origins are intentionally excluded.
+    ///
+    /// # Errors
+    /// Returns an error if a configured origin is not a valid URL or no origin
+    /// matches the configured RP ID trust boundary.
+    pub(crate) fn webauthn_allowed_origins(&self) -> Result<Vec<String>> {
+        let mut allowed_origins = Vec::new();
+        let mut candidates = self.cors_allowed_origins.clone();
+        candidates.push(self.webauthn_rp_origin.clone());
+
+        for candidate in candidates {
+            let normalized = normalize_origin(&candidate)?;
+            let parsed = Url::parse(&normalized)?;
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| anyhow!("WebAuthn origin must include a host: {normalized}"))?;
+
+            if origin_matches_rp_id(host, &self.webauthn_rp_id)
+                && !allowed_origins.contains(&normalized)
+            {
+                allowed_origins.push(normalized);
+            }
+        }
+
+        if allowed_origins.is_empty() {
+            return Err(anyhow!(
+                "No configured WebAuthn origins match RP ID {}",
+                self.webauthn_rp_id
+            ));
+        }
+
+        Ok(allowed_origins)
+    }
+
     #[must_use]
     pub fn opaque_kv_mount(&self) -> &str {
         &self.opaque_kv_mount
@@ -172,6 +210,21 @@ impl AuthConfig {
     pub(super) fn session_cookie_secure(&self) -> bool {
         self.frontend_base_url.starts_with("https://")
     }
+}
+
+fn normalize_origin(origin: &str) -> Result<String> {
+    let parsed = Url::parse(origin)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("Origin must include a host: {origin}"))?;
+    let port = parsed
+        .port()
+        .map_or_else(String::new, |port| format!(":{port}"));
+    Ok(format!("{}://{}{}", parsed.scheme(), host, port))
+}
+
+fn origin_matches_rp_id(host: &str, rp_id: &str) -> bool {
+    host == rp_id || host.ends_with(&format!(".{rp_id}"))
 }
 
 pub(super) struct OpaqueSuite;
@@ -399,5 +452,37 @@ mod tests {
             .filter(|o| *o == "https://permesi.dev")
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn webauthn_allowed_origins_include_rp_subdomains() -> anyhow::Result<()> {
+        let config =
+            AuthConfig::new("https://permesi.dev".to_string()).with_cors_allowed_origins(vec![
+                "https://k8s.permesi.dev".to_string(),
+                "https://www.permesi.dev".to_string(),
+            ]);
+
+        let origins = config.webauthn_allowed_origins()?;
+
+        assert!(origins.contains(&"https://permesi.dev".to_string()));
+        assert!(origins.contains(&"https://k8s.permesi.dev".to_string()));
+        assert!(origins.contains(&"https://www.permesi.dev".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn webauthn_allowed_origins_filter_unrelated_hosts() -> anyhow::Result<()> {
+        let config =
+            AuthConfig::new("https://permesi.dev".to_string()).with_cors_allowed_origins(vec![
+                "https://k8s.permesi.dev".to_string(),
+                "https://example.com".to_string(),
+            ]);
+
+        let origins = config.webauthn_allowed_origins()?;
+
+        assert!(origins.contains(&"https://permesi.dev".to_string()));
+        assert!(origins.contains(&"https://k8s.permesi.dev".to_string()));
+        assert!(!origins.contains(&"https://example.com".to_string()));
+        Ok(())
     }
 }

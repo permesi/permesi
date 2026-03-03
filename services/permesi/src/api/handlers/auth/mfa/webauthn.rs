@@ -30,6 +30,8 @@ use tracing::error;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
+type HandlerError = Box<axum::response::Response>;
+
 /// Starts the registration of a new `WebAuthn` security key.
 #[utoipa::path(
     post,
@@ -50,8 +52,13 @@ pub async fn register_start(
         Err(status) => return status.into_response(),
     };
 
+    let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
+        Ok(origin) => origin,
+        Err(response) => return *response,
+    };
+
     match webauthn_service
-        .register_begin(principal.user_id, &principal.email)
+        .register_begin(principal.user_id, &principal.email, &origin)
         .await
     {
         Ok((challenge, reg_id)) => (
@@ -104,6 +111,11 @@ pub async fn register_finish(
         return (StatusCode::BAD_REQUEST, "Invalid registration ID").into_response();
     };
 
+    let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
+        Ok(origin) => origin,
+        Err(response) => return *response,
+    };
+
     let reg_response: RegisterPublicKeyCredential = match serde_json::from_value(request.response) {
         Ok(res) => res,
         Err(err) => {
@@ -118,7 +130,13 @@ pub async fn register_finish(
     let client_ip = extract_client_ip(&headers);
 
     match webauthn_service
-        .register_finish(reg_id, reg_response, principal.user_id, &request.label)
+        .register_finish(
+            reg_id,
+            &origin,
+            reg_response,
+            principal.user_id,
+            &request.label,
+        )
         .await
     {
         Ok(()) => {
@@ -190,7 +208,15 @@ pub async fn authenticate_start(
         Err(status) => return status.into_response(),
     };
 
-    match webauthn_service.auth_begin(principal.user_id).await {
+    let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
+        Ok(origin) => origin,
+        Err(response) => return *response,
+    };
+
+    match webauthn_service
+        .auth_begin(principal.user_id, &origin)
+        .await
+    {
         Ok((challenge, auth_id)) => (
             StatusCode::OK,
             Json(WebauthnAuthenticateStartResponse {
@@ -238,6 +264,11 @@ pub async fn authenticate_finish(
         return (StatusCode::BAD_REQUEST, "Invalid authentication ID").into_response();
     };
 
+    let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
+        Ok(origin) => origin,
+        Err(response) => return *response,
+    };
+
     let auth_response: PublicKeyCredential = match serde_json::from_value(request.response) {
         Ok(res) => res,
         Err(err) => {
@@ -251,7 +282,10 @@ pub async fn authenticate_finish(
 
     let client_ip = extract_client_ip(&headers);
 
-    match webauthn_service.auth_finish(auth_id, auth_response).await {
+    match webauthn_service
+        .auth_finish(auth_id, &origin, auth_response)
+        .await
+    {
         Ok(_) => {
             // Success: Upgrade to full session
             let (token, ttl_seconds) = match insert_session(
@@ -308,6 +342,28 @@ pub async fn authenticate_finish(
                 .into_response()
         }
     }
+}
+
+/// Extract and normalize the browser `Origin` for `WebAuthn` MFA flows.
+///
+/// The origin must be explicitly configured for the security-key service and
+/// is bound to the in-progress challenge state.
+fn extract_origin(
+    headers: &HeaderMap,
+    webauthn_service: &SecurityKeyService,
+) -> Result<String, HandlerError> {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            Box::new((StatusCode::BAD_REQUEST, "Missing Origin header").into_response())
+        })?;
+
+    webauthn_service
+        .match_origin(origin)
+        .ok_or_else(|| Box::new((StatusCode::BAD_REQUEST, "Origin not allowed").into_response()))
 }
 
 /// Deletes a registered `WebAuthn` security key.

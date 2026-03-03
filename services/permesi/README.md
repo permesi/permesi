@@ -145,6 +145,10 @@ returns a short-lived admin `PASETO` (`v4.public`) token. That admin token is th
 Passkeys are stored in the `passkeys` table and serialized using the `webauthn-rs` `Passkey`
 type to preserve counters and backup state. Passkey login issues the same session kinds as
 password login (full, MFA bootstrap, or MFA challenge) based on the stored MFA state.
+By default, both passkeys and MFA security keys accept the primary frontend origin plus any
+configured CORS origins whose host matches the configured WebAuthn RP ID or one of its
+subdomains. This keeps alternate trusted frontends such as `https://k8s.permesi.dev` working
+without widening the RP trust boundary to unrelated origins.
 
 Set `PERMESI_PASSKEYS_PREVIEW_MODE=true` to disable persistence and login while still allowing
 registration verification (useful for staged rollouts).
