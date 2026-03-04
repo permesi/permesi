@@ -272,7 +272,7 @@ pub fn PasskeysSection() -> impl IntoView {
             );
             let finish = start
                 .state
-                .finish(password.as_bytes(), credential_response, params)
+                .finish(&mut rng, password.as_bytes(), credential_response, params)
                 .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
 
             let finish_request = OpaqueReauthFinishRequest {

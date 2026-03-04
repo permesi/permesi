@@ -15,8 +15,7 @@ pub struct OpaqueSuite;
 
 impl CipherSuite for OpaqueSuite {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeGroup = opaque_ke::Ristretto255;
-    type KeyExchange = TripleDh;
+    type KeyExchange = TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
     type Ksf = Argon2<'static>;
 }
 

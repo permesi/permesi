@@ -114,7 +114,12 @@ pub fn LoginPage() -> impl IntoView {
             );
             let finish = start
                 .state
-                .finish(input.password.as_bytes(), credential_response, params)
+                .finish(
+                    &mut rng,
+                    input.password.as_bytes(),
+                    credential_response,
+                    params,
+                )
                 .map_err(|_| AppError::Config("Unable to complete secure login.".to_string()))?;
 
             let finish_request = OpaqueLoginFinishRequest {
