@@ -15,6 +15,6 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres"] }
-testcontainers = { version = "0.26", features = ["http_wait"] }
+testcontainers = { version = "0.27", features = ["http_wait"] }
 tokio = { workspace = true }
 uuid = { workspace = true }

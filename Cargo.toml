@@ -31,7 +31,7 @@ blake2 = "0.10"
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 pasetors = "0.7"
 once_cell = "1.21"
-opaque-ke = { version = "3.0.0", features = ["argon2", "std"] }
+opaque-ke = { version = "4.0.1", features = ["argon2", "std"] }
 clap = { version = "4", features = ["env"] }
 opentelemetry = "0.31"
 opentelemetry-otlp = { version = "0.31", features = ["tls-roots", "tls", "grpc-tonic", "gzip-tonic", "trace"] }
@@ -83,7 +83,7 @@ url = "2.5"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
 uuid = { version = "1.21", features = ["v1", "v4", "v7", "serde"] }
-built = { version = "0.7", features = ["git2"] }
+built = { version = "0.8", features = ["git2"] }
 
 [profile.release]
 lto = "fat"

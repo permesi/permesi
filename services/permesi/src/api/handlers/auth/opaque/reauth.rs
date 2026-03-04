@@ -25,8 +25,8 @@ use axum::{
 };
 use base64::Engine;
 use opaque_ke::{
-    CredentialFinalization, CredentialRequest, Identifiers, ServerLogin,
-    ServerLoginStartParameters, ServerRegistration,
+    CredentialFinalization, CredentialRequest, Identifiers, ServerLogin, ServerLoginParameters,
+    ServerRegistration,
 };
 use rand::rngs::OsRng;
 use sqlx::PgPool;
@@ -145,7 +145,7 @@ async fn build_reauth_start_response(
         }
     };
 
-    let params = ServerLoginStartParameters {
+    let params = ServerLoginParameters {
         context: None,
         identifiers: Identifiers {
             client: Some(principal.email.as_bytes()),
@@ -242,7 +242,11 @@ pub async fn opaque_reauth_finish(
         return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
     }
 
-    if login_state.state.finish(credential_finalization).is_err() {
+    if login_state
+        .state
+        .finish(credential_finalization, ServerLoginParameters::default())
+        .is_err()
+    {
         return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
     }
 

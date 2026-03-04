@@ -820,7 +820,7 @@ async fn opaque_signup_login_flow_success() -> Result<()> {
     let login_finish =
         login_start
             .state
-            .finish(password, credential_response, login_finish_params)?;
+            .finish(&mut rng, password, credential_response, login_finish_params)?;
 
     let login_finish_payload = json!({
         "login_id": login_id,
@@ -920,10 +920,12 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
         identifiers(email.as_bytes(), b"api.permesi.dev"),
         Some(&ksf),
     );
-    let login_finish =
-        login_start
-            .state
-            .finish(wrong_password, credential_response, login_finish_params)?;
+    let login_finish = login_start.state.finish(
+        &mut rng,
+        wrong_password,
+        credential_response,
+        login_finish_params,
+    )?;
 
     let login_finish_payload = json!({
         "login_id": login_id,
@@ -1003,7 +1005,7 @@ async fn opaque_login_finish_rejects_unknown_user_after_client_completes_dummy_f
     let login_finish =
         login_start
             .state
-            .finish(password, credential_response, login_finish_params)?;
+            .finish(&mut rng, password, credential_response, login_finish_params)?;
 
     let login_finish_payload = json!({
         "login_id": login_id,
@@ -1382,7 +1384,7 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
     let client_login_final =
         client_login_start
             .state
-            .finish(wrong_password, cred_res, login_params)?;
+            .finish(&mut rng, wrong_password, cred_res, login_params)?;
     let finish_payload = json!({
         "login_id": start_res["login_id"],
         "credential_finalization": STANDARD.encode(client_login_final.message.serialize())
