@@ -27,7 +27,8 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 - **`test.yml`**: Handles formatting, linting (clippy), and unit/integration tests.
 - **`build.yml`**: Compiles the Rust services and builds the Leptos frontend. The frontend build clears the
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
-  reuse stale build artifacts when deploying Cloudflare Pages.
+  reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
+  pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
   It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed
