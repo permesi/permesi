@@ -68,7 +68,7 @@ pub fn new() -> Command {
             Arg::new("port")
                 .short('p')
                 .long("port")
-                .help("Port to listen on")
+                .help("Port to listen on (prefers [::], falls back to 0.0.0.0)")
                 .default_value("8080")
                 .env("PERMESI_PORT")
                 .value_parser(clap::value_parser!(u16)),

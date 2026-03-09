@@ -21,6 +21,10 @@ Admission tokens use RFC3339 `iat` / `exp` claims.
 
 Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8001` and point the PASERK URL at `genesis` on `:8000` to avoid collisions.
 
+When serving over TCP/TLS (that is, without `--socket-path`), `permesi` first binds `[::]:PORT`
+with dual-stack enabled so one listener can accept both IPv6 and IPv4 traffic. If the host does
+not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
+
 ### TCP Mode (AppRole)
 
 `--vault-url` points to the AppRole login endpoint. Requires role-id and secret-id (or wrapped token).
