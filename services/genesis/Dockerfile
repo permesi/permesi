@@ -1,6 +1,8 @@
 # Stage 1: build a static binary with musl.
 FROM messense/rust-musl-cross:x86_64-musl AS builder
 ARG TARGET=x86_64-unknown-linux-musl
+ARG BUILD_GIT_COMMIT_HASH=unknown
+ENV BUILD_GIT_COMMIT_HASH=${BUILD_GIT_COMMIT_HASH}
 
 # Keep the builder minimal; we only need git for Cargo deps.
 RUN apt-get update && \

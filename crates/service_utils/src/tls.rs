@@ -13,9 +13,11 @@ use rustls::{
     sign::CertifiedKey,
 };
 use rustls_pemfile::certs;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     fs::File,
-    io::BufReader,
+    io::{self, BufReader, ErrorKind},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock, RwLock},
 };
@@ -104,6 +106,33 @@ pub fn load_reqwest_ca() -> Result<Vec<Certificate>> {
     Ok(Vec::new())
 }
 
+/// Bind the HTTPS listener on all interfaces, preferring a dual-stack IPv6 socket.
+///
+/// The listener first tries `[::]:port` with `IPV6_V6ONLY` disabled so one socket
+/// accepts both IPv6 and IPv4-mapped connections. If the host does not provide a
+/// usable IPv6 stack, the helper falls back to `0.0.0.0:port`.
+///
+/// # Errors
+/// Returns an error if neither the dual-stack IPv6 listener nor the IPv4 fallback
+/// can be created and bound.
+pub fn bind_dual_stack_listener(port: u16) -> Result<(TcpListener, String)> {
+    let ipv6_addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0));
+    match bind_ipv6_dual_stack_listener(ipv6_addr) {
+        Ok(listener) => {
+            let display = display_listener_addr(&listener)?;
+            Ok((listener, display))
+        }
+        Err(err) if ipv6_unavailable(&err) => {
+            let ipv4_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port));
+            let listener = bind_ipv4_listener(ipv4_addr)
+                .with_context(|| format!("Failed to bind IPv4 fallback listener on {ipv4_addr}"))?;
+            let display = display_listener_addr(&listener)?;
+            Ok((listener, display))
+        }
+        Err(err) => Err(err),
+    }
+}
+
 fn load_reqwest_ca_from(path: &Path) -> Result<Vec<Certificate>> {
     let file = File::open(path)
         .with_context(|| format!("Failed to open TLS CA bundle: {}", path.display()))?;
@@ -125,6 +154,64 @@ fn load_reqwest_ca_from(path: &Path) -> Result<Vec<Certificate>> {
     }
 
     Ok(certs)
+}
+
+fn bind_ipv6_dual_stack_listener(addr: SocketAddr) -> Result<TcpListener> {
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))
+        .context("Failed to create IPv6 TCP socket")?;
+    socket
+        .set_only_v6(false)
+        .context("Failed to configure IPv6 socket for dual-stack mode")?;
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("Failed to bind dual-stack IPv6 listener on {addr}"))?;
+    socket
+        .listen(1024)
+        .context("Failed to listen on dual-stack IPv6 socket")?;
+    socket
+        .set_nonblocking(true)
+        .context("Failed to mark dual-stack IPv6 listener non-blocking")?;
+    Ok(socket.into())
+}
+
+fn bind_ipv4_listener(addr: SocketAddr) -> Result<TcpListener> {
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+        .context("Failed to create IPv4 TCP socket")?;
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("Failed to bind IPv4 listener on {addr}"))?;
+    socket
+        .listen(1024)
+        .context("Failed to listen on IPv4 socket")?;
+    socket
+        .set_nonblocking(true)
+        .context("Failed to mark IPv4 listener non-blocking")?;
+    Ok(socket.into())
+}
+
+fn display_listener_addr(listener: &TcpListener) -> Result<String> {
+    let local_addr = listener
+        .local_addr()
+        .context("Failed to read bound listener address")?;
+    Ok(match local_addr {
+        SocketAddr::V4(addr) => format!("0.0.0.0:{}", addr.port()),
+        SocketAddr::V6(addr) => format!("[::]:{}", addr.port()),
+    })
+}
+
+fn ipv6_unavailable(err: &anyhow::Error) -> bool {
+    err.chain().any(|source| {
+        source
+            .downcast_ref::<io::Error>()
+            .is_some_and(io_error_is_ipv6_unavailable)
+    })
+}
+
+fn io_error_is_ipv6_unavailable(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        ErrorKind::AddrNotAvailable | ErrorKind::Unsupported
+    ) || matches!(err.raw_os_error(), Some(43 | 47 | 49 | 93 | 97 | 99))
 }
 
 fn load_server_config_from(paths: &TlsPaths) -> Result<ServerConfig> {
@@ -285,7 +372,7 @@ fn load_root_store(path: &Path) -> Result<RootCertStore> {
 mod tests {
     use super::*;
     use rcgen::{CertificateParams, KeyPair};
-    use std::path::PathBuf;
+    use std::{net::SocketAddr, path::PathBuf};
     use uuid::Uuid;
     fn missing_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("utils-tls-test-{label}-{}", Uuid::new_v4()))
@@ -545,5 +632,17 @@ mod tests {
             "Failed to load valid server config: {:?}",
             config.err()
         );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_dual_stack_listener_reports_bound_family() {
+        let (listener, display) = bind_dual_stack_listener(0).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        match listener.local_addr().unwrap() {
+            SocketAddr::V4(_) => assert_eq!(display, format!("0.0.0.0:{port}")),
+            SocketAddr::V6(_) => assert_eq!(display, format!("[::]:{port}")),
+        }
     }
 }

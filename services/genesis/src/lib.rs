@@ -44,9 +44,12 @@ pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
-pub const GIT_COMMIT_HASH: &str = match built_info::GIT_COMMIT_HASH {
+pub const GIT_COMMIT_HASH: &str = match built_info::FALLBACK_GIT_COMMIT_HASH {
     Some(hash) => hash,
-    None => "unknown",
+    None => match built_info::GIT_COMMIT_HASH {
+        Some(hash) => hash,
+        None => "unknown",
+    },
 };
 
 pub const APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);

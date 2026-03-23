@@ -182,6 +182,10 @@ jobs:
             if [[ "${service}" == "web" ]]; then
               dockerfile="apps/web/Dockerfile"
             fi
-            ${CONTAINER_TOOL} build -f "${dockerfile}" -t "${image}:develop" .
+            ${CONTAINER_TOOL} build \
+              --build-arg "BUILD_GIT_COMMIT_HASH=${GITHUB_SHA}" \
+              -f "${dockerfile}" \
+              -t "${image}:develop" \
+              .
             ${CONTAINER_TOOL} push "${image}:develop"
           done

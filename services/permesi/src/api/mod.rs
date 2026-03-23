@@ -18,12 +18,7 @@ use axum::{
     routing::{get, options},
 };
 use sqlx::postgres::PgPoolOptions;
-use std::{
-    net::{IpAddr, Ipv6Addr, SocketAddr},
-    os::unix::fs::PermissionsExt,
-    sync::Arc,
-    time::Duration,
-};
+use std::{os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, mpsc};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -289,6 +284,10 @@ async fn serve_socket(
 
 /// Serve the API over TLS using Vault-issued certificates.
 ///
+/// The listener prefers a dual-stack IPv6 socket so one bind can accept both
+/// IPv6 and IPv4 traffic. Hosts without usable IPv6 support fall back to an
+/// IPv4 wildcard listener.
+///
 /// # Errors
 /// Returns an error if TLS configuration or the server fails to start.
 async fn serve_tls(
@@ -298,7 +297,7 @@ async fn serve_tls(
 ) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
-    let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
+    let (listener, listen_addr) = tls::bind_dual_stack_listener(port)?;
     let handle = axum_server::Handle::new();
 
     let shutdown_reason = Arc::new(Mutex::new(None));
@@ -320,9 +319,10 @@ async fn serve_tls(
         "TLS enabled; bundle loaded from {}",
         tls_paths.pem_bundle_path().display()
     );
-    info!("Listening on https://[::]:{}", port);
+    info!("Listening on https://{listen_addr}");
 
-    axum_server::bind_rustls(addr, tls_config)
+    axum_server::from_tcp_rustls(listener, tls_config)
+        .context("Failed to configure TLS server from pre-bound TCP listener")?
         .handle(handle)
         .serve(app.into_make_service())
         .await?;

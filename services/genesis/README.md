@@ -73,6 +73,10 @@ CLI args (also available via env vars):
 
 Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8000` to avoid collisions.
 
+When serving over TCP/TLS (that is, without `--socket-path`), `genesis` first binds `[::]:PORT`
+with dual-stack enabled so one listener can accept both IPv6 and IPv4 traffic. If the host does
+not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
+
 ### Connectivity Modes
 
 **1. TCP Mode (AppRole)**

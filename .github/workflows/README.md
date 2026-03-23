@@ -29,6 +29,8 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
   pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
+  The service image builds inject `github.sha` as `BUILD_GIT_COMMIT_HASH` because the Docker build context
+  excludes `.git`, and the binaries would otherwise report an unknown commit.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
   It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed
@@ -38,7 +40,7 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It also runs the frontend deploy workflow, serializes deploy runs with a workflow-level concurrency gate, and waits until the pushed GHCR tags are readable before it triggers downstream Helm automation.
+- **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It injects `github.sha` into service image builds so `/health` and CLI build metadata keep the tagged commit even though `.git` is not present in the container build context. It also runs the frontend deploy workflow, serializes deploy runs with a workflow-level concurrency gate, and waits until the pushed GHCR tags are readable before it triggers downstream Helm automation.
 - **`dispatch-helm-release.yml`**: Sends a `repository_dispatch` event to `permesi/permesi-helm` so that repo can open a PR bumping chart `appVersion` and image tags. It is invoked from `deploy.yml` only after the GHCR package job succeeds, which avoids racing Helm updates ahead of published container images, and it now carries the published image digests in the dispatch payload so Helm can pin exact artifacts.
 
 ## Required Secrets

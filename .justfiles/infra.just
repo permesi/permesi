@@ -386,10 +386,12 @@ haproxy-socket-start:
   if [[ "$(uname -s)" == "Linux" ]]; then
     add_host_arg=(--add-host=host.containers.internal:host-gateway)
   fi
+  socket_user_args=(--userns keep-id --user "$(id -u):$(id -g)")
 
   echo "Starting HAProxy (socket mode)..."
   if ! podman run --replace -d --name permesi-haproxy \
     "${add_host_arg[@]}" \
+    "${socket_user_args[@]}" \
     "${port_args[@]}" \
     -v "$cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
     -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \

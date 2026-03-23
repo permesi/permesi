@@ -297,7 +297,11 @@ jobs:
               build_tags+=(-t "${image}:${tag}")
             done
 
-            ${CONTAINER_TOOL} build -f "${dockerfile}" "${build_tags[@]}" .
+            ${CONTAINER_TOOL} build \
+              --build-arg "BUILD_GIT_COMMIT_HASH=${GITHUB_SHA}" \
+              -f "${dockerfile}" \
+              "${build_tags[@]}" \
+              .
 
             for tag in "${tags[@]}"; do
               ${CONTAINER_TOOL} push "${image}:${tag}"

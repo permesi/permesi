@@ -283,6 +283,7 @@ Default ports: genesis `8000`, permesi `8001`, web `8080`.
 
 Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443`. The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
 If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
+In socket mode, the HAProxy container runs with your current UID/GID so it can open the `0660` Unix sockets created under `.tmp/` without widening local socket permissions.
 
 If you want to run services manually instead of using the all-in-one `just start` (socket mode):
 1) Run services: `just genesis-socket` and `just permesi-socket` (or `just start-http` for the TCP flow). They auto-source `.envrc`, so direnv is optional.

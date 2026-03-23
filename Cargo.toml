@@ -42,6 +42,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 rcgen = "0.14"
 rustls = "0.23"
 rustls-pemfile = "2.2"
+socket2 = "0.6"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 secrecy = "0.10.3"
 serde = "1.0"
@@ -82,7 +83,7 @@ ulid = "1.2"
 url = "2.5"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
-uuid = { version = "1.21", features = ["v1", "v4", "v7", "serde"] }
+uuid = { version = "1.22", features = ["v1", "v4", "v7", "serde"] }
 built = { version = "0.8", features = ["git2"] }
 
 [profile.release]
