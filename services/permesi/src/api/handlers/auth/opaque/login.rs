@@ -31,10 +31,10 @@ use opaque_ke::{
     CredentialFinalization, CredentialRequest, Identifiers, ServerLogin, ServerLoginParameters,
     ServerRegistration,
 };
-use rand::rngs::OsRng;
+use opaque_rand_core::OsRng;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::{error, warn};
+use tracing::error;
 use uuid::Uuid;
 
 #[utoipa::path(
@@ -73,6 +73,7 @@ pub async fn opaque_login_start(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -80,6 +81,7 @@ pub async fn opaque_login_start(
     if auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -172,10 +174,16 @@ async fn build_login_start_response(
     };
 
     // Store the login state server-side so finish can complete the exchange.
-    let login_id = auth_state
+    let Some(login_id) = auth_state
         .opaque()
         .store_login_state(start_result.state, user_id)
-        .await;
+        .await
+    else {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many pending login attempts".to_string(),
+        ));
+    };
     let credential_response =
         base64::engine::general_purpose::STANDARD.encode(start_result.message.serialize());
 
@@ -242,59 +250,27 @@ pub async fn opaque_login_finish(
         return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
     };
 
-    // Missing user IDs mean the login was intentionally made non-committal.
-    if login_state.user_id.is_none() {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
-    }
-
-    match login_state
+    // Always finish the protocol before resolving the intentionally hidden user
+    // association. Unknown accounts and wrong passwords therefore perform the
+    // same server-side OPAQUE verification work.
+    let finish_result = login_state
         .state
-        .finish(credential_finalization, ServerLoginParameters::default())
-    {
-        Ok(_) => {
-            let Some(user_id) = login_state.user_id else {
-                return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
-            };
-            let mfa_record = match mfa::storage::load_mfa_state(&pool, user_id).await {
-                Ok(record) => record,
-                Err(err) => {
-                    if auth_state.mfa().required() {
-                        error!("Failed to load MFA state: {err}");
+        .finish(credential_finalization, ServerLoginParameters::default());
+
+    match (finish_result, login_state.user_id) {
+        (Ok(_), Some(user_id)) => {
+            let mfa_state =
+                match mfa::resolve_login_mfa_state(&pool, user_id, auth_state.mfa()).await {
+                    Ok(state) => state,
+                    Err(err) => {
+                        error!("Failed to resolve MFA state: {err}");
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "Login failed".to_string(),
                         )
                             .into_response();
                     }
-                    warn!("Skipping MFA state enforcement: {err}");
-                    None
-                }
-            };
-
-            let mut mfa_state = mfa_record
-                .as_ref()
-                .map_or(MfaState::Disabled, |record| record.state);
-
-            let effective_state =
-                mfa::enforce_required_state(auth_state.mfa().required(), mfa_state);
-            if effective_state == MfaState::RequiredUnenrolled
-                && mfa_state != MfaState::RequiredUnenrolled
-                && let Err(err) = mfa::storage::upsert_mfa_state(
-                    &pool,
-                    user_id,
-                    MfaState::RequiredUnenrolled,
-                    None,
-                )
-                .await
-            {
-                error!("Failed to set MFA required state: {err}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response();
-            }
-            mfa_state = effective_state;
+                };
 
             let (token, ttl_seconds) = match mfa_state {
                 MfaState::RequiredUnenrolled => {
@@ -372,7 +348,7 @@ pub async fn opaque_login_finish(
                 }
             }
         }
-        Err(_) => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
+        _ => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
     }
 }
 

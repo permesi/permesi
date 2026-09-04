@@ -20,7 +20,7 @@
 //! The default sender for local dev is `LogEmailSender`, which logs and returns `Ok(())`.
 //! Poll interval and retry/backoff settings are configurable via `EmailWorkerConfig`.
 use anyhow::{Context, Result};
-use rand::Rng;
+use rand::RngExt;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,7 +76,7 @@ impl EmailWorkerConfig {
             batch_size: 10,
             max_attempts: 5,
             backoff_base: Duration::from_secs(5),
-            backoff_max: Duration::from_secs(300),
+            backoff_max: Duration::from_mins(5),
         }
     }
 
@@ -367,6 +367,6 @@ fn jitter_delay(delay: Duration) -> Duration {
         return delay;
     }
     let half = delay_ms / 2;
-    let jitter = rand::thread_rng().gen_range(0..=half);
+    let jitter = rand::rng().random_range(0..=half);
     Duration::from_millis(half + jitter)
 }

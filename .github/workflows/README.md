@@ -24,7 +24,11 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 
 ## Workflow Overview
 
-- **`test.yml`**: Handles formatting, linting (clippy), and unit/integration tests.
+- **`test.yml`**: Handles formatting, linting (clippy), dependency auditing for the web app, and
+  unit/integration tests.
+- **`security-audit.yml`**: Audits the locked Rust dependency graph for vulnerabilities, unsound
+  advisories, and yanked crates when Cargo dependency files change, on manual runs, and weekly so
+  newly published RustSec advisories are detected without duplicating the normal test workflow.
 - **`build.yml`**: Compiles the Rust services and builds the Leptos frontend. The frontend build clears the
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and

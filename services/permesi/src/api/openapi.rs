@@ -1,4 +1,4 @@
-use super::handlers::{auth, health, me, me_webauthn, orgs, user_login, user_register, users};
+use super::handlers::{auth, health, me, me_webauthn, orgs, users};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -20,8 +20,6 @@ pub(crate) fn api_router() -> OpenApiRouter {
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(health::health))
-        .routes(routes!(user_register::register))
-        .routes(routes!(user_login::login))
         .routes(routes!(auth::opaque::signup::opaque_signup_start))
         .routes(routes!(auth::opaque::signup::opaque_signup_finish))
         .routes(routes!(auth::opaque::login::opaque_login_start))
@@ -179,6 +177,12 @@ fn parse_author(author: &str) -> (Option<&str>, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
 
     #[test]
     fn openapi_info_from_cargo() {
@@ -206,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn openapi_tags_and_paths() {
+    fn openapi_tags_and_paths() -> Result<()> {
         let spec = openapi();
         let tags = spec.tags.clone().unwrap_or_default();
         assert!(tags.iter().any(|tag| tag.name == "permesi"));
@@ -214,6 +218,24 @@ mod tests {
         assert!(spec.paths.paths.contains_key("/live"));
         assert!(spec.paths.paths.contains_key("/ready"));
         assert!(spec.paths.paths.contains_key("/health"));
+        assert!(
+            spec.paths
+                .paths
+                .contains_key("/v1/auth/opaque/signup/start")
+        );
+        assert!(
+            spec.paths
+                .paths
+                .contains_key("/v1/auth/opaque/signup/finish")
+        );
+        assert!(spec.paths.paths.contains_key("/v1/auth/opaque/login/start"));
+        assert!(
+            spec.paths
+                .paths
+                .contains_key("/v1/auth/opaque/login/finish")
+        );
+        assert!(!spec.paths.paths.contains_key("/user/login"));
+        assert!(!spec.paths.paths.contains_key("/user/register"));
         assert!(
             spec.paths
                 .paths
@@ -246,5 +268,25 @@ mod tests {
                 .paths
                 .contains_key("/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps")
         );
+
+        let document = serde_json::to_string(&spec)?;
+        assert!(!document.contains("\"UserLogin\""));
+        assert!(!document.contains("\"UserRegister\""));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_password_routes_are_not_registered() -> Result<()> {
+        let (router, _) = api_router().split_for_parts();
+
+        for path in ["/user/login", "/user/register"] {
+            let response = router
+                .clone()
+                .oneshot(Request::post(path).body(Body::empty())?)
+                .await?;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+
+        Ok(())
     }
 }

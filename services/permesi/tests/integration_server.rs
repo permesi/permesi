@@ -218,7 +218,7 @@ async fn bootstrap_runtime_role(conn: &mut PgConnection) -> Result<()> {
 
 async fn apply_schema(connection: &mut PgConnection, sql: &str) -> Result<()> {
     for (index, statement) in split_sql_statements(sql).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut *connection)
             .await
             .with_context(|| format!("Failed to execute schema statement {}", index + 1))?;

@@ -11,8 +11,6 @@ use admission_token::{
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use rand::RngCore;
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
@@ -59,7 +57,7 @@ impl AdminTokenSigner {
     /// Returns an error if the key ID cannot be derived.
     pub fn new() -> Result<Self> {
         let mut bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut bytes);
+        getrandom::fill(&mut bytes).context("generate admin signing key")?;
         let signing_key = SigningKey::from_bytes(&bytes);
         let verifying_key = signing_key.verifying_key();
         let key = PaserkKey::from_ed25519_public_key_bytes(&verifying_key.to_bytes())

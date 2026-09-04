@@ -22,22 +22,31 @@ admission_token = { path = "crates/admission_token" }
 vault_client = { path = "crates/vault_client" }
 test_support = { path = "crates/test_support" }
 service_utils = { path = "crates/service_utils" }
-argon2 = "0.5"
+argon2 = "0.6"
 anyhow = "1"
 axum = { version = "0.8", features = ["tracing"] }
-base64 = "0.22"
+base64 = "0.23"
 base64ct = { version = "1.8.3", features = ["alloc"] }
-blake2 = "0.10"
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
-pasetors = "0.7"
+blake2 = "0.11"
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
+getrandom = "0.4"
+pasetors = "0.8"
 once_cell = "1.21"
 opaque-ke = { version = "4.0.1", features = ["argon2", "std"] }
+# opaque-ke 4.x exposes protocol traits from the older digest, password-hash, and
+# rand_core ecosystems. Keep those versions isolated behind explicit aliases while
+# the rest of the workspace uses the current crates below.
+opaque_argon2 = { package = "argon2", version = "0.5" }
+opaque_rand_chacha = { package = "rand_chacha", version = "0.3" }
+opaque_rand_core = { package = "rand_core", version = "0.6", features = ["getrandom", "std"] }
+opaque_sha2 = { package = "sha2", version = "0.10" }
 clap = { version = "4", features = ["env"] }
-opentelemetry = "0.31"
-opentelemetry-otlp = { version = "0.31", features = ["tls-roots", "tls", "grpc-tonic", "gzip-tonic", "trace"] }
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
-rand = "0.8.5"
-rand_chacha = "0.3"
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", features = ["tls-roots", "tls", "grpc-tonic", "gzip-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+rand = "0.10.2"
+rand_chacha = "0.10"
+rand_core = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rcgen = "0.14"
 rustls = "0.23"
@@ -47,7 +56,7 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 secrecy = "0.10.3"
 serde = "1.0"
 serde_json = "1.0"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -57,7 +66,7 @@ hyperlocal = "0.9"
 http = "1"
 http-body-util = "0.1"
 bytes = "1"
-sqlx = { version = "0.8", default-features = false, features = [
+sqlx = { version = "0.9", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
@@ -69,7 +78,7 @@ temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.14" }
 tower = "0.5"
-tower-http = { version = "0.6", features = [
+tower-http = { version = "0.7", features = [
     "trace",
     "cors",
     "request-id",
@@ -77,13 +86,13 @@ tower-http = { version = "0.6", features = [
     "propagate-header",
 ] }
 tracing = "0.1"
-tracing-opentelemetry = "0.32"
+tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-ulid = "1.2"
+ulid = "3.0"
 url = "2.5"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2.0"
-uuid = { version = "1.22", features = ["v1", "v4", "v7", "serde"] }
+uuid = { version = "1.26", features = ["v1", "v4", "v7", "serde"] }
 built = { version = "0.8", features = ["git2"] }
 
 [profile.release]

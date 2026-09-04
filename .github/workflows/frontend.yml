@@ -24,7 +24,7 @@ jobs:
       attestations: write
     steps:
       - name: 'Integrity: Download Dist Artifact'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: apps/web/dist
@@ -43,7 +43,7 @@ jobs:
           cat SHA256SUMS
 
       - name: 'Integrity: Install Cosign'
-        uses: sigstore/cosign-installer@v4.0.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: 'Integrity: Sign Checksums'
         working-directory: apps/web/dist
@@ -55,12 +55,12 @@ jobs:
             SHA256SUMS
 
       - name: 'Integrity: Attest Build Provenance'
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: apps/web/dist/**
 
       - name: 'Integrity: Upload Signed Dist Artifact'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-dist-signed
           path: apps/web/dist
@@ -73,7 +73,7 @@ jobs:
       contents: read
     steps:
       - name: 'Deploy: Download Signed Dist Artifact'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist-signed
           path: apps/web/dist
@@ -100,5 +100,6 @@ jobs:
         working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
         run: npx wrangler pages deploy dist --project-name permesi --branch "$DEPLOY_BRANCH"

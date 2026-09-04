@@ -419,7 +419,10 @@ haproxy-sysctl:
 # Restart everything: stop infra and tmux, then start again
 restart: stop start
 
-start:
+# Backward-compatible aliases for the renamed start recipes
+alias start-http := start
+
+start-socket: _assert-not-devpod
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v tmux >/dev/null 2>&1; then
@@ -468,7 +471,7 @@ start:
   start_session
   tmux attach -t "$session"
 
-start-http:
+start: _assert-not-devpod
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v tmux >/dev/null 2>&1; then
@@ -537,7 +540,7 @@ tmux-stop:
   #!/usr/bin/env zsh
   tmux kill-session -t permesi 2>/dev/null || true
 
-reset: stop
+reset: _assert-not-devpod stop
   #!/usr/bin/env zsh
   set -euo pipefail
   just vault-reset

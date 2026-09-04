@@ -58,6 +58,7 @@ pub async fn verify_email(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::VerifyEmail)
+        .await
         == RateLimitDecision::Limited
     {
         // Rate limits are enforced before any token work to avoid amplification.
@@ -87,6 +88,7 @@ pub async fn verify_email(
         && auth_state
             .rate_limiter()
             .check_email(&email, RateLimitAction::VerifyEmail)
+            .await
             == RateLimitDecision::Limited
     {
         // Email-based limits reduce repeated verification attempts for the same address.
@@ -157,6 +159,7 @@ pub async fn resend_verification(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::ResendVerification)
+        .await
         == RateLimitDecision::Limited
     {
         // Resend is intentionally opaque; rate limits still return 204.
@@ -165,6 +168,7 @@ pub async fn resend_verification(
     if auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::ResendVerification)
+        .await
         == RateLimitDecision::Limited
     {
         return StatusCode::NO_CONTENT.into_response();
@@ -189,7 +193,7 @@ pub async fn resend_verification(
 
 #[cfg(test)]
 mod tests {
-    use super::super::rate_limit::{NoopRateLimiter, RateLimiter};
+    use super::super::rate_limit::RateLimiter;
     use super::super::state::{AuthConfig, AuthState, OpaqueState};
     use super::{VerifyEmailRequest, resend_verification, verify_email};
     use crate::api::handlers::AdmissionVerifier;
@@ -224,8 +228,9 @@ mod tests {
             [1u8; 32],
             "api.permesi.dev".to_string(),
             Duration::from_secs(30),
+            10_000,
         );
-        let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
+        let limiter = Arc::new(RateLimiter::noop());
         Arc::new(AuthState::new(
             config,
             opaque,

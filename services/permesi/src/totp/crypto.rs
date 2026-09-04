@@ -1,17 +1,16 @@
 use anyhow::Result;
 use chacha20poly1305::{
-    ChaCha20Poly1305, Key, Nonce,
+    ChaCha20Poly1305, Nonce,
     aead::{Aead, KeyInit, Payload},
 };
-use rand::{RngCore, rngs::OsRng};
 use uuid::Uuid;
 
 /// Encrypts the seed using the provided DEK and context (AAD).
 /// Returns `nonce (12 bytes) || ciphertext`.
 ///
 /// # Errors
-/// Returns an error if encryption fails.
-#[allow(deprecated)]
+/// Returns an error if the DEK length is invalid, randomness is unavailable,
+/// or encryption fails.
 pub fn encrypt_seed(
     dek: &[u8],
     seed: &[u8],
@@ -19,12 +18,12 @@ pub fn encrypt_seed(
     user_id: Uuid,
     credential_id: Uuid,
 ) -> Result<Vec<u8>> {
-    let key = Key::from_slice(dek); // 32-bytes
-    let cipher = ChaCha20Poly1305::new(key);
+    let cipher = ChaCha20Poly1305::new_from_slice(dek)
+        .map_err(|error| anyhow::anyhow!("Invalid DEK length: {error}"))?;
 
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    getrandom::fill(&mut nonce_bytes)?;
+    let nonce = Nonce::from(nonce_bytes);
 
     let aad = construct_aad(tenant_id, user_id, credential_id);
     let payload = Payload {
@@ -33,7 +32,7 @@ pub fn encrypt_seed(
     };
 
     let ciphertext = cipher
-        .encrypt(nonce, payload)
+        .encrypt(&nonce, payload)
         .map_err(|e| anyhow::anyhow!("Encryption failure: {e}"))?;
 
     let mut result = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
@@ -47,8 +46,7 @@ pub fn encrypt_seed(
 /// Expects `data` to be `nonce (12 bytes) || ciphertext`.
 ///
 /// # Errors
-/// Returns an error if decryption fails or if ciphertext is too short.
-#[allow(deprecated)]
+/// Returns an error if the DEK or ciphertext length is invalid or authentication fails.
 pub fn decrypt_seed(
     dek: &[u8],
     data: &[u8],
@@ -61,10 +59,11 @@ pub fn decrypt_seed(
     }
 
     let (nonce_bytes, ciphertext) = data.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes)
+        .map_err(|error| anyhow::anyhow!("Invalid nonce length: {error}"))?;
 
-    let key = Key::from_slice(dek);
-    let cipher = ChaCha20Poly1305::new(key);
+    let cipher = ChaCha20Poly1305::new_from_slice(dek)
+        .map_err(|error| anyhow::anyhow!("Invalid DEK length: {error}"))?;
 
     let aad = construct_aad(tenant_id, user_id, credential_id);
     let payload = Payload {
@@ -73,7 +72,7 @@ pub fn decrypt_seed(
     };
 
     let plaintext = cipher
-        .decrypt(nonce, payload)
+        .decrypt(&nonce, payload)
         .map_err(|e| anyhow::anyhow!("Decryption failure: {e}"))?;
 
     Ok(plaintext)

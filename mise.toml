@@ -1,0 +1,43 @@
+[settings]
+minimum_release_age = "0"
+cargo.binstall = true
+
+[tools]
+"github:nbari/slick" = "latest"
+"github:nbari/pwgen2" = "latest"
+"github:ssh-vault/ssh-vault" = "latest"
+bat = "latest"
+cargo-binstall = "latest"
+"cargo:cargo-edit" = "latest"
+"cargo:cargo-watch" = "latest"
+direnv = "latest"
+eza = "latest"
+just = "latest"
+mkcert = "latest"
+node = "lts"
+"pipx:pgcli" = "latest"
+python = "3.14"
+ripgrep = "latest"
+rust = "stable"
+sops = "latest"
+terraform = "1.15"
+tree-sitter = "latest"
+uv = "latest"
+vault = "latest"
+xh = "latest"
+
+[env]
+EDITOR = "nvim"
+VISUAL = "nvim"
+
+[tasks.setup-postgres-client]
+run = "sudo apt-get install -y libpq-dev postgresql-client"
+description = "Install postgres client libs"
+
+[tasks.setup-valkey]
+run = "sudo apt-get install -y valkey-tools"
+description = "Install Valkey CLI tools"
+
+[tasks.setup-tig]
+run = "sudo apt-get install -y tig"
+description = "Install tig git browser"

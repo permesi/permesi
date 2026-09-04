@@ -257,8 +257,7 @@ pub async fn admin_infra(
     )
     .fetch_one(&*pool)
     .await
-    .map(|row| row.get::<i64, _>(0))
-    .unwrap_or(0);
+    .map_or(0, |row| row.get::<i64, _>(0));
 
     let platform = PlatformStats {
         operator_count,
@@ -384,7 +383,7 @@ pub async fn admin_bootstrap(
     let _vault_info =
         match validate_vault_token(admin_state.as_ref(), principal.user_id, token).await {
             Ok(info) => info,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
 
     let note = request
@@ -474,7 +473,7 @@ pub async fn admin_elevate(
     let vault_info =
         match validate_vault_token(admin_state.as_ref(), principal.user_id, token).await {
             Ok(info) => info,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
 
     // Cap the admin token TTL to the vault token's remaining life if it is shorter
@@ -527,16 +526,22 @@ fn rate_limit_response(err: AdminRateLimitError) -> axum::response::Response {
     }
 }
 
+/// Verifies the submitted Vault token and requires the configured elevation policy.
+///
+/// Validation is performed through Vault with the authenticated user's server-side
+/// identity. Unauthorized or under-scoped attempts are recorded by the rate limiter;
+/// the token itself is never returned or logged. Error responses are boxed only to
+/// keep the async result small and do not change the response sent to the client.
 async fn validate_vault_token(
     admin_state: &AdminState,
     user_id: Uuid,
     token: &str,
-) -> Result<crate::vault::step_up::VaultTokenInfo, axum::response::Response> {
+) -> Result<crate::vault::step_up::VaultTokenInfo, Box<axum::response::Response>> {
     let lookup = admin_state.vault_client().lookup_self(token).await;
     let info = match lookup {
         Ok(info) => info,
         Err(err) => {
-            return Err(match err {
+            return Err(Box::new(match err {
                 LookupSelfError::Unauthorized => {
                     admin_state.rate_limiter().record_failure(user_id);
                     (StatusCode::UNAUTHORIZED, "Invalid vault token".to_string()).into_response()
@@ -551,7 +556,7 @@ async fn validate_vault_token(
                     "Vault response invalid".to_string(),
                 )
                     .into_response(),
-            });
+            }));
         }
     };
 
@@ -563,7 +568,9 @@ async fn validate_vault_token(
         Ok(info)
     } else {
         admin_state.rate_limiter().record_failure(user_id);
-        Err((StatusCode::FORBIDDEN, "Vault policy missing".to_string()).into_response())
+        Err(Box::new(
+            (StatusCode::FORBIDDEN, "Vault policy missing".to_string()).into_response(),
+        ))
     }
 }
 

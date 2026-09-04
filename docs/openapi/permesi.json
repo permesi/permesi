@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.29"
+    "version": "0.3.43"
   },
   "paths": {
     "/health": {
@@ -75,104 +75,6 @@
           },
           "503": {
             "description": "Service dependencies are not ready"
-          }
-        }
-      }
-    },
-    "/user/login": {
-      "post": {
-        "tags": [
-          "login"
-        ],
-        "operationId": "login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UserLogin"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Login successful",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/user/register": {
-      "post": {
-        "tags": [
-          "register"
-        ],
-        "operationId": "register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UserRegister"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Registration successful",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "User with the specified email already exists",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
           }
         }
       }
@@ -3044,15 +2946,7 @@
         "additionalProperties": false
       },
       "PasskeyLoginStartRequest": {
-        "type": "object",
-        "required": [
-          "email"
-        ],
-        "properties": {
-          "email": {
-            "type": "string"
-          }
-        }
+        "type": "object"
       },
       "PasskeyLoginStartResponse": {
         "type": "object",
@@ -3324,56 +3218,6 @@
             ]
           },
           "updated_at": {
-            "type": "string"
-          }
-        }
-      },
-      "UserLogin": {
-        "type": "object",
-        "required": [
-          "email",
-          "password",
-          "token"
-        ],
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "recaptcha": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "token": {
-            "type": "string"
-          }
-        }
-      },
-      "UserRegister": {
-        "type": "object",
-        "required": [
-          "email",
-          "password",
-          "token"
-        ],
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "recaptcha": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "token": {
             "type": "string"
           }
         }

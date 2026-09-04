@@ -72,7 +72,7 @@ pub struct OpaquePasswordFinishRequest {
     pub registration_record: String,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 pub struct VerifyEmailRequest {
     pub token: String,
 }
@@ -93,25 +93,25 @@ pub struct SessionResponse {
 }
 
 /// Payload for verifying an MFA recovery code during challenge.
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 pub struct MfaRecoveryRequest {
     pub code: String,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 pub struct MfaTotpEnrollStartResponse {
     pub secret: String,
     pub qr_code_url: String,
     pub credential_id: String,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 pub struct MfaTotpEnrollFinishRequest {
     pub code: String,
     pub credential_id: String,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 pub struct MfaTotpVerifyRequest {
     pub code: String,
 }
@@ -148,7 +148,7 @@ pub struct AdminStatusResponse {
     pub cooldown_seconds: u64,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminBootstrapRequest {
     pub vault_token: String,
@@ -161,13 +161,13 @@ pub struct AdminBootstrapResponse {
     pub bootstrap_complete: bool,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminElevateRequest {
     pub vault_token: String,
 }
 
-#[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[derive(ToSchema, Serialize, Deserialize)]
 pub struct AdminElevateResponse {
     pub admin_token: String,
     pub expires_at: String,

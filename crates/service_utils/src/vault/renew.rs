@@ -16,7 +16,7 @@
 
 use crate::globals::GlobalArgs;
 use anyhow::Result;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, rngs::StdRng};
 use secrecy::ExposeSecret;
 use tokio::{
     sync::mpsc,
@@ -75,7 +75,7 @@ pub async fn try_renew(
 
 fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<ShutdownSignal>) {
     tokio::spawn({
-        let mut rng = StdRng::from_entropy();
+        let mut rng = rand::make_rng::<StdRng>();
         let mut jittered_lease_duration: Duration = Duration::default();
 
         let transport = globals.vault_transport.clone();
@@ -100,7 +100,7 @@ fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<ShutdownS
 
                     match transport.renew_token(token, None).await {
                         Ok(lease_duration) => {
-                            let factor = rng.gen_range(70..90);
+                            let factor = rng.random_range(70..90);
 
                             jittered_lease_duration =
                                 Duration::from_secs(lease_duration * factor / 100);
@@ -138,7 +138,7 @@ fn spawn_token_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<ShutdownS
 
 fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<ShutdownSignal>) {
     tokio::spawn({
-        let mut rng = StdRng::from_entropy();
+        let mut rng = rand::make_rng::<StdRng>();
         let mut jittered_lease_duration: Duration = Duration::default();
 
         let transport = globals.vault_transport.clone();
@@ -168,7 +168,7 @@ fn spawn_db_lease_renewer(globals: &GlobalArgs, tx: mpsc::UnboundedSender<Shutdo
                         .await
                     {
                         Ok(lease_duration) => {
-                            let factor = rng.gen_range(70..90);
+                            let factor = rng.random_range(70..90);
 
                             jittered_lease_duration =
                                 Duration::from_secs(lease_duration * factor / 100);

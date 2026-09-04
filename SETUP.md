@@ -295,7 +295,7 @@ If you cannot use Terraform, this section provides the manual steps to configure
 # Enable cert auth for Vault Agent and bootstrap workflows
 vault auth enable cert
 
-# Enable Transit for user data and token signing
+# Enable Transit for TOTP secret protection and token signing
 vault secrets enable -path=transit/permesi transit
 vault secrets enable -path=transit/genesis transit
 
@@ -307,12 +307,12 @@ vault secrets enable database
 ```
 
 ### B. Configure Transit Keys
-Permesi uses ChaCha20-Poly1305 for user data, while Genesis uses Ed25519 for signing admission tokens.
+Permesi uses ChaCha20-Poly1305 to protect TOTP data-encryption keys, while Genesis uses Ed25519 for signing admission tokens.
 
 ```bash
-# Permesi data encryption key
-vault write transit/permesi/keys/users type=chacha20-poly1305
-vault write transit/permesi/keys/users/config auto_rotate_period=30d
+# Permesi TOTP protection key
+vault write transit/permesi/keys/totp type=chacha20-poly1305
+vault write transit/permesi/keys/totp/config auto_rotate_period=30d
 
 # Genesis admission signing key
 vault write transit/genesis/keys/genesis-signing type=ed25519
@@ -336,10 +336,12 @@ Create the following policies to grant the services the minimum required permiss
 **`permesi` policy:**
 ```bash
 vault policy write permesi - <<EOF
-path "transit/permesi/encrypt/users" { capabilities = ["update"] }
-path "transit/permesi/decrypt/users" { capabilities = ["update"] }
-path "transit/permesi/keys/users"    { capabilities = ["read"] }
-path "secret/permesi/data/opaque"    { capabilities = ["read"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+path "transit/permesi/encrypt/totp" { capabilities = ["update"] }
+path "transit/permesi/decrypt/totp" { capabilities = ["update"] }
+path "transit/permesi/keys/totp"    { capabilities = ["read"] }
+path "transit/permesi/datakey/plaintext/totp" { capabilities = ["update"] }
+path "secret/permesi/data/config"   { capabilities = ["read"] }
 path "database/creds/permesi"        { capabilities = ["read"] }
 path "auth/token/renew-self"         { capabilities = ["update"] }
 path "sys/leases/renew"              { capabilities = ["update"] }
@@ -405,6 +407,16 @@ Both services are configured via environment variables.
 ### Service Specifics
 - **Genesis**: Requires `GENESIS_DSN`.
 - **Permesi**: Requires `PERMESI_DSN` and `PERMESI_ADMISSION_PASERK_URL` (the endpoint where Genesis publishes its public key).
+
+Permesi enforces authentication limits in PostgreSQL across replicas. The
+defaults use a 600-second window, 100 attempts per IP/action, 10 attempts per
+account/action, and at most 10,000 pending protocol states per flow/replica.
+Override them with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+`PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
+`PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, and
+`PERMESI_AUTH_MAX_PENDING_STATES`. Forwarded client-IP headers are trusted only
+as a deployment boundary: the public-facing proxy must remove client-supplied
+copies and set canonical values before forwarding to Permesi.
 
 ---
 

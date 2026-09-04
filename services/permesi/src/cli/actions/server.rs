@@ -32,6 +32,10 @@ pub struct Args {
     pub email_outbox_backoff_max_seconds: u64,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
+    pub auth_max_pending_states: usize,
+    pub auth_rate_limit_window_seconds: i64,
+    pub auth_rate_limit_ip_attempts: i64,
+    pub auth_rate_limit_account_attempts: i64,
     pub platform_admin_ttl_seconds: i64,
     pub platform_recent_auth_seconds: i64,
     pub vault_kv_mount: String,
@@ -136,7 +140,13 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
         .with_session_ttl_seconds(args.session_ttl_seconds)
         .with_opaque_server_id(args.opaque_server_id.clone())
-        .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds);
+        .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds)
+        .with_auth_max_pending_states(args.auth_max_pending_states)
+        .with_rate_limit(
+            args.auth_rate_limit_window_seconds,
+            args.auth_rate_limit_ip_attempts,
+            args.auth_rate_limit_account_attempts,
+        );
 
     let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
         .with_vault_policy("permesi-operators".to_string())
@@ -180,7 +190,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         format!("tcp:{}", args.port)
     };
 
-    let entries = [
+    let mut entries = vec![
         ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
         ("vault_url", args.vault_url.clone()),
@@ -242,10 +252,34 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             "email_outbox_backoff_max_seconds",
             args.email_outbox_backoff_max_seconds.to_string(),
         ),
+    ];
+    entries.extend(auth_startup_entries(args));
+    log_entries("Startup configuration", &entries);
+}
+
+/// Return non-secret authentication limits for the startup configuration log.
+fn auth_startup_entries(args: &Args) -> [(&'static str, String); 8] {
+    [
         ("opaque_server_id", args.opaque_server_id.clone()),
         (
             "opaque_login_ttl_seconds",
             args.opaque_login_ttl_seconds.to_string(),
+        ),
+        (
+            "auth_max_pending_states",
+            args.auth_max_pending_states.to_string(),
+        ),
+        (
+            "auth_rate_limit_window_seconds",
+            args.auth_rate_limit_window_seconds.to_string(),
+        ),
+        (
+            "auth_rate_limit_ip_attempts",
+            args.auth_rate_limit_ip_attempts.to_string(),
+        ),
+        (
+            "auth_rate_limit_account_attempts",
+            args.auth_rate_limit_account_attempts.to_string(),
         ),
         (
             "platform_admin_ttl_seconds",
@@ -255,8 +289,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             "platform_recent_auth_seconds",
             args.platform_recent_auth_seconds.to_string(),
         ),
-    ];
-    log_entries("Startup configuration", &entries);
+    ]
 }
 
 fn redact_dsn(dsn: &str) -> String {
@@ -376,6 +409,10 @@ mod tests {
             email_outbox_backoff_max_seconds: 60,
             opaque_server_id: "server-id".to_string(),
             opaque_login_ttl_seconds: 60,
+            auth_max_pending_states: 1_000,
+            auth_rate_limit_window_seconds: 600,
+            auth_rate_limit_ip_attempts: 100,
+            auth_rate_limit_account_attempts: 10,
             platform_admin_ttl_seconds: 3600,
             platform_recent_auth_seconds: 60,
             vault_kv_mount: "kv".to_string(),

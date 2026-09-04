@@ -3,7 +3,7 @@
 use super::{
     AuthConfig, AuthState, OpaqueState,
     mfa::MfaConfig,
-    rate_limit::NoopRateLimiter,
+    rate_limit::{RateLimitAction, RateLimitConfig, RateLimitDecision, RateLimiter},
     state::OpaqueSuite,
     storage::{
         ResendOutcome, SignupOutcome, consume_verification_token, enqueue_resend_verification,
@@ -34,8 +34,8 @@ use opaque_ke::{
     ClientRegistrationFinishParameters, CredentialResponse, Identifiers, RegistrationResponse,
     ServerRegistration, ServerSetup,
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use opaque_rand_chacha::ChaCha20Rng;
+use opaque_rand_core::SeedableRng;
 use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
 use std::sync::Arc;
@@ -98,7 +98,7 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
         .context("failed to connect for schema setup")?;
 
     for (index, statement) in split_sql_statements(PERMESI_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut connection)
             .await
             .with_context(|| format!("failed to execute schema statement {}", index + 1))?;
@@ -215,7 +215,7 @@ fn opaque_test_record() -> Result<Vec<u8>> {
     let client_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password)?;
     let server_start =
         ServerRegistration::start(&server_setup, client_start.message, b"test@example.com")?;
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let params = ClientRegistrationFinishParameters::new(
         Identifiers {
             client: Some(b"test@example.com"),
@@ -282,6 +282,64 @@ async fn signup_concurrent_email_unique() -> Result<()> {
     assert_eq!(successes, 1);
     assert_eq!(conflicts, 1);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limiter_enforces_shared_ip_and_account_limits() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let limiter = RateLimiter::postgres(db.pool.clone(), RateLimitConfig::new(600, 2, 1));
+    assert_eq!(
+        limiter
+            .check_ip(Some("192.0.2.10"), RateLimitAction::Login)
+            .await,
+        RateLimitDecision::Allowed
+    );
+    assert_eq!(
+        limiter
+            .check_ip(Some("192.0.2.10"), RateLimitAction::Login)
+            .await,
+        RateLimitDecision::Allowed
+    );
+    assert_eq!(
+        limiter
+            .check_ip(Some("192.0.2.10"), RateLimitAction::Login)
+            .await,
+        RateLimitDecision::Limited
+    );
+
+    assert_eq!(
+        limiter
+            .check_email("alice@example.com", RateLimitAction::Login)
+            .await,
+        RateLimitDecision::Allowed
+    );
+    assert_eq!(
+        limiter
+            .check_email("alice@example.com", RateLimitAction::Login)
+            .await,
+        RateLimitDecision::Limited
+    );
+    assert_eq!(
+        limiter
+            .check_email("bob@example.com", RateLimitAction::Login)
+            .await,
+        RateLimitDecision::Allowed
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_mfa_resolution_fails_closed_on_storage_error() -> Result<()> {
+    let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
+    pool.close().await;
+    let result =
+        super::mfa::resolve_login_mfa_state(&pool, Uuid::new_v4(), &MfaConfig::new()).await;
+    assert!(result.is_err());
     Ok(())
 }
 
@@ -378,18 +436,23 @@ async fn resend_verification_respects_cooldown() -> Result<()> {
 }
 
 fn auth_state() -> Arc<AuthState> {
+    auth_state_with_pending_limit(10_000)
+}
+
+fn auth_state_with_pending_limit(max_pending_logins: usize) -> Arc<AuthState> {
     let config = AuthConfig::new("https://permesi.dev".to_string())
         .with_email_token_ttl_seconds(60)
         .with_resend_cooldown_seconds(300);
     let opaque_state = OpaqueState::from_seed(
         [0u8; 32],
         "api.permesi.dev".to_string(),
-        Duration::from_secs(300),
+        Duration::from_mins(5),
+        max_pending_logins,
     );
     Arc::new(AuthState::new(
         config,
         opaque_state,
-        Arc::new(NoopRateLimiter),
+        Arc::new(RateLimiter::noop()),
         MfaConfig::new(),
     ))
 }
@@ -483,7 +546,7 @@ async fn run_opaque_signup(
     seed: [u8; 32],
 ) -> Result<()> {
     let mut rng = ChaCha20Rng::from_seed(seed);
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let client_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password)?;
 
     let start_payload = json!({
@@ -750,6 +813,45 @@ async fn me_revoke_session_rejects_invalid_session_id() -> Result<()> {
 }
 
 #[tokio::test]
+async fn opaque_login_start_rejects_when_pending_state_capacity_is_full() -> Result<()> {
+    let Ok(db) = TestDb::new().await else {
+        return Ok(());
+    };
+
+    let (admission, signing_key, kid) = test_admission_context()?;
+    let zero_token = issue_zero_token(&signing_key, &kid)?;
+    let app = opaque_router(auth_state_with_pending_limit(1), admission, db.pool.clone());
+    let email = "pending-capacity@example.com";
+    let password = b"OpaquePassword123!";
+
+    for (seed, expected) in [
+        ([41u8; 32], StatusCode::OK),
+        ([42u8; 32], StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
+        let payload = json!({
+            "email": email,
+            "credential_request": STANDARD.encode(login_start.message.serialize())
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/auth/opaque/login/start")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("X-Permesi-Zero-Token", &zero_token)
+                    .body(Body::from(payload.to_string()))?,
+            )
+            .await?;
+        assert_eq!(response.status(), expected);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn opaque_signup_login_flow_success() -> Result<()> {
     let Ok(db) = TestDb::new().await else {
         return Ok(());
@@ -777,7 +879,7 @@ async fn opaque_signup_login_flow_success() -> Result<()> {
         .await?;
 
     let mut rng = ChaCha20Rng::from_seed([12u8; 32]);
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
 
     let login_start_payload = json!({
@@ -880,7 +982,7 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
         .await?;
 
     let mut rng = ChaCha20Rng::from_seed([14u8; 32]);
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, wrong_password)?;
 
     let login_start_payload = json!({
@@ -962,7 +1064,7 @@ async fn opaque_login_finish_rejects_unknown_user_after_client_completes_dummy_f
     let password = b"OpaquePassword123!";
 
     let mut rng = ChaCha20Rng::from_seed([15u8; 32]);
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
 
     let login_start_payload = json!({
@@ -1059,7 +1161,7 @@ async fn password_change_flow() -> Result<()> {
     let server_reg_start =
         ServerRegistration::start(&server_setup, client_reg_start.message, email.as_bytes())?;
 
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let reg_params = ClientRegistrationFinishParameters::new(
         Identifiers {
             client: Some(email.as_bytes()),
@@ -1100,9 +1202,10 @@ async fn password_change_flow() -> Result<()> {
         super::state::OpaqueState::from_seed(
             [0u8; 32],
             "api.permesi.dev".to_string(),
-            Duration::from_secs(300),
+            Duration::from_mins(5),
+            10_000,
         ),
-        Arc::new(super::NoopRateLimiter),
+        Arc::new(super::RateLimiter::noop()),
         super::mfa::MfaConfig::new(),
     ));
 
@@ -1255,7 +1358,7 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
     let client_reg_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, real_password)?;
     let server_reg_start =
         ServerRegistration::start(&server_setup, client_reg_start.message, email.as_bytes())?;
-    let ksf = argon2::Argon2::default();
+    let ksf = opaque_argon2::Argon2::default();
     let reg_params = ClientRegistrationFinishParameters::new(
         Identifiers {
             client: Some(email.as_bytes()),
@@ -1292,9 +1395,10 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
         super::state::OpaqueState::from_seed(
             [0u8; 32],
             "api.permesi.dev".to_string(),
-            Duration::from_secs(300),
+            Duration::from_mins(5),
+            10_000,
         ),
-        Arc::new(super::NoopRateLimiter),
+        Arc::new(super::RateLimiter::noop()),
         super::mfa::MfaConfig::new(),
     ));
 

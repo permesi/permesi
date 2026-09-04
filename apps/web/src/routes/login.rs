@@ -26,7 +26,7 @@ use js_sys::{Date, Reflect};
 use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
 use leptos_router::hooks::use_navigate;
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
-use rand::rngs::OsRng;
+use opaque_rand_core::OsRng;
 use wasm_bindgen::JsValue;
 
 #[derive(Clone)]
@@ -168,16 +168,6 @@ pub fn LoginPage() -> impl IntoView {
         }
     });
 
-    {
-        let set_passkey_options = set_passkey_options.clone();
-        let set_passkey_prepared_at = set_passkey_prepared_at.clone();
-        Effect::new(move |_| {
-            let _ = email.get();
-            set_passkey_options.set(None);
-            set_passkey_prepared_at.set(None);
-        });
-    }
-
     let on_submit = move |event: SubmitEvent| {
         event.prevent_default();
         set_error.set(None);
@@ -271,14 +261,6 @@ pub fn LoginPage() -> impl IntoView {
                                             {
                                                 return;
                                             }
-                                            let email_value = email.get_untracked().trim().to_string();
-                                            if email_value.is_empty() {
-                                                set_passkey_feedback.set(Some((
-                                                    AlertKind::Info,
-                                                    "Email is required to use a passkey.".to_string(),
-                                                )));
-                                                return;
-                                            }
                                             let prepared = passkey_options.get_untracked();
                                             if prepared.is_none() {
                                                 set_passkey_feedback.set(Some((
@@ -288,7 +270,6 @@ pub fn LoginPage() -> impl IntoView {
                                                 start_passkey_prepare_and_auth(
                                                     auth.clone(),
                                                     navigate.clone(),
-                                                    email_value,
                                                     set_passkey_prepare_pending,
                                                     set_passkey_feedback,
                                                     set_passkey_options,
@@ -313,7 +294,6 @@ pub fn LoginPage() -> impl IntoView {
                                                     start_passkey_prepare_and_auth(
                                                         auth.clone(),
                                                         navigate.clone(),
-                                                        email_value,
                                                         set_passkey_prepare_pending,
                                                         set_passkey_feedback,
                                                         set_passkey_options,
@@ -437,7 +417,6 @@ pub fn LoginPage() -> impl IntoView {
 fn start_passkey_prepare_and_auth<N>(
     auth: crate::features::auth::state::AuthContext,
     navigate: N,
-    email_value: String,
     set_passkey_prepare_pending: WriteSignal<bool>,
     set_passkey_feedback: WriteSignal<Option<(AlertKind, String)>>,
     set_passkey_options: WriteSignal<Option<PasskeyLoginStartResponse>>,
@@ -450,11 +429,7 @@ fn start_passkey_prepare_and_auth<N>(
     spawn_local(async move {
         let result: Result<PasskeyLoginStartResponse, AppError> = async {
             let zero_token = token::fetch_zero_token().await?;
-            client::passkey_login_start(
-                &PasskeyLoginStartRequest { email: email_value },
-                &zero_token,
-            )
-            .await
+            client::passkey_login_start(&PasskeyLoginStartRequest {}, &zero_token).await
         }
         .await;
 

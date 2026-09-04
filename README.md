@@ -35,15 +35,107 @@ just firefox
 
 *`just start` launches the full infrastructure (Postgres, Vault, Jaeger,
 HAProxy) and starts the services (`genesis`, `permesi`, and the `web` console)
-in a `tmux` session using Unix domain sockets for backend communication. If
-`tmux` is not installed, it will start the infra and you can run the services
-manually.*
+in a `tmux` session over HTTPS/TLS — the same transport used in production and
+k8s, so local dev mirrors real deployments. If `tmux` is not installed, it will
+start the infra and you can run the services manually.*
+
+*For a same-host performance optimization you can instead run `just start-socket`,
+which serves the backends over Unix domain sockets (opt-in; not portable across
+hosts/pods).*
 
 **Verify the stack is healthy:**
 - **Web Console:** [https://permesi.localhost](https://permesi.localhost)
 - **API (Permesi):** [https://api.permesi.localhost/health](https://api.permesi.localhost/health)
 - **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
 - **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
+
+### 🧳 Portable alternative: DevPod + Dev Containers
+
+On hosts where you cannot (or do not want to) install the full toolchain — e.g.
+immutable distros like **Fedora Atomic** — you can run the whole stack inside a Dev
+Container. Designed to work the same on **Linux, macOS, and Fedora-Atomic**, locally
+or on a remote VM. The host needs only `podman` (or `docker`) +
+[`devpod`](https://devpod.sh) + Docker Compose v2.
+
+**Model:** a **Docker Compose-based devcontainer** (`.devcontainer/compose.yaml`)
+defines the **app** dev container *and* every backing service
+(postgres/vault/jaeger/haproxy) in one project. DevPod brings the whole stack up
+together, so the environment is fully self-contained — no host-side dependency
+management. Inside the project network, services resolve each other by name and
+HAProxy terminates TLS on `:443` and proxies to the in-app services as `app:8000/8001/8081`.
+
+**1. One-time host setup**
+
+```bash
+# Install DevPod (CLI) — see https://devpod.sh/docs/getting-started/install
+# Then point the default "docker" provider at podman (rootless):
+devpod provider add docker            # if not already added
+devpod provider use docker
+devpod provider set-options docker -o DOCKER_PATH=/usr/bin/podman
+```
+
+**2. Create the workspace — `scripts/dev-up` does everything**
+
+```bash
+git clone https://github.com/permesi/permesi.git
+cd permesi
+scripts/dev-up          # DevPod brings up app + postgres/vault/jaeger/haproxy, then
+                        # the app's lifecycle hooks bootstrap Vault+DB+TLS, write
+                        # .envrc, and start genesis/permesi/web in tmux
+```
+
+The first run pulls images and builds the dev container (a few minutes). By default it
+also trusts the dev CA on your host so `https://permesi.localhost` is valid in your
+browser (one `sudo` prompt; opt out with `PERMESI_TRUST_CA=0`). On Linux it lowers
+`net.ipv4.ip_unprivileged_port_start` to `443` so HAProxy can bind `:443` under
+rootless podman.
+
+> The bootstrap runs once (`postCreate`); on every later start (`postStart`) Vault is
+> re-unsealed, `.envrc` is refreshed, and the services are restarted. Set
+> `PERMESI_DEVPOD_NO_AUTOSTART=1` before `scripts/dev-up` to skip auto-starting them.
+
+**3. Enter the workspace and use it**
+
+```bash
+devpod ssh permesi          # shell into the running workspace (as vscode)
+tmux attach -t permesi      # watch genesis/permesi/web (detach with your prefix + d)
+# or, without attaching (e.g. if you're already in a host tmux): just devpod-logs
+```
+
+…or open the workspace from your editor's DevPod / Dev Containers integration.
+
+**Run it on a remote VM (`scripts/dev-up-remote`)**
+
+Because the stack is self-contained, the *same* devcontainer runs on a remote VM
+through an existing DevPod provider — DevPod brings everything up on the remote, no
+SSH-staged services. Configure via env vars:
+
+```bash
+# Uses the existing "coyote" provider by default; clones permesi on the remote.
+DEVPOD_REMOTE_PROVIDER=coyote \
+DEVPOD_REMOTE_SOURCE=git:https://github.com/permesi/permesi.git@sandbox \
+scripts/dev-up-remote
+devpod ssh permesi-coyote   # then: tmux attach -t permesi
+```
+
+Overridable: `DEVPOD_REMOTE_PROVIDER`, `DEVPOD_REMOTE_WORKSPACE_NAME`,
+`DEVPOD_REMOTE_SOURCE` (append `@branch`), and `DEVPOD_REMOTE_SSH=host:port` to
+auto-reload HAProxy on the VM.
+
+**Lifecycle (from the host)**
+
+```bash
+devpod stop permesi             # stop the whole stack
+scripts/dev-up                  # start again (re-unseals Vault, restarts services)
+devpod delete permesi --force   # remove the workspace (containers + volumes)
+just vault-reset                # wipe Vault data + keys/state, then: scripts/dev-up --recreate
+```
+
+The three Rust services run inside the `app` container and are reached through
+HAProxy on `:443` (`https://permesi.localhost`, `api.`, `genesis.`). See
+[`.devcontainer/README.md`](.devcontainer/README.md) for the full architecture,
+environment variables, and host CA-trust steps. The legacy host-podman `just start`
+flow above continues to work unchanged on non-Atomic / macOS hosts.
 
 ## Workspace Layout
 
@@ -77,7 +169,7 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 #### 3. Database
 * **Role:** System of Record.
-* **Usage:** Stores user records (OPAQUE registration records), email verification tokens/outbox, plus **Audit Logs** and **Revocation Lists**. It is **not** required for the hot-path verification of Admission Tokens, ensuring high availability even during DB latency spikes.
+* **Usage:** Stores user records (OPAQUE registration records), authentication rate-limit counters, email verification tokens/outbox, plus **Audit Logs** and **Revocation Lists**. It is **not** required for the hot-path verification of Admission Tokens, ensuring high availability even during DB latency spikes.
 
 ---
 
@@ -104,7 +196,7 @@ schedule pg_cron jobs directly.
 ## Cryptography
 
 - **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.
-- **permesi encryption:** Vault Transit key type `chacha20-poly1305` (default `transit/permesi` / key `users`) for encrypt/decrypt operations.
+- **TOTP protection:** Per-user TOTP secrets use envelope encryption backed by the Vault Transit `chacha20-poly1305` key at `transit/permesi` / `totp`; plaintext seeds are not stored in PostgreSQL.
 - **OPAQUE (user auth):** Client-side OPAQUE; server stores only the registration record. The server setup seed is stored in Vault KV v2 (`opaque_server_seed`).
 
 ## Admission Token Verification (Offline)
@@ -204,7 +296,7 @@ sequenceDiagram
 
 ## Passkey + MFA Login Flow
 
-Users sign up with email and password, then can register passkeys from `/console/me/security` once they are logged in. The login page prioritizes passwordless flows; users enter their email and can sign in with a passkey, or expand the password form if they want to use OPAQUE.
+Users sign up with email and password, then can register passkeys from `/console/me/security` once they are logged in. Passkey login is discoverable and does not send an email or account-specific credential list during the start request; the authenticator returns an opaque user handle that Permesi binds to the stored credential before verification. Email is required only when the user expands the password form and uses OPAQUE.
 
 MFA enforcement is consistent across login paths. If TOTP is enabled for the account, the login flow always proceeds to the MFA challenge after either password or passkey authentication succeeds.
 
@@ -214,7 +306,7 @@ flowchart TD
   Verify --> Console["/console/me/security"]
   Console --> AddPasskey[Register passkey]
 
-  Login[Login: enter email] --> Passkey{Use passkey?}
+  Login[Login] --> Passkey{Use passkey?}
   Passkey -->|Yes| PasskeyAuth[Passkey auth]
   Passkey -->|No| ShowPassword[Show password fields]
   ShowPassword --> Opaque[OPAQUE password login]
@@ -229,6 +321,15 @@ flowchart TD
 
 ### Admin Rate Limiting
 Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against Vault token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
+
+Unauthenticated authentication flows also use PostgreSQL-backed fixed-window
+limits shared across replicas. The defaults are 100 attempts per IP and 10 per
+normalized account identifier per action in 10 minutes. In-progress OPAQUE and
+passkey protocol states are separately bounded to 10,000 entries per flow and
+replica. Configure these with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+`PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
+`PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, and
+`PERMESI_AUTH_MAX_PENDING_STATES`.
 
 ### Auth endpoints (quick scan)
 | Method | Path | Notes |
@@ -281,12 +382,12 @@ Production readiness checklist:
 
 Default ports: genesis `8000`, permesi `8001`, web `8080`.
 
-Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443`. The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
+Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443` and runs the backends over HTTPS/TLS (the same transport as production and k8s). The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
 If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
-In socket mode, the HAProxy container runs with your current UID/GID so it can open the `0660` Unix sockets created under `.tmp/` without widening local socket permissions.
+`just start-socket` is an opt-in alternative that serves the backends over Unix domain sockets for a same-host performance optimization. In that mode the HAProxy container runs with your current UID/GID so it can open the `0660` Unix sockets created under `.tmp/` without widening local socket permissions. Sockets are same-host only and are not portable across separate hosts/pods (k8s), so HTTPS remains the default.
 
-If you want to run services manually instead of using the all-in-one `just start` (socket mode):
-1) Run services: `just genesis-socket` and `just permesi-socket` (or `just start-http` for the TCP flow). They auto-source `.envrc`, so direnv is optional.
+If you want to run services manually instead of using the all-in-one `just start`:
+1) Run services: `just genesis` and `just permesi` (HTTPS/TCP), or `just genesis-socket` and `just permesi-socket` for the socket flow. They auto-source `.envrc`, so direnv is optional. (`just start-http` is kept as an alias of `just start`.)
 
 `just start` uses tmux when available to start a `permesi` session with genesis + permesi + web panes, plus a fourth pane for ad hoc commands.
 If you're already inside tmux, it creates the `permesi` session in the background and prints attach instructions.
@@ -320,8 +421,7 @@ Cleanup: `just stop` to stop containers, and `just reset` to remove the infra co
 - `just db-verify`: Confirm database constraints and schema state.
 - `just openapi`: Regenerate OpenAPI specs from code.
 
-Passkey registration is available in preview mode by default and does not persist credentials without additional storage.
- Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`. Persisting passkeys would require a dedicated table to store `credential_id` (bytes), `user_id`, `public_key` (serialized passkey), `sign_count`, `transports`, `created_at`, and `last_used_at` (nullable).
+Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`.
 
 ### Local HTTPS for Passkeys (mkcert + HAProxy)
 

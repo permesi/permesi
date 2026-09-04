@@ -1,17 +1,21 @@
 # ----------------------------------------------------------------------------
-# Transit - Permesi (Users data encryption)
+# Transit - Permesi (TOTP secret protection)
 # ----------------------------------------------------------------------------
 resource "vault_mount" "transit_permesi" {
   path        = "transit/permesi"
   type        = "transit"
-  description = "Permesi user data encryption"
+  description = "Permesi TOTP secret protection"
 }
 
-resource "vault_transit_secret_backend_key" "permesi_users" {
-  backend            = vault_mount.transit_permesi.path
-  name               = "users"
-  type               = "chacha20-poly1305"
-  auto_rotate_period = 2592000 # 30 days
+removed {
+  from = vault_transit_secret_backend_key.permesi_users
+
+  lifecycle {
+    # The legacy key is retired explicitly after operators have reviewed
+    # backups and rollback requirements; see README.md. Terraform must not
+    # turn an ordinary configuration apply into irreversible key deletion.
+    destroy = false
+  }
 }
 
 resource "vault_transit_secret_backend_key" "permesi_totp" {

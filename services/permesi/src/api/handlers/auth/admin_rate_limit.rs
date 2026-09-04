@@ -13,11 +13,11 @@ use std::time::Duration;
 use tracing::{Instrument, error};
 use uuid::Uuid;
 
-const ATTEMPT_WINDOW: Duration = Duration::from_secs(10 * 60);
+const ATTEMPT_WINDOW: Duration = Duration::from_mins(10);
 const USER_ATTEMPT_LIMIT: i64 = 3;
 const IP_ATTEMPT_LIMIT: i64 = 10;
 const FAILURE_LIMIT: i64 = 3;
-const COOLDOWN_DURATION: Duration = Duration::from_secs(15 * 60);
+const COOLDOWN_DURATION: Duration = Duration::from_mins(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AdminRateLimitError {

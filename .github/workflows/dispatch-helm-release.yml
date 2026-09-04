@@ -90,7 +90,7 @@ jobs:
 
       - name: Create GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.PERMESI_HELM_APP_ID }}
           private-key: ${{ secrets.PERMESI_HELM_APP_PRIVATE_KEY }}

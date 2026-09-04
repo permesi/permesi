@@ -47,3 +47,9 @@ config/haproxy/*.key
 *.tfvars
 *.tfvars.json
 tfplan
+
+# DevPod
+.devpod/
+
+# DevPod remote config (host-only, never committed)
+.devpod.env

@@ -9,8 +9,6 @@ pub mod me;
 pub mod me_webauthn;
 pub mod orgs;
 pub mod root;
-pub mod user_login;
-pub mod user_register;
 pub mod users;
 
 use admission_token::{
@@ -18,7 +16,6 @@ use admission_token::{
     verify_v4_public,
 };
 use anyhow::{Context, Result, anyhow};
-use regex::Regex;
 use reqwest::{
     Client,
     header::{ETAG, IF_NONE_MATCH},
@@ -38,17 +35,6 @@ const KEYSET_REFRESH_COOLDOWN_SECONDS: u64 = 30;
 const MIN_TOKEN_TTL_SECONDS: i64 = 60;
 const MAX_TOKEN_TTL_SECONDS: i64 = 180;
 const ADMISSION_ACTION: &str = "admission";
-
-/// Lightweight email sanity check used by auth handlers before persisting data.
-pub fn valid_email(email: &str) -> bool {
-    Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").is_ok_and(|re| re.is_match(email))
-}
-
-/// Password inputs are expected to be 32-byte hex (e.g., 64 hex chars).
-pub fn valid_password(password: &str) -> bool {
-    // length must be between 64 hex characters
-    Regex::new(r"^[0-9a-fA-F]{64}$").is_ok_and(|re| re.is_match(password))
-}
 
 #[derive(Debug)]
 enum KeysetSource {
@@ -324,8 +310,7 @@ impl AdmissionVerifier {
 fn now_unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// Convenience for cooldown tracking (unsigned).
@@ -518,34 +503,6 @@ mod tests {
             action: ADMISSION_ACTION.to_string(),
             sub: None,
         })
-    }
-
-    #[test]
-    fn valid_email_accepts_simple() {
-        assert!(valid_email("user@example.com"));
-    }
-
-    #[test]
-    fn valid_email_rejects_missing_at() {
-        assert!(!valid_email("user.example.com"));
-    }
-
-    #[test]
-    fn valid_password_accepts_hex() {
-        let password = "a".repeat(64);
-        assert!(valid_password(&password));
-    }
-
-    #[test]
-    fn valid_password_rejects_non_hex() {
-        let password = "g".repeat(64);
-        assert!(!valid_password(&password));
-    }
-
-    #[test]
-    fn valid_password_rejects_short() {
-        let password = "a".repeat(63);
-        assert!(!valid_password(&password));
     }
 
     #[tokio::test]

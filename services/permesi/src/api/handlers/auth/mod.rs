@@ -7,6 +7,8 @@
 //! - Password auth uses `OPAQUE` to establish sessions without exposing plaintext.
 //! - MFA bootstrap/challenge sessions gate access when MFA is required or enabled.
 //! - Recovery codes provide the only self-service MFA recovery path.
+//! - PostgreSQL-backed counters enforce shared unauthenticated rate limits, while
+//!   bounded in-memory maps retain only short-lived OPAQUE/WebAuthn protocol state.
 //!
 //! ## Admin Rate Limiting
 //!
@@ -43,8 +45,8 @@ pub(crate) mod verification;
 mod zero_token;
 
 pub use admin::{AdminConfig, AdminState};
-pub use rate_limit::NoopRateLimiter;
 pub(crate) use rate_limit::{RateLimitAction, RateLimitDecision};
+pub use rate_limit::{RateLimitConfig, RateLimiter};
 pub use state::{AuthConfig, AuthState, OpaqueState};
 #[cfg(test)]
 pub(crate) use utils::generate_session_token;

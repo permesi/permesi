@@ -5,8 +5,17 @@
 genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
+  # Default targets the HAProxy frontend (host flow, mkcert-trusted). In the devpod
+  # container the *.permesi.localhost names resolve to loopback where only :8000
+  # listens, so .envrc overrides GENESIS_API_BASE_URL to the direct genesis port and
+  # GENESIS_CA_PATH to the Vault PKI CA used to verify it.
+  base="${GENESIS_API_BASE_URL:-https://genesis.permesi.localhost}"
+  verify=()
+  if [[ -n "${GENESIS_CA_PATH:-}" ]]; then
+    verify=(--verify "${GENESIS_CA_PATH}")
+  fi
   token="$(
-    xh 'https://genesis.permesi.localhost/token?client_id=00000000-0000-0000-0000-000000000000' \
+    xh "${verify[@]}" GET "${base}/token?client_id=00000000-0000-0000-0000-000000000000" \
       | jq -er '.token'
   )"
   python3 - "$token" <<'PY'

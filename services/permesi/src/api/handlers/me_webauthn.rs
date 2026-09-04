@@ -114,7 +114,7 @@ pub async fn register_options(
         "passkey register options requested"
     );
 
-    if let Err(response) = enforce_rate_limits(&headers, &auth_state, &principal.email) {
+    if let Err(response) = enforce_rate_limits(&headers, &auth_state, &principal.email).await {
         warn!(
             user_id = %principal.user_id,
             request_id = %request_id,
@@ -504,7 +504,7 @@ async fn load_register_finish_context(
 
     let (reg_id, reg_response) = parse_register_finish(body)?;
 
-    if let Err(response) = enforce_rate_limits(headers, auth_state, &principal.email) {
+    if let Err(response) = enforce_rate_limits(headers, auth_state, &principal.email).await {
         warn!(
             user_id = %principal.user_id,
             request_id = %request_id,
@@ -665,7 +665,7 @@ async fn require_zero_token(
     }
 }
 
-fn enforce_rate_limits(
+async fn enforce_rate_limits(
     headers: &HeaderMap,
     auth_state: &AuthState,
     email: &str,
@@ -674,6 +674,7 @@ fn enforce_rate_limits(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return Err(Box::new(
@@ -684,6 +685,7 @@ fn enforce_rate_limits(
     if auth_state
         .rate_limiter()
         .check_email(email, RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return Err(Box::new(
@@ -716,7 +718,7 @@ async fn fetch_display_name(pool: &PgPool, user_id: Uuid) -> Result<Option<Strin
 mod tests {
     use super::*;
     use crate::api::handlers::auth::hash_session_token;
-    use crate::api::handlers::auth::{AuthConfig, AuthState, NoopRateLimiter, OpaqueState};
+    use crate::api::handlers::auth::{AuthConfig, AuthState, OpaqueState, RateLimiter};
     use admission_token::{
         AdmissionTokenFooter, PaserkKey, PaserkKeySet, build_token, encode_signing_input,
     };
@@ -728,8 +730,6 @@ mod tests {
     };
     use chrono::Utc;
     use ed25519_dalek::Signer;
-    use rand::RngCore;
-    use rand::rngs::OsRng;
     use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
     use test_support::{postgres::PostgresContainer, runtime};
     use tokio::time::Duration;
@@ -772,7 +772,9 @@ mod tests {
         let mut connection = PgConnection::connect(&postgres.admin_dsn()).await?;
 
         for statement in split_sql_statements(PERMESI_SCHEMA_SQL) {
-            sqlx::query(&statement).execute(&mut connection).await?;
+            sqlx::query(sqlx::AssertSqlSafe(statement))
+                .execute(&mut connection)
+                .await?;
         }
 
         Ok(())
@@ -805,7 +807,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         let email = format!("user-{}@example.com", user_id.simple());
         let mut record = vec![0u8; 32];
-        OsRng.fill_bytes(&mut record);
+        getrandom::fill(&mut record)?;
         sqlx::query(
             "INSERT INTO users (id, email, opaque_registration_record, status, display_name) VALUES ($1, $2, $3, 'active', 'Example User')",
         )
@@ -883,9 +885,10 @@ mod tests {
             OpaqueState::from_seed(
                 [0u8; 32],
                 "api.permesi.dev".to_string(),
-                Duration::from_secs(300),
+                Duration::from_mins(5),
+                10_000,
             ),
-            Arc::new(NoopRateLimiter),
+            Arc::new(RateLimiter::noop()),
             crate::api::handlers::auth::mfa::MfaConfig::new(),
         ));
 
@@ -893,10 +896,10 @@ mod tests {
             auth_config.webauthn_rp_id().to_string(),
             "Permesi".to_string(),
             vec![auth_config.webauthn_rp_origin().to_string()],
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             true,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config)?);
+        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
 
         let (admission, zero_token) = build_admission()?;
 
@@ -947,10 +950,10 @@ mod tests {
             "permesi.dev".to_string(),
             "Permesi".to_string(),
             vec!["https://permesi.dev".to_string()],
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             true,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config)?);
+        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
 
         let app = Router::new()
             .route("/v1/me/webauthn/credentials", get(list_credentials))
@@ -1002,9 +1005,10 @@ mod tests {
             OpaqueState::from_seed(
                 [0u8; 32],
                 "api.permesi.dev".to_string(),
-                Duration::from_secs(300),
+                Duration::from_mins(5),
+                10_000,
             ),
-            Arc::new(NoopRateLimiter),
+            Arc::new(RateLimiter::noop()),
             crate::api::handlers::auth::mfa::MfaConfig::new(),
         ));
 
@@ -1012,10 +1016,10 @@ mod tests {
             auth_config.webauthn_rp_id().to_string(),
             "Permesi".to_string(),
             vec![auth_config.webauthn_rp_origin().to_string()],
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             false,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config)?);
+        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
         let (admission, _zero_token) = build_admission()?;
 
         let app = Router::new()
@@ -1060,9 +1064,10 @@ mod tests {
             OpaqueState::from_seed(
                 [0u8; 32],
                 "api.permesi.dev".to_string(),
-                Duration::from_secs(300),
+                Duration::from_mins(5),
+                10_000,
             ),
-            Arc::new(NoopRateLimiter),
+            Arc::new(RateLimiter::noop()),
             crate::api::handlers::auth::mfa::MfaConfig::new(),
         ));
 
@@ -1070,10 +1075,10 @@ mod tests {
             auth_config.webauthn_rp_id().to_string(),
             "Permesi".to_string(),
             vec![auth_config.webauthn_rp_origin().to_string()],
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             false,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config)?);
+        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
         let (admission, zero_token) = build_admission()?;
 
         let app = Router::new()

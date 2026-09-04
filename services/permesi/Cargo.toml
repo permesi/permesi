@@ -45,15 +45,21 @@ base64 = { workspace = true }
 base64ct = { version = "1.8.3", features = ["alloc"] }
 clap = { workspace = true, features = ["env"] }
 ed25519-dalek = { workspace = true }
+getrandom = { workspace = true }
 http = { workspace = true }
 once_cell = { workspace = true }
 opaque-ke = { workspace = true }
+opaque_argon2 = { workspace = true }
+opaque_rand_chacha = { workspace = true }
+opaque_rand_core = { workspace = true }
+opaque_sha2 = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls"] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
-regex = "1.12"
+rand_core = { workspace = true }
+regex = "1.13"
 reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
@@ -62,7 +68,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-totp-rs = { version = "5.7", features = ["qr", "gen_secret"] }
+totp-rs = { version = "6.0", features = ["qr", "gen_secret"] }
 chrono = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
@@ -92,11 +98,18 @@ url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
-chacha20poly1305 = "0.10.1"
-webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
-openssl = { version = "0.10", features = ["vendored"] }
+chacha20poly1305 = "0.11.0"
+webauthn-rs = { version = "0.5", features = ["conditional-ui", "danger-allow-state-serialisation"] }
 hex = "0.4"
 service_utils = { workspace = true }
+
+# webauthn-rs requires OpenSSL for WebAuthn attestation crypto (no rustls backend).
+# Vendor + statically link it ONLY for the musl/scratch production build, whose runtime
+# image has no system libssl. On glibc (local dev/test) the system OpenSSL is used via
+# pkg-config (libssl-dev) — no perl / no building OpenSSL from source. All TLS in the
+# app already uses rustls; OpenSSL here is purely webauthn-rs's crypto.
+[target.'cfg(target_env = "musl")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 base32 = "0.5.1"

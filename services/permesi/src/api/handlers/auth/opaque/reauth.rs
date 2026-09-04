@@ -28,7 +28,7 @@ use opaque_ke::{
     CredentialFinalization, CredentialRequest, Identifiers, ServerLogin, ServerLoginParameters,
     ServerRegistration,
 };
-use rand::rngs::OsRng;
+use opaque_rand_core::OsRng;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::error;
@@ -72,6 +72,7 @@ pub async fn opaque_reauth_start(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -79,6 +80,7 @@ pub async fn opaque_reauth_start(
     if auth_state
         .rate_limiter()
         .check_email(&principal.email, RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -168,10 +170,16 @@ async fn build_reauth_start_response(
         ));
     };
 
-    let login_id: Uuid = auth_state
+    let Some(login_id) = auth_state
         .opaque()
         .store_login_state(start_result.state, Some(record.user_id))
-        .await;
+        .await
+    else {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many pending login attempts".to_string(),
+        ));
+    };
     let credential_response =
         base64::engine::general_purpose::STANDARD.encode(start_result.message.serialize());
     Ok(OpaqueLoginStartResponse {

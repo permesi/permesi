@@ -121,6 +121,9 @@ BEGIN
     IF to_regclass('public.user_sessions') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: user_sessions';
     END IF;
+    IF to_regclass('public.auth_rate_limits') IS NULL THEN
+        RAISE EXCEPTION 'Missing permesi table: auth_rate_limits';
+    END IF;
     IF to_regprocedure('public.cleanup_expired_tokens()') IS NULL THEN
         RAISE EXCEPTION 'Missing function: public.cleanup_expired_tokens()';
     END IF;

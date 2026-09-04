@@ -17,7 +17,7 @@ use crate::api::handlers::{
         mfa::{self, MfaState},
         session::session_cookie_with_ttl,
         storage::{insert_mfa_bootstrap_session, insert_mfa_challenge_session, insert_session},
-        utils::{extract_client_ip, normalize_email, valid_email},
+        utils::extract_client_ip,
         zero_token::{require_zero_token, zero_token_error_response},
     },
 };
@@ -37,17 +37,13 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use webauthn_rs::prelude::{AuthenticationResult, Passkey, PublicKeyCredential};
-
-use super::storage::lookup_login_record;
+use webauthn_rs::prelude::{AuthenticationResult, DiscoverableKey, Passkey, PublicKeyCredential};
 
 const MAX_WEBAUTHN_JSON_BYTES: usize = 32 * 1024;
 type HandlerError = Box<axum::response::Response>;
 
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct PasskeyLoginStartRequest {
-    pub email: String,
-}
+pub struct PasskeyLoginStartRequest {}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PasskeyLoginStartResponse {
@@ -79,38 +75,25 @@ pub struct PasskeyLoginFinishRequest {
 /// Start passkey login by issuing an authentication challenge.
 pub async fn passkey_login_start(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
     auth_state: Extension<Arc<AuthState>>,
     admission: Extension<Arc<AdmissionVerifier>>,
     passkey_service: Extension<Arc<PasskeyService>>,
     payload: Option<Json<PasskeyLoginStartRequest>>,
 ) -> impl IntoResponse {
     let request_id = request_id(&headers);
-    let Some(Json(request)) = payload else {
+    let Some(Json(_request)) = payload else {
         return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response();
     };
-
-    let email = normalize_email(&request.email);
-    if !valid_email(&email) {
-        return (StatusCode::BAD_REQUEST, "Invalid email".to_string()).into_response();
-    }
 
     let client_ip = extract_client_ip(&headers);
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
     }
-    if auth_state
-        .rate_limiter()
-        .check_email(&email, RateLimitAction::Login)
-        == RateLimitDecision::Limited
-    {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
-    }
-
     if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);
         return (status, message).into_response();
@@ -129,21 +112,12 @@ pub async fn passkey_login_start(
         Err(response) => return *response,
     };
 
-    let (user_id, passkeys) = match load_passkeys_for_email(&pool, &email, &request_id).await {
-        Ok(result) => result,
-        Err(response) => return *response,
-    };
-
     info!(
-        user_id = %user_id,
         request_id = %request_id,
         "passkey login start requested"
     );
 
-    match passkey_service
-        .auth_begin(user_id, &passkeys, &origin)
-        .await
-    {
+    match passkey_service.auth_begin(&origin).await {
         Ok((auth_id, challenge)) => (
             StatusCode::OK,
             Json(PasskeyLoginStartResponse {
@@ -154,7 +128,6 @@ pub async fn passkey_login_start(
             .into_response(),
         Err(err) => {
             error!(
-                user_id = %user_id,
                 request_id = %request_id,
                 "failed to start passkey login: {err}"
             );
@@ -200,6 +173,7 @@ pub async fn passkey_login_finish(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -242,16 +216,18 @@ pub async fn passkey_login_finish(
         }
     };
 
-    let finish_result = passkey_service
-        .auth_finish(auth_id, &origin, auth_response)
-        .await;
-
-    let (user_id, auth_result) = match finish_result {
-        Ok(result) => result,
-        Err(err) => {
-            warn!(request_id = %request_id, "passkey login failed: {err:?}");
-            return (StatusCode::BAD_REQUEST, "Passkey login failed".to_string()).into_response();
-        }
+    let (user_id, auth_result) = match verify_passkey_assertion(
+        &pool,
+        &passkey_service,
+        auth_id,
+        &origin,
+        auth_response,
+        &request_id,
+    )
+    .await
+    {
+        Ok(verified) => verified,
+        Err(response) => return *response,
     };
 
     if let Err(response) = update_passkey_after_auth(
@@ -269,95 +245,85 @@ pub async fn passkey_login_finish(
     issue_session_for_user(&pool, &auth_state, user_id, &request_id).await
 }
 
-async fn load_passkeys_for_email(
+/// Resolve a discoverable credential and verify its proof before trusting its user handle.
+///
+/// Every pre-verification failure consumes the pending challenge. Account status is checked
+/// only after `webauthn-rs` has authenticated the stored credential, so untrusted assertion
+/// fields cannot select a session identity or disclose whether an account is active.
+async fn verify_passkey_assertion(
     pool: &PgPool,
-    email: &str,
+    passkey_service: &PasskeyService,
+    auth_id: Uuid,
+    origin: &str,
+    auth_response: PublicKeyCredential,
     request_id: &str,
-) -> Result<(Uuid, Vec<Passkey>), HandlerError> {
-    let login_record = match lookup_login_record(pool, email).await {
-        Ok(record) => record,
-        Err(err) => {
-            error!(request_id = %request_id, "passkey login lookup failed: {err}");
-            return Err(Box::new(
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response(),
-            ));
-        }
-    };
-
-    let Some(record) = login_record else {
-        return Err(Box::new(
-            (
-                StatusCode::BAD_REQUEST,
-                "Passkey login unavailable".to_string(),
-            )
-                .into_response(),
-        ));
-    };
-
-    if record.status != "active" {
-        return Err(Box::new(
-            (
-                StatusCode::BAD_REQUEST,
-                "Passkey login unavailable".to_string(),
-            )
-                .into_response(),
-        ));
-    }
-
-    let passkey_rows = match PasskeyRepo::list_user_passkeys(pool, record.user_id).await {
-        Ok(rows) => rows,
-        Err(err) => {
-            error!(
-                user_id = %record.user_id,
-                request_id = %request_id,
-                "passkey list failed: {err}"
-            );
-            return Err(Box::new(
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response(),
-            ));
-        }
-    };
-
-    if passkey_rows.is_empty() {
-        return Err(Box::new(
-            (
-                StatusCode::BAD_REQUEST,
-                "No passkeys registered".to_string(),
-            )
-                .into_response(),
-        ));
-    }
-
-    let mut passkeys = Vec::with_capacity(passkey_rows.len());
-    for row in passkey_rows {
-        match deserialize_passkey(&row.passkey_data) {
-            Ok(passkey) => passkeys.push(passkey),
+) -> Result<(Uuid, AuthenticationResult), HandlerError> {
+    let (user_id, credential_id) =
+        match passkey_service.identify_authentication(origin, &auth_response) {
+            Ok(identifiers) => identifiers,
             Err(err) => {
-                error!(
-                    user_id = %record.user_id,
-                    request_id = %request_id,
-                    "failed to decode passkey: {err}"
-                );
+                passkey_service.discard_authentication(auth_id).await;
+                warn!(request_id = %request_id, "passkey identification failed: {err}");
                 return Err(Box::new(
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Login failed".to_string(),
-                    )
-                        .into_response(),
+                    (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
                 ));
             }
+        };
+
+    let passkey_row =
+        match load_passkey_row_for_user(pool, user_id, &credential_id, request_id).await {
+            Ok(row) => row,
+            Err(response) => {
+                passkey_service.discard_authentication(auth_id).await;
+                return Err(response);
+            }
+        };
+    let passkey = match decode_stored_passkey(user_id, request_id, &passkey_row.passkey_data) {
+        Ok(passkey) => passkey,
+        Err(response) => {
+            passkey_service.discard_authentication(auth_id).await;
+            return Err(response);
+        }
+    };
+    let credentials = [DiscoverableKey::from(&passkey)];
+    let auth_result = passkey_service
+        .auth_finish(auth_id, origin, auth_response, &credentials)
+        .await
+        .map_err(|err| {
+            warn!(request_id = %request_id, "passkey login failed: {err:?}");
+            Box::new((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response())
+        })?;
+
+    match user_is_active(pool, user_id).await {
+        Ok(true) => Ok((user_id, auth_result)),
+        Ok(false) => Err(Box::new(
+            (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
+        )),
+        Err(err) => {
+            error!(
+                user_id = %user_id,
+                request_id = %request_id,
+                "failed to load passkey account status: {err}"
+            );
+            Err(Box::new(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Login failed".to_string(),
+                )
+                    .into_response(),
+            ))
         }
     }
+}
 
-    Ok((record.user_id, passkeys))
+/// Check account status only after the passkey assertion has been verified.
+async fn user_is_active(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND status = 'active')",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
 }
 
 async fn load_passkey_row_for_user(
@@ -506,66 +472,6 @@ async fn update_passkey_after_auth(
     Ok(())
 }
 
-async fn resolve_mfa_state(
-    pool: &PgPool,
-    auth_state: &AuthState,
-    user_id: Uuid,
-    request_id: &str,
-) -> Result<MfaState, HandlerError> {
-    let mfa_record = match mfa::storage::load_mfa_state(pool, user_id).await {
-        Ok(record) => record,
-        Err(err) => {
-            if auth_state.mfa().required() {
-                error!(
-                    user_id = %user_id,
-                    request_id = %request_id,
-                    "failed to load MFA state: {err}"
-                );
-                return Err(Box::new(
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Login failed".to_string(),
-                    )
-                        .into_response(),
-                ));
-            }
-            warn!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "skipping MFA state enforcement: {err}"
-            );
-            None
-        }
-    };
-
-    let mut mfa_state = mfa_record
-        .as_ref()
-        .map_or(MfaState::Disabled, |record| record.state);
-    let effective_state = mfa::enforce_required_state(auth_state.mfa().required(), mfa_state);
-
-    if effective_state == MfaState::RequiredUnenrolled
-        && mfa_state != MfaState::RequiredUnenrolled
-        && let Err(err) =
-            mfa::storage::upsert_mfa_state(pool, user_id, MfaState::RequiredUnenrolled, None).await
-    {
-        error!(
-            user_id = %user_id,
-            request_id = %request_id,
-            "failed to set MFA required state: {err}"
-        );
-        return Err(Box::new(
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Login failed".to_string(),
-            )
-                .into_response(),
-        ));
-    }
-
-    mfa_state = effective_state;
-    Ok(mfa_state)
-}
-
 async fn create_session_token(
     pool: &PgPool,
     auth_state: &AuthState,
@@ -653,9 +559,20 @@ async fn issue_session_for_user(
     user_id: Uuid,
     request_id: &str,
 ) -> axum::response::Response {
-    let mfa_state = match resolve_mfa_state(pool, auth_state, user_id, request_id).await {
+    let mfa_state = match mfa::resolve_login_mfa_state(pool, user_id, auth_state.mfa()).await {
         Ok(state) => state,
-        Err(response) => return *response,
+        Err(err) => {
+            error!(
+                user_id = %user_id,
+                request_id = %request_id,
+                "failed to resolve MFA state: {err}"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Login failed".to_string(),
+            )
+                .into_response();
+        }
     };
 
     let (token, ttl_seconds) =

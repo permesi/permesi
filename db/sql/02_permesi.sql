@@ -302,6 +302,21 @@ CREATE INDEX IF NOT EXISTS email_outbox_status_idx ON email_outbox (status);
 CREATE INDEX IF NOT EXISTS email_outbox_next_attempt_idx ON email_outbox (status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS email_outbox_created_at_idx ON email_outbox (created_at);
 
+-- Authentication rate limits are shared by every Permesi replica. Subjects are
+-- SHA-256 digests of normalized IP or account identifiers, not raw identifiers.
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
+    subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
+    action TEXT NOT NULL CHECK (action IN (
+        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery'
+    )),
+    attempts BIGINT NOT NULL CHECK (attempts > 0),
+    expires_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (dimension, subject_hash, action)
+);
+
+CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
+
 CREATE TABLE IF NOT EXISTS admin_attempts (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -324,6 +339,7 @@ BEGIN
     DELETE FROM user_sessions WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
+    DELETE FROM auth_rate_limits WHERE expires_at < NOW();
 END;
 $$;
 
@@ -485,6 +501,7 @@ CREATE INDEX IF NOT EXISTS idx_passkey_audit_user_time ON passkey_audit_log (use
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_audit_log TO permesi_runtime;

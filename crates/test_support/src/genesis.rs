@@ -40,14 +40,14 @@ pub async fn apply_genesis_schema(postgres: &PostgresContainer) -> Result<()> {
         .context("Failed to connect to Postgres for schema setup")?;
 
     for (index, statement) in split_sql_statements(GENESIS_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut connection)
             .await
             .with_context(|| format!("Failed to execute schema statement {}", index + 1))?;
     }
 
     for (index, statement) in split_sql_statements(GENESIS_SEED_SQL).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut connection)
             .await
             .with_context(|| format!("Failed to execute seed statement {}", index + 1))?;

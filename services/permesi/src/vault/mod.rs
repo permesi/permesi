@@ -2,7 +2,6 @@ pub mod database;
 pub mod kv;
 pub mod renew;
 pub mod step_up;
-pub mod transit;
 
 use crate::APP_USER_AGENT;
 use anyhow::Result;

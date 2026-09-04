@@ -20,7 +20,7 @@ use crate::{
 use base64::Engine;
 use leptos::{ev::SubmitEvent, prelude::*};
 use opaque_ke::{ClientRegistration, ClientRegistrationFinishParameters, RegistrationResponse};
-use rand::rngs::OsRng;
+use opaque_rand_core::OsRng;
 
 /// Minimum password length enforced by the client for early UX feedback.
 const MIN_PASSWORD_LENGTH: usize = 12;

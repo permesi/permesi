@@ -439,6 +439,12 @@ BEGIN
     INSERT INTO admin_attempts (id, user_id, ip_address, created_at)
     VALUES (uuidv4(), v_user_id, '203.0.113.11', NOW() - INTERVAL '1 hour');
 
+    INSERT INTO auth_rate_limits (dimension, subject_hash, action, attempts, expires_at)
+    VALUES ('ip', decode(repeat('06', 32), 'hex'), 'login', 3, NOW() - INTERVAL '1 hour');
+
+    INSERT INTO auth_rate_limits (dimension, subject_hash, action, attempts, expires_at)
+    VALUES ('ip', decode(repeat('07', 32), 'hex'), 'login', 2, NOW() + INTERVAL '1 hour');
+
     PERFORM cleanup_expired_tokens();
 
     PERFORM 1
@@ -481,6 +487,20 @@ BEGIN
     WHERE ip_address = '203.0.113.11';
     IF NOT FOUND THEN
         RAISE EXCEPTION 'expected recent admin_attempt to remain after cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM auth_rate_limits
+    WHERE subject_hash = decode(repeat('06', 32), 'hex');
+    IF FOUND THEN
+        RAISE EXCEPTION 'expected expired auth rate limit to be deleted by cleanup_expired_tokens';
+    END IF;
+
+    PERFORM 1
+    FROM auth_rate_limits
+    WHERE subject_hash = decode(repeat('07', 32), 'hex');
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'expected active auth rate limit to remain after cleanup_expired_tokens';
     END IF;
 
     -- Cascade deletions: ensure deleting a user removes their operator record.

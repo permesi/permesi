@@ -32,14 +32,16 @@ pub async fn load_mfa_state(pool: &PgPool, user_id: Uuid) -> Result<Option<MfaSt
         .fetch_optional(pool)
         .await
         .context("failed to load MFA state")?;
-    Ok(row.map(|row| {
+    row.map(|row| {
         let state_text: String = row.get("state");
-        let state = MfaState::from_str(&state_text).unwrap_or(MfaState::Disabled);
-        MfaStateRecord {
+        let state = MfaState::from_str(&state_text)
+            .with_context(|| format!("invalid persisted MFA state: {state_text}"))?;
+        Ok(MfaStateRecord {
             state,
             recovery_batch_id: row.get("recovery_batch_id"),
-        }
-    }))
+        })
+    })
+    .transpose()
 }
 
 /// Upsert MFA state and active recovery batch for a user.

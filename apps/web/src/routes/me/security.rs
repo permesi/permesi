@@ -47,8 +47,8 @@ use opaque_ke::{
     ClientLogin, ClientLoginFinishParameters, ClientRegistration,
     ClientRegistrationFinishParameters, CredentialResponse, RegistrationResponse,
 };
+use opaque_rand_core::OsRng;
 use passkeys::PasskeysSection;
-use rand::rngs::OsRng;
 use wasm_bindgen::JsValue;
 
 /// Minimum password length enforced by the client for early UX feedback.

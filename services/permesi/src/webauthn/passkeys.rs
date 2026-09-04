@@ -9,7 +9,8 @@
 //! 2) Persist the in-progress registration state with a short TTL.
 //! 3) Finish registration by verifying the authenticator response.
 //! 4) Persist the credential when preview mode is disabled.
-//! 5) Issue authentication challenges for passkey login and verify assertions.
+//! 5) Issue discoverable authentication challenges and resolve the user only
+//!    after the authenticator returns its opaque user handle.
 //!
 //! Security boundaries:
 //! - Origin and RP ID validation are enforced by `webauthn-rs` and by explicit
@@ -156,7 +157,6 @@ pub enum PasskeyRegistrationError {
 pub enum PasskeyAuthenticationError {
     NotFound,
     Expired,
-    UserMismatch,
     OriginMismatch,
     Webauthn(WebauthnError),
 }
@@ -170,14 +170,14 @@ struct PasskeyRegistrationState {
 }
 
 struct PasskeyAuthenticationState {
-    user_id: Uuid,
     origin: String,
     created_at: Instant,
-    authentication: PasskeyAuthentication,
+    authentication: DiscoverableAuthentication,
 }
 
 pub struct PasskeyService {
     config: PasskeyConfig,
+    max_pending_states: usize,
     webauthn_by_origin: HashMap<String, Webauthn>,
     reg_states: Mutex<HashMap<Uuid, PasskeyRegistrationState>>,
     auth_states: Mutex<HashMap<Uuid, PasskeyAuthenticationState>>,
@@ -187,8 +187,12 @@ impl PasskeyService {
     /// Create a new passkey service.
     ///
     /// # Errors
-    /// Returns error if `WebAuthn` builder fails for any configured origin.
-    pub fn new(config: PasskeyConfig) -> Result<Self> {
+    /// Returns error if the state capacity is zero or the `WebAuthn` builder
+    /// fails for any configured origin.
+    pub fn new(config: PasskeyConfig, max_pending_states: usize) -> Result<Self> {
+        if max_pending_states == 0 {
+            return Err(anyhow!("Passkey state capacity must be greater than zero"));
+        }
         let mut webauthn_by_origin = HashMap::new();
 
         for origin in &config.allowed_origins {
@@ -202,6 +206,7 @@ impl PasskeyService {
 
         Ok(Self {
             config,
+            max_pending_states,
             webauthn_by_origin,
             reg_states: Mutex::new(HashMap::new()),
             auth_states: Mutex::new(HashMap::new()),
@@ -248,6 +253,9 @@ impl PasskeyService {
         let reg_id = Uuid::new_v4();
         let mut states = self.reg_states.lock().await;
         prune_registrations(&mut states, self.config.challenge_ttl());
+        if states.len() >= self.max_pending_states {
+            return Err(anyhow!("Too many pending passkey registrations"));
+        }
         states.insert(
             reg_id,
             PasskeyRegistrationState {
@@ -301,26 +309,26 @@ impl PasskeyService {
             .map_err(PasskeyRegistrationError::Webauthn)
     }
 
-    /// Begin passkey authentication for a user.
+    /// Begin usernameless passkey authentication.
+    ///
+    /// No account lookup or credential identifiers are included in the start
+    /// response, preventing the endpoint from serving as an email oracle.
     ///
     /// # Errors
     /// Returns error if origin is invalid or `WebAuthn` fails.
-    pub async fn auth_begin(
-        &self,
-        user_id: Uuid,
-        passkeys: &[Passkey],
-        origin: &str,
-    ) -> Result<(Uuid, RequestChallengeResponse)> {
+    pub async fn auth_begin(&self, origin: &str) -> Result<(Uuid, RequestChallengeResponse)> {
         let webauthn = self.webauthn_for_origin(origin)?;
-        let (challenge, authentication) = webauthn.start_passkey_authentication(passkeys)?;
+        let (challenge, authentication) = webauthn.start_discoverable_authentication()?;
 
         let auth_id = Uuid::new_v4();
         let mut states = self.auth_states.lock().await;
         prune_authentications(&mut states, self.config.challenge_ttl());
+        if states.len() >= self.max_pending_states {
+            return Err(anyhow!("Too many pending passkey authentications"));
+        }
         states.insert(
             auth_id,
             PasskeyAuthenticationState {
-                user_id,
                 origin: origin.to_string(),
                 created_at: Instant::now(),
                 authentication,
@@ -330,7 +338,30 @@ impl PasskeyService {
         Ok((auth_id, challenge))
     }
 
-    /// Finish passkey authentication after verifying the client response.
+    /// Extract the opaque user handle and credential ID from an assertion.
+    ///
+    /// The returned identifiers are untrusted until the handler loads the
+    /// credential belonging to that user and `auth_finish` verifies the proof.
+    ///
+    /// # Errors
+    /// Returns an error if the origin is not configured or the assertion does
+    /// not contain a valid discoverable user handle.
+    pub fn identify_authentication(
+        &self,
+        origin: &str,
+        response: &PublicKeyCredential,
+    ) -> Result<(Uuid, Vec<u8>)> {
+        let webauthn = self.webauthn_for_origin(origin)?;
+        let (user_id, credential_id) = webauthn.identify_discoverable_authentication(response)?;
+        Ok((user_id, credential_id.to_vec()))
+    }
+
+    /// Consume an authentication state after an assertion fails pre-verification checks.
+    pub async fn discard_authentication(&self, auth_id: Uuid) {
+        self.auth_states.lock().await.remove(&auth_id);
+    }
+
+    /// Finish passkey authentication against the server-loaded credential.
     ///
     /// # Errors
     /// Returns error if the authentication state is missing, expired, or mismatched.
@@ -339,7 +370,8 @@ impl PasskeyService {
         auth_id: Uuid,
         origin: &str,
         response: PublicKeyCredential,
-    ) -> Result<(Uuid, AuthenticationResult), PasskeyAuthenticationError> {
+        credentials: &[DiscoverableKey],
+    ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
         let mut states = self.auth_states.lock().await;
         prune_authentications(&mut states, self.config.challenge_ttl());
         let state = states
@@ -357,9 +389,8 @@ impl PasskeyService {
             .webauthn_for_origin(origin)
             .map_err(|_| PasskeyAuthenticationError::OriginMismatch)?;
         webauthn
-            .finish_passkey_authentication(&response, &state.authentication)
+            .finish_discoverable_authentication(&response, state.authentication, credentials)
             .map_err(PasskeyAuthenticationError::Webauthn)
-            .map(|result| (state.user_id, result))
     }
 }
 
@@ -428,7 +459,7 @@ mod tests {
             "example.com".to_string(),
             "Example".to_string(),
             vec!["https://example.com".to_string()],
-            Duration::from_secs(120),
+            Duration::from_mins(2),
             true,
         )
     }
@@ -448,7 +479,7 @@ mod tests {
 
     #[test]
     fn origin_matching_is_exact() -> Result<()> {
-        let service = PasskeyService::new(test_config()?)?;
+        let service = PasskeyService::new(test_config()?, 100)?;
         assert_eq!(
             service.match_origin("https://example.com"),
             Some("https://example.com".to_string())
@@ -467,10 +498,10 @@ mod tests {
             "example.com".to_string(),
             "Example".to_string(),
             vec!["https://example.com:8443".to_string()],
-            Duration::from_secs(120),
+            Duration::from_mins(2),
             true,
         )?;
-        let service = PasskeyService::new(config)?;
+        let service = PasskeyService::new(config, 100)?;
         assert_eq!(service.match_origin("https://example.com"), None);
         assert_eq!(
             service.match_origin("https://example.com:8443"),
@@ -485,7 +516,7 @@ mod tests {
             "example.com".to_string(),
             "Example".to_string(),
             vec!["https://example.com".to_string()],
-            Duration::from_secs(120),
+            Duration::from_mins(2),
             true,
         )?;
         assert!(enabled.preview_mode());
@@ -494,7 +525,7 @@ mod tests {
             "example.com".to_string(),
             "Example".to_string(),
             vec!["https://example.com".to_string()],
-            Duration::from_secs(120),
+            Duration::from_mins(2),
             false,
         )?;
         assert!(!disabled.preview_mode());
@@ -503,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn registration_state_is_single_use() -> Result<()> {
-        let service = PasskeyService::new(test_config()?)?;
+        let service = PasskeyService::new(test_config()?, 100)?;
         let user_id = Uuid::new_v4();
         let (reg_id, _challenge) = service
             .register_begin(
@@ -525,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_finish_rejects_origin_and_consumes_state() -> Result<()> {
-        let service = PasskeyService::new(test_config()?)?;
+        let service = PasskeyService::new(test_config()?, 100)?;
         let user_id = Uuid::new_v4();
         let session_hash = vec![1, 2, 3, 4];
         let (reg_id, _challenge) = service
@@ -569,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_finish_rejects_session_mismatch() -> Result<()> {
-        let service = PasskeyService::new(test_config()?)?;
+        let service = PasskeyService::new(test_config()?, 100)?;
         let user_id = Uuid::new_v4();
         let (reg_id, _challenge) = service
             .register_begin(
@@ -594,6 +625,25 @@ mod tests {
             .err()
             .ok_or_else(|| anyhow!("Expected session mismatch error"))?;
         assert!(matches!(err, PasskeyRegistrationError::SessionMismatch));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authentication_start_does_not_disclose_account_credentials() -> Result<()> {
+        let service = PasskeyService::new(test_config()?, 100)?;
+        let (auth_id, challenge) = service.auth_begin("https://example.com").await?;
+
+        assert!(challenge.public_key.allow_credentials.is_empty());
+        service.discard_authentication(auth_id).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authentication_start_enforces_pending_state_capacity() -> Result<()> {
+        let service = PasskeyService::new(test_config()?, 1)?;
+        let (_auth_id, _challenge) = service.auth_begin("https://example.com").await?;
+
+        assert!(service.auth_begin("https://example.com").await.is_err());
         Ok(())
     }
 

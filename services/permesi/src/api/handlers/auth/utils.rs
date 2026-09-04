@@ -5,9 +5,9 @@
 
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose};
-use rand::{RngCore, rngs::OsRng};
 use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::net::IpAddr;
 
 /// Normalize an email for lookup/uniqueness checks.
 pub(super) fn normalize_email(email: &str) -> String {
@@ -24,9 +24,7 @@ pub(super) fn valid_email(email_normalized: &str) -> bool {
 /// Returned token is only sent to the user; we store a hash in the database.
 pub(super) fn generate_verification_token() -> Result<String> {
     let mut bytes = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut bytes)
-        .context("failed to generate verification token")?;
+    getrandom::fill(&mut bytes).context("failed to generate verification token")?;
     Ok(general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
@@ -35,9 +33,7 @@ pub(super) fn generate_verification_token() -> Result<String> {
 /// The raw value is only returned to set the cookie; the database stores a hash.
 pub(crate) fn generate_session_token() -> Result<String> {
     let mut bytes = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut bytes)
-        .context("failed to generate session token")?;
+    getrandom::fill(&mut bytes).context("failed to generate session token")?;
     Ok(general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
@@ -82,15 +78,17 @@ pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
     }
 }
 
-/// Extract a client IP for rate limiting from common proxy headers.
+/// Extract and canonicalize a client IP from trusted reverse-proxy headers.
 ///
-/// Prioritizes Cloudflare's `CF-Connecting-IP` when available.
+/// Prioritizes Cloudflare's `CF-Connecting-IP`. Invalid values are ignored,
+/// but the service cannot authenticate the headers themselves: deployments
+/// must strip client-supplied forwarding headers at the proxy boundary.
 pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(cf_ip) = headers
         .get("cf-connecting-ip")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<IpAddr>().ok())
     {
         return Some(cf_ip.to_string());
     }
@@ -100,7 +98,7 @@ pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<Strin
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(',').next())
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .and_then(|value| value.parse::<IpAddr>().ok());
     if let Some(ip) = forwarded {
         return Some(ip.to_string());
     }
@@ -108,8 +106,8 @@ pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<Strin
         .get("x-real-ip")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .map(|ip| ip.to_string())
 }
 
 /// Extract a country code from Cloudflare's `CF-IPCountry` header.
@@ -274,6 +272,19 @@ mod tests {
     fn extract_client_ip_none_when_missing() {
         let headers = HeaderMap::new();
         assert_eq!(extract_client_ip(&headers), None);
+    }
+
+    #[test]
+    fn extract_client_ip_ignores_invalid_forwarding_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", HeaderValue::from_static("attacker"));
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("not-an-ip, 192.0.2.1"),
+        );
+        headers.insert("x-real-ip", HeaderValue::from_static("2001:db8::1"));
+
+        assert_eq!(extract_client_ip(&headers), Some("2001:db8::1".to_string()));
     }
 
     #[test]

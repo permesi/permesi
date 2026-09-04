@@ -65,7 +65,7 @@ pub struct OpaquePasswordFinishRequest {
     pub registration_record: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VerifyEmailRequest {
     pub token: String,
 }
@@ -95,20 +95,20 @@ pub struct UserSession {
     pub webauthn_enabled: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MfaTotpEnrollStartResponse {
     pub secret: String,
     pub qr_code_url: String,
     pub credential_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MfaTotpEnrollFinishRequest {
     pub code: String,
     pub credential_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MfaTotpVerifyRequest {
     pub code: String,
 }
@@ -139,9 +139,7 @@ pub struct WebauthnAuthenticateFinishRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PasskeyLoginStartRequest {
-    pub email: String,
-}
+pub struct PasskeyLoginStartRequest {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PasskeyLoginStartResponse {
@@ -155,12 +153,12 @@ pub struct PasskeyLoginFinishRequest {
     pub response: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MfaRecoveryRequest {
     pub code: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryCodesResponse {
     pub codes: Vec<String>,
 }
@@ -172,7 +170,7 @@ pub struct AdminStatusResponse {
     pub cooldown_seconds: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AdminBootstrapRequest {
     pub vault_token: String,
     pub note: Option<String>,
@@ -184,12 +182,12 @@ pub struct AdminBootstrapResponse {
     pub bootstrap_complete: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AdminElevateRequest {
     pub vault_token: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AdminElevateResponse {
     pub admin_token: String,
     pub expires_at: String,

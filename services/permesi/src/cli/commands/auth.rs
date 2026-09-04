@@ -14,6 +14,11 @@ pub const ARG_EMAIL_OUTBOX_BACKOFF_MAX: &str = "email-outbox-backoff-max-seconds
 
 pub const ARG_OPAQUE_SERVER_ID: &str = "opaque-server-id";
 pub const ARG_OPAQUE_LOGIN_TTL: &str = "opaque-login-ttl-seconds";
+pub const ARG_AUTH_MAX_PENDING_STATES: &str = "auth-max-pending-states";
+
+pub const ARG_AUTH_RATE_LIMIT_WINDOW: &str = "auth-rate-limit-window-seconds";
+pub const ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS: &str = "auth-rate-limit-ip-attempts";
+pub const ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS: &str = "auth-rate-limit-account-attempts";
 
 pub const ARG_PLATFORM_ADMIN_TTL: &str = "platform-admin-ttl-seconds";
 pub const ARG_PLATFORM_RECENT_AUTH: &str = "platform-recent-auth-seconds";
@@ -34,6 +39,13 @@ pub struct OpaqueOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct RateLimitOptions {
+    pub window_seconds: i64,
+    pub ip_attempts: i64,
+    pub account_attempts: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct AdminOptions {
     pub ttl_seconds: i64,
     pub recent_auth_seconds: i64,
@@ -48,6 +60,8 @@ pub struct Options {
     pub session_ttl_seconds: i64,
     pub email_outbox: EmailOutboxOptions,
     pub opaque: OpaqueOptions,
+    pub max_pending_states: u64,
+    pub rate_limit: RateLimitOptions,
     pub admin: AdminOptions,
 }
 
@@ -121,6 +135,24 @@ impl Options {
                     .copied()
                     .unwrap_or(300),
             },
+            max_pending_states: matches
+                .get_one::<u64>(ARG_AUTH_MAX_PENDING_STATES)
+                .copied()
+                .unwrap_or(10_000),
+            rate_limit: RateLimitOptions {
+                window_seconds: matches
+                    .get_one::<i64>(ARG_AUTH_RATE_LIMIT_WINDOW)
+                    .copied()
+                    .unwrap_or(600),
+                ip_attempts: matches
+                    .get_one::<i64>(ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS)
+                    .copied()
+                    .unwrap_or(100),
+                account_attempts: matches
+                    .get_one::<i64>(ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS)
+                    .copied()
+                    .unwrap_or(10),
+            },
             admin: AdminOptions {
                 ttl_seconds: matches
                     .get_one::<i64>(ARG_PLATFORM_ADMIN_TTL)
@@ -140,6 +172,7 @@ pub fn with_args(command: Command) -> Command {
     let command = with_auth_email_args(command);
     let command = with_auth_outbox_args(command);
     let command = with_auth_opaque_args(command);
+    let command = with_auth_rate_limit_args(command);
     with_admin_args(command)
 }
 
@@ -245,6 +278,42 @@ fn with_auth_opaque_args(command: Command) -> Command {
                 .default_value("300")
                 .value_parser(clap::value_parser!(u64)),
         )
+        .arg(
+            Arg::new(ARG_AUTH_MAX_PENDING_STATES)
+                .long(ARG_AUTH_MAX_PENDING_STATES)
+                .help("Maximum in-progress authentication protocol states per flow and replica")
+                .env("PERMESI_AUTH_MAX_PENDING_STATES")
+                .default_value("10000")
+                .value_parser(clap::value_parser!(u64).range(1..)),
+        )
+}
+
+fn with_auth_rate_limit_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new(ARG_AUTH_RATE_LIMIT_WINDOW)
+                .long(ARG_AUTH_RATE_LIMIT_WINDOW)
+                .help("Authentication rate-limit fixed-window duration in seconds")
+                .env("PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS")
+                .default_value("600")
+                .value_parser(clap::value_parser!(i64).range(1..)),
+        )
+        .arg(
+            Arg::new(ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS)
+                .long(ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS)
+                .help("Maximum authentication attempts per IP and action per window")
+                .env("PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS")
+                .default_value("100")
+                .value_parser(clap::value_parser!(i64).range(1..)),
+        )
+        .arg(
+            Arg::new(ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS)
+                .long(ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS)
+                .help("Maximum authentication attempts per account and action per window")
+                .env("PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS")
+                .default_value("10")
+                .value_parser(clap::value_parser!(i64).range(1..)),
+        )
 }
 
 fn with_admin_args(command: Command) -> Command {
@@ -288,6 +357,10 @@ mod tests {
             ARG_EMAIL_OUTBOX_BACKOFF_MAX,
             ARG_OPAQUE_SERVER_ID,
             ARG_OPAQUE_LOGIN_TTL,
+            ARG_AUTH_MAX_PENDING_STATES,
+            ARG_AUTH_RATE_LIMIT_WINDOW,
+            ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS,
+            ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS,
             ARG_PLATFORM_ADMIN_TTL,
             ARG_PLATFORM_RECENT_AUTH,
         ];

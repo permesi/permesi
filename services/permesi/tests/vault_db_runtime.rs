@@ -441,7 +441,7 @@ async fn bootstrap_permesi(postgres: &PostgresContainer) -> Result<()> {
 
 async fn apply_schema(connection: &mut PgConnection, sql: &str) -> Result<()> {
     for (index, statement) in split_sql_statements(sql).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut *connection)
             .await
             .with_context(|| format!("Failed to execute schema statement {}", index + 1))?;
@@ -496,7 +496,7 @@ async fn create_role_if_missing(
             END IF; \
         END $$;"
     );
-    sqlx::query(&statement)
+    sqlx::query(sqlx::AssertSqlSafe(statement))
         .execute(connection)
         .await
         .with_context(|| format!("Failed to create role {role}"))?;
@@ -511,7 +511,7 @@ async fn create_runtime_role(connection: &mut PgConnection, role: &str) -> Resul
             END IF; \
         END $$;"
     );
-    sqlx::query(&statement)
+    sqlx::query(sqlx::AssertSqlSafe(statement))
         .execute(connection)
         .await
         .with_context(|| format!("Failed to create runtime role {role}"))?;
@@ -519,7 +519,7 @@ async fn create_runtime_role(connection: &mut PgConnection, role: &str) -> Resul
 }
 
 async fn create_database_if_missing(connection: &mut PgConnection, db_name: &str) -> Result<()> {
-    let result = sqlx::query(&format!("CREATE DATABASE {db_name}"))
+    let result = sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
         .execute(connection)
         .await;
     match result {
@@ -548,7 +548,9 @@ async fn reassign_owned(
     to_role: &str,
 ) -> Result<()> {
     let statement = format!("REASSIGN OWNED BY {from_role} TO {to_role}");
-    let result = sqlx::query(&statement).execute(&mut *connection).await;
+    let result = sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+        .execute(&mut *connection)
+        .await;
     match result {
         Ok(_) => Ok(()),
         Err(sqlx::Error::Database(db_err))

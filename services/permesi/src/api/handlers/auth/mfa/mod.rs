@@ -18,7 +18,7 @@ pub(crate) mod recovery;
 pub(crate) mod storage;
 pub(crate) mod webauthn;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Json,
     extract::Extension,
@@ -87,6 +87,31 @@ pub(crate) fn enforce_required_state(required: bool, state: MfaState) -> MfaStat
     } else {
         state
     }
+}
+
+/// Resolve the MFA gate after a primary credential succeeds.
+///
+/// Database and state-decoding errors fail closed. When MFA is globally
+/// required, the persisted state is advanced before any scoped session can be
+/// issued, preventing login paths from silently bypassing the second factor.
+pub(crate) async fn resolve_login_mfa_state(
+    pool: &PgPool,
+    user_id: Uuid,
+    config: &MfaConfig,
+) -> Result<MfaState> {
+    let record = storage::load_mfa_state(pool, user_id)
+        .await
+        .context("failed to resolve login MFA state")?;
+    let current = record.map_or(MfaState::Disabled, |record| record.state);
+    let effective = enforce_required_state(config.required(), current);
+
+    if effective == MfaState::RequiredUnenrolled && current != MfaState::RequiredUnenrolled {
+        storage::upsert_mfa_state(pool, user_id, MfaState::RequiredUnenrolled, None)
+            .await
+            .context("failed to persist required login MFA state")?;
+    }
+
+    Ok(effective)
 }
 
 /// MFA configuration loaded at startup.
@@ -448,6 +473,7 @@ pub async fn mfa_recovery(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::MfaRecovery)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -455,6 +481,7 @@ pub async fn mfa_recovery(
     if auth_state
         .rate_limiter()
         .check_email(&principal.email, RateLimitAction::MfaRecovery)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();

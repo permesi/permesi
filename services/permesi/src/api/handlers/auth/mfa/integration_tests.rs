@@ -112,7 +112,7 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
 
     // Apply Base Schema
     for (index, statement) in split_sql_statements(PERMESI_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut connection)
             .await
             .with_context(|| format!("failed to execute schema statement {}", index + 1))?;
@@ -157,12 +157,13 @@ fn auth_state() -> AuthState {
     let opaque_state = OpaqueState::from_seed(
         [0u8; 32],
         "api.permesi.dev".to_string(),
-        Duration::from_secs(300),
+        Duration::from_mins(5),
+        10_000,
     );
     AuthState::new(
         config,
         opaque_state,
-        std::sync::Arc::new(crate::api::handlers::auth::NoopRateLimiter),
+        std::sync::Arc::new(crate::api::handlers::auth::RateLimiter::noop()),
         MfaConfig::new().with_recovery_pepper(Arc::from(vec![1, 2, 3, 4])),
     )
 }
@@ -263,19 +264,17 @@ async fn mfa_enrollment_flow() -> Result<()> {
         };
 
     // 2. Generate Code
-    let totp = totp_rs::TOTP::new(
-        totp_rs::Algorithm::SHA1,
-        6,
-        1,
-        30,
-        secret_bytes,
-        Some("Permesi".to_string()),
-        email.to_string(),
-    )
-    .map_err(|e| anyhow!("Failed to create TOTP: {e}"))?;
-    let code = totp
-        .generate_current()
-        .map_err(|e| anyhow!("Failed to generate code: {e}"))?;
+    let totp = totp_rs::Builder::new()
+        .with_algorithm(totp_rs::Algorithm::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret_bytes)
+        .with_issuer(Some("Permesi"))
+        .with_account_name(email)
+        .build()
+        .map_err(|e| anyhow!("Failed to create TOTP: {e}"))?;
+    let code = totp.generate_current().to_string();
 
     // 3. Finish Enrollment
     let payload = serde_json::to_string(

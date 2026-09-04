@@ -64,8 +64,7 @@ pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRe
 
             let webauthn_enabled = crate::webauthn::SecurityKeyRepo::list_user_keys(&pool, user_id)
                 .await
-                .map(|keys| !keys.is_empty())
-                .unwrap_or(false);
+                .is_ok_and(|keys| !keys.is_empty());
 
             let response = SessionResponse {
                 user_id: user_id.to_string(),

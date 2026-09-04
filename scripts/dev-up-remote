@@ -1,0 +1,150 @@
+#!/usr/bin/env sh
+set -eu
+
+# Remote variant of scripts/dev-up: bring the SAME compose-based devcontainer up on a
+# remote VM through an existing DevPod provider (default: coyote). Because the whole
+# stack (app + postgres/vault/jaeger/haproxy) lives in .devcontainer/compose.yaml,
+# DevPod brings everything up ON THE REMOTE — no host-side dependency management and
+# no SSH-staged services. Everything is configurable via env vars on the host.
+#
+# Env vars (all optional):
+# Config is read from env vars, optionally via a gitignored .devpod.env in the repo
+# root (sourced below) — use that instead of .envrc, which the container regenerates
+# on every start. All optional:
+#   DEVPOD_REMOTE_PROVIDER         existing DevPod provider to use         (default: coyote)
+#   DEVPOD_REMOTE_WORKSPACE_NAME   workspace id                            (default: permesi-<provider>)
+#   DEVPOD_REMOTE_SOURCE           git source DevPod clones on the remote  (default: git:https://github.com/permesi/permesi.git)
+#                                  append @<branch> to pick a branch, e.g. ...permesi.git@sandbox
+#   DEVPOD_REMOTE_HOST / _USER / _PORT   SSH target for the post-up HAProxy reload
+#                                  (bloque-style; e.g. HOST=jump USER=devops PORT=31025)
+#   DEVPOD_REMOTE_SSH              host[:port] override for the reload (else derived from HOST/USER/PORT)
+#   DEVPOD_DOTFILES, GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY,
+#   GIT_SSH_SIGNING_PROGRAM, GITHUB_TOKEN, PERMESI_DEVPOD_NO_AUTOSTART  (forwarded)
+
+project_dir="$(
+    unset CDPATH
+    cd -- "$(dirname -- "$0")/.." && pwd
+)"
+
+# Load host-side remote config from a dedicated, gitignored file that the container
+# NEVER overwrites (unlike the generated .envrc, which `just devpod-envrc` rewrites on
+# every start). Put your DEVPOD_REMOTE_* there, e.g.:
+#   export DEVPOD_REMOTE_PROVIDER="coyote"
+#   export DEVPOD_REMOTE_WORKSPACE_NAME="permesi-remote"
+#   export DEVPOD_REMOTE_HOST="jump"
+#   export DEVPOD_REMOTE_USER="devops"
+#   export DEVPOD_REMOTE_PORT="31025"
+if [ -f "${project_dir}/.devpod.env" ]; then
+    # shellcheck disable=SC1091
+    . "${project_dir}/.devpod.env"
+fi
+
+provider_name="${DEVPOD_REMOTE_PROVIDER:-coyote}"
+workspace_name="${DEVPOD_REMOTE_WORKSPACE_NAME:-permesi-${provider_name}}"
+remote_source="${DEVPOD_REMOTE_SOURCE:-git:https://github.com/permesi/permesi.git}"
+
+# Derive the SSH target for the post-up HAProxy reload from bloque-style HOST/USER/PORT
+# when DEVPOD_REMOTE_SSH isn't set explicitly.
+if [ -z "${DEVPOD_REMOTE_SSH:-}" ] && [ -n "${DEVPOD_REMOTE_HOST:-}" ]; then
+    _u="${DEVPOD_REMOTE_USER:+${DEVPOD_REMOTE_USER}@}"
+    DEVPOD_REMOTE_SSH="${_u}${DEVPOD_REMOTE_HOST}:${DEVPOD_REMOTE_PORT:-22}"
+fi
+
+if ! command -v devpod >/dev/null 2>&1; then
+    echo "Error: devpod not found on host (https://devpod.sh)." >&2
+    exit 1
+fi
+
+if ! devpod provider options "$provider_name" >/dev/null 2>&1; then
+    echo "Error: DevPod provider '$provider_name' not found. Add it first, e.g.:" >&2
+    echo "  devpod provider add ssh --name $provider_name -o HOST=user@vm -o PORT=22" >&2
+    echo "Or set DEVPOD_REMOTE_PROVIDER to an existing provider (see: devpod provider list)." >&2
+    exit 1
+fi
+
+case "$remote_source" in
+git:*) ;;
+*) remote_source="git:${remote_source}" ;;
+esac
+
+echo "==> Launching Permesi on remote provider '${provider_name}' (workspace '${workspace_name}')..."
+
+set -- \
+    --provider "$provider_name" \
+    --ide none \
+    --id "$workspace_name" \
+    --source "$remote_source"
+
+# Note: uses the default .devcontainer/devcontainer.json. The coyote provider (and
+# most SSH providers) run rootless podman on the remote, which — like local — needs
+# the userns keep-id override for an editable bind-mounted workspace, so the same
+# devcontainer config applies. Override with --devcontainer-path here only if a remote
+# uses true docker (where keep-id is unsupported).
+
+# Forward identity/config so chezmoi + git work inside the remote container.
+for var in \
+    GIT_USER_NAME \
+    GIT_USER_EMAIL \
+    GIT_SIGNING_KEY \
+    GIT_SSH_SIGNING_PROGRAM \
+    GITHUB_TOKEN \
+    DEVPOD_DOTFILES \
+    PERMESI_DEVPOD_NO_AUTOSTART; do
+    eval "value=\${$var:-}"
+    if [ "$value" != "" ]; then
+        set -- "$@" \
+            --init-env "$var=$value" \
+            --workspace-env "$var=$value"
+    fi
+done
+
+# Fall back to gh CLI for a token when GITHUB_TOKEN is unset.
+if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+    gh_token="$(gh auth token 2>/dev/null || true)"
+    if [ -n "$gh_token" ]; then
+        set -- "$@" \
+            --init-env "GITHUB_TOKEN=$gh_token" \
+            --workspace-env "GITHUB_TOKEN=$gh_token"
+    fi
+fi
+
+# Remote preflight (best-effort, needs DEVPOD_REMOTE_SSH): allow rootless podman on the
+# VM to bind the privileged :443 HAProxy port. devops-style sudo is assumed; harmless
+# if already set. Without DEVPOD_REMOTE_SSH this is skipped (set it, or run the sysctl
+# on the VM yourself).
+if [ -n "${DEVPOD_REMOTE_SSH:-}" ]; then
+    _rhost="${DEVPOD_REMOTE_SSH%%:*}"
+    _rport="22"
+    case "$DEVPOD_REMOTE_SSH" in *:*) _rport="${DEVPOD_REMOTE_SSH##*:}" ;; esac
+    echo "==> Remote preflight: allowing rootless bind to :443 on ${_rhost}..."
+    ssh -p "$_rport" "$_rhost" '
+        cur="$(/usr/sbin/sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+        [ "$cur" -le 443 ] && exit 0
+        echo "net.ipv4.ip_unprivileged_port_start=443" | sudo tee /etc/sysctl.d/99-permesi.conf >/dev/null
+        sudo /usr/sbin/sysctl -w net.ipv4.ip_unprivileged_port_start=443 >/dev/null
+    ' >/dev/null 2>&1 || echo "   (could not set the sysctl automatically; set it on the VM if HAProxy fails to bind :443)"
+fi
+
+devpod up "$workspace_name" "$@"
+
+# HAProxy starts before the in-app services and their certs; reload it on the remote
+# so it picks up the certs and re-resolves the `app` backend. Best-effort: only if
+# DEVPOD_REMOTE_SSH is provided (host[:port]); otherwise print the manual command.
+reload_hint="devpod ssh ${workspace_name} --command 'true'  # then on the VM: docker restart <project>-haproxy-1"
+if [ -n "${DEVPOD_REMOTE_SSH:-}" ]; then
+    rhost="${DEVPOD_REMOTE_SSH%%:*}"
+    rport="22"
+    case "$DEVPOD_REMOTE_SSH" in *:*) rport="${DEVPOD_REMOTE_SSH##*:}" ;; esac
+    echo "==> Reloading HAProxy on the remote (${rhost}:${rport})..."
+    ssh -p "$rport" "$rhost" '
+        c="$(podman ps --format "{{.Names}}" 2>/dev/null | grep -- "-haproxy-1$" | head -1)"
+        [ -z "$c" ] && c="$(docker ps --format "{{.Names}}" 2>/dev/null | grep -- "-haproxy-1$" | head -1)"
+        [ -n "$c" ] && { podman restart "$c" 2>/dev/null || docker restart "$c"; }
+    ' >/dev/null 2>&1 || echo "   (could not reload HAProxy automatically; do it manually)"
+else
+    echo "==> Note: reload HAProxy on the remote once the services are up:"
+    echo "    ssh <vm> 'docker restart \$(docker ps --format \"{{.Names}}\" | grep -- -haproxy-1\$)'"
+    echo "    (or set DEVPOD_REMOTE_SSH=host:port to automate it)"
+fi
+
+echo "==> Done. Enter the remote workspace: devpod ssh ${workspace_name}  (then: tmux attach -t permesi)"

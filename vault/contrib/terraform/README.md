@@ -5,8 +5,8 @@ This Terraform module provides a production-ready configuration for HashiCorp Va
 ## Features
 
 - **AppRole**: Configures roles for both `permesi` and `genesis`.
-- **Transit**: Sets up encryption/decryption keys for user data (`users`) and admission token signing (`genesis-signing`).
-- **KV Store**: Generates and stores a persistent 32-byte OPAQUE seed under `secret/permesi/opaque`.
+- **Transit**: Sets up the TOTP protection key (`totp`) and admission token signing key (`genesis-signing`).
+- **KV Store**: Generates and stores the persistent OPAQUE seed and MFA recovery pepper under `secret/permesi/config`.
 - **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the Vault root database credentials.
 - **Policies**: Implements least-privilege policies for services and operators.
 - **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for Vault Agent-based certificate delivery.
@@ -101,12 +101,37 @@ vault token create -policy=permesi-operators -period=2h -field=token
 You can verify the configuration via the Vault CLI:
 ```bash
 # Check Transit keys
-vault read transit/permesi/keys/users
+vault read transit/permesi/keys/totp
 vault read transit/genesis/keys/genesis-signing
 
 # Check OPAQUE seed
-vault kv get secret/permesi/opaque
+vault kv get secret/permesi/config
 ```
+
+The former `transit/permesi/keys/users` key belonged to the retired reversible
+password flow. The Permesi application policy no longer permits access to that
+key, and Terraform deliberately leaves deletion as a separate operator action:
+an ordinary configuration apply must not make old backups or rollback data
+irreversibly unreadable.
+
+Once every active deployment runs the OPAQUE-only authentication code, no
+legacy credential migration is required, and the backup-retention decision has
+been approved, permanently retire the key with an authorized operator token:
+
+```bash
+vault write transit/permesi/keys/users/config deletion_allowed=true
+vault delete transit/permesi/keys/users
+```
+
+Verify deletion with `vault read transit/permesi/keys/users`; it must return a
+not-found response. Transit key deletion cannot be reversed. Database backups
+that contain old ciphertext cease to expose a recoverable credential after the
+key is deleted, but they also cannot be used to restore the retired login flow.
+There is no in-application ciphertext-to-OPAQUE migration path: the original
+OPAQUE schema transition re-created the user table, and current releases cannot
+authenticate or migrate a legacy encrypted credential. Any required account
+transition must therefore be completed through a separately reviewed reset or
+re-enrollment process before deleting the key.
 
 ### 4. PKI Bootstrap and Vault Agent cert auth
 The PKI hierarchy provides short-lived runtime roles (`permesi-runtime`, `genesis-runtime`) and longer-lived bootstrap roles (`permesi-bootstrap`, `genesis-bootstrap`) intended only for Vault Agent cert-auth onboarding. Bootstrap certificates should be rotated on a slower cadence and never used directly for service TLS. Vault must be configured to accept cert-auth logins and trust the issuing chain used by the bootstrap certificates.

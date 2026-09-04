@@ -1,0 +1,92 @@
+#!/usr/bin/env sh
+set -eu
+
+# Make the Permesi dev HTTPS certs valid on the HOST browser.
+#
+# The app container terminates TLS for https://permesi.localhost (and the api/genesis
+# subdomains) with an mkcert-issued certificate. For the host browser to accept it
+# without warnings, the issuing CA must be trusted by the host. Rather than trusting a
+# CA generated inside the container (which would change on every recreate), this script
+# makes the HOST own the mkcert CA and shares it into the repo so the container issues
+# the frontend cert from that host-trusted CA:
+#
+#   1. install mkcert into ~/.local/bin if missing (static binary; no rpm-ostree/reboot),
+#   2. run `mkcert -install` (adds the CA to the system trust store + browser NSS via
+#      certutil) — this is the only step that needs sudo, and only the first time,
+#   3. copy the host CAROOT (rootCA.pem + rootCA-key.pem) into certs/mkcert-caroot/
+#      (gitignored) so `just devpod-tls-certs` issues from it.
+#
+# Idempotent. Run it directly, or let `scripts/dev-up` run it when PERMESI_TRUST_CA=1.
+
+project_dir="$(
+    unset CDPATH
+    cd -- "$(dirname -- "$0")/.." && pwd
+)"
+bindir="${HOME}/.local/bin"
+shared_caroot="${project_dir}/certs/mkcert-caroot"
+
+# 1. Ensure mkcert is available. Prefer an existing one on PATH (e.g. mise-managed via
+#    mise.toml); only as a fallback for hosts without it do we try `mise install`, then
+#    a static-binary download into ~/.local/bin.
+if ! command -v mkcert >/dev/null 2>&1; then
+    if command -v mise >/dev/null 2>&1; then
+        echo "==> Installing mkcert via mise ..."
+        mise install mkcert@latest >/dev/null 2>&1 || true
+        mkbin="$(mise which mkcert 2>/dev/null || true)"
+        [ -n "$mkbin" ] && export PATH="$(dirname "$mkbin"):${PATH}"
+    fi
+fi
+if ! command -v mkcert >/dev/null 2>&1; then
+    echo "==> Installing mkcert into ${bindir} ..."
+    mkdir -p "$bindir"
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    arch="$(uname -m)"
+    case "$arch" in
+    x86_64 | amd64) arch=amd64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    esac
+    if ! curl -fsSL -o "${bindir}/mkcert" \
+        "https://dl.filippo.io/mkcert/latest?for=${os}/${arch}"; then
+        rm -f "${bindir}/mkcert"
+        echo "Error: failed to download mkcert for ${os}/${arch}." >&2
+        exit 1
+    fi
+    chmod +x "${bindir}/mkcert"
+    export PATH="${bindir}:${PATH}"
+fi
+
+# certutil (nss-tools) lets mkcert install into Firefox/Chromium NSS stores too.
+if ! command -v certutil >/dev/null 2>&1; then
+    echo "Note: certutil not found; mkcert will set system trust only. Install" >&2
+    echo "      nss-tools for automatic Firefox/Chromium trust." >&2
+fi
+
+# 2. Install the CA into host trust stores (idempotent; needs sudo only the first
+#    time, for /etc/pki). Non-fatal: a non-interactive run with no usable sudo will
+#    fail fast (sudo errors without a tty rather than hanging) — warn and continue so
+#    `scripts/dev-up` is never blocked. Re-run in a terminal to finish trusting.
+echo "==> Trusting the mkcert CA on the host (may prompt for sudo the first time)..."
+if ! mkcert -install; then
+    echo "Warning: could not install the CA into host trust (needs sudo in a terminal)." >&2
+    echo "         Run 'scripts/trust-ca' interactively to finish; certs work meanwhile" >&2
+    echo "         but the host browser will warn until the CA is trusted." >&2
+fi
+
+# 3. Share the host CAROOT into the repo so the container issues from it.
+caroot="$(mkcert -CAROOT)"
+if [ ! -f "${caroot}/rootCA.pem" ] || [ ! -f "${caroot}/rootCA-key.pem" ]; then
+    echo "Error: mkcert CAROOT incomplete at ${caroot}." >&2
+    exit 1
+fi
+mkdir -p "$shared_caroot"
+chmod 0700 "$shared_caroot"
+cp "${caroot}/rootCA.pem" "${shared_caroot}/rootCA.pem"
+cp "${caroot}/rootCA-key.pem" "${shared_caroot}/rootCA-key.pem"
+chmod 0644 "${shared_caroot}/rootCA.pem"
+chmod 0600 "${shared_caroot}/rootCA-key.pem"
+
+echo "==> Host CA shared to ${shared_caroot} (gitignored)."
+echo "    The container will issue the frontend cert from this host-trusted CA."
+echo "    If the workspace is already up, refresh the cert and reload HAProxy:"
+echo "      scripts/dev-ssh just devpod-tls-certs"
+echo "      podman restart \$(podman ps --format '{{.Names}}' | grep -- -haproxy-1\$)"

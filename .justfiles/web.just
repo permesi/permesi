@@ -107,7 +107,7 @@ web-css-build: web-node-setup
   cd {{root}}/apps/web
   npm run css:build
 
-firefox-dev:
+firefox:
   #!/usr/bin/env zsh
   set -euo pipefail
   script="{{root}}/firefox-dev.sh"
@@ -118,12 +118,3 @@ firefox-dev:
   nohup "$script" >/tmp/firefox-dev.log 2>&1 &
   disown
   echo "Firefox dev launched (log: /tmp/firefox-dev.log)"
-
-firefox:
-  #!/usr/bin/env zsh
-  set -euo pipefail
-  if ! command -v hyprctl >/dev/null 2>&1; then
-    echo "hyprctl not found; run: just firefox-dev" >&2
-    exit 1
-  fi
-  hyprctl dispatch exec "[workspace 2] bash -lc 'cd {{root}} && just firefox-dev'"

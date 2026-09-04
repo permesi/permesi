@@ -24,6 +24,16 @@ fn normalize_vault_mount(arg: &str, value: &str) -> Result<String> {
     Ok(normalized)
 }
 
+fn require_positive(arg: &str, value: i64) -> Result<i64> {
+    if value > 0 {
+        Ok(value)
+    } else {
+        Err(anyhow!(
+            "invalid argument: --{arg} must be greater than zero"
+        ))
+    }
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -47,6 +57,26 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let admission_opts = admission::Options::parse(matches)?;
     let auth_opts = auth::Options::parse(matches)?;
+    let auth_max_pending_states = usize::try_from(auth_opts.max_pending_states)
+        .context("--auth-max-pending-states exceeds this platform's capacity")?;
+    if auth_max_pending_states == 0 {
+        return Err(anyhow!(
+            "invalid argument: --{} must be greater than zero",
+            auth::ARG_AUTH_MAX_PENDING_STATES
+        ));
+    }
+    let auth_rate_limit_window_seconds = require_positive(
+        auth::ARG_AUTH_RATE_LIMIT_WINDOW,
+        auth_opts.rate_limit.window_seconds,
+    )?;
+    let auth_rate_limit_ip_attempts = require_positive(
+        auth::ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS,
+        auth_opts.rate_limit.ip_attempts,
+    )?;
+    let auth_rate_limit_account_attempts = require_positive(
+        auth::ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS,
+        auth_opts.rate_limit.account_attempts,
+    )?;
     let tls_opts = tls::Options::parse(matches)?;
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
@@ -76,6 +106,10 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         email_outbox_backoff_max_seconds: auth_opts.email_outbox.backoff_max_seconds,
         opaque_server_id: auth_opts.opaque.server_id,
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
+        auth_max_pending_states,
+        auth_rate_limit_window_seconds,
+        auth_rate_limit_ip_attempts,
+        auth_rate_limit_account_attempts,
         platform_admin_ttl_seconds: auth_opts.admin.ttl_seconds,
         platform_recent_auth_seconds: auth_opts.admin.recent_auth_seconds,
         vault_kv_mount,

@@ -1,0 +1,126 @@
+#!/usr/bin/env sh
+set -eu
+
+# Portable one-command dev setup for Permesi (compose-based devcontainer).
+#
+# The whole stack — the dev container (`app`) AND its services (postgres/vault/
+# jaeger/haproxy) — is defined in .devcontainer/compose.yaml and brought up together
+# by DevPod. The host only needs podman (or docker) + devpod + Docker Compose v2.
+# The same flow runs locally and, via scripts/dev-up-remote, on a remote VM.
+#
+# Works on Linux, macOS (podman machine / Docker), and Linux Atomic (fedora-atomic).
+
+project_dir="$(
+    unset CDPATH
+    cd -- "$(dirname -- "$0")/.." && pwd
+)"
+workspace_name="permesi"
+
+if ! command -v devpod >/dev/null 2>&1; then
+    echo "Error: devpod not found on host (https://devpod.sh)." >&2
+    exit 1
+fi
+
+# Prefer podman; fall back to docker (for the post-up HAProxy reload).
+if command -v podman >/dev/null 2>&1; then
+    engine=podman
+elif command -v docker >/dev/null 2>&1; then
+    engine=docker
+else
+    engine=""
+fi
+
+case "$(uname -s)" in
+Darwin)
+    case "${XDG_RUNTIME_DIR:-}" in
+    "" | /tmp/*) XDG_RUNTIME_DIR="${HOME}/.cache/xdg-runtime" ;;
+    esac
+    ;;
+*)
+    : "${XDG_RUNTIME_DIR:=/tmp/runtime-$(id -u)}"
+    ;;
+esac
+export XDG_RUNTIME_DIR
+
+# Allow rootless bind to :443 (HAProxy frontend) on Linux. Opt out with
+# PERMESI_DEVUP_SKIP_PORTCHECK=1.
+ensure_privileged_ports() {
+    [ "${PERMESI_DEVUP_SKIP_PORTCHECK:-}" = "1" ] && return 0
+    [ "$(uname -s)" = "Linux" ] || return 0
+    start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+    case "$start" in '' | *[!0-9]*) start=1024 ;; esac
+    [ "$start" -le 443 ] && return 0
+    echo "-> Allowing rootless bind to :443 (net.ipv4.ip_unprivileged_port_start=443)..." >&2
+    if sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443 >/dev/null 2>&1; then
+        echo "   Persist: echo 'net.ipv4.ip_unprivileged_port_start=443' | sudo tee /etc/sysctl.d/99-permesi.conf" >&2
+    else
+        echo "Error: could not lower net.ipv4.ip_unprivileged_port_start (needs sudo)." >&2
+        echo "Run once: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443" >&2
+        exit 1
+    fi
+}
+ensure_privileged_ports
+
+# Make https://permesi.localhost valid on the host browser by having the host own the
+# mkcert CA and sharing it into the repo (gitignored). On by default; idempotent and
+# only needs sudo the first time. Opt out with PERMESI_TRUST_CA=0. Never fatal.
+if [ "${PERMESI_TRUST_CA:-1}" != "0" ]; then
+    "${project_dir}/scripts/trust-ca" || echo "==> Host CA trust step skipped (continuing)."
+fi
+
+echo "==> Launching the full workspace (app + deps) via DevPod..."
+set -- --ide none --id "$workspace_name" --ssh-config "$HOME/.ssh/devpod" "$@"
+
+# Optional 1Password SSH agent passthrough.
+agent_sock="${HOME}/.1password/agent.sock"
+if [ -S "$agent_sock" ]; then
+    export SSH_AUTH_SOCK="$agent_sock"
+fi
+
+# Forward identity/config so chezmoi + git work inside the container.
+for var in \
+    GIT_USER_NAME \
+    GIT_USER_EMAIL \
+    GIT_SIGNING_KEY \
+    GIT_SSH_SIGNING_PROGRAM \
+    GITHUB_TOKEN \
+    DEVPOD_DOTFILES \
+    PERMESI_DEVPOD_NO_AUTOSTART; do
+    eval "value=\${$var:-}"
+    if [ "$value" != "" ]; then
+        set -- "$@" \
+            --init-env "$var=$value" \
+            --workspace-env "$var=$value"
+    fi
+done
+
+# Fall back to gh CLI for a token when GITHUB_TOKEN is unset.
+if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+    gh_token="$(gh auth token 2>/dev/null || true)"
+    if [ -n "$gh_token" ]; then
+        set -- "$@" \
+            --init-env "GITHUB_TOKEN=$gh_token" \
+            --workspace-env "GITHUB_TOKEN=$gh_token"
+    fi
+fi
+
+devpod up "$project_dir" "$@"
+
+# HAProxy starts before the in-app services (genesis/permesi/web) and before their
+# TLS certs are issued by postCreate, so reload it now to pick up the certs and
+# re-resolve the `app` backend. Idempotent; the `check` directive brings backends up
+# as they finish compiling.
+if [ -n "$engine" ]; then
+    echo "==> Reloading HAProxy to pick up issued TLS certs..."
+    hap="$("$engine" ps --format '{{.Names}}' 2>/dev/null | grep -- '-haproxy-1$' | head -1 || true)"
+    [ -n "$hap" ] && "$engine" restart "$hap" >/dev/null 2>&1 || true
+fi
+
+echo "==> Done. Enter the workspace: devpod ssh ${workspace_name}  (then: tmux attach -t permesi)"
+
+if [ "${PERMESI_TRUST_CA:-1}" != "0" ]; then
+    echo "    Host trust enabled: https://permesi.localhost should be valid in your browser."
+    echo "    (disable with PERMESI_TRUST_CA=0; the install only needs sudo the first time.)"
+else
+    echo "    Host CA trust disabled (PERMESI_TRUST_CA=0). For valid browser certs, run: scripts/trust-ca"
+fi

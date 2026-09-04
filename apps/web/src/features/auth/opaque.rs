@@ -5,17 +5,18 @@
 //! Flow Overview: Routes use these helpers to build identifiers and KSF parameters
 //! before running the OPAQUE start/finish steps.
 
-use argon2::Argon2;
+use opaque_argon2::Argon2;
 use opaque_ke::key_exchange::tripledh::TripleDh;
 use opaque_ke::{CipherSuite, Identifiers};
 
 /// OPAQUE cipher suite used by the client; must match the server configuration.
-/// Changing this requires coordinated updates with the backend.
+/// Its `opaque_*` crypto aliases isolate `opaque-ke 4`'s older trait versions;
+/// changing the suite or aliases requires a coordinated backend migration.
 pub struct OpaqueSuite;
 
 impl CipherSuite for OpaqueSuite {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeyExchange = TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
+    type KeyExchange = TripleDh<opaque_ke::Ristretto255, opaque_sha2::Sha512>;
     type Ksf = Argon2<'static>;
 }
 

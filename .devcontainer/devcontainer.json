@@ -1,0 +1,30 @@
+{
+  "name": "Permesi (DevPod, compose)",
+  "dockerComposeFile": [
+    "compose.yaml",
+    "compose.podman.yaml"
+  ],
+  "service": "app",
+  "runServices": [
+    "app",
+    "postgres",
+    "vault",
+    "jaeger",
+    "haproxy"
+  ],
+  "workspaceFolder": "/workspaces/permesi",
+  "remoteUser": "vscode",
+  "userShell": "/usr/bin/zsh",
+  "overrideCommand": false,
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "username": "vscode"
+    },
+    "ghcr.io/duduribeiro/devcontainer-features/neovim:1": {
+      "version": "stable"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/postcreate.sh",
+  "postStartCommand": "bash .devcontainer/post-start.sh"
+}

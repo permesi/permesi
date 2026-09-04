@@ -1,7 +1,7 @@
 use crate::totp::{crypto, dek_manager::DekManager, repo::TotpRepo};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use sqlx::PgPool;
-use totp_rs::{Algorithm, Secret, TOTP};
+use totp_rs::{Algorithm, Builder, Secret, Totp};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -34,10 +34,8 @@ impl TotpService {
         label: Option<String>,
     ) -> Result<(String, String, Uuid)> {
         // 1. Generate new random secret
-        let secret = Secret::generate_secret();
-        let secret_bytes = secret
-            .to_bytes()
-            .map_err(|e| anyhow!("Secret gen error: {e}"))?;
+        let secret = Secret::generate();
+        let secret_bytes = secret.as_bytes().to_vec();
 
         // 2. Get active DEK
         let dek_id = self.dek_manager.get_active_dek_id(&self.pool).await?;
@@ -64,22 +62,13 @@ impl TotpService {
         .await?;
 
         // 5. Generate QR (base64 data URL)
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            secret_bytes,
-            Some(self.issuer.clone()),
-            user_email.to_string(),
-        )
-        .map_err(|e| anyhow!("TOTP init error: {e}"))?;
+        let totp = build_totp(secret_bytes, &self.issuer, user_email)?;
 
         let qr = totp
-            .get_qr_base64()
+            .to_qr_base64()
             .map_err(|e| anyhow!("QR gen error: {e}"))?; // "data:image/png;base64,..."
         let qr = format!("data:image/png;base64,{qr}");
-        let secret_str = totp.get_secret_base32();
+        let secret_str = totp.secret().to_base32();
 
         Ok((secret_str, qr, credential_id))
     }
@@ -122,18 +111,9 @@ impl TotpService {
             credential_id,
         )?;
 
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            secret_bytes,
-            Some(self.issuer.clone()),
-            "user".to_string(), // label doesn't matter for check
-        )
-        .map_err(|e| anyhow!("TOTP init error: {e}"))?;
+        let totp = build_totp(secret_bytes, &self.issuer, "user")?;
 
-        let valid = totp.check_current(code).unwrap_or(false);
+        let valid = check_current_totp(&totp, code)?;
 
         if valid {
             TotpRepo::confirm_credential(&self.pool, user_id, credential_id).await?;
@@ -182,18 +162,9 @@ impl TotpService {
             cred.credential_id,
         )?;
 
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            secret_bytes,
-            Some(self.issuer.clone()),
-            "user".to_string(),
-        )
-        .map_err(|e| anyhow!("TOTP init error: {e}"))?;
+        let totp = build_totp(secret_bytes, &self.issuer, "user")?;
 
-        let valid = totp.check_current(code).unwrap_or(false);
+        let valid = check_current_totp(&totp, code)?;
 
         if valid {
             TotpRepo::touch_last_used(&self.pool, cred.credential_id).await?;
@@ -220,4 +191,30 @@ impl TotpService {
             Ok(false)
         }
     }
+}
+
+/// Builds the RFC 6238 configuration shared by enrollment and verification.
+/// The SHA-1 algorithm, six digits, one-step skew, and 30-second period preserve
+/// compatibility with already-enrolled authenticators.
+fn build_totp(secret: Vec<u8>, issuer: &str, account_name: &str) -> Result<Totp> {
+    Builder::new()
+        .with_algorithm(Algorithm::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .with_issuer(Some(issuer))
+        .with_account_name(account_name)
+        .build()
+        .map_err(|error| anyhow!("TOTP init error: {error}"))
+}
+
+/// Checks a TOTP code against the current Unix time without relying on the
+/// library's panicking system-clock convenience method.
+fn check_current_totp(totp: &Totp, code: &str) -> Result<bool> {
+    let unix_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs();
+    Ok(totp.check(code, unix_time).is_some())
 }

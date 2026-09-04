@@ -63,7 +63,7 @@ pub async fn opaque_login_finish(
     post_json_with_headers_with_credentials("/v1/auth/opaque/login/finish", request, &headers).await
 }
 
-/// Starts passkey login for the supplied email address.
+/// Starts a discoverable passkey login without disclosing an account identifier.
 pub async fn passkey_login_start(
     request: &PasskeyLoginStartRequest,
     zero_token: &str,

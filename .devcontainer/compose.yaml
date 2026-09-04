@@ -1,0 +1,158 @@
+# Unified dev stack for the Permesi compose-based devcontainer.
+#
+# Flow Overview
+#   This single compose project defines the dev container (`app`) AND every backing
+#   service it needs (postgres, vault, jaeger, haproxy). DevPod (devcontainer.json
+#   -> dockerComposeFile) brings the whole stack up together and drops you into the
+#   `app` service, so the environment is fully self-contained: the same `devpod up`
+#   works locally (podman/docker) and on a remote VM (e.g. the coyote SSH provider)
+#   with no host-side dependency management.
+#
+#   Inside the project network, services resolve each other by name: the app reaches
+#   postgres:5432 / http://vault:8200 / jaeger:4317, and HAProxy terminates TLS on
+#   :443 and proxies to the in-app services as app:8000/8001/8081.
+#
+#   Vault is *started* here but *configured* inside the container
+#   (`just devpod-bootstrap`), keeping the model portable and tooling-light.
+#
+# Trust boundary
+#   Local/dev only: Postgres uses trust auth and Vault is bootstrapped with locally
+#   generated keys (vault/keys.json). Never reuse this outside a dev machine.
+
+name: permesi
+
+networks:
+  permesi:
+    driver: bridge
+
+volumes:
+  pgdata:
+  vault-data:
+  cargo-registry:
+  cargo-git:
+  cargo-target:
+  rustup:
+  mise-data:
+  mise-cache:
+
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/rust:trixie
+    init: true
+    user: vscode
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - label=disable
+    # Keep the dev container alive; DevPod execs into it and runs lifecycle hooks.
+    command: sleep infinity
+    environment:
+      # DevPod auto-injects these for image-based containers but NOT for compose, so
+      # set them explicitly (used by the legacy-recipe guard and tooling).
+      DEVPOD: "true"
+      DEVPOD_WORKSPACE_ID: permesi
+      EDITOR: nvim
+      VISUAL: nvim
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      CARGO_HOME: /home/vscode/.cargo
+      CARGO_TARGET_DIR: /home/vscode/.cargo/target
+      MISE_DATA_DIR: /home/vscode/.local/share/mise
+      MISE_CACHE_DIR: /home/vscode/.cache/mise
+      MISE_CONFIG_FILE: /workspaces/permesi/mise.toml
+      VAULT_ADDR: http://vault:8200
+      PERMESI_DB_HOST: postgres
+    # The in-app services bind/serve on *.permesi.localhost; resolve them to loopback
+    # inside the container (HAProxy reaches them via the `app` service name instead).
+    extra_hosts:
+      - "permesi.localhost:127.0.0.1"
+      - "api.permesi.localhost:127.0.0.1"
+      - "genesis.permesi.localhost:127.0.0.1"
+    volumes:
+      - ..:/workspaces/permesi
+      - cargo-registry:/home/vscode/.cargo/registry
+      - cargo-git:/home/vscode/.cargo/git
+      - cargo-target:/home/vscode/.cargo/target
+      - rustup:/home/vscode/.rustup
+      - mise-data:/home/vscode/.local/share/mise
+      - mise-cache:/home/vscode/.cache/mise
+    networks:
+      permesi:
+        aliases:
+          - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_started
+      jaeger:
+        condition: service_started
+
+  postgres:
+    image: docker.io/library/postgres:18
+    security_opt:
+      - label=disable
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ../db:/db:ro
+      - ../db/sql/container-entrypoint.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+    networks:
+      - permesi
+
+  vault:
+    image: docker.io/hashicorp/vault:2.0
+    cap_add:
+      - IPC_LOCK
+    security_opt:
+      - label=disable
+    # Dev-only: run as root so Vault can create its audit-log dir (/var/log/vault)
+    # required by the Terraform bootstrap.
+    user: "0:0"
+    entrypoint: vault
+    command: server -config=/vault/config/vault.hcl
+    volumes:
+      - ../vault/config.hcl:/vault/config/vault.hcl:ro
+      - vault-data:/vault/data
+    ports:
+      - "8200:8200"
+    restart: unless-stopped
+    networks:
+      - permesi
+
+  jaeger:
+    image: docker.io/jaegertracing/jaeger:2.19.0
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+    ports:
+      - "16686:16686"
+    restart: unless-stopped
+    networks:
+      - permesi
+
+  haproxy:
+    image: docker.io/library/haproxy:3.4
+    security_opt:
+      - label=disable
+    # HAProxy re-resolves the `app` backend at runtime (see haproxy.deps.cfg), so it
+    # tolerates the app service finishing its build/start after haproxy itself.
+    volumes:
+      - ./haproxy/haproxy.deps.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ../config/haproxy/certs:/usr/local/etc/haproxy/certs:ro
+      - ../certs:/usr/local/etc/haproxy/clientca:ro
+    ports:
+      - "443:8080"
+    restart: unless-stopped
+    depends_on:
+      - app
+    networks:
+      - permesi

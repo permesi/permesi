@@ -6,8 +6,8 @@
 
 use anyhow::{Result, anyhow};
 use opaque_ke::{CipherSuite, ServerLogin, ServerSetup, key_exchange::tripledh::TripleDh};
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use opaque_rand_chacha::ChaCha20Rng;
+use opaque_rand_core::SeedableRng;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -22,8 +22,12 @@ use super::{mfa::MfaConfig, rate_limit::RateLimiter};
 const DEFAULT_TOKEN_TTL_SECONDS: i64 = 30 * 60;
 const DEFAULT_RESEND_COOLDOWN_SECONDS: i64 = 60;
 const DEFAULT_OPAQUE_LOGIN_TTL_SECONDS: u64 = 5 * 60;
+const DEFAULT_AUTH_MAX_PENDING_STATES: usize = 10_000;
 const DEFAULT_SESSION_TTL_SECONDS: i64 = 12 * 60 * 60;
 const DEFAULT_OPAQUE_SERVER_ID: &str = "api.permesi.dev";
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS: i64 = 10 * 60;
+const DEFAULT_RATE_LIMIT_IP_ATTEMPTS: i64 = 100;
+const DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS: i64 = 10;
 
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
@@ -36,6 +40,10 @@ pub struct AuthConfig {
     opaque_kv_mount: String,
     opaque_server_id: String,
     opaque_login_ttl_seconds: u64,
+    auth_max_pending_states: usize,
+    rate_limit_window_seconds: i64,
+    rate_limit_ip_attempts: i64,
+    rate_limit_account_attempts: i64,
     webauthn_rp_id: String,
     webauthn_rp_origin: String,
 }
@@ -60,6 +68,10 @@ impl AuthConfig {
             opaque_kv_mount: "secret/permesi".to_string(),
             opaque_server_id: DEFAULT_OPAQUE_SERVER_ID.to_string(),
             opaque_login_ttl_seconds: DEFAULT_OPAQUE_LOGIN_TTL_SECONDS,
+            auth_max_pending_states: DEFAULT_AUTH_MAX_PENDING_STATES,
+            rate_limit_window_seconds: DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+            rate_limit_ip_attempts: DEFAULT_RATE_LIMIT_IP_ATTEMPTS,
+            rate_limit_account_attempts: DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS,
             webauthn_rp_id: rp_id,
             webauthn_rp_origin: rp_origin,
         }
@@ -98,6 +110,25 @@ impl AuthConfig {
     #[must_use]
     pub fn with_opaque_login_ttl_seconds(mut self, seconds: u64) -> Self {
         self.opaque_login_ttl_seconds = seconds;
+        self
+    }
+
+    #[must_use]
+    pub fn with_auth_max_pending_states(mut self, max_pending_states: usize) -> Self {
+        self.auth_max_pending_states = max_pending_states;
+        self
+    }
+
+    #[must_use]
+    pub fn with_rate_limit(
+        mut self,
+        window_seconds: i64,
+        ip_attempts: i64,
+        account_attempts: i64,
+    ) -> Self {
+        self.rate_limit_window_seconds = window_seconds;
+        self.rate_limit_ip_attempts = ip_attempts;
+        self.rate_limit_account_attempts = account_attempts;
         self
     }
 
@@ -187,6 +218,26 @@ impl AuthConfig {
         self.opaque_login_ttl_seconds
     }
 
+    #[must_use]
+    pub fn auth_max_pending_states(&self) -> usize {
+        self.auth_max_pending_states
+    }
+
+    #[must_use]
+    pub fn rate_limit_window_seconds(&self) -> i64 {
+        self.rate_limit_window_seconds
+    }
+
+    #[must_use]
+    pub fn rate_limit_ip_attempts(&self) -> i64 {
+        self.rate_limit_ip_attempts
+    }
+
+    #[must_use]
+    pub fn rate_limit_account_attempts(&self) -> i64 {
+        self.rate_limit_account_attempts
+    }
+
     pub(crate) fn frontend_base_url(&self) -> &str {
         &self.frontend_base_url
     }
@@ -227,12 +278,18 @@ fn origin_matches_rp_id(host: &str, rp_id: &str) -> bool {
     host == rp_id || host.ends_with(&format!(".{rp_id}"))
 }
 
+/// OPAQUE cipher suite used by the permesi server.
+///
+/// The hash, key-stretching function, and deterministic setup RNG use explicit
+/// `opaque_*` compatibility aliases because `opaque-ke 4` exposes traits from
+/// the older digest and `rand_core` ecosystems. Keeping those versions local to
+/// this suite preserves the OPAQUE transcript while other code uses current crates.
 pub(super) struct OpaqueSuite;
 
 impl CipherSuite for OpaqueSuite {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeyExchange = TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
-    type Ksf = argon2::Argon2<'static>;
+    type KeyExchange = TripleDh<opaque_ke::Ristretto255, opaque_sha2::Sha512>;
+    type Ksf = opaque_argon2::Argon2<'static>;
 }
 
 pub(super) struct OpaqueLoginState {
@@ -245,17 +302,28 @@ pub struct OpaqueState {
     server_setup: ServerSetup<OpaqueSuite>,
     server_id: Vec<u8>,
     login_ttl: Duration,
+    max_pending_logins: usize,
     login_states: Mutex<HashMap<Uuid, OpaqueLoginState>>,
 }
 
 impl OpaqueState {
-    pub fn from_seed(seed: [u8; 32], server_id: String, login_ttl: Duration) -> Self {
+    /// Build deterministic server setup and bounded ephemeral login storage.
+    ///
+    /// All replicas must use the same seed and server identifier. The capacity
+    /// bounds unauthenticated protocol state retained until login completion.
+    pub fn from_seed(
+        seed: [u8; 32],
+        server_id: String,
+        login_ttl: Duration,
+        max_pending_logins: usize,
+    ) -> Self {
         let mut rng = ChaCha20Rng::from_seed(seed);
         let server_setup = ServerSetup::<OpaqueSuite>::new(&mut rng);
         Self {
             server_setup,
             server_id: server_id.into_bytes(),
             login_ttl,
+            max_pending_logins,
             login_states: Mutex::new(HashMap::new()),
         }
     }
@@ -268,14 +336,21 @@ impl OpaqueState {
         &self.server_id
     }
 
+    /// Store one OPAQUE exchange after pruning expired entries.
+    ///
+    /// Returns `None` when the configured capacity has been reached; callers
+    /// must reject the start request without issuing an unusable login ID.
     pub(super) async fn store_login_state(
         &self,
         state: ServerLogin<OpaqueSuite>,
         user_id: Option<Uuid>,
-    ) -> Uuid {
+    ) -> Option<Uuid> {
         let login_id = Uuid::new_v4();
         let mut states = self.login_states.lock().await;
         states.retain(|_, entry| entry.created_at.elapsed() < self.login_ttl);
+        if states.len() >= self.max_pending_logins {
+            return None;
+        }
         states.insert(
             login_id,
             OpaqueLoginState {
@@ -284,7 +359,7 @@ impl OpaqueState {
                 created_at: Instant::now(),
             },
         );
-        login_id
+        Some(login_id)
     }
 
     pub(super) async fn take_login_state(&self, login_id: Uuid) -> Option<OpaqueLoginState> {
@@ -302,7 +377,7 @@ impl OpaqueState {
 pub struct AuthState {
     config: AuthConfig,
     opaque: OpaqueState,
-    rate_limiter: Arc<dyn RateLimiter>,
+    rate_limiter: Arc<RateLimiter>,
     mfa: MfaConfig,
 }
 
@@ -310,7 +385,7 @@ impl AuthState {
     pub fn new(
         config: AuthConfig,
         opaque: OpaqueState,
-        rate_limiter: Arc<dyn RateLimiter>,
+        rate_limiter: Arc<RateLimiter>,
         mfa: MfaConfig,
     ) -> Self {
         Self {
@@ -331,7 +406,7 @@ impl AuthState {
         &self.opaque
     }
 
-    pub(crate) fn rate_limiter(&self) -> &dyn RateLimiter {
+    pub(crate) fn rate_limiter(&self) -> &RateLimiter {
         self.rate_limiter.as_ref()
     }
 
@@ -343,8 +418,11 @@ impl AuthState {
 
 #[cfg(test)]
 mod tests {
-    use super::super::rate_limit::{NoopRateLimiter, RateLimiter};
-    use super::{AuthConfig, AuthState, OpaqueState};
+    use super::super::rate_limit::RateLimiter;
+    use super::{AuthConfig, AuthState, OpaqueState, OpaqueSuite};
+    use opaque_ke::{ClientLogin, ServerLogin, ServerLoginParameters};
+    use opaque_rand_chacha::ChaCha20Rng;
+    use opaque_rand_core::SeedableRng;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -367,19 +445,41 @@ mod tests {
             config.opaque_login_ttl_seconds(),
             super::DEFAULT_OPAQUE_LOGIN_TTL_SECONDS
         );
+        assert_eq!(
+            config.auth_max_pending_states(),
+            super::DEFAULT_AUTH_MAX_PENDING_STATES
+        );
+        assert_eq!(
+            config.rate_limit_window_seconds(),
+            super::DEFAULT_RATE_LIMIT_WINDOW_SECONDS
+        );
+        assert_eq!(
+            config.rate_limit_ip_attempts(),
+            super::DEFAULT_RATE_LIMIT_IP_ATTEMPTS
+        );
+        assert_eq!(
+            config.rate_limit_account_attempts(),
+            super::DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS
+        );
 
         let config = config
             .with_email_token_ttl_seconds(120)
             .with_resend_cooldown_seconds(30)
             .with_opaque_kv_mount("kv-v2".to_string())
             .with_opaque_server_id("api.test".to_string())
-            .with_opaque_login_ttl_seconds(42);
+            .with_opaque_login_ttl_seconds(42)
+            .with_auth_max_pending_states(123)
+            .with_rate_limit(90, 12, 4);
 
         assert_eq!(config.email_token_ttl_seconds(), 120);
         assert_eq!(config.resend_cooldown_seconds(), 30);
         assert_eq!(config.opaque_kv_mount(), "kv-v2");
         assert_eq!(config.opaque_server_id(), "api.test");
         assert_eq!(config.opaque_login_ttl_seconds(), 42);
+        assert_eq!(config.auth_max_pending_states(), 123);
+        assert_eq!(config.rate_limit_window_seconds(), 90);
+        assert_eq!(config.rate_limit_ip_attempts(), 12);
+        assert_eq!(config.rate_limit_account_attempts(), 4);
     }
 
     #[test]
@@ -388,9 +488,40 @@ mod tests {
             [42u8; 32],
             "opaque.test".to_string(),
             Duration::from_secs(5),
+            10,
         );
         assert_eq!(state.server_id(), b"opaque.test");
         assert_eq!(state.login_ttl, Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn opaque_state_enforces_pending_login_capacity() -> anyhow::Result<()> {
+        let state = OpaqueState::from_seed(
+            [42u8; 32],
+            "opaque.test".to_string(),
+            Duration::from_secs(5),
+            1,
+        );
+
+        for (seed, expected) in [(1_u8, true), (2_u8, false)] {
+            let mut client_rng = ChaCha20Rng::from_seed([seed; 32]);
+            let client = ClientLogin::<OpaqueSuite>::start(&mut client_rng, b"password")?;
+            let mut server_rng = ChaCha20Rng::from_seed([seed.saturating_add(10); 32]);
+            let login = ServerLogin::start(
+                &mut server_rng,
+                state.server_setup(),
+                None,
+                client.message,
+                b"user@example.com",
+                ServerLoginParameters::default(),
+            )?;
+
+            assert_eq!(
+                state.store_login_state(login.state, None).await.is_some(),
+                expected
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -400,8 +531,9 @@ mod tests {
             [7u8; 32],
             "api.permesi.dev".to_string(),
             Duration::from_secs(5),
+            10,
         );
-        let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
+        let limiter = Arc::new(RateLimiter::noop());
         let state = AuthState::new(config, opaque, limiter, super::MfaConfig::new());
         assert_eq!(state.opaque().server_id(), b"api.permesi.dev");
     }

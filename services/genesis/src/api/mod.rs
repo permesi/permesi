@@ -62,7 +62,7 @@ pub async fn new(
     let pool = PgPoolOptions::new()
         .min_connections(1)
         .max_connections(5)
-        .max_lifetime(Duration::from_secs(60 * 2))
+        .max_lifetime(Duration::from_mins(2))
         .test_before_acquire(true)
         .connect(&dsn)
         .await
@@ -82,7 +82,7 @@ pub async fn new(
             ServiceBuilder::new()
                 .layer(SetRequestHeaderLayer::if_not_present(
                     HeaderName::from_static("x-request-id"),
-                    |_req: &_| HeaderValue::from_str(Ulid::new().to_string().as_str()).ok(),
+                    |_req: &_| HeaderValue::from_str(Ulid::generate().to_string().as_str()).ok(),
                 ))
                 .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
                     "x-request-id",
@@ -236,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_socket_returns_error_on_shutdown_signal() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("genesis.sock");
 
@@ -255,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_socket_removes_file_on_shutdown() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("genesis.sock");
         let socket_path_wait = socket_path.clone();

@@ -4,8 +4,7 @@
 //! are unavailable. Codes are Argon2id-hashed with a server-side pepper.
 
 use anyhow::{Context, Result};
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
-use rand::{RngCore, rngs::OsRng};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use uuid::Uuid;
 
 const RECOVERY_CODE_COUNT: usize = 10;
@@ -14,7 +13,6 @@ const RECOVERY_CODE_GROUP_SIZE: usize = 4;
 const RECOVERY_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /// A freshly generated recovery-code batch (plaintext + hashes).
-#[derive(Debug)]
 pub struct RecoveryCodeBatch {
     pub batch_id: Uuid,
     pub codes: Vec<String>,
@@ -24,15 +22,10 @@ pub struct RecoveryCodeBatch {
 impl RecoveryCodeBatch {
     /// Generate a new recovery-code batch using the provided pepper.
     pub fn generate(pepper: &[u8]) -> Result<Self> {
-        let mut rng = OsRng;
-        Self::generate_with_rng(&mut rng, pepper)
-    }
-
-    fn generate_with_rng<R: RngCore + ?Sized>(rng: &mut R, pepper: &[u8]) -> Result<Self> {
         let mut codes = Vec::with_capacity(RECOVERY_CODE_COUNT);
         let mut code_hashes = Vec::with_capacity(RECOVERY_CODE_COUNT);
         for _ in 0..RECOVERY_CODE_COUNT {
-            let code = generate_code(rng)?;
+            let code = generate_code()?;
             let hash = hash_recovery_code(&code, pepper)?;
             codes.push(code);
             code_hashes.push(hash);
@@ -105,9 +98,9 @@ pub fn verify_recovery_code(code: &str, stored_hash: &str, pepper: &[u8]) -> Res
 }
 
 /// Generate a single recovery code in grouped form.
-fn generate_code<R: RngCore + ?Sized>(rng: &mut R) -> Result<String> {
+fn generate_code() -> Result<String> {
     let mut raw = [0u8; RECOVERY_CODE_LEN];
-    rng.fill_bytes(&mut raw);
+    getrandom::fill(&mut raw).context("failed to generate recovery code")?;
     let mut normalized = String::with_capacity(RECOVERY_CODE_LEN);
     for byte in raw {
         let idx = usize::from(byte) % RECOVERY_CODE_ALPHABET.len();
@@ -121,7 +114,6 @@ fn generate_code<R: RngCore + ?Sized>(rng: &mut R) -> Result<String> {
 /// Hash a recovery code using Argon2id with the server-side pepper.
 fn hash_recovery_code(code: &str, pepper: &[u8]) -> Result<String> {
     let normalized = normalize_recovery_code(code)?;
-    let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::new_with_secret(
         pepper,
         argon2::Algorithm::Argon2id,
@@ -130,7 +122,7 @@ fn hash_recovery_code(code: &str, pepper: &[u8]) -> Result<String> {
     )
     .map_err(|_| anyhow::anyhow!("failed to initialize Argon2id"))?;
     let hash = argon2
-        .hash_password(normalized.as_bytes(), &salt)
+        .hash_password(normalized.as_bytes())
         .map_err(|_| anyhow::anyhow!("failed to hash recovery code"))?
         .to_string();
     Ok(hash)

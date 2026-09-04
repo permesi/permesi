@@ -4,7 +4,7 @@ use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
         mfa::MfaConfig,
-        rate_limit::{NoopRateLimiter, RateLimiter},
+        rate_limit::RateLimiter,
         state::{AuthConfig, AuthState, OpaqueState},
     },
 };
@@ -33,7 +33,8 @@ pub(super) fn auth_state() -> Arc<AuthState> {
         [1u8; 32],
         "api.permesi.dev".to_string(),
         Duration::from_secs(30),
+        10_000,
     );
-    let limiter: Arc<dyn RateLimiter> = Arc::new(NoopRateLimiter);
+    let limiter = Arc::new(RateLimiter::noop());
     Arc::new(AuthState::new(config, opaque, limiter, MfaConfig::new()))
 }

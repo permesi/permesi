@@ -4,6 +4,40 @@ runs:
   using: composite
   steps:
     - name: Pre-clean workspace (self-hosted)
-      if: ${{ contains(runner.labels, 'self-hosted') }}
+      if: ${{ runner.environment == 'self-hosted' }}
       shell: bash
       run: sudo rm -rf "${GITHUB_WORKSPACE}/db/data" || true
+
+    - name: Repair rustup toolchain (self-hosted)
+      if: ${{ runner.environment == 'self-hosted' }}
+      shell: bash
+      run: |
+        # dtolnay/rust-toolchain@stable runs `rustup toolchain install stable`. On this
+        # self-hosted runner an interrupted earlier run left corruption in the shared
+        # RUSTUP_HOME: a partial component tarball in the downloads cache is re-extracted on
+        # every reinstall, producing a stable toolchain whose `cargo` binary is missing
+        # ("error: the 'cargo' binary ... is not applicable to the 'stable' toolchain"), and a
+        # stale wasm32 std manifest makes component installs abort with a "detected conflict".
+        # `rustup toolchain uninstall stable` alone does not help because the bad tarball
+        # survives in the cache and seeds the next install. When the stable toolchain is
+        # unhealthy, purge the toolchain plus its update hash and the download/tmp caches so
+        # the following toolchain step downloads and installs clean components. Healthy runners
+        # keep their cached toolchain and pay no cost.
+        if ! command -v rustup >/dev/null 2>&1; then
+          echo "rustup not found; nothing to repair"
+          exit 0
+        fi
+        rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+        echo "rustup=$(command -v rustup) RUSTUP_HOME=$rustup_home"
+        if RUSTUP_AUTO_INSTALL=0 rustup run stable cargo --version >/dev/null 2>&1; then
+          echo "stable toolchain healthy; no repair needed"
+          exit 0
+        fi
+        echo "stable toolchain unhealthy; purging rustup toolchain and caches"
+        rustup toolchain uninstall stable >/dev/null 2>&1 || true
+        rm -rf \
+          "$rustup_home/downloads" \
+          "$rustup_home/tmp" \
+          "$rustup_home/toolchains/stable-x86_64-unknown-linux-gnu" \
+          "$rustup_home/update-hashes/stable-x86_64-unknown-linux-gnu" || true
+        echo "purge complete; toolchain step will reinstall clean components"

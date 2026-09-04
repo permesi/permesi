@@ -1,0 +1,261 @@
+#!/usr/bin/env sh
+set -eu
+
+# Host-tmux dev launcher: run genesis / permesi / web as panes in your HOST tmux,
+# each SSH'd into the DevPod workspace. The tmux server stays on the host (e.g. your
+# sway scratchpad session); the services run inside the container as plain commands
+# with NO inner tmux, so nothing nests inside your host tmux session.
+#
+# `scripts/dev-up` boots the DevPod (deps + dev container). This script then adds a
+# tmux window split into one pane per service (plus an interactive workspace pane).
+# Each service pane opens an interactive container shell (via `scripts/dev-ssh`) and
+# auto-runs `just <svc>`; the shell stays after the service exits, so a crash or Ctrl-C
+# drops you back to a live prompt in the same pane -- up-arrow + Enter re-runs it.
+#
+# Run it from INSIDE your host tmux (e.g. the $mod+s scratchpad): it adds a new window
+# named 'permesi-dev' to the current session and switches to it. Run it from a plain
+# shell (no tmux) and it creates a detached session 'permesi-dev' you can attach to.
+#
+# Why host tmux (instead of Ghostty windows or in-container tmux): you keep your normal
+# tmux muscle memory (prefix, panes, copy-mode) on the host, the panes sit next to your
+# other work in the same session, and because the container side is a plain command
+# there is no tmux-in-tmux nesting. `just devpod-dev` (in-container tmux) stays as the
+# headless/remote fallback for non-tmux hosts.
+#
+# Usage:
+#   scripts/dev-run            Add the service panes to your host tmux (reaps first).
+#   scripts/dev-run --stop     Stop the dev services and remove the dev window/session.
+#   scripts/dev-run --help     Show this help.
+#
+# Env knobs (all optional, dev-only):
+#   PERMESI_DEVPOD_ID          DevPod workspace name          (default: permesi)
+#   PERMESI_DEV_WINDOWS        Services to open               (default: "genesis permesi web")
+#   PERMESI_DEV_SESSION        tmux session when run outside tmux (default: permesi-dev)
+#   PERMESI_DEV_WINDOW_NAME    tmux window name for the panes  (default: permesi-dev)
+#   PERMESI_DEV_TERM           If set, prefix service cmd with `env TERM=<value>` (default: inherit)
+#   PERMESI_DEV_NO_SHELL=1     Skip the extra interactive workspace pane
+#   PERMESI_DEVPOD_NO_PREBUILD=1  Skip the parallel genesis+permesi prebuild
+
+project_dir="$(
+    unset CDPATH
+    cd -- "$(dirname -- "$0")/.." && pwd
+)"
+dev_ssh="$project_dir/scripts/dev-ssh"
+
+workspace_name="${PERMESI_DEVPOD_ID:-permesi}"
+dev_windows="${PERMESI_DEV_WINDOWS:-genesis permesi web}"
+dev_session="${PERMESI_DEV_SESSION:-permesi-dev}"
+win_name="${PERMESI_DEV_WINDOW_NAME:-permesi-dev}"
+dev_term="${PERMESI_DEV_TERM:-}"
+
+usage() {
+    sed -n '4,38p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+action=start
+for arg do
+    case "$arg" in
+    --stop) action=stop ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "Error: unknown argument '$arg'." >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+done
+
+if ! command -v devpod >/dev/null 2>&1; then
+    echo "Error: devpod not found on host (https://devpod.sh)." >&2
+    exit 1
+fi
+
+if [ ! -x "$dev_ssh" ]; then
+    echo "Error: $dev_ssh not found or not executable." >&2
+    exit 1
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "Error: tmux not found on host. Install tmux, or use the in-container flow:" >&2
+    echo "    scripts/dev-ssh && just devpod-dev" >&2
+    exit 1
+fi
+
+# Shell-quote a single argument for safe embedding in a command string handed to tmux
+# (tmux runs pane commands via `sh -c`), so paths/values with spaces survive intact.
+sq() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+dev_ssh_q="$(sq "$dev_ssh")"
+
+# The shell command auto-typed into a service pane's interactive container shell. It is
+# sent verbatim with `tmux send-keys` (not via sh -c), so it also lands in the shell's
+# history -- after the service exits you re-run it with up-arrow + Enter. `PERMESI_DEV_TERM`,
+# if set, forces a TERM for cargo-watch; by default the container inherits the pane's TERM.
+type_cmd() {
+    if [ -n "$dev_term" ]; then
+        printf 'env TERM=%s just %s' "$dev_term" "$1"
+    else
+        printf 'just %s' "$1"
+    fi
+}
+
+# Wait until a freshly-opened dev-ssh pane is idle at its shell prompt before typing into
+# it, so the auto-run keystrokes are not eaten by SSH + shell startup. Detection is
+# prompt-agnostic: once the pane's rendered content stops changing for ~1.6s it has
+# finished login/direnv and is waiting for input. Best-effort -- give up after ~48s and
+# send anyway (the pane is still a usable shell either way).
+wait_pane_ready() {
+    _prev=""
+    _stable=0
+    _i=0
+    while [ "$_i" -lt 120 ]; do
+        _cur="$(tmux capture-pane -p -t "$1" 2>/dev/null)"
+        if [ -n "$_cur" ] && [ "$_cur" = "$_prev" ]; then
+            _stable=$((_stable + 1))
+            [ "$_stable" -ge 4 ] && return 0
+        else
+            _stable=0
+        fi
+        _prev="$_cur"
+        _i=$((_i + 1))
+        sleep 0.4
+    done
+    return 1
+}
+
+if [ "$action" = stop ]; then
+    echo "==> Stopping dev services in devpod '$workspace_name'..."
+    "$dev_ssh" just devpod-dev-stop || true
+    # Remove the host-side panes: a dedicated session, or a window in the current one.
+    tmux kill-session -t "=$dev_session" 2>/dev/null || true
+    if [ -n "${TMUX:-}" ]; then
+        tmux kill-window -t "=$win_name" 2>/dev/null || true
+    fi
+    echo "==> Done."
+    exit 0
+fi
+
+# Refuse to stack duplicate layouts: point the user at --stop instead.
+if [ -n "${TMUX:-}" ]; then
+    if tmux list-windows -F '#{window_name}' | grep -Fqx "$win_name"; then
+        echo "A '$win_name' window already exists in this session." >&2
+        echo "Switch to it, or reset with: scripts/dev-run --stop" >&2
+        exit 1
+    fi
+elif tmux has-session -t "=$dev_session" 2>/dev/null; then
+    echo "tmux session '$dev_session' already exists. Attach: tmux attach -t $dev_session" >&2
+    echo "Or reset with: scripts/dev-run --stop" >&2
+    exit 1
+fi
+
+# Free :8000/:8001/:8081 and kill any boot-time in-container services before opening
+# panes, otherwise cargo-watch stragglers cause "address already in use".
+echo "==> Reaping any running dev services (frees ports)..."
+"$dev_ssh" just devpod-dev-stop || true
+
+# Pre-build the native binaries once, in parallel, so genesis and permesi don't
+# serialize on the shared cargo-watch build lock when their panes start.
+if [ "${PERMESI_DEVPOD_NO_PREBUILD:-}" != "1" ]; then
+    echo "==> Pre-building genesis + permesi (parallel; avoids cargo-watch lock contention)..."
+    "$dev_ssh" cargo build -p genesis -p permesi ||
+        echo "Pre-build failed (continuing; each pane will build on start)." >&2
+fi
+
+# Build the layout: create the first pane (as a new window inside tmux, or a new
+# detached session outside tmux), then split off one pane per remaining service and a
+# final interactive workspace pane, and tile them evenly.
+root_pane=""
+last_pane=""
+opened=""
+svc_panes=""
+for svc in $dev_windows; do
+    case "$svc" in
+    genesis | permesi | web) ;;
+    *)
+        echo "Skipping unknown service '$svc' (expected genesis|permesi|web)." >&2
+        continue
+        ;;
+    esac
+    # Every pane opens the same interactive container shell; the service is started into
+    # it below with send-keys, so the shell survives the service and stays re-runnable.
+    # Split off the *previous* pane (not the first) so pane indices follow creation order.
+    # `select-layout tiled` then fills the grid row-major, so the default window list
+    # "genesis permesi web" + workspace lands as genesis (top-left), permesi (top-right),
+    # web (bottom-left), workspace (bottom-right).
+    if [ -z "$root_pane" ]; then
+        if [ -n "${TMUX:-}" ]; then
+            root_pane="$(tmux new-window -P -F '#{pane_id}' -n "$win_name" -c "$project_dir" "$dev_ssh_q")"
+        else
+            root_pane="$(tmux new-session -d -s "$dev_session" -n "$win_name" -P -F '#{pane_id}' -c "$project_dir" "$dev_ssh_q")"
+        fi
+        pane="$root_pane"
+    else
+        pane="$(tmux split-window -t "$last_pane" -P -F '#{pane_id}' -c "$project_dir" "$dev_ssh_q")"
+    fi
+    last_pane="$pane"
+    tmux select-pane -t "$pane" -T "$svc"
+    # Re-tile after each split so panes stay even and later splits always have room.
+    tmux select-layout -t "$root_pane" tiled >/dev/null 2>&1 || true
+    svc_panes="$svc_panes $pane:$svc"
+    opened="$opened $svc"
+done
+
+if [ -z "$root_pane" ]; then
+    echo "Error: no valid services in PERMESI_DEV_WINDOWS ('$dev_windows')." >&2
+    exit 1
+fi
+
+win_id="$(tmux display-message -p -t "$root_pane" '#{window_id}')"
+
+# Optional interactive workspace pane for ad-hoc commands (curl, psql, git): no-arg
+# dev-ssh opens a real PTY in the workspace dir. Split off the last service pane so it
+# keeps creation order and tiles into the final grid slot (bottom-right by default).
+if [ "${PERMESI_DEV_NO_SHELL:-}" != "1" ]; then
+    ws_pane="$(tmux split-window -t "$last_pane" -P -F '#{pane_id}' -c "$project_dir" "$dev_ssh_q")"
+    tmux select-pane -t "$ws_pane" -T workspace
+    last_pane="$ws_pane"
+    opened="$opened workspace"
+fi
+
+# Even grid, visible per-pane titles, and keep the pane if the SSH shell itself drops
+# (a live service exiting no longer kills the pane -- its interactive shell survives).
+tmux select-layout -t "$win_id" tiled >/dev/null 2>&1 || true
+tmux set-option -w -t "$win_id" pane-border-status top 2>/dev/null || true
+tmux set-option -w -t "$win_id" remain-on-exit on 2>/dev/null || true
+tmux select-pane -t "$root_pane" 2>/dev/null || true
+
+# Auto-start each service into its pane's interactive shell. Wait for the prompt first so
+# the keystrokes are not lost during SSH/shell startup; the command also lands in history,
+# so after the service exits you re-run it with up-arrow + Enter in the same pane.
+echo "==> Starting services in panes (waiting for container shells)..."
+for entry in $svc_panes; do
+    pane="${entry%%:*}"
+    svc="${entry#*:}"
+    wait_pane_ready "$pane" || true
+    tmux send-keys -t "$pane" -l "$(type_cmd "$svc")"
+    tmux send-keys -t "$pane" Enter
+done
+
+if [ -n "${TMUX:-}" ]; then
+    tmux select-window -t "$win_id" 2>/dev/null || true
+    where="window '$win_name' (this session)"
+else
+    where="session '$dev_session' -> attach with: tmux attach -t $dev_session"
+fi
+
+cat <<EOF
+==> Started dev panes:$opened
+    in $where
+    genesis : https://genesis.permesi.localhost/health
+    permesi : https://api.permesi.localhost/health
+    web     : https://permesi.localhost
+
+Each pane is an interactive container shell; after a service exits (crash or Ctrl-C),
+re-run it with up-arrow + Enter in that pane.
+Traces go to Jaeger (started by the infra, not this script): http://localhost:16686
+Stop everything:  scripts/dev-run --stop
+EOF

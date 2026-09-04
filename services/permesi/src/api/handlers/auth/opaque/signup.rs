@@ -64,6 +64,7 @@ pub async fn opaque_signup_start(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Signup)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -71,6 +72,7 @@ pub async fn opaque_signup_start(
     if auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::Signup)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -155,6 +157,7 @@ pub async fn opaque_signup_finish(
     if auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Signup)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
@@ -162,6 +165,7 @@ pub async fn opaque_signup_finish(
     if auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::Signup)
+        .await
         == RateLimitDecision::Limited
     {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();

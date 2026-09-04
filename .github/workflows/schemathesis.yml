@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Resolve permesi base URL
@@ -82,7 +82,7 @@ jobs:
           fi
 
       - name: Run Schemathesis (permesi core)
-        uses: schemathesis/action@v2
+        uses: schemathesis/action@v3
         with:
           schema: docs/openapi/permesi.json
           base-url: ${{ steps.permesi_base.outputs.base_url }}
@@ -97,7 +97,7 @@ jobs:
             --report-dir schemathesis-report/core
 
       - name: Run Schemathesis (permesi logout)
-        uses: schemathesis/action@v2
+        uses: schemathesis/action@v3
         with:
           schema: docs/openapi/permesi.json
           base-url: ${{ steps.permesi_base.outputs.base_url }}
@@ -112,7 +112,7 @@ jobs:
             --report-dir schemathesis-report/logout
 
       - name: Upload Schemathesis report (permesi)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: schemathesis-permesi-report
@@ -125,7 +125,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Resolve genesis base URL
@@ -197,7 +197,7 @@ jobs:
           fi
 
       - name: Run Schemathesis (genesis)
-        uses: schemathesis/action@v2
+        uses: schemathesis/action@v3
         with:
           schema: docs/openapi/genesis.json
           base-url: ${{ steps.genesis_base.outputs.base_url }}
@@ -211,7 +211,7 @@ jobs:
             --report-dir schemathesis-report
 
       - name: Upload Schemathesis report (genesis)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: schemathesis-genesis-report

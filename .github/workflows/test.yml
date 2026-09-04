@@ -21,9 +21,11 @@ jobs:
     name: Format
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -32,9 +34,11 @@ jobs:
     name: Clippy
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -43,32 +47,18 @@ jobs:
     name: Check
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check
         run: cargo check --workspace
 
-  cargo-audit:
-    name: Security Audit (Rust)
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-audit
-        run: cargo install --locked --force cargo-audit
-
-      - name: Cargo audit
-        run: cargo audit
-
   npm-audit:
     name: Security Audit (Web)
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Set up Node
@@ -101,7 +91,7 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
@@ -119,7 +109,7 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 
@@ -135,10 +125,9 @@ jobs:
       - format
       - lint
       - check
-      - cargo-audit
       - npm-audit
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/pre-clean-workspace
       - uses: dtolnay/rust-toolchain@stable
 

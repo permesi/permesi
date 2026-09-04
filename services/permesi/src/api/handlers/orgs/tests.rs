@@ -63,7 +63,7 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
         .context("failed to connect for schema setup")?;
 
     for (index, statement) in split_sql_statements(PERMESI_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(statement)
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .execute(&mut connection)
             .await
             .with_context(|| format!("failed to execute schema statement {}", index + 1))?;

@@ -87,7 +87,7 @@ pub async fn new(
     let pool = PgPoolOptions::new()
         .min_connections(1)
         .max_connections(5)
-        .max_lifetime(Duration::from_secs(60 * 2))
+        .max_lifetime(Duration::from_mins(2))
         .test_before_acquire(true)
         .connect(&dsn)
         .await
@@ -101,6 +101,7 @@ pub async fn new(
         secrets.opaque_server_seed,
         config.auth.opaque_server_id().to_string(),
         Duration::from_secs(config.auth.opaque_login_ttl_seconds()),
+        config.auth.auth_max_pending_states(),
     );
 
     let mut mfa_config = auth::mfa::MfaConfig::from_env();
@@ -115,7 +116,14 @@ pub async fn new(
     let auth_state = Arc::new(auth::AuthState::new(
         config.auth.clone(),
         opaque_state,
-        Arc::new(auth::NoopRateLimiter),
+        Arc::new(auth::RateLimiter::postgres(
+            pool.clone(),
+            auth::RateLimitConfig::new(
+                config.auth.rate_limit_window_seconds(),
+                config.auth.rate_limit_ip_attempts(),
+                config.auth.rate_limit_account_attempts(),
+            ),
+        )),
         mfa_config,
     ));
     let admin_state = Arc::new(
@@ -206,7 +214,7 @@ fn build_router(
                 .is_ok_and(|o| allowed_origins.iter().any(|a| a == o))
         }))
         .allow_credentials(true)
-        .max_age(Duration::from_secs(86400));
+        .max_age(Duration::from_hours(24));
 
     // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
@@ -218,7 +226,7 @@ fn build_router(
             ServiceBuilder::new()
                 .layer(SetRequestHeaderLayer::if_not_present(
                     HeaderName::from_static("x-request-id"),
-                    |_req: &_| HeaderValue::from_str(Ulid::new().to_string().as_str()).ok(),
+                    |_req: &_| HeaderValue::from_str(Ulid::generate().to_string().as_str()).ok(),
                 ))
                 .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
                     "x-request-id",
@@ -375,7 +383,8 @@ fn init_passkey_service(auth_config: &auth::AuthConfig) -> Result<PasskeyService
         .context("Failed to derive passkey origins")?;
     let passkey_config = PasskeyConfig::from_env(auth_config.webauthn_rp_id(), &default_origins)
         .context("Failed to load passkey configuration")?;
-    PasskeyService::new(passkey_config).context("Failed to initialize Passkey service")
+    PasskeyService::new(passkey_config, auth_config.auth_max_pending_states())
+        .context("Failed to initialize Passkey service")
 }
 
 #[cfg(test)]
@@ -393,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_socket_returns_error_on_shutdown_signal() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("permesi-{}", Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("permesi-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("permesi.sock");
 
@@ -412,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_socket_removes_file_on_shutdown() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("permesi-{}", Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("permesi-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("permesi.sock");
         let socket_path_wait = socket_path.clone();

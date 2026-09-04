@@ -24,7 +24,7 @@ use js_sys::{Date, Reflect};
 use leptos::{ev, prelude::*, task::spawn_local};
 use leptos_dom::helpers::{WindowListenerHandle, window_event_listener};
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
-use rand::rngs::OsRng;
+use opaque_rand_core::OsRng;
 use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 
