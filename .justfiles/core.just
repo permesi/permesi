@@ -31,7 +31,7 @@ update:
   cargo update
 
 clean:
-  cargo clean
+  cargo clean --target-dir "{{root}}/target"
 
 # Resolve workspace version (expects a single shared version).
 _workspace-version:
@@ -202,10 +202,10 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
     cargo update
 
     echo "🧹 Running clean build..."
-    cargo clean
+    just clean
 
     echo "🧪 Running release verification (including frontend build)..."
-    just verify-release
+    CARGO_TARGET_DIR="{{root}}/target" just verify-release
 
     git add Cargo.toml Cargo.lock
     git commit -m "bump version to ${new_version}"

@@ -425,6 +425,8 @@ Release recipes must run from a clean `develop` branch. `just deploy` performs a
 patch version bump, verifies the workspace, merges `develop` into `main`, and
 creates a signed tag. Tag signing follows Git's configured `gpg.format` and
 supports both SSH signing (including the forwarded DevPod agent) and OpenPGP.
+Release verification uses the repository-local `target` directory so a clean
+build works even when DevPod mounts its shared Cargo target cache as a volume.
 
 Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`.
 
