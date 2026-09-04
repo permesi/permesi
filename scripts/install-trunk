@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Install a pinned official Trunk release without compiling Trunk's native C
+# dependencies. This avoids compiler-version incompatibilities in tool-only
+# dependencies while keeping local and CI frontend builds reproducible.
+trunk_version="${TRUNK_VERSION:-0.21.14}"
+cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
+install_dir="${TRUNK_INSTALL_DIR:-${cargo_home}/bin}"
+
+if command -v trunk >/dev/null 2>&1 &&
+    [[ "$(trunk --version 2>/dev/null)" == "trunk ${trunk_version}" ]]; then
+    exit 0
+fi
+
+case "$(uname -s):$(uname -m)" in
+    Linux:x86_64)
+        target="x86_64-unknown-linux-gnu"
+        ;;
+    Linux:aarch64 | Linux:arm64)
+        target="aarch64-unknown-linux-gnu"
+        ;;
+    Darwin:x86_64)
+        target="x86_64-apple-darwin"
+        ;;
+    Darwin:arm64 | Darwin:aarch64)
+        target="aarch64-apple-darwin"
+        ;;
+    *)
+        echo "Unsupported platform for the pinned Trunk binary: $(uname -s) $(uname -m)" >&2
+        echo "Install Trunk ${trunk_version} manually and retry." >&2
+        exit 1
+        ;;
+esac
+
+archive="trunk-${target}.tar.gz"
+release_url="https://github.com/trunk-rs/trunk/releases/download/v${trunk_version}"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "${tmp_dir}"' EXIT
+
+echo "Installing Trunk ${trunk_version} (${target}) from its official release..."
+curl --fail --location --silent --show-error \
+    "${release_url}/${archive}" --output "${tmp_dir}/${archive}"
+expected_sha256="$(
+    curl --fail --location --silent --show-error \
+        "${release_url}/${archive}.sha256"
+)"
+
+if command -v sha256sum >/dev/null 2>&1; then
+    actual_sha256="$(sha256sum "${tmp_dir}/${archive}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+    actual_sha256="$(shasum -a 256 "${tmp_dir}/${archive}" | awk '{print $1}')"
+else
+    echo "sha256sum or shasum is required to verify the Trunk release." >&2
+    exit 1
+fi
+
+if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+    echo "Trunk archive checksum verification failed." >&2
+    exit 1
+fi
+
+tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
+if [[ ! -f "${tmp_dir}/trunk" ]]; then
+    echo "The Trunk release archive did not contain the expected binary." >&2
+    exit 1
+fi
+
+mkdir -p "${install_dir}"
+install -m 0755 "${tmp_dir}/trunk" "${install_dir}/trunk"
+echo "Installed $("${install_dir}/trunk" --version) to ${install_dir}/trunk"

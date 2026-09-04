@@ -79,7 +79,7 @@ jobs:
             . -> target
 
       - name: Install Trunk
-        run: cargo install --locked trunk
+        run: ./scripts/install-trunk
 
       - name: Install Frontend Dependencies
         working-directory: apps/web

@@ -77,7 +77,7 @@ web-setup:
   mkdir -p {{root}}/.tmp
   rustup target add wasm32-unknown-unknown
   if ! command -v trunk >/dev/null 2>&1; then
-    cargo install --locked trunk
+    {{root}}/scripts/install-trunk
   fi
 
 web-node-setup:

@@ -10,7 +10,9 @@ Tailwind runs via Node at build/dev time only (no Node at runtime).
 - `just web-css-watch`: Tailwind watch (CSS only).
 - `just web-css-build`: Tailwind minified build (CSS only).
 - `just web-node-setup`: install Node deps for Tailwind CLI.
-- `just web-setup`: install Trunk + wasm target.
+- `just web-setup`: install the pinned, checksum-verified official Trunk binary
+  and the wasm target. Using the release binary avoids host C compiler
+  incompatibilities in Trunk's build-only dependencies.
 - `just web-check`: `cargo check -p permesi_web`.
 - `podman build -f apps/web/Dockerfile -t web:dev .`: build a container image that serves `dist/` with nginx.
 
