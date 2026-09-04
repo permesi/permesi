@@ -53,7 +53,7 @@ devpod-db-verify:
     echo "❌ Cannot reach database 'permesi' at {{db_host_devpod}}:5432." >&2
     echo "   The postgres sibling loads db/sql/00_init.sql on first start; if the" >&2
     echo "   volume predates a schema change, recreate it: 'devpod stop permesi' or" >&2
-    echo "   remove the 'pgdata' volume and re-run 'scripts/dev-up'." >&2
+    echo "   remove the 'pgdata' volume and re-run the selected scripts/dev-up mode." >&2
     exit 1
   fi
   tables="$(psql "$dsn" -tAc "select count(*) from information_schema.tables where table_schema='public'")"
@@ -269,33 +269,9 @@ devpod-envrc:
   fi
   echo "Wrote {{root}}/.envrc for the compose dev stack."
 
-# Apply host git identity and SSH commit signing from the environment forwarded by
-# scripts/dev-up. With no explicit signing program, Git uses ssh-keygen and the
-# forwarded SSH agent instead of a host-only signing helper.
+# Apply host Git identity plus connection-scoped SSH authentication and signing.
 devpod-git-config:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  if [[ -n "${GIT_USER_NAME:-}" ]]; then
-    git config --global user.name "$GIT_USER_NAME"
-  fi
-  if [[ -n "${GIT_USER_EMAIL:-}" ]]; then
-    git config --global user.email "$GIT_USER_EMAIL"
-  fi
-  if [[ -n "${GIT_SIGNING_KEY:-}" ]]; then
-    git config --global gpg.format ssh
-    git config --global user.signingkey "$GIT_SIGNING_KEY"
-    git config --global commit.gpgsign true
-    if [[ -n "${GIT_SSH_SIGNING_PROGRAM:-}" ]]; then
-      git config --global gpg.ssh.program "$GIT_SSH_SIGNING_PROGRAM"
-    else
-      git config --global --unset-all gpg.ssh.program 2>/dev/null || true
-    fi
-    echo "Configured git identity + SSH commit signing (${GIT_USER_EMAIL:-no email})."
-  elif [[ -n "${GIT_USER_NAME:-}${GIT_USER_EMAIL:-}" ]]; then
-    echo "Configured git identity (${GIT_USER_EMAIL:-no email}); signing off (GIT_SIGNING_KEY unset)."
-  else
-    echo "No GIT_* env forwarded; set GIT_USER_NAME/GIT_USER_EMAIL/GIT_SIGNING_KEY in .devpod.env."
-  fi
+  sh "{{root}}/.devcontainer/configure-git.sh"
 
 # Make the stack ready on every container start: wait for the siblings, unseal
 # Vault (it re-seals across restarts), refresh .envrc, and start the services in
@@ -406,7 +382,7 @@ devpod-trust-ca:
   fi
   echo "Recommended (automatic): let the HOST own the mkcert CA so certs are valid"
   echo "in your browser with no manual import and no re-trust after recreates:"
-  echo "  PERMESI_TRUST_CA=1 scripts/dev-up      # or run: scripts/trust-ca"
+  echo "  PERMESI_TRUST_CA=1 scripts/dev-up --local      # or run: scripts/trust-ca"
   echo
   echo "Manual alternative — trust this CA on your HOST:"
   echo "  ${ca}"

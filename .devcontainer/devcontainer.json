@@ -26,5 +26,6 @@
     }
   },
   "postCreateCommand": "bash .devcontainer/postcreate.sh",
-  "postStartCommand": "bash .devcontainer/post-start.sh"
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+  "postAttachCommand": "sh .devcontainer/configure-git.sh"
 }

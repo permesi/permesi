@@ -11,9 +11,12 @@ export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 #    podman to create their parents (~/.local, ~/.cache) as root, so vscode cannot
 #    write into them until we fix ownership up front.
 sudo mkdir -p \
-    "$HOME/.local/bin" "$HOME/.local/share" "$HOME/.cache" "$HOME/.config"
+    "$HOME/.claude" "$HOME/.codex" "$HOME/.copilot" \
+    "$HOME/.config/atuin" "$HOME/.local/bin" "$HOME/.local/share/atuin" \
+    "$HOME/.local/state/ssh" "$HOME/.ssh/sockets" "$HOME/.cache"
 sudo chown -R "$(id -u):$(id -g)" \
-    "$HOME/.local" "$HOME/.cache" "$HOME/.config" \
+    "$HOME/.claude" "$HOME/.codex" "$HOME/.copilot" \
+    "$HOME/.local" "$HOME/.cache" "$HOME/.config" "$HOME/.ssh" \
     /home/vscode/.cargo /home/vscode/.rustup 2>/dev/null || true
 
 # 2. System dependencies.
@@ -21,11 +24,12 @@ sudo apt-get update
 sudo apt-get install -y \
     build-essential ca-certificates curl delta dnsutils fd-find fzf git gnupg iputils-ping jq \
     libbz2-dev libcap2-bin libffi-dev liblzma-dev libnss3-tools libreadline-dev libsqlite3-dev \
-    libssl-dev luarocks make netcat-openbsd openssh-client pkg-config rsync \
+    libssl-dev luarocks make netcat-openbsd openssh-client pkg-config rsync shellcheck \
     tmux unzip wget xz-utils yq zip zlib1g-dev
 
 sudo setcap cap_net_raw+ep /usr/bin/ping
 sudo chsh -s /usr/bin/zsh vscode
+sh .devcontainer/configure-git.sh
 
 # 3b. mkcert (frontend HAProxy cert) is provided by mise (see mise.toml) — installed
 #     with the rest of the toolchain in step 4 below.
@@ -51,6 +55,8 @@ mise reshim || true
 sudo tee /etc/profile.d/mise.sh >/dev/null <<'EOF'
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 EOF
+# These single-quoted strings intentionally write a command for future shells.
+# shellcheck disable=SC2016
 grep -qxF 'export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"' ~/.zshenv 2>/dev/null ||
     echo 'export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"' >>~/.zshenv
 
@@ -62,14 +68,20 @@ mise run setup-postgres-client
 mise run setup-valkey
 mise run setup-tig
 
-# 5. Dotfiles (chezmoi), matching the bloque workflow. Opt-in via DEVPOD_DOTFILES.
-dotfiles_repo="${DEVPOD_DOTFILES:-https://github.com/nbari/dotfiles-devpod.git}"
+# 5. Dotfiles (chezmoi). The main profile supplies Atuin/Herdr configuration and
+# agent integrations; set DEVPOD_DOTFILES=none to skip or provide another repository.
+dotfiles_repo="${DEVPOD_DOTFILES:-https://github.com/nbari/dotfiles.git}"
+if [ "$dotfiles_repo" = "none" ]; then
+    dotfiles_repo=""
+fi
 if [ "$dotfiles_repo" != "" ]; then
     if ! command -v chezmoi >/dev/null 2>&1; then
         sh -c "$(curl -fsSL get.chezmoi.io)" -- -b ~/.local/bin
     fi
+    install -Dm 0600 .devcontainer/chezmoi.toml "$HOME/.config/chezmoi/chezmoi.toml"
     chezmoi init --apply --force "$dotfiles_repo" ||
         echo "chezmoi dotfiles step failed (continuing)"
+    sh .devcontainer/configure-git.sh
 fi
 
 # 6. Base zsh config (only if dotfiles did not already provide one).

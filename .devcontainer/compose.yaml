@@ -34,6 +34,10 @@ volumes:
   rustup:
   mise-data:
   mise-cache:
+  atuin-data:
+  codex-home:
+  claude-home:
+  copilot-home:
 
 services:
   app:
@@ -76,6 +80,10 @@ services:
       - rustup:/home/vscode/.rustup
       - mise-data:/home/vscode/.local/share/mise
       - mise-cache:/home/vscode/.cache/mise
+      - atuin-data:/home/vscode/.local/share/atuin
+      - codex-home:/home/vscode/.codex
+      - claude-home:/home/vscode/.claude
+      - copilot-home:/home/vscode/.copilot
     networks:
       permesi:
         aliases:

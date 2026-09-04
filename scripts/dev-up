@@ -1,12 +1,15 @@
 #!/usr/bin/env sh
 set -eu
 
-# Portable one-command dev setup for Permesi (compose-based devcontainer).
+# Portable one-command DevPod setup for Permesi. With no .devpod.env it uses the
+# local container provider; creating .devpod.env selects remote mode. Pass --local
+# or --remote to override that automatic selection.
 #
 # The whole stack — the dev container (`app`) AND its services (postgres/vault/
 # jaeger/haproxy) — is defined in .devcontainer/compose.yaml and brought up together
-# by DevPod. The host only needs podman (or docker) + devpod + Docker Compose v2.
-# The same flow runs locally and, via scripts/dev-up-remote, on a remote VM.
+# by DevPod. Remote mode needs DevPod; local mode additionally needs podman (or
+# docker) and Docker Compose v2.
+# The same compose stack runs locally or on a remote VM.
 #
 # Works on Linux, macOS (podman machine / Docker), and Linux Atomic (fedora-atomic).
 
@@ -15,6 +18,44 @@ project_dir="$(
     cd -- "$(dirname -- "$0")/.." && pwd
 )"
 workspace_name="permesi"
+config_file="${project_dir}/.devpod.env"
+
+mode=""
+case "${1:-}" in
+--local)
+    mode=local
+    shift
+    ;;
+--remote)
+    mode=remote
+    shift
+    ;;
+esac
+
+# The same gitignored file selects remote mode and supplies host-side settings.
+# Explicit mode flags take precedence, but the settings remain available in either
+# mode (for example, Git identity variables are useful locally too).
+config_loaded=0
+if [ -f "$config_file" ]; then
+    # shellcheck disable=SC1090
+    . "$config_file"
+    config_loaded=1
+fi
+
+if [ -z "$mode" ]; then
+    if [ "$config_loaded" = "1" ]; then
+        mode=remote
+    else
+        mode=local
+    fi
+fi
+
+if [ "$mode" = "remote" ]; then
+    # Avoid sourcing the configuration twice when handing off. The compatibility
+    # entry point still loads it itself when invoked directly.
+    export PERMESI_DEVPOD_ENV_LOADED="$config_loaded"
+    exec "${project_dir}/scripts/dev-up-remote" "$@"
+fi
 
 if ! command -v devpod >/dev/null 2>&1; then
     echo "Error: devpod not found on host (https://devpod.sh)." >&2
@@ -86,6 +127,7 @@ for var in \
     GITHUB_TOKEN \
     DEVPOD_DOTFILES \
     PERMESI_DEVPOD_NO_AUTOSTART; do
+    value=""
     eval "value=\${$var:-}"
     if [ "$value" != "" ]; then
         set -- "$@" \

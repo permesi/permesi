@@ -11,11 +11,12 @@ The devcontainer is **Docker Compose-based**: a single compose project
 (`compose.yaml`) defines the **app** dev container *and* every backing service
 (`postgres`, `vault`, `jaeger`, `haproxy`). `devpod up` brings the whole stack up
 together, so the environment is fully self-contained — no host-side dependency
-management — and the *same* flow runs locally and on a remote VM (see
-`scripts/dev-up-remote`).
+management — and the *same* flow runs locally and on a remote VM. `scripts/dev-up`
+selects local mode when `.devpod.env` is absent and remote mode when it exists;
+`--local` and `--remote` override the selection.
 
 ```
-        host: podman (or docker) + devpod + docker compose v2
+        host: devpod (+ podman/docker + compose in local mode)
           │  scripts/dev-up   →   devpod up   (brings up the whole compose project)
           ▼
    ┌──────────────── compose project "permesi" ───────────────────┐
@@ -40,21 +41,22 @@ container: build/run/test the three binaries and configure Vault
 | --- | --- |
 | `compose.yaml` | The whole stack: `app` + `postgres` + `vault` + `jaeger` + `haproxy`. |
 | `compose.podman.yaml` | Local override: `userns_mode: keep-id` so the bind-mounted workspace stays editable as `vscode` under rootless podman. |
-| `devcontainer.json` | Compose-based devcontainer for **local** (`compose.yaml` + podman override). |
+| `devcontainer.json` | Compose-based devcontainer (`compose.yaml` + rootless podman override). |
 | `haproxy/haproxy.deps.cfg` | HAProxy config; backends `app:*` with a `resolvers` section. |
 | `postcreate.sh` | One-time provisioning + `just devpod-bootstrap`. |
 | `post-start.sh` | Every start: `just devpod-start` (unseal + .envrc + services). |
+| `configure-git.sh` | Rebind Git authentication/signing to the current forwarded SSH agent. |
 | `setup-zsh.sh` | Fallback zsh config when no dotfiles are applied. |
-| `../scripts/dev-up` | Host entrypoint (local): host CA trust + `devpod up`. |
-| `../scripts/dev-up-remote` | Host entrypoint (remote): `devpod up` via an existing provider. |
+| `../scripts/dev-up` | Host entrypoint: local without `.devpod.env`, remote with it; explicit flags override. |
+| `../scripts/dev-up-remote` | Compatibility entry point for remote mode. |
 
 ## Prerequisites (host)
 
-- `podman` (rootless is fine) **or** `docker`.
-- `devpod` (https://devpod.sh). With podman, the default `docker` provider works via
+- `devpod` (https://devpod.sh).
+- Local mode: `podman` (rootless is fine) **or** `docker`. With podman, the default `docker` provider works via
   `DOCKER_PATH=/usr/bin/podman`.
 - **Docker Compose v2** (DevPod uses it to drive the compose devcontainer).
-- Linux only: ability to bind `:443` under rootless podman — `scripts/dev-up` lowers
+- Linux local mode only: ability to bind `:443` under rootless podman — `scripts/dev-up --local` lowers
   `net.ipv4.ip_unprivileged_port_start` to `443` via `sudo` (one prompt). Persist with
   `echo 'net.ipv4.ip_unprivileged_port_start=443' | sudo tee /etc/sysctl.d/99-permesi.conf`.
   On macOS, podman-machine / Docker handle this in the VM. Skip with
@@ -67,15 +69,20 @@ guard and tooling still detect the workspace.
 Optional env forwarded by `scripts/dev-up`:
 - `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GIT_SIGNING_KEY`, `GIT_SSH_SIGNING_PROGRAM`
 - `GITHUB_TOKEN` (falls back to `gh auth token`)
-- `DEVPOD_DOTFILES` (chezmoi dotfiles repo; set empty to skip)
+- `DEVPOD_DOTFILES` (chezmoi dotfiles repo; set `none` to skip)
 - `PERMESI_DEVPOD_NO_AUTOSTART=1` (bootstrap but don't auto-start the services)
+
+Chezmoi defaults to `nbari/dotfiles`, which provides Atuin and Herdr configuration
+and installs integrations for the Mise-managed AI agents. Its post-apply hook reruns
+`configure-git.sh`, because the host-oriented SSH agent path and signing helper are
+not valid inside DevPod. Agent state and Atuin history live in named volumes.
 
 `scripts/dev-ssh` connects as the workspace's `vscode` user so Git sees the
 bind-mounted repository under its owning account and the forwarded SSH signing
 agent remains available. Set `PERMESI_DEVPOD_USER` only when a custom image uses
 a different non-root workspace user.
 
-## One-time provider setup (podman)
+## One-time local provider setup (podman)
 
 ```bash
 devpod provider add docker          # if not already present
@@ -83,7 +90,7 @@ devpod provider use docker
 devpod provider set-options docker -o DOCKER_PATH=/usr/bin/podman
 ```
 
-## Quickstart — `scripts/dev-up` does everything
+## Quickstart — one command
 
 ```bash
 git clone https://github.com/permesi/permesi.git
@@ -95,30 +102,30 @@ scripts/dev-up
 #     postStart  → just devpod-start (unseal Vault, refresh .envrc, start services)
 #   then reloads HAProxy so it picks up the freshly issued certs and the app backend
 
-devpod ssh permesi          # enter the workspace (as vscode)
+# With no .devpod.env this is the local workspace:
+devpod ssh permesi
 tmux attach -t permesi      # genesis / permesi / web (detach with your tmux prefix + d)
 # Already inside a host tmux? Avoid nesting and just tail logs instead:
 just devpod-logs            # or: just devpod-logs genesis|permesi|web
 ```
 
-Browse: https://permesi.localhost, https://api.permesi.localhost/health,
-https://genesis.permesi.localhost/health, Jaeger UI http://localhost:16686.
+To use a remote provider, copy `.devpod.env.example` to `.devpod.env`, edit it,
+and run `scripts/dev-up` again. Its presence selects remote mode. Set
+`DEVPOD_REMOTE_PROVIDER` in that file to use a provider other than `coyote`, then
+enter the default remote workspace with `devpod ssh permesi-coyote`.
 
-## Run it on a remote VM — `scripts/dev-up-remote`
+## Local mode
 
-The same compose devcontainer runs on a remote VM through an existing DevPod provider
-(default `coyote`); DevPod brings the whole stack up on the remote.
+Without `.devpod.env`, local mode is automatic. Use `--local` to force the local
+provider even when the remote configuration file exists:
 
 ```bash
-DEVPOD_REMOTE_PROVIDER=coyote \
-DEVPOD_REMOTE_SOURCE=git:https://github.com/permesi/permesi.git@sandbox \
-scripts/dev-up-remote
-devpod ssh permesi-coyote   # then: tmux attach -t permesi
+scripts/dev-up --local
+devpod ssh permesi          # then: tmux attach -t permesi
 ```
 
-Env vars: `DEVPOD_REMOTE_PROVIDER`, `DEVPOD_REMOTE_WORKSPACE_NAME`,
-`DEVPOD_REMOTE_SOURCE` (append `@branch`), `DEVPOD_REMOTE_SSH=host:port` (to
-auto-reload HAProxy on the VM).
+Browse: https://permesi.localhost, https://api.permesi.localhost/health,
+https://genesis.permesi.localhost/health, Jaeger UI http://localhost:16686.
 
 ## App tasks (inside the container)
 
@@ -137,11 +144,11 @@ trust the issuing CA for `https://permesi.localhost` to be valid in a browser.
 
 **Default — the host owns the CA (automatic, survives recreates):**
 
-`scripts/dev-up` does this for you (disable with `PERMESI_TRUST_CA=0`):
+Local mode does this for you (disable with `PERMESI_TRUST_CA=0`):
 
 ```bash
-scripts/dev-up                      # trusts the CA on the host by default
-PERMESI_TRUST_CA=0 scripts/dev-up   # opt out (e.g. CI / non-interactive)
+scripts/dev-up --local                      # trusts the CA on the host by default
+PERMESI_TRUST_CA=0 scripts/dev-up --local   # opt out (e.g. CI / non-interactive)
 scripts/trust-ca                    # run the trust step on its own
 ```
 
@@ -163,16 +170,18 @@ just devpod-trust-ca     # prints steps; CA is at certs/mkcert-root.pem
 ## Lifecycle & resetting
 
 ```bash
-devpod stop permesi             # stop the whole stack
-scripts/dev-up                  # start again (re-unseals Vault, restarts services)
-devpod delete permesi --force   # remove the workspace (containers + volumes)
+devpod stop permesi-coyote      # stop the default remote workspace
+scripts/dev-up                  # remote when .devpod.env exists
+devpod stop permesi             # stop the local workspace
+scripts/dev-up --local          # explicitly start local mode
+devpod delete permesi --force   # remove the local workspace (containers + volumes)
 ```
 
 - Re-run `just devpod-bootstrap` any time (idempotent).
 - Wipe Vault (host): `just vault-reset` removes the `*_vault-data` volume plus
-  `vault/keys.json` and Terraform state; then `scripts/dev-up --recreate` re-bootstraps.
+  `vault/keys.json` and Terraform state; then `scripts/dev-up --local --recreate` re-bootstraps.
 - Reload DB schema after changing `db/sql/*`: remove the `*_pgdata` volume and recreate
-  (`devpod delete permesi --force` then `scripts/dev-up`); the schema is applied on the
+  (`devpod delete permesi --force` then `scripts/dev-up --local`); the schema is applied on the
   first Postgres init.
 
 ## Notes & caveats
@@ -181,7 +190,7 @@ devpod delete permesi --force   # remove the workspace (containers + volumes)
   features (Neovim). The first `scripts/dev-up` pulls images and can take a while; the
   toolchain and cargo/target are cached in named volumes.
 - HAProxy starts before the in-app services and their certs exist; its `resolvers`
-  section re-resolves `app` and `scripts/dev-up` reloads HAProxy once after bootstrap.
+  section re-resolves `app` and the selected `scripts/dev-up` mode reloads HAProxy once after bootstrap.
 - Local rootless podman uses `userns_mode: keep-id` (via `compose.podman.yaml`) so the
   bind-mounted workspace maps the container `vscode` to your host user and stays
   editable. The remote (docker) flow omits this override.

@@ -6,12 +6,19 @@ cargo.binstall = true
 "github:nbari/slick" = "latest"
 "github:nbari/pwgen2" = "latest"
 "github:ssh-vault/ssh-vault" = "latest"
+"npm:@anthropic-ai/claude-code" = "latest"
+"npm:@github/copilot" = { version = "latest", allow_builds = [
+  "@github/copilot",
+] }
+"npm:@openai/codex" = "latest"
+atuin = "latest"
 bat = "latest"
 cargo-binstall = "latest"
 "cargo:cargo-edit" = "latest"
 "cargo:cargo-watch" = "latest"
 direnv = "latest"
 eza = "latest"
+herdr = "latest"
 just = "latest"
 mkcert = "latest"
 node = "lts"

@@ -12,10 +12,10 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 cd /workspaces/permesi 2>/dev/null || true
 
-# Apply forwarded git identity + SSH signing (best-effort; needs GIT_* in .devpod.env).
-if command -v just >/dev/null 2>&1; then
-    just devpod-git-config || echo "post-start: git identity setup skipped (continuing)." >&2
-fi
+# Refresh connection-scoped SSH and signing overrides after every container start.
+install -Dm 0600 .devcontainer/chezmoi.toml "$HOME/.config/chezmoi/chezmoi.toml"
+sh .devcontainer/configure-git.sh ||
+    echo "post-start: git identity setup skipped (continuing)." >&2
 
 if command -v just >/dev/null 2>&1 && just devpod-start; then
     echo

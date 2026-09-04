@@ -26,15 +26,17 @@ project_dir="$(
     cd -- "$(dirname -- "$0")/.." && pwd
 )"
 
-# Load host-side remote config from a dedicated, gitignored file that the container
-# NEVER overwrites (unlike the generated .envrc, which `just devpod-envrc` rewrites on
-# every start). Put your DEVPOD_REMOTE_* there, e.g.:
+# Load host-side remote config when this compatibility entry point is invoked
+# directly. scripts/dev-up loads the file before dispatching and sets the marker so
+# it is not sourced twice. The container NEVER overwrites this file (unlike the
+# generated .envrc, which `just devpod-envrc` rewrites on every start). Put your
+# DEVPOD_REMOTE_* there, e.g.:
 #   export DEVPOD_REMOTE_PROVIDER="coyote"
 #   export DEVPOD_REMOTE_WORKSPACE_NAME="permesi-remote"
 #   export DEVPOD_REMOTE_HOST="jump"
 #   export DEVPOD_REMOTE_USER="devops"
 #   export DEVPOD_REMOTE_PORT="31025"
-if [ -f "${project_dir}/.devpod.env" ]; then
+if [ "${PERMESI_DEVPOD_ENV_LOADED:-0}" != "1" ] && [ -f "${project_dir}/.devpod.env" ]; then
     # shellcheck disable=SC1091
     . "${project_dir}/.devpod.env"
 fi
@@ -73,7 +75,8 @@ set -- \
     --provider "$provider_name" \
     --ide none \
     --id "$workspace_name" \
-    --source "$remote_source"
+    --source "$remote_source" \
+    "$@"
 
 # Note: uses the default .devcontainer/devcontainer.json. The coyote provider (and
 # most SSH providers) run rootless podman on the remote, which — like local — needs
@@ -90,6 +93,7 @@ for var in \
     GITHUB_TOKEN \
     DEVPOD_DOTFILES \
     PERMESI_DEVPOD_NO_AUTOSTART; do
+    value=""
     eval "value=\${$var:-}"
     if [ "$value" != "" ]; then
         set -- "$@" \
@@ -130,7 +134,6 @@ devpod up "$workspace_name" "$@"
 # HAProxy starts before the in-app services and their certs; reload it on the remote
 # so it picks up the certs and re-resolves the `app` backend. Best-effort: only if
 # DEVPOD_REMOTE_SSH is provided (host[:port]); otherwise print the manual command.
-reload_hint="devpod ssh ${workspace_name} --command 'true'  # then on the VM: docker restart <project>-haproxy-1"
 if [ -n "${DEVPOD_REMOTE_SSH:-}" ]; then
     rhost="${DEVPOD_REMOTE_SSH%%:*}"
     rport="22"

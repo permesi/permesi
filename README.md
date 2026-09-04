@@ -54,8 +54,8 @@ hosts/pods).*
 On hosts where you cannot (or do not want to) install the full toolchain — e.g.
 immutable distros like **Fedora Atomic** — you can run the whole stack inside a Dev
 Container. Designed to work the same on **Linux, macOS, and Fedora-Atomic**, locally
-or on a remote VM. The host needs only `podman` (or `docker`) +
-[`devpod`](https://devpod.sh) + Docker Compose v2.
+or on a remote VM. The host needs [`devpod`](https://devpod.sh); local mode also
+needs `podman` (or `docker`) and Docker Compose v2.
 
 **Model:** a **Docker Compose-based devcontainer** (`.devcontainer/compose.yaml`)
 defines the **app** dev container *and* every backing service
@@ -64,7 +64,10 @@ together, so the environment is fully self-contained — no host-side dependency
 management. Inside the project network, services resolve each other by name and
 HAProxy terminates TLS on `:443` and proxies to the in-app services as `app:8000/8001/8081`.
 
-**1. One-time host setup**
+**1. Choose a provider**
+
+`scripts/dev-up` uses the local provider when `.devpod.env` is absent. Configure the
+local provider once:
 
 ```bash
 # Install DevPod (CLI) — see https://devpod.sh/docs/getting-started/install
@@ -79,14 +82,15 @@ devpod provider set-options docker -o DOCKER_PATH=/usr/bin/podman
 ```bash
 git clone https://github.com/permesi/permesi.git
 cd permesi
-scripts/dev-up          # DevPod brings up app + postgres/vault/jaeger/haproxy, then
-                        # the app's lifecycle hooks bootstrap Vault+DB+TLS, write
-                        # .envrc, and start genesis/permesi/web in tmux
+scripts/dev-up          # no .devpod.env: local; .devpod.env present: remote
+# override explicitly with --local or --remote
+# DevPod brings up app + postgres/vault/jaeger/haproxy, then the lifecycle hooks
+# bootstrap Vault+DB+TLS, write .envrc, and start genesis/permesi/web in tmux
 ```
 
-The first run pulls images and builds the dev container (a few minutes). By default it
+The first run pulls images and builds the dev container (a few minutes). Local mode
 also trusts the dev CA on your host so `https://permesi.localhost` is valid in your
-browser (one `sudo` prompt; opt out with `PERMESI_TRUST_CA=0`). On Linux it lowers
+browser (one `sudo` prompt; opt out with `PERMESI_TRUST_CA=0`). On Linux local mode lowers
 `net.ipv4.ip_unprivileged_port_start` to `443` so HAProxy can bind `:443` under
 rootless podman.
 
@@ -97,26 +101,31 @@ rootless podman.
 **3. Enter the workspace and use it**
 
 ```bash
-devpod ssh permesi          # shell into the running workspace (as vscode)
+devpod ssh permesi-coyote   # default remote workspace (as vscode)
+# local mode: devpod ssh permesi
 tmux attach -t permesi      # watch genesis/permesi/web (detach with your prefix + d)
 # or, without attaching (e.g. if you're already in a host tmux): just devpod-logs
 ```
 
 …or open the workspace from your editor's DevPod / Dev Containers integration.
 
-**Run it on a remote VM (`scripts/dev-up-remote`)**
+**Remote configuration**
 
 Because the stack is self-contained, the *same* devcontainer runs on a remote VM
 through an existing DevPod provider — DevPod brings everything up on the remote, no
-SSH-staged services. Configure via env vars:
+SSH-staged services. Copy the example configuration once; from then on the same
+one-command entry point selects remote mode automatically:
 
 ```bash
-# Uses the existing "coyote" provider by default; clones permesi on the remote.
-DEVPOD_REMOTE_PROVIDER=coyote \
-DEVPOD_REMOTE_SOURCE=git:https://github.com/permesi/permesi.git@sandbox \
-scripts/dev-up-remote
+cp .devpod.env.example .devpod.env
+# Edit provider, source, and SSH target as needed.
+scripts/dev-up
 devpod ssh permesi-coyote   # then: tmux attach -t permesi
 ```
+
+Use `scripts/dev-up --remote` to force remote mode without the file, or
+`scripts/dev-up --local` to force local mode when it exists. `scripts/dev-up-remote`
+remains available as a compatibility entry point.
 
 Overridable: `DEVPOD_REMOTE_PROVIDER`, `DEVPOD_REMOTE_WORKSPACE_NAME`,
 `DEVPOD_REMOTE_SOURCE` (append `@branch`), and `DEVPOD_REMOTE_SSH=host:port` to
@@ -125,10 +134,12 @@ auto-reload HAProxy on the VM.
 **Lifecycle (from the host)**
 
 ```bash
-devpod stop permesi             # stop the whole stack
-scripts/dev-up                  # start again (re-unseals Vault, restarts services)
-devpod delete permesi --force   # remove the workspace (containers + volumes)
-just vault-reset                # wipe Vault data + keys/state, then: scripts/dev-up --recreate
+devpod stop permesi-coyote             # stop the default remote stack
+scripts/dev-up                         # remote when .devpod.env exists
+devpod stop permesi                    # stop a local stack
+scripts/dev-up --local                 # explicitly start local mode
+devpod delete permesi --force          # remove the local workspace
+just vault-reset                       # then: scripts/dev-up --local --recreate
 ```
 
 The three Rust services run inside the `app` container and are reached through

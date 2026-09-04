@@ -16,7 +16,8 @@ set -eu
 #   3. copy the host CAROOT (rootCA.pem + rootCA-key.pem) into certs/mkcert-caroot/
 #      (gitignored) so `just devpod-tls-certs` issues from it.
 #
-# Idempotent. Run it directly, or let `scripts/dev-up` run it when PERMESI_TRUST_CA=1.
+# Idempotent. Run it directly, or let `scripts/dev-up --local` run it when
+# PERMESI_TRUST_CA=1.
 
 project_dir="$(
     unset CDPATH
@@ -33,7 +34,10 @@ if ! command -v mkcert >/dev/null 2>&1; then
         echo "==> Installing mkcert via mise ..."
         mise install mkcert@latest >/dev/null 2>&1 || true
         mkbin="$(mise which mkcert 2>/dev/null || true)"
-        [ -n "$mkbin" ] && export PATH="$(dirname "$mkbin"):${PATH}"
+        if [ -n "$mkbin" ]; then
+            mkbin_dir="$(dirname "$mkbin")"
+            export PATH="${mkbin_dir}:${PATH}"
+        fi
     fi
 fi
 if ! command -v mkcert >/dev/null 2>&1; then
@@ -64,7 +68,7 @@ fi
 # 2. Install the CA into host trust stores (idempotent; needs sudo only the first
 #    time, for /etc/pki). Non-fatal: a non-interactive run with no usable sudo will
 #    fail fast (sudo errors without a tty rather than hanging) — warn and continue so
-#    `scripts/dev-up` is never blocked. Re-run in a terminal to finish trusting.
+#    `scripts/dev-up --local` is never blocked. Re-run in a terminal to finish trusting.
 echo "==> Trusting the mkcert CA on the host (may prompt for sudo the first time)..."
 if ! mkcert -install; then
     echo "Warning: could not install the CA into host trust (needs sudo in a terminal)." >&2

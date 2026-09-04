@@ -20,7 +20,7 @@ _assert-not-devpod:
     echo "     just devpod-bootstrap      # full (re)bootstrap" >&2
     echo "" >&2
     echo "   To wipe & reinit Vault, run on the HOST: just vault-reset" >&2
-    echo "   then re-run: scripts/dev-up   (or, in the container: just devpod-bootstrap)" >&2
+    echo "   then re-run: scripts/dev-up --local   (or, in the container: just devpod-bootstrap)" >&2
     exit 1
   fi
 
@@ -480,6 +480,6 @@ vault-reset: _assert-not-devpod vault-stop
   if [[ "$compose_reset" == "1" ]]; then
     echo ""
     echo "Compose Vault volume removed. Recreate the stack with a fresh Vault:"
-    echo "  scripts/dev-up --recreate"
+    echo "  scripts/dev-up --local --recreate"
     echo "(postCreate re-bootstraps Vault automatically.)"
   fi

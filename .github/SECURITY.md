@@ -15,7 +15,7 @@ version support matrix when the project establishes stable release lines.
 
 Do not open a public issue, discussion, or pull request for a suspected security
 vulnerability. Report it privately by emailing
-[nbari@tequila.io](mailto:nbari@tequila.io).
+[team@permesi.dev](mailto:team@permesi.dev).
 
 Include enough information to reproduce and assess the issue, where possible:
 
