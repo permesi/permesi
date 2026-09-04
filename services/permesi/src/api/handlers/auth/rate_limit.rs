@@ -1,6 +1,6 @@
 //! Shared rate limiting for unauthenticated authentication flows.
 //!
-//! Production checks use PostgreSQL so limits are enforced consistently across
+//! Production checks use `PostgreSQL` so limits are enforced consistently across
 //! replicas. Subjects are hashed before persistence, and any storage failure
 //! fails closed. Tests can use the explicit no-op backend where throttling is
 //! outside the behavior under test.
@@ -66,7 +66,7 @@ enum Backend {
 
 /// Rate limiter used by authentication handlers.
 ///
-/// The PostgreSQL backend atomically increments fixed-window counters and
+/// The `PostgreSQL` backend atomically increments fixed-window counters and
 /// treats database failures as limited so an outage cannot disable protection.
 #[derive(Clone, Debug)]
 pub struct RateLimiter {
