@@ -104,25 +104,48 @@ _require-bump-tools:
 _require-tag-signing:
     #!/usr/bin/env bash
     set -euo pipefail
-    gpg_cmd="$(git config --get gpg.program || true)"
-    if [[ -n "$gpg_cmd" ]]; then
-        if ! command -v "$gpg_cmd" >/dev/null 2>&1; then
-            echo "❌ Configured gpg.program '${gpg_cmd}' not found." >&2
+    signing_format="$(git config --get gpg.format || true)"
+    signing_format="${signing_format:-openpgp}"
+
+    case "${signing_format}" in
+        ssh)
+            if ! command -v ssh-keygen >/dev/null 2>&1; then
+                echo "❌ ssh-keygen not found; required for SSH-signed tags." >&2
+                exit 1
+            fi
+            if [[ -z "$(git config --get user.signingkey || true)" ]]; then
+                echo "❌ user.signingkey is required for SSH-signed tags." >&2
+                echo "Configure it with: git config user.signingkey '<SSH public key or key path>'" >&2
+                exit 1
+            fi
+            ;;
+        openpgp)
+            gpg_cmd="$(git config --get gpg.program || true)"
+            if [[ -n "$gpg_cmd" ]]; then
+                if ! command -v "$gpg_cmd" >/dev/null 2>&1; then
+                    echo "❌ Configured gpg.program '${gpg_cmd}' not found." >&2
+                    exit 1
+                fi
+            elif command -v gpg >/dev/null 2>&1; then
+                gpg_cmd="gpg"
+            elif command -v gpg2 >/dev/null 2>&1; then
+                gpg_cmd="gpg2"
+            else
+                echo "❌ gpg not found; required for OpenPGP-signed tags." >&2
+                exit 1
+            fi
+            if ! "$gpg_cmd" --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
+                echo "❌ No OpenPGP secret keys found for signing." >&2
+                echo "Configure a signing key and retry (git config user.signingkey <KEYID>)." >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "❌ Unsupported Git signing format '${signing_format}' for release tags." >&2
+            echo "Use SSH or OpenPGP signing." >&2
             exit 1
-        fi
-    elif command -v gpg >/dev/null 2>&1; then
-        gpg_cmd="gpg"
-    elif command -v gpg2 >/dev/null 2>&1; then
-        gpg_cmd="gpg2"
-    else
-        echo "❌ gpg not found; required for signed tags (git tag -s)." >&2
-        exit 1
-    fi
-    if ! "$gpg_cmd" --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
-        echo "❌ No GPG secret keys found for signing." >&2
-        echo "Configure a signing key and retry (git config user.signingkey <KEYID>)." >&2
-        exit 1
-    fi
+            ;;
+    esac
 
 _bump bump_kind: check-develop check-clean _require-bump-tools
     #!/usr/bin/env bash
