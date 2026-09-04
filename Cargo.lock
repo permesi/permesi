@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admission_token"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "base64ct",
  "ed25519-dalek 3.0.0",
@@ -698,9 +698,9 @@ checksum = "bb1307f12aa967b5a58416e87b3653360e0fd614a016b6e970db08fecbb1b80d"
 
 [[package]]
 name = "cc"
-version = "1.4.4"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+checksum = "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1546,9 +1546,9 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "flate2"
@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "genesis"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3393,7 +3393,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permesi"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3462,7 +3462,7 @@ dependencies = [
 
 [[package]]
 name = "permesi_web"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "argon2 0.5.3",
  "argon2 0.6.0",
@@ -3583,9 +3583,9 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.7"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
+checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
 dependencies = [
  "portable-atomic",
 ]
@@ -4590,7 +4590,7 @@ dependencies = [
 
 [[package]]
 name = "service_utils"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "anyhow",
  "http",
@@ -5102,7 +5102,7 @@ dependencies = [
 
 [[package]]
 name = "test_support"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -5289,9 +5289,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.26.4"
+version = "0.26.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
+checksum = "b0c85f2c3ef0b1cd58b36682f4b17aaa995f0e5db534d85692b4903abce21f67"
 dependencies = [
  "rustls",
  "tokio",
@@ -5764,7 +5764,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault_client"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "anyhow",
  "bytes",
