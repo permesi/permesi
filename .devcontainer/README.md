@@ -70,6 +70,11 @@ Optional env forwarded by `scripts/dev-up`:
 - `DEVPOD_DOTFILES` (chezmoi dotfiles repo; set empty to skip)
 - `PERMESI_DEVPOD_NO_AUTOSTART=1` (bootstrap but don't auto-start the services)
 
+`scripts/dev-ssh` connects as the workspace's `vscode` user so Git sees the
+bind-mounted repository under its owning account and the forwarded SSH signing
+agent remains available. Set `PERMESI_DEVPOD_USER` only when a custom image uses
+a different non-root workspace user.
+
 ## One-time provider setup (podman)
 
 ```bash

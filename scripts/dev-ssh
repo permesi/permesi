@@ -4,6 +4,7 @@ set -eu
 # Enter the local Permesi DevPod or run one command in its workspace directory.
 workspace_name="${PERMESI_DEVPOD_ID:-permesi}"
 workspace_dir="${PERMESI_DEVPOD_WORKDIR:-/workspaces/permesi}"
+workspace_user="${PERMESI_DEVPOD_USER:-vscode}"
 
 if ! command -v devpod >/dev/null 2>&1; then
     echo "Error: devpod not found on host (https://devpod.sh)." >&2
@@ -11,7 +12,9 @@ if ! command -v devpod >/dev/null 2>&1; then
 fi
 
 if [ "$#" -eq 0 ]; then
-    exec devpod --silent ssh "$workspace_name" --workdir "$workspace_dir"
+    exec devpod --silent ssh "$workspace_name" \
+        --user "$workspace_user" \
+        --workdir "$workspace_dir"
 fi
 
 # Quote each argument for the remote shell so spaces and metacharacters remain part
@@ -27,6 +30,7 @@ for arg do
 done
 
 exec devpod --silent ssh "$workspace_name" \
+    --user "$workspace_user" \
     --workdir "$workspace_dir" \
     --start-services=false \
     --command "$command_string"
