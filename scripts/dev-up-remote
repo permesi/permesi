@@ -11,13 +11,17 @@ set -eu
 # Config is read from env vars, optionally via a gitignored .devpod.env in the repo
 # root (sourced below) — use that instead of .envrc, which the container regenerates
 # on every start. All optional:
-#   DEVPOD_REMOTE_PROVIDER         existing DevPod provider to use         (default: coyote)
-#   DEVPOD_REMOTE_WORKSPACE_NAME   workspace id                            (default: permesi-<provider>)
+#   DEVPOD_REMOTE_PROVIDER         DevPod provider to use/create           (default: coyote)
+#   DEVPOD_REMOTE_WORKSPACE_NAME   remote workspace id                     (default: permesi-remote)
 #   DEVPOD_REMOTE_SOURCE           git source DevPod clones on the remote  (default: git:https://github.com/permesi/permesi.git)
 #                                  append @<branch> to pick a branch, e.g. ...permesi.git@sandbox
 #   DEVPOD_REMOTE_HOST / _USER / _PORT   SSH target for the post-up HAProxy reload
 #                                  (bloque-style; e.g. HOST=jump USER=devops PORT=31025)
 #   DEVPOD_REMOTE_SSH              host[:port] override for the reload (else derived from HOST/USER/PORT)
+#   DEVPOD_REMOTE_HAPROXY_PORT      unprivileged HTTPS port on the VM       (default: 8443)
+#   DEVPOD_REMOTE_LOCAL_HTTPS_PORT  HTTPS port exposed on this host          (default: 443)
+#   DEVPOD_REMOTE_TUNNEL            create the local HTTPS tunnel            (default: 1)
+#   DEVPOD_REMOTE_SSH_CONFIG        optional OpenSSH client config file
 #   DEVPOD_DOTFILES, GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY,
 #   GIT_SSH_SIGNING_PROGRAM, GITHUB_TOKEN, PERMESI_DEVPOD_NO_AUTOSTART  (forwarded)
 
@@ -42,14 +46,51 @@ if [ "${PERMESI_DEVPOD_ENV_LOADED:-0}" != "1" ] && [ -f "${project_dir}/.devpod.
 fi
 
 provider_name="${DEVPOD_REMOTE_PROVIDER:-coyote}"
-workspace_name="${DEVPOD_REMOTE_WORKSPACE_NAME:-permesi-${provider_name}}"
+workspace_name="${DEVPOD_REMOTE_WORKSPACE_NAME:-permesi-remote}"
 remote_source="${DEVPOD_REMOTE_SOURCE:-git:https://github.com/permesi/permesi.git}"
+remote_port="${DEVPOD_REMOTE_PORT:-22}"
+remote_haproxy_port="${DEVPOD_REMOTE_HAPROXY_PORT:-8443}"
+local_https_port="${DEVPOD_REMOTE_LOCAL_HTTPS_PORT:-443}"
+remote_target=""
+
+ssh_exec() {
+    if [ -n "${DEVPOD_REMOTE_SSH_CONFIG:-}" ]; then
+        command ssh -F "$DEVPOD_REMOTE_SSH_CONFIG" "$@"
+    else
+        command ssh "$@"
+    fi
+}
+
+case "$remote_haproxy_port" in
+'' | *[!0-9]*)
+    echo "Error: DEVPOD_REMOTE_HAPROXY_PORT must be an integer from 1024 to 65535." >&2
+    exit 1
+    ;;
+esac
+if [ "$remote_haproxy_port" -lt 1024 ] || [ "$remote_haproxy_port" -gt 65535 ]; then
+    echo "Error: DEVPOD_REMOTE_HAPROXY_PORT must be an unprivileged port from 1024 to 65535." >&2
+    exit 1
+fi
+
+case "$local_https_port" in
+'' | *[!0-9]*)
+    echo "Error: DEVPOD_REMOTE_LOCAL_HTTPS_PORT must be an integer from 1 to 65535." >&2
+    exit 1
+    ;;
+esac
+if [ "$local_https_port" -lt 1 ] || [ "$local_https_port" -gt 65535 ]; then
+    echo "Error: DEVPOD_REMOTE_LOCAL_HTTPS_PORT must be an integer from 1 to 65535." >&2
+    exit 1
+fi
+
+if [ -n "${DEVPOD_REMOTE_HOST:-}" ]; then
+    remote_target="${DEVPOD_REMOTE_USER:+${DEVPOD_REMOTE_USER}@}${DEVPOD_REMOTE_HOST}"
+fi
 
 # Derive the SSH target for the post-up HAProxy reload from bloque-style HOST/USER/PORT
 # when DEVPOD_REMOTE_SSH isn't set explicitly.
-if [ -z "${DEVPOD_REMOTE_SSH:-}" ] && [ -n "${DEVPOD_REMOTE_HOST:-}" ]; then
-    _u="${DEVPOD_REMOTE_USER:+${DEVPOD_REMOTE_USER}@}"
-    DEVPOD_REMOTE_SSH="${_u}${DEVPOD_REMOTE_HOST}:${DEVPOD_REMOTE_PORT:-22}"
+if [ -z "${DEVPOD_REMOTE_SSH:-}" ] && [ -n "$remote_target" ]; then
+    DEVPOD_REMOTE_SSH="${remote_target}:${remote_port}"
 fi
 
 if ! command -v devpod >/dev/null 2>&1; then
@@ -57,11 +98,133 @@ if ! command -v devpod >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! devpod provider options "$provider_name" >/dev/null 2>&1; then
-    echo "Error: DevPod provider '$provider_name' not found. Add it first, e.g.:" >&2
-    echo "  devpod provider add ssh --name $provider_name -o HOST=user@vm -o PORT=22" >&2
-    echo "Or set DEVPOD_REMOTE_PROVIDER to an existing provider (see: devpod provider list)." >&2
+if [ "$workspace_name" = "permesi" ]; then
+    echo "Error: remote workspace name 'permesi' is reserved for the local workspace." >&2
+    echo "Set DEVPOD_REMOTE_WORKSPACE_NAME=permesi-remote in .devpod.env." >&2
     exit 1
+fi
+case "$workspace_name" in
+*[!A-Za-z0-9_.-]*)
+    echo "Error: DEVPOD_REMOTE_WORKSPACE_NAME may contain only letters, numbers, '.', '_', and '-'." >&2
+    exit 1
+    ;;
+esac
+
+provider_target="$remote_target"
+provider_port="$remote_port"
+# DEVPOD_REMOTE_SSH can provide the provider target when the separate host, user,
+# and port settings were not supplied.
+if [ -z "$provider_target" ] && [ -n "${DEVPOD_REMOTE_SSH:-}" ]; then
+    provider_target="${DEVPOD_REMOTE_SSH%%:*}"
+    case "$DEVPOD_REMOTE_SSH" in
+    *:*) provider_port="${DEVPOD_REMOTE_SSH##*:}" ;;
+    esac
+fi
+
+if [ -z "$provider_target" ]; then
+    echo "Error: remote Podman setup requires an SSH target." >&2
+    echo "Set DEVPOD_REMOTE_HOST (and optionally DEVPOD_REMOTE_USER/PORT) in .devpod.env." >&2
+    exit 1
+fi
+
+# DevPod 0.6.15 uses its configured container CLI for most operations but invokes
+# `docker-compose` by name while preparing a Compose devcontainer. Keep the remote
+# Podman-only by installing two narrow wrappers: the provider CLI always executes
+# Podman with podman-compose selected, and the compatibility command DevPod looks
+# up always executes podman-compose. The latter lives in /usr/local/bin (ahead of
+# /usr/bin on the SSH provider's PATH) and is never allowed to replace an
+# unmanaged command.
+echo "==> Configuring remote Podman Compose integration..."
+# The single-quoted program is evaluated by the remote shell; only the adjacent
+# local port fragment is intentionally interpolated before it is sent.
+# shellcheck disable=SC2016
+provider_docker_path="$(
+    ssh_exec \
+        -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new \
+        -p "$provider_port" \
+        "$provider_target" '
+            set -eu
+            remote_haproxy_port='"$remote_haproxy_port"'
+            podman_path="$(command -v podman)"
+            compose_provider="$(command -v podman-compose)"
+            wrapper="$HOME/.local/bin/permesi-devpod-podman"
+            temporary="${wrapper}.tmp.$$"
+            compose_shim="/usr/local/bin/docker-compose"
+            marker="# Managed by Permesi scripts/dev-up-remote."
+
+            if [ -e "$compose_shim" ] && ! grep -qxF "$marker" "$compose_shim"; then
+                echo "Error: $compose_shim exists and is not managed by Permesi." >&2
+                echo "Remove or relocate it so DevPod can use podman-compose." >&2
+                exit 1
+            fi
+
+            umask 077
+            mkdir -p "$HOME/.local/bin"
+            printf "%s\n" \
+                "#!/usr/bin/env sh" \
+                "export PERMESI_HOST_BIND=127.0.0.1" \
+                "export PERMESI_HAPROXY_PORT=$remote_haproxy_port" \
+                "compose_requested=0" \
+                "    for argument in \"\$@\"; do" \
+                "        if [ \"\$argument\" = compose ]; then compose_requested=1; break; fi" \
+                "    done" \
+                "if [ \"\$compose_requested\" = 1 ]; then" \
+                "    while [ \"\$1\" != compose ]; do shift; done" \
+                "    shift" \
+                "    for argument in \"\$@\"; do" \
+                "        if [ \"\$argument\" = ls ]; then printf \"[]\\n\"; exit 0; fi" \
+                "    done" \
+                "    exec $compose_provider --in-pod=false \"\$@\"" \
+                "fi" \
+                "exec $podman_path \"\$@\"" >"$temporary"
+            chmod 755 "$temporary"
+            mv "$temporary" "$wrapper"
+
+            printf "%s\n" \
+                "#!/usr/bin/env sh" \
+                "$marker" \
+                "export PERMESI_HOST_BIND=127.0.0.1" \
+                "export PERMESI_HAPROXY_PORT=$remote_haproxy_port" \
+                "for argument in \"\$@\"; do" \
+                "    if [ \"\$argument\" = ls ]; then printf \"[]\\n\"; exit 0; fi" \
+                "done" \
+                "exec $compose_provider --in-pod=false \"\$@\"" |
+                sudo install -m 0755 /dev/stdin "$compose_shim"
+
+            printf "%s" "$wrapper"
+        '
+)"
+
+if ! devpod provider options "$provider_name" >/dev/null 2>&1; then
+    if [ -z "$provider_target" ]; then
+        echo "Error: cannot create DevPod provider '$provider_name' without an SSH target." >&2
+        echo "Set DEVPOD_REMOTE_HOST (and optionally DEVPOD_REMOTE_USER/PORT) in .devpod.env." >&2
+        exit 1
+    fi
+
+    echo "==> Creating DevPod SSH provider '${provider_name}' for ${provider_target}:${provider_port}..."
+    # Remote launches select this provider explicitly; do not replace the host's
+    # active provider, which local mode may use later.
+    devpod provider add ssh \
+        --name "$provider_name" \
+        --use=false \
+        -o "HOST=$provider_target" \
+        -o "PORT=$provider_port" \
+        -o "DOCKER_PATH=$provider_docker_path" \
+        -o "EXTRA_FLAGS=-A" \
+        -o "INJECT_DOCKER_CREDENTIALS=false" \
+        -o "INJECT_GIT_CREDENTIALS=false"
+elif [ -n "$provider_target" ]; then
+    # Treat the project configuration as authoritative so a partially configured
+    # or stale provider cannot silently connect somewhere else.
+    devpod provider set-options "$provider_name" \
+        -o "HOST=$provider_target" \
+        -o "PORT=$provider_port" \
+        -o "DOCKER_PATH=$provider_docker_path" \
+        -o "EXTRA_FLAGS=-A" \
+        -o "INJECT_DOCKER_CREDENTIALS=false" \
+        -o "INJECT_GIT_CREDENTIALS=false" >/dev/null
 fi
 
 case "$remote_source" in
@@ -79,10 +242,8 @@ set -- \
     "$@"
 
 # Note: uses the default .devcontainer/devcontainer.json. The coyote provider (and
-# most SSH providers) run rootless podman on the remote, which — like local — needs
-# the userns keep-id override for an editable bind-mounted workspace, so the same
-# devcontainer config applies. Override with --devcontainer-path here only if a remote
-# uses true docker (where keep-id is unsupported).
+# most SSH providers) runs rootless Podman on the remote, which — like local — needs
+# the userns keep-id override for an editable bind-mounted workspace.
 
 # Forward identity/config so chezmoi + git work inside the remote container.
 for var in \
@@ -112,42 +273,110 @@ if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
     fi
 fi
 
-# Remote preflight (best-effort, needs DEVPOD_REMOTE_SSH): allow rootless podman on the
-# VM to bind the privileged :443 HAProxy port. devops-style sudo is assumed; harmless
-# if already set. Without DEVPOD_REMOTE_SSH this is skipped (set it, or run the sysctl
-# on the VM yourself).
-if [ -n "${DEVPOD_REMOTE_SSH:-}" ]; then
-    _rhost="${DEVPOD_REMOTE_SSH%%:*}"
-    _rport="22"
-    case "$DEVPOD_REMOTE_SSH" in *:*) _rport="${DEVPOD_REMOTE_SSH##*:}" ;; esac
-    echo "==> Remote preflight: allowing rootless bind to :443 on ${_rhost}..."
-    ssh -p "$_rport" "$_rhost" '
-        cur="$(/usr/sbin/sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
-        [ "$cur" -le 443 ] && exit 0
-        echo "net.ipv4.ip_unprivileged_port_start=443" | sudo tee /etc/sysctl.d/99-permesi.conf >/dev/null
-        sudo /usr/sbin/sysctl -w net.ipv4.ip_unprivileged_port_start=443 >/dev/null
-    ' >/dev/null 2>&1 || echo "   (could not set the sysctl automatically; set it on the VM if HAProxy fails to bind :443)"
-fi
-
 devpod up "$workspace_name" "$@"
 
 # HAProxy starts before the in-app services and their certs; reload it on the remote
-# so it picks up the certs and re-resolves the `app` backend. Best-effort: only if
-# DEVPOD_REMOTE_SSH is provided (host[:port]); otherwise print the manual command.
-if [ -n "${DEVPOD_REMOTE_SSH:-}" ]; then
-    rhost="${DEVPOD_REMOTE_SSH%%:*}"
-    rport="22"
-    case "$DEVPOD_REMOTE_SSH" in *:*) rport="${DEVPOD_REMOTE_SSH##*:}" ;; esac
-    echo "==> Reloading HAProxy on the remote (${rhost}:${rport})..."
-    ssh -p "$rport" "$rhost" '
-        c="$(podman ps --format "{{.Names}}" 2>/dev/null | grep -- "-haproxy-1$" | head -1)"
-        [ -z "$c" ] && c="$(docker ps --format "{{.Names}}" 2>/dev/null | grep -- "-haproxy-1$" | head -1)"
-        [ -n "$c" ] && { podman restart "$c" 2>/dev/null || docker restart "$c"; }
-    ' >/dev/null 2>&1 || echo "   (could not reload HAProxy automatically; do it manually)"
-else
-    echo "==> Note: reload HAProxy on the remote once the services are up:"
-    echo "    ssh <vm> 'docker restart \$(docker ps --format \"{{.Names}}\" | grep -- -haproxy-1\$)'"
-    echo "    (or set DEVPOD_REMOTE_SSH=host:port to automate it)"
+# so it picks up the certs and re-resolves the `app` backend. Compose service labels
+# are stable across both hyphenated Docker-style and underscored Podman-style names.
+echo "==> Reloading HAProxy on the remote (${provider_target}:${provider_port})..."
+# shellcheck disable=SC2016
+if ! ssh_exec -p "$provider_port" "$provider_target" '
+    c="$(podman ps --filter label=com.docker.compose.service=haproxy --format "{{.Names}}" 2>/dev/null | head -1)"
+    [ -n "$c" ] && podman restart "$c"
+' >/dev/null 2>&1; then
+    echo "Warning: could not reload HAProxy automatically." >&2
 fi
 
-echo "==> Done. Enter the remote workspace: devpod ssh ${workspace_name}  (then: tmux attach -t permesi)"
+# Rootless Podman publishes remote services on loopback only. Keep TLS termination
+# in remote HAProxy and expose it locally through SSH, so browsers use the normal
+# https://*.permesi.localhost URLs without opening :443 on the VM.
+if [ "${DEVPOD_REMOTE_TUNNEL:-1}" != "0" ]; then
+    if [ "$(uname -s)" = "Linux" ] && [ "$local_https_port" -lt 1024 ]; then
+        start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+        case "$start" in '' | *[!0-9]*) start=1024 ;; esac
+        if [ "$start" -gt "$local_https_port" ]; then
+            echo "==> Allowing the local SSH tunnel to bind :${local_https_port}..."
+            if ! sudo sysctl -w "net.ipv4.ip_unprivileged_port_start=${local_https_port}" >/dev/null; then
+                echo "Error: could not allow a rootless bind to :${local_https_port}." >&2
+                echo "Set DEVPOD_REMOTE_LOCAL_HTTPS_PORT=8443 or update the sysctl manually." >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    tunnel_dir="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}/permesi-devpod"
+    tunnel_socket="${tunnel_dir}/${workspace_name}-${local_https_port}.sock"
+    mkdir -p "$tunnel_dir"
+    chmod 0700 "$tunnel_dir"
+    if ! ssh_exec -S "$tunnel_socket" -O check -p "$provider_port" "$provider_target" >/dev/null 2>&1; then
+        rm -f "$tunnel_socket"
+        echo "==> Forwarding local :${local_https_port} to remote HAProxy :${remote_haproxy_port}..."
+        if ! ssh_exec -fNT -M \
+            -S "$tunnel_socket" \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -p "$provider_port" \
+            -L "127.0.0.1:${local_https_port}:127.0.0.1:${remote_haproxy_port}" \
+            "$provider_target"; then
+            echo "Error: local port ${local_https_port} is unavailable for the remote HTTPS tunnel." >&2
+            echo "Stop the local Permesi workspace if it owns that port, or set" >&2
+            echo "DEVPOD_REMOTE_LOCAL_HTTPS_PORT=8443 in .devpod.env." >&2
+            exit 1
+        fi
+    fi
+
+    # Trust only the public project CA generated inside the remote workspace. Its
+    # private key never leaves the remote development environment.
+    if [ "${PERMESI_TRUST_CA:-1}" != "0" ]; then
+        remote_ca="$(mktemp -t permesi-remote-ca.XXXXXX)"
+        trap 'rm -f "$remote_ca"' EXIT HUP INT TERM
+        # shellcheck disable=SC2016
+        if ssh_exec -p "$provider_port" "$provider_target" '
+            app="$(podman ps --filter label=com.docker.compose.service=app --format "{{.Names}}" 2>/dev/null | head -1)"
+            [ -n "$app" ] && podman exec "$app" cat /workspaces/permesi/certs/mkcert-root.pem
+        ' >"$remote_ca" && grep -q '^-----BEGIN CERTIFICATE-----$' "$remote_ca"; then
+            ca_name="permesi-${workspace_name}"
+            case "$(uname -s)" in
+            Linux)
+                if command -v update-ca-trust >/dev/null 2>&1; then
+                    ca_path="/etc/pki/ca-trust/source/anchors/${ca_name}.pem"
+                    if ! cmp -s "$remote_ca" "$ca_path" 2>/dev/null; then
+                        echo "==> Trusting the remote Permesi development CA on this host..."
+                        sudo install -m 0644 "$remote_ca" "$ca_path"
+                        sudo update-ca-trust extract
+                    fi
+                elif command -v update-ca-certificates >/dev/null 2>&1; then
+                    ca_path="/usr/local/share/ca-certificates/${ca_name}.crt"
+                    if ! cmp -s "$remote_ca" "$ca_path" 2>/dev/null; then
+                        echo "==> Trusting the remote Permesi development CA on this host..."
+                        sudo install -m 0644 "$remote_ca" "$ca_path"
+                        sudo update-ca-certificates
+                    fi
+                else
+                    echo "Warning: no supported system CA update command was found." >&2
+                fi
+                ;;
+            Darwin)
+                echo "==> Trusting the remote Permesi development CA in the macOS system keychain..."
+                sudo security add-trusted-cert -d -r trustRoot \
+                    -k /Library/Keychains/System.keychain "$remote_ca"
+                ;;
+            *)
+                echo "Warning: automatic CA trust is unsupported on $(uname -s)." >&2
+                ;;
+            esac
+        else
+            echo "Warning: could not retrieve the remote development CA." >&2
+        fi
+        rm -f "$remote_ca"
+        trap - EXIT HUP INT TERM
+    fi
+fi
+
+if [ "$local_https_port" = "443" ]; then
+    echo "==> Done. Browse: https://permesi.localhost"
+else
+    echo "==> Done. Browse: https://permesi.localhost:${local_https_port}"
+fi
+echo "    Enter:  devpod ssh ${workspace_name}  (then: tmux attach -t permesi)"

@@ -7,7 +7,7 @@ VM, with an almost tooling-free host.
 
 ## Design: one self-contained compose stack
 
-The devcontainer is **Docker Compose-based**: a single compose project
+The devcontainer is **Compose-based**: a single compose project
 (`compose.yaml`) defines the **app** dev container *and* every backing service
 (`postgres`, `vault`, `jaeger`, `haproxy`). `devpod up` brings the whole stack up
 together, so the environment is fully self-contained — no host-side dependency
@@ -16,7 +16,7 @@ selects local mode when `.devpod.env` is absent and remote mode when it exists;
 `--local` and `--remote` override the selection.
 
 ```
-        host: devpod (+ podman/docker + compose in local mode)
+        host: devpod (+ podman + podman-compose in local mode)
           │  scripts/dev-up   →   devpod up   (brings up the whole compose project)
           ▼
    ┌──────────────── compose project "permesi" ───────────────────┐
@@ -53,13 +53,17 @@ container: build/run/test the three binaries and configure Vault
 ## Prerequisites (host)
 
 - `devpod` (https://devpod.sh).
-- Local mode: `podman` (rootless is fine) **or** `docker`. With podman, the default `docker` provider works via
-  `DOCKER_PATH=/usr/bin/podman`.
-- **Docker Compose v2** (DevPod uses it to drive the compose devcontainer).
+- Local mode: `podman` (rootless is fine) and `podman-compose`. The script points
+  DevPod's internally named `docker` provider at persistent Podman/podman-compose
+  adapters. It also installs a user-level Podman Compose provider drop-in, so later
+  lifecycle commands work without a Docker daemon or shell-specific environment
+  variables. The adapter supplies the project-list operation that DevPod needs but
+  `podman-compose` does not currently implement. Podman's user-level `nodocker`
+  marker and Compose warning setting keep compatibility banners out of that JSON.
 - Linux local mode only: ability to bind `:443` under rootless podman — `scripts/dev-up --local` lowers
   `net.ipv4.ip_unprivileged_port_start` to `443` via `sudo` (one prompt). Persist with
   `echo 'net.ipv4.ip_unprivileged_port_start=443' | sudo tee /etc/sysctl.d/99-permesi.conf`.
-  On macOS, podman-machine / Docker handle this in the VM. Skip with
+  On macOS, the Podman machine handles this in the VM. Skip with
   `PERMESI_DEVUP_SKIP_PORTCHECK=1` if you've already set it.
 
 `DEVPOD` / `DEVPOD_WORKSPACE_ID` are set on the `app` service in `compose.yaml`
@@ -72,23 +76,17 @@ Optional env forwarded by `scripts/dev-up`:
 - `DEVPOD_DOTFILES` (chezmoi dotfiles repo; set `none` to skip)
 - `PERMESI_DEVPOD_NO_AUTOSTART=1` (bootstrap but don't auto-start the services)
 
-Chezmoi defaults to `nbari/dotfiles`, which provides Atuin and Herdr configuration
-and installs integrations for the Mise-managed AI agents. Its post-apply hook reruns
-`configure-git.sh`, because the host-oriented SSH agent path and signing helper are
-not valid inside DevPod. Agent state and Atuin history live in named volumes.
+Chezmoi defaults to the SSH URL for the private `nbari/dotfiles` repository, which
+provides Atuin and Herdr configuration and installs integrations for the Mise-managed
+AI agents. The forwarded SSH agent authenticates that clone. Chezmoi's post-apply
+hook reruns `configure-git.sh`, because the host-oriented SSH agent path and signing
+helper are not valid inside DevPod. Agent state and Atuin history live in named
+volumes.
 
 `scripts/dev-ssh` connects as the workspace's `vscode` user so Git sees the
 bind-mounted repository under its owning account and the forwarded SSH signing
 agent remains available. Set `PERMESI_DEVPOD_USER` only when a custom image uses
 a different non-root workspace user.
-
-## One-time local provider setup (podman)
-
-```bash
-devpod provider add docker          # if not already present
-devpod provider use docker
-devpod provider set-options docker -o DOCKER_PATH=/usr/bin/podman
-```
 
 ## Quickstart — one command
 
@@ -112,7 +110,26 @@ just devpod-logs            # or: just devpod-logs genesis|permesi|web
 To use a remote provider, copy `.devpod.env.example` to `.devpod.env`, edit it,
 and run `scripts/dev-up` again. Its presence selects remote mode. Set
 `DEVPOD_REMOTE_PROVIDER` in that file to use a provider other than `coyote`, then
-enter the default remote workspace with `devpod ssh permesi-coyote`.
+enter the default remote workspace with `devpod ssh permesi-remote`. Keep the remote
+workspace name distinct from `permesi`, which is reserved for local mode. If the named
+provider does not exist, the script creates an SSH provider automatically from the
+configured remote host, user, and port. It requires Podman and `podman-compose` on
+that remote and does not require a Docker-compatible socket. DevPod 0.6.15 looks up
+one command by the legacy name `docker-compose`; the setup installs a managed shim
+at that name which executes `podman-compose` directly.
+
+Remote mode does not bind privileged port 443 on the VM. Its Podman services bind
+only to remote loopback, HAProxy uses remote `127.0.0.1:8443`, and `scripts/dev-up`
+opens a persistent SSH tunnel from local `127.0.0.1:443`. Consequently the browser
+still uses `https://permesi.localhost` while the remote development services are not
+published on the VM's network interfaces. The script also imports only the remote
+workspace's public development CA into the local system trust store; the CA private
+key stays remote. Set `DEVPOD_REMOTE_LOCAL_HTTPS_PORT=8443` when the local host cannot
+bind port 443, `DEVPOD_REMOTE_TUNNEL=0` to manage the tunnel yourself, or
+`PERMESI_TRUST_CA=0` to skip CA installation.
+Only one workspace can own local port 443. Run `devpod stop permesi` before using
+the default remote tunnel when the local workspace is active, or choose another
+local tunnel port.
 
 ## Local mode
 
@@ -167,10 +184,16 @@ just devpod-trust-ca     # prints steps; CA is at certs/mkcert-root.pem
 127.0.0.1 permesi.localhost api.permesi.localhost genesis.permesi.localhost
 ```
 
+Remote mode performs the equivalent public-CA trust automatically after bootstrap.
+It does not copy the host mkcert private key to the VM. If a remote workspace is
+deleted and rebuilt with a new CA, the next `scripts/dev-up` replaces that
+workspace's named trust anchor. Restart browsers opened before the trust update if
+necessary.
+
 ## Lifecycle & resetting
 
 ```bash
-devpod stop permesi-coyote      # stop the default remote workspace
+devpod stop permesi-remote      # stop the default remote workspace
 scripts/dev-up                  # remote when .devpod.env exists
 devpod stop permesi             # stop the local workspace
 scripts/dev-up --local          # explicitly start local mode
@@ -191,9 +214,9 @@ devpod delete permesi --force   # remove the local workspace (containers + volum
   toolchain and cargo/target are cached in named volumes.
 - HAProxy starts before the in-app services and their certs exist; its `resolvers`
   section re-resolves `app` and the selected `scripts/dev-up` mode reloads HAProxy once after bootstrap.
-- Local rootless podman uses `userns_mode: keep-id` (via `compose.podman.yaml`) so the
+- Local rootless Podman uses `userns_mode: keep-id` (via `compose.podman.yaml`) so the
   bind-mounted workspace maps the container `vscode` to your host user and stays
-  editable. The remote (docker) flow omits this override.
+  editable. Remote mode also uses rootless Podman.
 - Development only: Postgres uses trust auth and Vault is bootstrapped with locally
   generated keys (`vault/keys.json`). Never reuse outside a dev machine.
 - The legacy host-podman flow (`just start`, `.justfiles/infra.just` / `vault.just`)

@@ -1,0 +1,54 @@
+#!/usr/bin/env sh
+set -eu
+
+# podman-compose does not implement `compose ls`, but DevPod uses it to recover
+# the generated Compose files and project name of an existing workspace. Produce
+# the compatible JSON view from the labels Podman Compose places on containers.
+for argument in "$@"; do
+    if [ "$argument" = "ls" ]; then
+        requested_project=""
+        previous_argument=""
+        for list_argument in "$@"; do
+            if [ "$previous_argument" = "--filter" ]; then
+                case "$list_argument" in
+                name=*) requested_project="${list_argument#name=}" ;;
+                esac
+            fi
+            case "$list_argument" in
+            --filter=name=*) requested_project="${list_argument#--filter=name=}" ;;
+            esac
+            previous_argument="$list_argument"
+        done
+
+        podman ps -a \
+            --filter label=com.docker.compose.project \
+            --format '{{index .Labels "com.docker.compose.project"}}\t{{index .Labels "com.docker.compose.project.config_files"}}\t{{index .Labels "com.docker.compose.service"}}' |
+            awk -F '\t' -v requested_project="$requested_project" '
+                function json_escape(value) {
+                    gsub(/\\/, "\\\\", value)
+                    gsub(/"/, "\\\"", value)
+                    return value
+                }
+                $1 != "" && (requested_project == "" || $1 == requested_project) &&
+                    (!($1 in config_files) ||
+                    ($3 == "app" && selected_service[$1] != "app") ||
+                    ($3 == selected_service[$1] && length($2) > length(config_files[$1]))) {
+                    config_files[$1] = $2
+                    selected_service[$1] = $3
+                }
+                END {
+                    separator = ""
+                    printf "["
+                    for (project in config_files) {
+                        printf "%s{\"Name\":\"%s\",\"Status\":\"unknown\",\"ConfigFiles\":\"%s\"}", \
+                            separator, json_escape(project), json_escape(config_files[project])
+                        separator = ","
+                    }
+                    print "]"
+                }
+            '
+        exit 0
+    fi
+done
+
+exec podman-compose --in-pod=false "$@"

@@ -70,7 +70,7 @@ mise run setup-tig
 
 # 5. Dotfiles (chezmoi). The main profile supplies Atuin/Herdr configuration and
 # agent integrations; set DEVPOD_DOTFILES=none to skip or provide another repository.
-dotfiles_repo="${DEVPOD_DOTFILES:-https://github.com/nbari/dotfiles.git}"
+dotfiles_repo="${DEVPOD_DOTFILES:-git@github.com:nbari/dotfiles.git}"
 if [ "$dotfiles_repo" = "none" ]; then
     dotfiles_repo=""
 fi
@@ -79,7 +79,15 @@ if [ "$dotfiles_repo" != "" ]; then
         sh -c "$(curl -fsSL get.chezmoi.io)" -- -b ~/.local/bin
     fi
     install -Dm 0600 .devcontainer/chezmoi.toml "$HOME/.config/chezmoi/chezmoi.toml"
-    chezmoi init --apply --force "$dotfiles_repo" ||
+    # DevPod 0.6.15's injected HTTPS credential helper can panic when a lifecycle
+    # command clones a public repository. Reset the helper only for this clone;
+    # SSH URLs authenticate through the forwarded agent and record the host key on
+    # first use so a newly recreated container can clone non-interactively.
+    GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0=credential.helper \
+        GIT_CONFIG_VALUE_0='' \
+        GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' \
+        chezmoi init --apply --force "$dotfiles_repo" ||
         echo "chezmoi dotfiles step failed (continuing)"
     sh .devcontainer/configure-git.sh
 fi

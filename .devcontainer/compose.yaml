@@ -5,7 +5,7 @@
 #   service it needs (postgres, vault, jaeger, haproxy). DevPod (devcontainer.json
 #   -> dockerComposeFile) brings the whole stack up together and drops you into the
 #   `app` service, so the environment is fully self-contained: the same `devpod up`
-#   works locally (podman/docker) and on a remote VM (e.g. the coyote SSH provider)
+#   works with Podman locally and on a remote VM (e.g. the coyote SSH provider)
 #   with no host-side dependency management.
 #
 #   Inside the project network, services resolve each other by name: the app reaches
@@ -132,7 +132,7 @@ services:
       - ../vault/config.hcl:/vault/config/vault.hcl:ro
       - vault-data:/vault/data
     ports:
-      - "8200:8200"
+      - "${PERMESI_HOST_BIND:-0.0.0.0}:8200:8200"
     restart: unless-stopped
     networks:
       - permesi
@@ -142,7 +142,7 @@ services:
     environment:
       COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
     ports:
-      - "16686:16686"
+      - "${PERMESI_HOST_BIND:-0.0.0.0}:16686:16686"
     restart: unless-stopped
     networks:
       - permesi
@@ -158,9 +158,7 @@ services:
       - ../config/haproxy/certs:/usr/local/etc/haproxy/certs:ro
       - ../certs:/usr/local/etc/haproxy/clientca:ro
     ports:
-      - "443:8080"
+      - "${PERMESI_HOST_BIND:-0.0.0.0}:${PERMESI_HAPROXY_PORT:-443}:8080"
     restart: unless-stopped
-    depends_on:
-      - app
     networks:
       - permesi

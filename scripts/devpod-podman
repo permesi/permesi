@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+set -eu
+
+# DevPod names its local container provider "docker" even when another
+# Docker-compatible CLI is configured. Route every container operation to Podman
+# and every Compose operation to the companion podman-compose adapter.
+compose_requested=0
+for argument in "$@"; do
+    if [ "$argument" = "compose" ]; then
+        compose_requested=1
+        break
+    fi
+done
+
+if [ "$compose_requested" = "1" ]; then
+    while [ "$1" != "compose" ]; do
+        shift
+    done
+    shift
+    exec "$(dirname -- "$0")/devpod-podman-compose" "$@"
+fi
+
+exec podman "$@"

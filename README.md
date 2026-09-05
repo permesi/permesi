@@ -55,9 +55,9 @@ On hosts where you cannot (or do not want to) install the full toolchain — e.g
 immutable distros like **Fedora Atomic** — you can run the whole stack inside a Dev
 Container. Designed to work the same on **Linux, macOS, and Fedora-Atomic**, locally
 or on a remote VM. The host needs [`devpod`](https://devpod.sh); local mode also
-needs `podman` (or `docker`) and Docker Compose v2.
+needs `podman` and `podman-compose`.
 
-**Model:** a **Docker Compose-based devcontainer** (`.devcontainer/compose.yaml`)
+**Model:** a **Compose-based devcontainer** (`.devcontainer/compose.yaml`)
 defines the **app** dev container *and* every backing service
 (postgres/vault/jaeger/haproxy) in one project. DevPod brings the whole stack up
 together, so the environment is fully self-contained — no host-side dependency
@@ -71,10 +71,11 @@ local provider once:
 
 ```bash
 # Install DevPod (CLI) — see https://devpod.sh/docs/getting-started/install
-# Then point the default "docker" provider at podman (rootless):
-devpod provider add docker            # if not already added
-devpod provider use docker
-devpod provider set-options docker -o DOCKER_PATH=/usr/bin/podman
+# scripts/dev-up creates or updates DevPod's local provider to use persistent
+# rootless Podman/podman-compose adapters. It also installs a user-level Podman
+# Compose provider drop-in and Podman's `nodocker` marker so later `devpod stop`
+# commands cannot select Docker or corrupt DevPod's JSON with compatibility banners.
+# DevPod names that provider type "docker", but no Docker daemon is used.
 ```
 
 **2. Create the workspace — `scripts/dev-up` does everything**
@@ -92,7 +93,9 @@ The first run pulls images and builds the dev container (a few minutes). Local m
 also trusts the dev CA on your host so `https://permesi.localhost` is valid in your
 browser (one `sudo` prompt; opt out with `PERMESI_TRUST_CA=0`). On Linux local mode lowers
 `net.ipv4.ip_unprivileged_port_start` to `443` so HAProxy can bind `:443` under
-rootless podman.
+rootless Podman. Remote mode provides the same browser URL by opening a local SSH
+tunnel from `127.0.0.1:443` to remote HAProxy and trusting only the public remote
+development CA; the VM itself does not expose or bind port 443.
 
 > The bootstrap runs once (`postCreate`); on every later start (`postStart`) Vault is
 > re-unsealed, `.envrc` is refreshed, and the services are restarted. Set
@@ -101,7 +104,7 @@ rootless podman.
 **3. Enter the workspace and use it**
 
 ```bash
-devpod ssh permesi-coyote   # default remote workspace (as vscode)
+devpod ssh permesi-remote   # default remote workspace (as vscode)
 # local mode: devpod ssh permesi
 tmux attach -t permesi      # watch genesis/permesi/web (detach with your prefix + d)
 # or, without attaching (e.g. if you're already in a host tmux): just devpod-logs
@@ -120,7 +123,7 @@ one-command entry point selects remote mode automatically:
 cp .devpod.env.example .devpod.env
 # Edit provider, source, and SSH target as needed.
 scripts/dev-up
-devpod ssh permesi-coyote   # then: tmux attach -t permesi
+devpod ssh permesi-remote   # then: tmux attach -t permesi
 ```
 
 Use `scripts/dev-up --remote` to force remote mode without the file, or
@@ -129,12 +132,34 @@ remains available as a compatibility entry point.
 
 Overridable: `DEVPOD_REMOTE_PROVIDER`, `DEVPOD_REMOTE_WORKSPACE_NAME`,
 `DEVPOD_REMOTE_SOURCE` (append `@branch`), and `DEVPOD_REMOTE_SSH=host:port` to
-auto-reload HAProxy on the VM.
+auto-reload HAProxy on the VM. When the named provider does not exist,
+`scripts/dev-up` creates an SSH provider automatically from `DEVPOD_REMOTE_HOST`,
+`DEVPOD_REMOTE_USER`, and `DEVPOD_REMOTE_PORT`.
+Keep `DEVPOD_REMOTE_WORKSPACE_NAME=permesi-remote`; `permesi` is reserved for the
+local workspace so DevPod cannot silently reuse it with the wrong provider. For a
+rootless Podman remote, the script selects `podman-compose` automatically and does
+not install or require Docker or a Docker-compatible socket. DevPod 0.6.15 still
+looks up a command named `docker-compose`, so the script installs a managed remote
+shim at that name which executes `podman-compose` directly. HAProxy, Vault, and
+Jaeger bind only to remote loopback. The script keeps the browser-facing TLS tunnel
+on the local machine, so there is no need to SSH into the VM and run another local
+DevPod there.
+
+By default the tunnel maps local `127.0.0.1:443` to remote
+`127.0.0.1:8443`. Set `DEVPOD_REMOTE_LOCAL_HTTPS_PORT=8443` if the local host cannot
+bind a privileged port, or `DEVPOD_REMOTE_TUNNEL=0` to manage forwarding yourself.
+The local and remote workspaces cannot both own local port 443: stop the local
+workspace with `devpod stop permesi` before switching to the normal remote URL, or
+select a different local tunnel port.
+The automatic trust step imports the remote workspace's public development CA into
+the local system trust store; the CA private key remains remote. Restart an already
+open browser after the first trust operation if it does not immediately recognize
+the certificate.
 
 **Lifecycle (from the host)**
 
 ```bash
-devpod stop permesi-coyote             # stop the default remote stack
+devpod stop permesi-remote             # stop the default remote stack
 scripts/dev-up                         # remote when .devpod.env exists
 devpod stop permesi                    # stop a local stack
 scripts/dev-up --local                 # explicitly start local mode
@@ -142,8 +167,8 @@ devpod delete permesi --force          # remove the local workspace
 just vault-reset                       # then: scripts/dev-up --local --recreate
 ```
 
-The three Rust services run inside the `app` container and are reached through
-HAProxy on `:443` (`https://permesi.localhost`, `api.`, `genesis.`). See
+The three Rust services run inside the `app` container and are reached locally
+through HAProxy on `:443` (`https://permesi.localhost`, `api.`, `genesis.`). See
 [`.devcontainer/README.md`](.devcontainer/README.md) for the full architecture,
 environment variables, and host CA-trust steps. The legacy host-podman `just start`
 flow above continues to work unchanged on non-Atomic / macOS hosts.
