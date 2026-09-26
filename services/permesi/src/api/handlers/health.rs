@@ -13,7 +13,7 @@ use super::{AdmissionVerifier, DependencyStatus};
 use crate::GIT_COMMIT_HASH;
 use axum::{
     body::Body,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json},
 };
@@ -74,9 +74,9 @@ pub async fn live() -> impl IntoResponse {
 /// Returns `503` when dependencies are unhealthy so orchestrators can stop
 /// routing traffic to this instance.
 pub async fn ready(
-    pool: Extension<PgPool>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+    pool: State<PgPool>,
+    admission: State<Arc<AdmissionVerifier>>,
+    shutdown_tx: State<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
     let status = evaluate_probe_status(&pool.0, &admission.0).await;
     maybe_signal_shutdown(status, &shutdown_tx.0);
@@ -105,9 +105,9 @@ pub async fn ready(
 /// DB credentials.
 pub async fn health(
     method: Method,
-    pool: Extension<PgPool>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+    pool: State<PgPool>,
+    admission: State<Arc<AdmissionVerifier>>,
+    shutdown_tx: State<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
     let status = evaluate_probe_status(&pool.0, &admission.0).await;
     maybe_signal_shutdown(status, &shutdown_tx.0);

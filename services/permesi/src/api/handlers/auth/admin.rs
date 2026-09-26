@@ -13,7 +13,7 @@
 
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode, header::CONTENT_LENGTH},
     response::IntoResponse,
 };
@@ -159,8 +159,8 @@ impl AdminState {
 )]
 pub async fn admin_status(
     headers: HeaderMap,
-    pool: Extension<sqlx::PgPool>,
-    admin_state: Extension<Arc<AdminState>>,
+    pool: State<sqlx::PgPool>,
+    admin_state: State<Arc<AdminState>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -206,8 +206,8 @@ pub async fn admin_status(
 )]
 pub async fn admin_infra(
     headers: HeaderMap,
-    pool: Extension<sqlx::PgPool>,
-    admin_state: Extension<Arc<AdminState>>,
+    pool: State<sqlx::PgPool>,
+    admin_state: State<Arc<AdminState>>,
 ) -> impl IntoResponse {
     let user_id = match verify_admin_token(&headers, &admin_state) {
         Ok(id) => id,
@@ -325,8 +325,8 @@ pub fn verify_admin_token(
 )]
 pub async fn admin_bootstrap(
     headers: HeaderMap,
-    pool: Extension<sqlx::PgPool>,
-    admin_state: Extension<Arc<AdminState>>,
+    pool: State<sqlx::PgPool>,
+    admin_state: State<Arc<AdminState>>,
     payload: Option<Json<AdminBootstrapRequest>>,
 ) -> impl IntoResponse {
     if let Some(status) = reject_large_body(&headers) {
@@ -425,8 +425,8 @@ pub async fn admin_bootstrap(
 )]
 pub async fn admin_elevate(
     headers: HeaderMap,
-    pool: Extension<sqlx::PgPool>,
-    admin_state: Extension<Arc<AdminState>>,
+    pool: State<sqlx::PgPool>,
+    admin_state: State<Arc<AdminState>>,
     payload: Option<Json<AdminElevateRequest>>,
 ) -> impl IntoResponse {
     if let Some(status) = reject_large_body(&headers) {
@@ -719,7 +719,7 @@ mod tests {
             types::AdminBootstrapRequest,
             utils::{generate_session_token, hash_session_token},
         };
-        use axum::{Extension, Json, http::header::COOKIE, response::IntoResponse};
+        use axum::{Json, extract::State, http::header::COOKIE, response::IntoResponse};
         use std::sync::Arc;
 
         if !can_bind_localhost() {
@@ -785,8 +785,8 @@ mod tests {
         // 4. Call Handler
         let response = admin_bootstrap(
             headers,
-            Extension(pool.clone()),
-            Extension(state),
+            State(pool.clone()),
+            State(state),
             Some(Json(payload)),
         )
         .await
@@ -814,7 +814,7 @@ mod tests {
     #[tokio::test]
     async fn admin_infra_rejects_non_operator() -> Result<()> {
         use crate::api::handlers::auth::admin::admin_infra;
-        use axum::{Extension, http::header::AUTHORIZATION, response::IntoResponse};
+        use axum::{extract::State, http::header::AUTHORIZATION, response::IntoResponse};
         use std::sync::Arc;
 
         if !can_bind_localhost() {
@@ -850,7 +850,7 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Bearer {admin_token}").parse()?);
 
-        let response = admin_infra(headers, Extension(pool), Extension(state))
+        let response = admin_infra(headers, State(pool), State(state))
             .await
             .into_response();
 

@@ -53,7 +53,7 @@ admission_token = { workspace = true }
 vault_client = { workspace = true }
 argon2 = { workspace = true }
 anyhow = { workspace = true }
-axum = { version = "0.8", features = ["tracing"] }
+axum = { version = "0.8", features = ["macros", "tracing"] }
 axum-server = { workspace = true }
 base64 = { workspace = true }
 base64ct = { version = "1.8.3", features = ["alloc"] }

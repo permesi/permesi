@@ -19,7 +19,7 @@ use crate::api::handlers::{
 };
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -52,9 +52,9 @@ use uuid::Uuid;
 )]
 pub async fn opaque_reauth_start(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueReauthStartRequest>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -205,9 +205,9 @@ async fn build_reauth_start_response(
 )]
 pub async fn opaque_reauth_finish(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueReauthFinishRequest>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {

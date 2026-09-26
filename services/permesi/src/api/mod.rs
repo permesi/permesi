@@ -28,7 +28,7 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
-    Extension, Router,
+    Router,
     http::{
         HeaderName, Method,
         header::{AUTHORIZATION, CONTENT_TYPE},
@@ -46,7 +46,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_util::sync::CancellationToken;
-use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{debug, info, warn};
 use url::Url;
@@ -56,12 +55,16 @@ pub(crate) mod email;
 pub(crate) mod handlers;
 // OpenAPI router wiring and route registration live in openapi.rs.
 mod openapi;
+mod state;
 
 pub use openapi::openapi;
+pub use state::AppState;
 
 /// Build the API router with all documented routes registered.
+///
+/// The router still needs its [`AppState`]; `build_router` supplies it with `with_state`.
 #[must_use]
-pub fn router() -> OpenApiRouter {
+pub fn router() -> OpenApiRouter<AppState> {
     openapi::api_router()
 }
 
@@ -174,17 +177,16 @@ pub async fn new(
     // Initialize Passkeys (preview mode supported via env)
     let passkey_service = init_passkey_service(&config.auth)?;
 
-    let app = build_router(
-        auth_state,
-        admin_state,
+    let app = build_router(AppState {
+        auth: auth_state,
+        admin: admin_state,
         admission,
-        globals,
-        shutdown_tx,
-        pool.clone(),
-        totp_service,
-        security_key_service,
-        passkey_service,
-    )?;
+        shutdown: shutdown_tx,
+        pool: pool.clone(),
+        totp: totp_service,
+        security_keys: Arc::new(security_key_service),
+        passkeys: Arc::new(passkey_service),
+    })?;
 
     // Background worker polls email_outbox (DB-backed queue) for pending rows,
     // delivers/logs them, and retries failures with exponential backoff.
@@ -223,19 +225,10 @@ async fn stop_worker(name: &str, worker: JoinHandle<()>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_router(
-    auth_state: Arc<auth::AuthState>,
-    admin_state: Arc<auth::AdminState>,
-    admission: Arc<handlers::AdmissionVerifier>,
-    globals: &GlobalArgs,
-    shutdown_tx: mpsc::UnboundedSender<vault::renew::ShutdownSignal>,
-    pool: sqlx::PgPool,
-    totp_service: TotpService,
-    security_key_service: SecurityKeyService,
-    passkey_service: PasskeyService,
-) -> Result<Router> {
-    let allowed_origins = frontend_origins(auth_state.config().cors_allowed_origins())?;
+/// Assemble the served router: documented routes, `/`, `OPTIONS /health`, CORS,
+/// shared state, and request correlation (outermost, so every response carries it).
+fn build_router(state: AppState) -> Result<Router> {
+    let allowed_origins = frontend_origins(state.auth.config().cors_allowed_origins())?;
     let cors = CorsLayer::new()
         .allow_headers([
             CONTENT_TYPE,
@@ -259,26 +252,12 @@ fn build_router(
 
     // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
-    // Request correlation wraps everything last, so every response (CORS preflights included)
-    // carries the server-issued `x-request-id`.
     let (router, _openapi) = router().split_for_parts();
     let app = router
         .route("/", get(root::root))
         .route("/health", options(health::health))
-        .layer(
-            ServiceBuilder::new()
-                .layer(cors)
-                .layer(Extension(auth_state))
-                .layer(Extension(admin_state))
-                .layer(Extension(admission))
-                .layer(Extension(globals.clone()))
-                .layer(Extension(shutdown_tx))
-                .layer(Extension(pool.clone()))
-                .layer(Extension(totp_service))
-                .layer(Extension(Arc::new(security_key_service)))
-                .layer(Extension(Arc::new(passkey_service))),
-        )
-        .layer(Extension(pool));
+        .layer(cors)
+        .with_state(state);
     Ok(request_id::with_request_correlation(app))
 }
 

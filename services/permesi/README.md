@@ -86,12 +86,18 @@ the OPAQUE registration record (`opaque_registration_record`).
 
 ### API router (OpenAPI-aware)
 
-`permesi::api::router()` returns an `OpenApiRouter` with all documented routes registered via
-`#[utoipa::path]`. Use it to build a server or to split out the OpenAPI spec in tests.
+`permesi::api::router()` returns an `OpenApiRouter<AppState>` with all documented routes registered
+via `#[utoipa::path]`. Use it to build a server or to split out the OpenAPI spec in tests.
 
 ```rust
 let (router, openapi) = permesi::api::router().split_for_parts();
+let app = router.with_state(state); // state: permesi::api::AppState
 ```
+
+Handlers receive shared dependencies through axum `State` extractors (`State<PgPool>`,
+`State<Arc<AuthState>>`, ...) derived from `AppState` with `FromRef`, so routing a handler whose
+dependency the state does not provide fails to compile instead of returning a runtime 500 from a
+missing `Extension` layer. Per-request values such as the request ID stay request extensions.
 
 Every response carries an `x-request-id` header holding a ULID issued by the server for that request. The same ID is recorded on the request's `http.request` trace span, so a failing response can be matched to its log lines. A client-supplied `x-request-id` is never adopted as the correlation ID; it is only logged as `client_request_id`, and only when it is at most 128 visible ASCII characters.
 

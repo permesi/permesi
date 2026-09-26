@@ -6,7 +6,7 @@
 
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -46,7 +46,7 @@ use super::{
 pub async fn create_application(
     Path((org_slug, project_slug, env_slug)): Path<(String, String, String)>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<CreateApplicationRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -117,7 +117,7 @@ pub async fn create_application(
 pub async fn list_applications(
     Path((org_slug, project_slug, env_slug)): Path<(String, String, String)>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,

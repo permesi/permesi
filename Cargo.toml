@@ -24,7 +24,7 @@ test_support = { path = "crates/test_support" }
 service_utils = { path = "crates/service_utils" }
 argon2 = "0.6"
 anyhow = "1"
-axum = { version = "0.8", features = ["tracing"] }
+axum = { version = "0.8", features = ["macros", "tracing"] }
 base64 = "0.23"
 base64ct = { version = "1.8.3", features = ["alloc"] }
 blake2 = "0.11"

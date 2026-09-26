@@ -1,3 +1,4 @@
+use super::state::AppState;
 use crate::api::handlers::{headers, health, paserk, token};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -14,7 +15,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// Add new endpoints here via `.routes(routes!(...))` so they are both served
 /// and included in the generated `OpenAPI` spec.
 /// Routes added outside (like `OPTIONS /health`) are intentionally not documented.
-pub(crate) fn api_router() -> OpenApiRouter {
+pub(crate) fn api_router() -> OpenApiRouter<AppState> {
     // `routes!` reads #[utoipa::path] to bind HTTP method + path and add the route to OpenAPI.
     let mut router = OpenApiRouter::with_openapi(cargo_openapi())
         .routes(routes!(health::live))

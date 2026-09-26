@@ -7,7 +7,7 @@
 use admission_token::AdmissionTokenClaims;
 use axum::{
     Json,
-    extract::{Extension, Query, rejection::QueryRejection},
+    extract::{Query, State, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
 };
 use chrono::Utc;
@@ -89,8 +89,8 @@ impl AdmissionSignerLike for AdmissionSigner {
 )]
 #[instrument(skip(pool, admission, headers, query))]
 pub async fn token(
-    Extension(pool): Extension<PgPool>,
-    Extension(admission): Extension<Arc<AdmissionSigner>>,
+    State(pool): State<PgPool>,
+    State(admission): State<Arc<AdmissionSigner>>,
     headers: HeaderMap,
     query: Result<Query<ClientArgs>, QueryRejection>,
 ) -> TokenResponse {

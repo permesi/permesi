@@ -17,8 +17,9 @@ use super::{
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
-    Extension, Router,
+    Router,
     body::{Body, to_bytes},
+    extract::FromRef,
     http::{
         Request, StatusCode,
         header::{CONTENT_TYPE, COOKIE, SET_COOKIE},
@@ -430,6 +431,22 @@ fn auth_state_with_pending_limit(max_pending_logins: usize) -> Arc<AuthState> {
     ))
 }
 
+/// Router state for the OPAQUE and password handlers; `FromRef` hands each handler
+/// only the parts it extracts.
+#[derive(Clone, FromRef)]
+struct OpaqueTestState {
+    auth: Arc<AuthState>,
+    admission: Arc<crate::api::handlers::AdmissionVerifier>,
+    pool: PgPool,
+}
+
+/// Router state for the `/v1/me` session handlers.
+#[derive(Clone, FromRef)]
+struct SessionTestState {
+    auth: Arc<AuthState>,
+    pool: PgPool,
+}
+
 fn opaque_router(
     auth_state: Arc<AuthState>,
     admission: Arc<crate::api::handlers::AdmissionVerifier>,
@@ -452,9 +469,11 @@ fn opaque_router(
             "/v1/auth/opaque/login/finish",
             post(super::opaque::login::opaque_login_finish),
         )
-        .layer(Extension(auth_state))
-        .layer(Extension(admission))
-        .layer(Extension(pool))
+        .with_state(OpaqueTestState {
+            auth: auth_state,
+            admission,
+            pool,
+        })
 }
 
 /// Build a verifier/signer pair so tests can mint valid zero-tokens accepted by handlers.
@@ -631,8 +650,10 @@ fn app_router(auth_state: Arc<AuthState>, pool: PgPool) -> Router {
             "/v1/me/sessions/{sid}",
             delete(crate::api::handlers::me::revoke_session),
         )
-        .layer(Extension(auth_state))
-        .layer(Extension(pool))
+        .with_state(SessionTestState {
+            auth: auth_state,
+            pool,
+        })
 }
 
 #[tokio::test]
@@ -1221,9 +1242,11 @@ async fn password_change_flow() -> Result<()> {
             "/v1/auth/opaque/password/finish",
             axum::routing::post(super::opaque::password::opaque_password_finish),
         )
-        .layer(Extension(auth_state.clone()))
-        .layer(Extension(admission.clone()))
-        .layer(Extension(db.pool.clone()));
+        .with_state(OpaqueTestState {
+            auth: auth_state.clone(),
+            admission: admission.clone(),
+            pool: db.pool.clone(),
+        });
 
     // 3. Start Password Change
     let client_reg_new = ClientRegistration::<OpaqueSuite>::start(&mut rng, new_password)?;
@@ -1412,9 +1435,11 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
             "/v1/auth/opaque/reauth/finish",
             axum::routing::post(super::opaque::reauth::opaque_reauth_finish),
         )
-        .layer(Extension(auth_state.clone()))
-        .layer(Extension(admission.clone()))
-        .layer(Extension(db.pool.clone()));
+        .with_state(OpaqueTestState {
+            auth: auth_state.clone(),
+            admission: admission.clone(),
+            pool: db.pool.clone(),
+        });
 
     // 3. Start Re-auth with WRONG password
     let client_login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, wrong_password)?;

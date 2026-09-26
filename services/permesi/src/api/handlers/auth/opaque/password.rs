@@ -37,7 +37,7 @@ use crate::api::handlers::{
 };
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
@@ -66,9 +66,9 @@ const PASSWORD_RECENT_AUTH_SECONDS: i64 = 10 * 60;
 )]
 pub async fn opaque_password_start(
     headers: HeaderMap,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    pool: Extension<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
     payload: Option<Json<OpaquePasswordStartRequest>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -140,9 +140,9 @@ pub async fn opaque_password_start(
 )]
 pub async fn opaque_password_finish(
     headers: HeaderMap,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    pool: Extension<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
     payload: Option<Json<OpaquePasswordFinishRequest>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {

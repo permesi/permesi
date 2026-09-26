@@ -20,7 +20,7 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -44,8 +44,8 @@ type HandlerError = Box<axum::response::Response>;
 )]
 pub async fn register_start(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    webauthn_service: Extension<Arc<SecurityKeyService>>,
+    pool: State<PgPool>,
+    webauthn_service: State<Arc<SecurityKeyService>>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -94,8 +94,8 @@ pub async fn register_start(
 )]
 pub async fn register_finish(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    webauthn_service: Extension<Arc<SecurityKeyService>>,
+    pool: State<PgPool>,
+    webauthn_service: State<Arc<SecurityKeyService>>,
     payload: Option<Json<WebauthnRegisterFinishRequest>>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
@@ -200,8 +200,8 @@ pub async fn register_finish(
 )]
 pub async fn authenticate_start(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    webauthn_service: Extension<Arc<SecurityKeyService>>,
+    pool: State<PgPool>,
+    webauthn_service: State<Arc<SecurityKeyService>>,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
         Ok(principal) => principal,
@@ -246,9 +246,9 @@ pub async fn authenticate_start(
 )]
 pub async fn authenticate_finish(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    webauthn_service: Extension<Arc<SecurityKeyService>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    webauthn_service: State<Arc<SecurityKeyService>>,
     payload: Option<Json<WebauthnAuthenticateFinishRequest>>,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
@@ -388,7 +388,7 @@ fn extract_origin(
 pub async fn delete_key(
     Path(credential_id_hex): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,

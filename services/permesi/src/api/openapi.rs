@@ -1,4 +1,5 @@
 use super::handlers::{auth, health, me, me_webauthn, orgs, users};
+use super::state::AppState;
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -14,7 +15,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// Add new endpoints here via `.routes(routes!(...))` so they are both served
 /// and included in the generated `OpenAPI` spec.
 /// Routes added outside (like `/` or `OPTIONS /health`) are intentionally not documented.
-pub(crate) fn api_router() -> OpenApiRouter {
+pub(crate) fn api_router() -> OpenApiRouter<AppState> {
     // `routes!` reads #[utoipa::path] to bind HTTP method + path and add the route to OpenAPI.
     let mut router = OpenApiRouter::with_openapi(cargo_openapi())
         .routes(routes!(health::live))
@@ -277,7 +278,11 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_password_routes_are_not_registered() -> Result<()> {
+        // The full router needs its state even though no handler runs for these paths.
+        let pool =
+            sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
         let (router, _) = api_router().split_for_parts();
+        let router = router.with_state(AppState::for_tests(pool)?);
 
         for path in ["/user/login", "/user/register"] {
             let response = router

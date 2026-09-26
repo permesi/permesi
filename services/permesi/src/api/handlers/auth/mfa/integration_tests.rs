@@ -11,8 +11,9 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
-    Extension, Router,
+    Router,
     body::{Body, to_bytes},
+    extract::FromRef,
     http::{Request, StatusCode, header::COOKIE},
     routing::{delete, get, post},
 };
@@ -167,6 +168,21 @@ async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
     Ok(token)
 }
 
+/// Router state for the MFA handlers; `FromRef` hands each handler the parts it extracts.
+#[derive(Clone, FromRef)]
+struct MfaTestState {
+    auth: std::sync::Arc<AuthState>,
+    pool: PgPool,
+    totp: TotpService,
+}
+
+/// Router state for the session handler.
+#[derive(Clone, FromRef)]
+struct SessionTestState {
+    auth: std::sync::Arc<AuthState>,
+    pool: PgPool,
+}
+
 fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) -> Router {
     Router::new()
         .route(
@@ -186,9 +202,11 @@ fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) ->
             delete(crate::api::handlers::me::disable_totp),
         )
         .route("/v1/me", get(crate::api::handlers::me::get_me))
-        .layer(Extension(std::sync::Arc::new(auth_state)))
-        .layer(Extension(pool))
-        .layer(Extension(totp_service))
+        .with_state(MfaTestState {
+            auth: std::sync::Arc::new(auth_state),
+            pool,
+            totp: totp_service,
+        })
 }
 
 #[tokio::test]
@@ -531,8 +549,10 @@ async fn session_response_includes_mfa_flags() -> Result<()> {
             "/v1/auth/session",
             get(crate::api::handlers::auth::session::session),
         )
-        .layer(Extension(std::sync::Arc::new(auth_state())))
-        .layer(Extension(ctx.pool.clone()));
+        .with_state(SessionTestState {
+            auth: std::sync::Arc::new(auth_state()),
+            pool: ctx.pool.clone(),
+        });
 
     let response = app
         .oneshot(

@@ -22,7 +22,7 @@ use crate::api::handlers::{
 use anyhow::anyhow;
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
@@ -53,9 +53,9 @@ use uuid::Uuid;
 )]
 pub async fn opaque_login_start(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueLoginStartRequest>>,
 ) -> impl IntoResponse {
     let request: OpaqueLoginStartRequest = match payload {
@@ -210,9 +210,9 @@ async fn build_login_start_response(
 #[allow(clippy::too_many_lines)]
 pub async fn opaque_login_finish(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueLoginFinishRequest>>,
 ) -> impl IntoResponse {
     let request: OpaqueLoginFinishRequest = match payload {
@@ -358,7 +358,7 @@ mod tests {
     use crate::api::handlers::auth::opaque::test_support::{admission_verifier, auth_state};
     use anyhow::Result;
     use axum::{
-        extract::Extension,
+        extract::State,
         http::{HeaderMap, StatusCode},
         response::IntoResponse,
     };
@@ -369,9 +369,9 @@ mod tests {
         let pool = PgPoolOptions::new().connect_lazy("postgres://postgres@localhost/postgres")?;
         let response = opaque_login_start(
             HeaderMap::new(),
-            Extension(pool),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(pool),
+            State(auth_state()),
+            State(admission_verifier()?),
             None,
         )
         .await
@@ -385,9 +385,9 @@ mod tests {
         let pool = PgPoolOptions::new().connect_lazy("postgres://postgres@localhost/postgres")?;
         let response = opaque_login_finish(
             HeaderMap::new(),
-            Extension(pool),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(pool),
+            State(auth_state()),
+            State(admission_verifier()?),
             None,
         )
         .await

@@ -19,7 +19,7 @@ use crate::api::handlers::{
 };
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -45,8 +45,8 @@ use tracing::error;
 )]
 pub async fn opaque_signup_start(
     headers: HeaderMap,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueSignupStartRequest>>,
 ) -> impl IntoResponse {
     let request: OpaqueSignupStartRequest = match payload {
@@ -137,9 +137,9 @@ pub async fn opaque_signup_start(
 )]
 pub async fn opaque_signup_finish(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<OpaqueSignupFinishRequest>>,
 ) -> impl IntoResponse {
     let request: OpaqueSignupFinishRequest = match payload {
@@ -227,7 +227,7 @@ mod tests {
     use crate::api::handlers::auth::opaque::test_support::{admission_verifier, auth_state};
     use anyhow::Result;
     use axum::{
-        extract::Extension,
+        extract::State,
         http::{HeaderMap, StatusCode},
         response::IntoResponse,
     };
@@ -237,8 +237,8 @@ mod tests {
     async fn opaque_signup_start_missing_payload() -> Result<()> {
         let response = opaque_signup_start(
             HeaderMap::new(),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(auth_state()),
+            State(admission_verifier()?),
             None,
         )
         .await
@@ -252,9 +252,9 @@ mod tests {
         let pool = PgPoolOptions::new().connect_lazy("postgres://postgres@localhost/postgres")?;
         let response = opaque_signup_finish(
             HeaderMap::new(),
-            Extension(pool),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(pool),
+            State(auth_state()),
+            State(admission_verifier()?),
             None,
         )
         .await

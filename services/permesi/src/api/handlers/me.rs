@@ -5,7 +5,7 @@
 
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -76,7 +76,7 @@ pub struct SecurityKeySummary {
     ),
     tag = "me"
 )]
-pub async fn get_me(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn get_me(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
@@ -119,7 +119,7 @@ pub async fn get_me(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoRes
 )]
 pub async fn patch_me(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<MeUpdateRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -167,7 +167,7 @@ pub async fn patch_me(
     ),
     tag = "me"
 )]
-pub async fn list_sessions(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn list_sessions(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
@@ -191,7 +191,7 @@ pub async fn list_sessions(headers: HeaderMap, pool: Extension<PgPool>) -> impl 
     ),
     tag = "me"
 )]
-pub async fn list_security_keys(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn list_security_keys(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
@@ -232,7 +232,7 @@ pub async fn list_security_keys(headers: HeaderMap, pool: Extension<PgPool>) -> 
 pub async fn revoke_session(
     Path(sid): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -265,8 +265,8 @@ pub async fn revoke_session(
 )]
 pub async fn regenerate_recovery_codes(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -353,7 +353,7 @@ pub async fn regenerate_recovery_codes(
     ),
     tag = "me"
 )]
-pub async fn disable_totp(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn disable_totp(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),

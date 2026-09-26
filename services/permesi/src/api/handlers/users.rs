@@ -5,7 +5,7 @@
 
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -66,7 +66,7 @@ pub struct UserRoleResponse {
     tag = "users"
 )]
 /// List users only for requests with a valid full-session cookie.
-pub async fn list_users(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn list_users(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
@@ -97,7 +97,7 @@ pub async fn list_users(headers: HeaderMap, pool: Extension<PgPool>) -> impl Int
 pub async fn get_user(
     Path(id): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -132,7 +132,7 @@ pub async fn get_user(
 pub async fn patch_user(
     headers: HeaderMap,
     Path(id): Path<String>,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<UserUpdateRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -174,7 +174,7 @@ pub async fn patch_user(
 pub async fn delete_user(
     headers: HeaderMap,
     Path(id): Path<String>,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -209,7 +209,7 @@ pub async fn delete_user(
 pub async fn set_user_role(
     headers: HeaderMap,
     Path(id): Path<String>,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<UserRoleRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -488,8 +488,8 @@ mod tests {
     use crate::api::handlers::auth::principal::{Permission, Principal};
     use anyhow::Result;
     use axum::{
-        Extension, Json,
-        extract::Path,
+        Json,
+        extract::{Path, State},
         http::{HeaderMap, StatusCode},
         response::IntoResponse,
     };
@@ -525,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_users_requires_auth() -> Result<()> {
-        let response = list_users(HeaderMap::new(), Extension(lazy_pool()?))
+        let response = list_users(HeaderMap::new(), State(lazy_pool()?))
             .await
             .into_response();
 
@@ -538,7 +538,7 @@ mod tests {
         let response = get_user(
             Path(Uuid::new_v4().to_string()),
             HeaderMap::new(),
-            Extension(lazy_pool()?),
+            State(lazy_pool()?),
         )
         .await
         .into_response();
@@ -552,7 +552,7 @@ mod tests {
         let response = patch_user(
             HeaderMap::new(),
             Path(Uuid::new_v4().to_string()),
-            Extension(lazy_pool()?),
+            State(lazy_pool()?),
             Json(UserUpdateRequest {
                 display_name: Some("Example".to_string()),
                 locale: None,
@@ -570,7 +570,7 @@ mod tests {
         let response = delete_user(
             HeaderMap::new(),
             Path(Uuid::new_v4().to_string()),
-            Extension(lazy_pool()?),
+            State(lazy_pool()?),
         )
         .await
         .into_response();
@@ -584,7 +584,7 @@ mod tests {
         let response = set_user_role(
             HeaderMap::new(),
             Path(Uuid::new_v4().to_string()),
-            Extension(lazy_pool()?),
+            State(lazy_pool()?),
             Json(UserRoleRequest {
                 role: "admin".to_string(),
             }),

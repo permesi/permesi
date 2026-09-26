@@ -6,7 +6,7 @@
 
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{InvalidHeaderValue, SET_COOKIE},
@@ -41,7 +41,7 @@ const SESSION_COOKIE_NAME: &str = "permesi_session";
     ),
     tag = "auth"
 )]
-pub async fn session(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn session(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     // Missing cookies are treated as "no session" to avoid leaking auth state.
     let Some(token) = extract_session_token(&headers) else {
         return StatusCode::NO_CONTENT.into_response();
@@ -113,8 +113,8 @@ pub(crate) async fn authenticate_session(
 )]
 pub async fn logout(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
 ) -> impl IntoResponse {
     if let Some(token) = extract_session_token(&headers)
         && let Err(err) = delete_any_session(&pool, &token).await

@@ -5,7 +5,7 @@
 
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -41,7 +41,7 @@ use super::{
 pub async fn create_project(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<CreateProjectRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -98,7 +98,7 @@ pub async fn create_project(
 pub async fn list_projects(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,

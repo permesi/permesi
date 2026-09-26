@@ -8,7 +8,7 @@
 use crate::GIT_COMMIT_HASH;
 use axum::{
     body::Body,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json},
 };
@@ -59,8 +59,8 @@ pub async fn live() -> impl IntoResponse {
 )]
 /// Report readiness based on database connectivity.
 pub async fn ready(
-    pool: Extension<PgPool>,
-    shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+    pool: State<PgPool>,
+    shutdown_tx: State<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
     let status = evaluate_database_probe(&pool.0).await;
     maybe_signal_shutdown(status, &shutdown_tx.0);
@@ -89,8 +89,8 @@ pub async fn ready(
 /// DB credentials.
 pub async fn health(
     method: Method,
-    pool: Extension<PgPool>,
-    shutdown_tx: Extension<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+    pool: State<PgPool>,
+    shutdown_tx: State<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
     let status = evaluate_database_probe(&pool.0).await;
     maybe_signal_shutdown(status, &shutdown_tx.0);

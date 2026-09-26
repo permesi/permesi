@@ -7,7 +7,7 @@
 use axum::{
     Json,
     body::Bytes,
-    extract::{Extension, Path},
+    extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -99,10 +99,10 @@ pub struct PasskeyCredentialListResponse {
 pub async fn register_options(
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    passkey_service: Extension<Arc<PasskeyService>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
+    passkey_service: State<Arc<PasskeyService>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -209,10 +209,10 @@ pub async fn register_options(
 pub async fn register_finish(
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    passkey_service: Extension<Arc<PasskeyService>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
+    passkey_service: State<Arc<PasskeyService>>,
     body: Bytes,
 ) -> impl IntoResponse {
     let context = match load_register_finish_context(
@@ -320,8 +320,8 @@ pub async fn register_finish(
 pub async fn list_credentials(
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    pool: Extension<PgPool>,
-    passkey_service: Extension<Arc<PasskeyService>>,
+    pool: State<PgPool>,
+    passkey_service: State<Arc<PasskeyService>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -399,9 +399,9 @@ pub async fn delete_credential(
     Path(credential_id_b64): Path<String>,
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    pool: Extension<PgPool>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    passkey_service: Extension<Arc<PasskeyService>>,
+    pool: State<PgPool>,
+    admission: State<Arc<AdmissionVerifier>>,
+    passkey_service: State<Arc<PasskeyService>>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -720,8 +720,9 @@ mod tests {
         AdmissionTokenFooter, PaserkKey, PaserkKeySet, build_token, encode_signing_input,
     };
     use axum::{
-        Extension, Router,
+        Router,
         body::{Body, to_bytes},
+        extract::FromRef,
         http::{Request, StatusCode, header::CONTENT_TYPE},
         routing::{delete, get, post},
     };
@@ -804,6 +805,23 @@ mod tests {
         Ok(token)
     }
 
+    /// Router state for the passkey handlers; `FromRef` hands each handler the parts
+    /// it extracts.
+    #[derive(Clone, FromRef)]
+    struct WebauthnTestState {
+        auth: Arc<AuthState>,
+        admission: Arc<AdmissionVerifier>,
+        passkeys: Arc<PasskeyService>,
+        pool: PgPool,
+    }
+
+    /// Router state for the credential listing handler.
+    #[derive(Clone, FromRef)]
+    struct CredentialListTestState {
+        passkeys: Arc<PasskeyService>,
+        pool: PgPool,
+    }
+
     fn build_admission() -> anyhow::Result<(Arc<AdmissionVerifier>, String)> {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
         let verifying_key = signing_key.verifying_key();
@@ -878,10 +896,12 @@ mod tests {
         let app = with_request_correlation(
             Router::new()
                 .route("/v1/me/webauthn/register/options", post(register_options))
-                .layer(Extension(auth_state))
-                .layer(Extension(admission))
-                .layer(Extension(passkey_service))
-                .layer(Extension(db.pool)),
+                .with_state(WebauthnTestState {
+                    auth: auth_state,
+                    admission,
+                    passkeys: passkey_service,
+                    pool: db.pool,
+                }),
         );
 
         let response = app
@@ -932,8 +952,10 @@ mod tests {
         let app = with_request_correlation(
             Router::new()
                 .route("/v1/me/webauthn/credentials", get(list_credentials))
-                .layer(Extension(passkey_service))
-                .layer(Extension(db.pool)),
+                .with_state(CredentialListTestState {
+                    passkeys: passkey_service,
+                    pool: db.pool,
+                }),
         );
 
         let response = app
@@ -1004,10 +1026,12 @@ mod tests {
                     "/v1/me/webauthn/credentials/{credential_id}",
                     delete(delete_credential),
                 )
-                .layer(Extension(auth_state))
-                .layer(Extension(admission))
-                .layer(Extension(passkey_service))
-                .layer(Extension(db.pool)),
+                .with_state(WebauthnTestState {
+                    auth: auth_state,
+                    admission,
+                    passkeys: passkey_service,
+                    pool: db.pool,
+                }),
         );
 
         let response = app
@@ -1065,10 +1089,12 @@ mod tests {
                     "/v1/me/webauthn/credentials/{credential_id}",
                     delete(delete_credential),
                 )
-                .layer(Extension(auth_state))
-                .layer(Extension(admission))
-                .layer(Extension(passkey_service))
-                .layer(Extension(db.pool)),
+                .with_state(WebauthnTestState {
+                    auth: auth_state,
+                    admission,
+                    passkeys: passkey_service,
+                    pool: db.pool,
+                }),
         );
 
         let response = app

@@ -6,7 +6,7 @@
 
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -45,7 +45,7 @@ use super::{
 pub async fn create_environment(
     Path((org_slug, project_slug)): Path<(String, String)>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<CreateEnvironmentRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -110,7 +110,7 @@ pub async fn create_environment(
 pub async fn list_environments(
     Path((org_slug, project_slug)): Path<(String, String)>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,

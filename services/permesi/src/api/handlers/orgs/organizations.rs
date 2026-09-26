@@ -6,7 +6,7 @@
 
 use axum::{
     Json,
-    extract::{Extension, Path},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -39,7 +39,7 @@ use super::{
 /// The response intentionally omits membership state and roles.
 pub async fn create_org(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<CreateOrgRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
@@ -79,7 +79,7 @@ pub async fn create_org(
 /// Lists organizations the authenticated user is an active member of.
 /// Soft-deleted orgs are excluded, and membership scoping avoids leaking org existence across tenants.
 /// The response uses only public `OrgResponse` fields.
-pub async fn list_orgs(headers: HeaderMap, pool: Extension<PgPool>) -> impl IntoResponse {
+pub async fn list_orgs(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
@@ -111,7 +111,7 @@ pub async fn list_orgs(headers: HeaderMap, pool: Extension<PgPool>) -> impl Into
 pub async fn get_org(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -147,7 +147,7 @@ pub async fn get_org(
 pub async fn patch_org(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
-    pool: Extension<PgPool>,
+    pool: State<PgPool>,
     Json(payload): Json<UpdateOrgRequest>,
 ) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {

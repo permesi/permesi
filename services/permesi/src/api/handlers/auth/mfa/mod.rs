@@ -21,7 +21,7 @@ pub(crate) mod webauthn;
 use anyhow::{Context, Result};
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -195,8 +195,8 @@ fn parse_bool_env(key: &str) -> Option<bool> {
 )]
 pub async fn totp_enroll_start(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    totp_service: Extension<TotpService>,
+    pool: State<PgPool>,
+    totp_service: State<TotpService>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -239,9 +239,9 @@ pub async fn totp_enroll_start(
 )]
 pub async fn totp_enroll_finish(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    totp_service: Extension<TotpService>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    totp_service: State<TotpService>,
     payload: Option<Json<MfaTotpEnrollFinishRequest>>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
@@ -364,9 +364,9 @@ pub async fn totp_enroll_finish(
 )]
 pub async fn totp_verify(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    totp_service: Extension<TotpService>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    totp_service: State<TotpService>,
     payload: Option<Json<MfaTotpVerifyRequest>>,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
@@ -456,8 +456,8 @@ pub async fn totp_verify(
 #[allow(clippy::too_many_lines)]
 pub async fn mfa_recovery(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
     payload: Option<Json<MfaRecoveryRequest>>,
 ) -> impl IntoResponse {
     let principal = match require_mfa_challenge(&headers, &pool).await {

@@ -15,7 +15,7 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
-    Extension, Router,
+    Router,
     http::Method,
     routing::{get, options},
 };
@@ -29,7 +29,6 @@ use tokio::{
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
-use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use utoipa_axum::router::OpenApiRouter;
@@ -38,12 +37,16 @@ use utoipa_axum::router::OpenApiRouter;
 mod admission;
 mod handlers;
 mod openapi;
+mod state;
 
 pub use openapi::openapi;
+pub use state::AppState;
 
 /// Build the API router with all documented routes registered.
+///
+/// The router still needs its [`AppState`]; `new` supplies it with `with_state`.
 #[must_use]
-pub fn router() -> OpenApiRouter {
+pub fn router() -> OpenApiRouter<AppState> {
     openapi::api_router()
 }
 
@@ -80,14 +83,12 @@ pub async fn new(
     let app = router
         .route("/", get(root::root))
         .route("/health", options(health::health))
-        .layer(
-            ServiceBuilder::new()
-                .layer(cors)
-                .layer(Extension(admission.clone()))
-                .layer(Extension(shutdown_tx))
-                .layer(Extension(pool.clone())),
-        )
-        .layer(Extension(pool.clone()));
+        .layer(cors)
+        .with_state(AppState {
+            admission,
+            shutdown: shutdown_tx,
+            pool: pool.clone(),
+        });
     let app = request_id::with_request_correlation(app);
 
     let served = match socket_path {

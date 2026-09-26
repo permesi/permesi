@@ -27,7 +27,7 @@ use crate::webauthn::{
 use axum::{
     Json,
     body::Bytes,
-    extract::Extension,
+    extract::{Extension, State},
     http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
@@ -77,9 +77,9 @@ pub struct PasskeyLoginFinishRequest {
 pub async fn passkey_login_start(
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    passkey_service: Extension<Arc<PasskeyService>>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
+    passkey_service: State<Arc<PasskeyService>>,
     payload: Option<Json<PasskeyLoginStartRequest>>,
 ) -> impl IntoResponse {
     let request_id = request_id.to_string();
@@ -160,10 +160,10 @@ pub async fn passkey_login_start(
 pub async fn passkey_login_finish(
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
-    passkey_service: Extension<Arc<PasskeyService>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
+    passkey_service: State<Arc<PasskeyService>>,
     body: Bytes,
 ) -> impl IntoResponse {
     let request_id = request_id.to_string();

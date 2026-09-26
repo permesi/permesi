@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::Extension,
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -39,9 +39,9 @@ use super::zero_token::{require_zero_token, zero_token_error_response};
 )]
 pub async fn verify_email(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<VerifyEmailRequest>>,
 ) -> impl IntoResponse {
     let request: VerifyEmailRequest = match payload {
@@ -139,9 +139,9 @@ pub async fn verify_email(
 )]
 pub async fn resend_verification(
     headers: HeaderMap,
-    pool: Extension<PgPool>,
-    auth_state: Extension<Arc<AuthState>>,
-    admission: Extension<Arc<AdmissionVerifier>>,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+    admission: State<Arc<AdmissionVerifier>>,
     payload: Option<Json<ResendVerificationRequest>>,
 ) -> impl IntoResponse {
     let request: ResendVerificationRequest = match payload {
@@ -200,7 +200,7 @@ mod tests {
     use admission_token::{PaserkKey, PaserkKeySet};
     use anyhow::Result;
     use axum::Json;
-    use axum::extract::Extension;
+    use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use sqlx::postgres::PgPoolOptions;
@@ -244,9 +244,9 @@ mod tests {
         let pool = PgPoolOptions::new().connect_lazy("postgres://postgres@localhost/postgres")?;
         let response = verify_email(
             HeaderMap::new(),
-            Extension(pool),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(pool),
+            State(auth_state()),
+            State(admission_verifier()?),
             None,
         )
         .await
@@ -260,9 +260,9 @@ mod tests {
         let pool = PgPoolOptions::new().connect_lazy("postgres://postgres@localhost/postgres")?;
         let response = verify_email(
             HeaderMap::new(),
-            Extension(pool),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(pool),
+            State(auth_state()),
+            State(admission_verifier()?),
             Some(Json(VerifyEmailRequest {
                 token: " ".to_string(),
             })),
@@ -278,9 +278,9 @@ mod tests {
         let pool = PgPoolOptions::new().connect_lazy("postgres://postgres@localhost/postgres")?;
         let response = resend_verification(
             HeaderMap::new(),
-            Extension(pool),
-            Extension(auth_state()),
-            Extension(admission_verifier()?),
+            State(pool),
+            State(auth_state()),
+            State(admission_verifier()?),
             None,
         )
         .await

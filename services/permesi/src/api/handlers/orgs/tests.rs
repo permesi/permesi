@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    Extension, Router,
+    Router,
     body::{Body, to_bytes},
     http::{
         Request, StatusCode,
@@ -158,7 +158,8 @@ fn app_router(pool: PgPool) -> Router {
             post(super::applications::create_application)
                 .get(super::applications::list_applications),
         )
-        .layer(Extension(pool))
+        // The org handlers only extract `State<PgPool>`, so the pool itself is the state.
+        .with_state(pool)
 }
 
 #[tokio::test]

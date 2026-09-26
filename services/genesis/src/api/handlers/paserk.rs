@@ -1,6 +1,6 @@
 use crate::api::admission::AdmissionSigner;
 use axum::{
-    extract::Extension,
+    extract::State,
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE},
@@ -18,7 +18,7 @@ use tracing::error;
     ),
     tag= "paserk"
 )]
-pub async fn paserk(Extension(admission): Extension<Arc<AdmissionSigner>>) -> impl IntoResponse {
+pub async fn paserk(State(admission): State<Arc<AdmissionSigner>>) -> impl IntoResponse {
     match admission.paserk_snapshot().await {
         Ok(snapshot) => match snapshot.keyset.to_json_pretty() {
             Ok(keyset_json) => {
