@@ -13,6 +13,8 @@ TL;DR:
 
 When Vault token renewal or the DB lease renewal fails repeatedly, `permesi` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `permesi` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
+On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `permesi` stops accepting connections and lets in-flight requests finish for up to 30 seconds, then stops the email outbox worker at a batch boundary, flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process.
+
 ## CLI example
 
 The `dsn` can omit username/password because Vault injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).

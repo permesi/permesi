@@ -77,6 +77,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 ] }
 temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 tonic = { version = "0.14" }
 tower = "0.5"
 tower-http = { version = "0.7", features = [

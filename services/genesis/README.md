@@ -29,6 +29,8 @@ TL;DR:
 
 When Vault token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
+On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `genesis` stops accepting connections and lets in-flight requests finish for up to 30 seconds, then flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process.
+
 In the workspace “Split-Trust” flow:
 
 1. Client requests admission from `genesis`

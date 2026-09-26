@@ -2,6 +2,11 @@
 //!
 //! This module coordinates the server lifecycle, including database connectivity,
 //! background task management (Vault renewals), and TLS serving.
+//!
+//! The server runs until SIGTERM/SIGINT or a fail-closed `ShutdownSignal` from
+//! the Vault renewers starts a drain bounded by `shutdown::DRAIN_TIMEOUT`. A
+//! platform-requested stop returns `Ok`; a fail-closed stop returns an error so
+//! the supervisor restarts the process with fresh credentials.
 
 use crate::{
     api::handlers::{health, root},
@@ -15,9 +20,14 @@ use axum::{
     http::{HeaderName, HeaderValue, Method, Request},
     routing::{get, options},
 };
+use service_utils::shutdown;
 use sqlx::postgres::PgPoolOptions;
-use std::{os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, mpsc};
+use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Mutex, mpsc},
+    time::sleep,
+};
+use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -108,14 +118,12 @@ pub async fn new(
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
 ///
-/// # Errors
-/// Returns an error if the socket cannot be created, permissions cannot be set,
-/// the server fails to start, or a shutdown signal is received.
-/// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
+/// SIGTERM/SIGINT and fail-closed signals both drain for at most
+/// [`shutdown::DRAIN_TIMEOUT`]; only a fail-closed signal is returned as an error.
 ///
 /// # Errors
 /// Returns an error if the socket cannot be created, permissions cannot be set,
-/// the server fails to start, or a shutdown signal is received.
+/// the server fails, or a fail-closed shutdown signal is received.
 async fn serve_socket(
     app: Router,
     path: String,
@@ -134,20 +142,34 @@ async fn serve_socket(
         .context("Failed to set socket permissions")?;
 
     let shutdown_reason = Arc::new(Mutex::new(None));
-    let shutdown_reason_task = shutdown_reason.clone();
+    let drain_started = CancellationToken::new();
 
     info!("Listening on unix:{}", path.display());
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            if let Some(signal) = shutdown_rx.recv().await {
-                *shutdown_reason_task.lock().await = Some(signal);
-                info!(reason = signal.as_str(), "Gracefully shutdown");
-            }
-        })
-        .await?;
+    let socket_server = axum::serve(listener, app).with_graceful_shutdown({
+        let shutdown_reason = shutdown_reason.clone();
+        let drain_started = drain_started.clone();
+        async move {
+            *shutdown_reason.lock().await = shutdown::requested(&mut shutdown_rx).await;
+            drain_started.cancel();
+        }
+    });
+    // axum waits for every connection to close; bound the drain like the TLS server.
+    let drain_deadline = async {
+        drain_started.cancelled().await;
+        sleep(shutdown::DRAIN_TIMEOUT).await;
+    };
+    let served = tokio::select! {
+        result = socket_server.into_future() => result.context("Unix socket server failed"),
+        () = drain_deadline => {
+            warn!("Graceful drain timed out; closing remaining connections");
+            Ok(())
+        }
+    };
+
     if let Err(err) = tokio::fs::remove_file(&path).await {
         warn!(error = %err, "Failed to remove unix socket on shutdown");
     }
+    served?;
     if let Some(signal) = shutdown_reason.lock().await.take() {
         return Err(anyhow!("Shutdown requested: {}", signal.as_str()));
     }
@@ -160,8 +182,12 @@ async fn serve_socket(
 /// IPv6 and IPv4 traffic. Hosts without usable IPv6 support fall back to an
 /// IPv4 wildcard listener.
 ///
+/// SIGTERM/SIGINT and fail-closed signals both start a graceful drain bounded
+/// by [`shutdown::DRAIN_TIMEOUT`]; only a fail-closed signal is returned as an error.
+///
 /// # Errors
-/// Returns an error if TLS configuration or the server fails to start.
+/// Returns an error if TLS configuration or the server fails to start, or a
+/// fail-closed shutdown signal is received.
 async fn serve_tls(
     app: Router,
     port: u16,
@@ -173,16 +199,13 @@ async fn serve_tls(
     let handle = axum_server::Handle::new();
 
     let shutdown_reason = Arc::new(Mutex::new(None));
-    let shutdown_reason_task = shutdown_reason.clone();
 
     tokio::spawn({
         let handle = handle.clone();
+        let shutdown_reason = shutdown_reason.clone();
         async move {
-            if let Some(signal) = shutdown_rx.recv().await {
-                *shutdown_reason_task.lock().await = Some(signal);
-                info!(reason = signal.as_str(), "Gracefully shutdown");
-                handle.graceful_shutdown(Some(Duration::from_secs(30)));
-            }
+            *shutdown_reason.lock().await = shutdown::requested(&mut shutdown_rx).await;
+            handle.graceful_shutdown(Some(shutdown::DRAIN_TIMEOUT));
         }
     });
 
@@ -234,8 +257,13 @@ mod tests {
     };
     use ulid::Ulid;
 
+    /// Tests that listen for OS signals share the process: a SIGTERM sent by one
+    /// reaches every listener, so they must not overlap.
+    static OS_SIGNAL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn serve_socket_returns_error_on_shutdown_signal() -> Result<()> {
+        let _serial = OS_SIGNAL_TESTS.lock().await;
         let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("genesis.sock");
@@ -254,7 +282,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serve_socket_exits_cleanly_on_sigterm() -> Result<()> {
+        let _serial = OS_SIGNAL_TESTS.lock().await;
+        // Hold a SIGTERM listener so the signal can never use the default action
+        // and kill the test binary, even before the server installs its own.
+        let _guard = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::generate()));
+        fs::create_dir_all(&dir).context("create temp dir failed")?;
+        let socket_path = dir.join("genesis.sock");
+        let socket_path_wait = socket_path.clone();
+
+        let (_tx, rx) = mpsc::unbounded_channel::<ShutdownSignal>();
+        tokio::spawn(async move {
+            let _ = timeout(Duration::from_secs(1), async {
+                while !socket_path_wait.exists() {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            // Let the server poll its shutdown future so its handler is registered.
+            sleep(Duration::from_millis(100)).await;
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &std::process::id().to_string()])
+                .status();
+        });
+
+        let result = timeout(
+            Duration::from_secs(5),
+            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx),
+        )
+        .await
+        .context("server did not stop after SIGTERM")?;
+        assert!(
+            result.is_ok(),
+            "SIGTERM must be a clean shutdown: {result:?}"
+        );
+        assert!(
+            !socket_path.exists(),
+            "expected socket file to be removed on shutdown"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn serve_socket_removes_file_on_shutdown() -> Result<()> {
+        let _serial = OS_SIGNAL_TESTS.lock().await;
         let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("genesis.sock");

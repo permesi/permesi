@@ -25,6 +25,7 @@ use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info, info_span};
 use uuid::Uuid;
 
@@ -175,10 +176,16 @@ impl Default for EmailWorkerConfig {
 }
 
 /// Spawn a background task that polls and processes the email outbox.
+///
+/// `cancel` is checked only between batches, so a batch that has started is
+/// delivered and committed before the task returns. The caller bounds how long
+/// it waits; if it gives up, the open transaction rolls back and the claimed rows
+/// stay pending for the next poll.
 pub fn spawn_outbox_worker(
     pool: PgPool,
     sender: Arc<dyn EmailSender>,
     config: EmailWorkerConfig,
+    cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let config = config.normalize();
@@ -191,8 +198,12 @@ pub fn spawn_outbox_worker(
                 error!("email outbox batch failed: {err}");
             }
 
-            sleep(poll_interval).await;
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = sleep(poll_interval) => {}
+            }
         }
+        info!("email outbox worker stopped");
     })
 }
 
@@ -369,4 +380,39 @@ fn jitter_delay(delay: Duration) -> Duration {
     let half = delay_ms / 2;
     let jitter = rand::rng().random_range(0..=half);
     Duration::from_millis(half + jitter)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EmailWorkerConfig, LogEmailSender, spawn_outbox_worker};
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
+    use std::{sync::Arc, time::Duration};
+    use tokio::time::timeout;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn outbox_worker_stops_when_cancelled() {
+        // An unreachable database makes each batch fail fast; the loop must still
+        // honor cancellation between batches instead of sleeping out its interval.
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(1)
+            .username("invalid")
+            .database("invalid")
+            .ssl_mode(PgSslMode::Disable);
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_lazy_with(options);
+        let config = EmailWorkerConfig::new().with_poll_interval_seconds(3600);
+        let cancel = CancellationToken::new();
+
+        let worker = spawn_outbox_worker(pool, Arc::new(LogEmailSender), config, cancel.clone());
+        cancel.cancel();
+
+        let stopped = timeout(Duration::from_secs(5), worker).await;
+        assert!(
+            matches!(stopped, Ok(Ok(()))),
+            "worker must stop after cancellation"
+        );
+    }
 }

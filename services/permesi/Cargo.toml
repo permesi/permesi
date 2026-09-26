@@ -94,6 +94,7 @@ sqlx = { workspace = true, features = [
 temp-env = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"], optional = true }
 tower = { workspace = true }
 tower-http = { workspace = true, features = [
