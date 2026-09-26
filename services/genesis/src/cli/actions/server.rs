@@ -1,6 +1,7 @@
 use crate::{api, cli::globals::GlobalArgs, vault};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
+use service_utils::database::PoolConfig;
 use tracing::{debug, info};
 use url::Url;
 
@@ -9,6 +10,7 @@ pub struct Args {
     pub port: u16,
     pub socket_path: Option<String>,
     pub dsn: String,
+    pub db_pool: PoolConfig,
     pub vault_url: String,
     pub vault_target: vault::VaultTarget,
     pub vault_role_id: Option<String>,
@@ -75,7 +77,14 @@ pub async fn execute(args: Args) -> Result<()> {
     dsn.set_password(Some(globals.vault_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    api::new(args.port, args.socket_path, dsn.to_string(), &globals).await
+    api::new(
+        args.port,
+        args.socket_path,
+        dsn.to_string(),
+        args.db_pool,
+        &globals,
+    )
+    .await
 }
 
 fn log_startup_args(args: &Args) {
@@ -91,6 +100,7 @@ fn log_startup_args(args: &Args) {
     let entries = [
         ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
+        ("db_pool", args.db_pool.to_string()),
         ("vault_url", args.vault_url.clone()),
         ("vault_mode", mode.to_string()),
         (

@@ -1,6 +1,7 @@
 use crate::{api, cli::globals::GlobalArgs, vault};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
+use service_utils::database::PoolConfig;
 use std::sync::Arc;
 use tracing::{debug, info};
 use url::Url;
@@ -10,6 +11,7 @@ pub struct Args {
     pub port: u16,
     pub socket_path: Option<String>,
     pub dsn: String,
+    pub db_pool: PoolConfig,
     pub vault_url: String,
     pub vault_target: vault_client::VaultTarget,
     pub vault_role_id: Option<String>,
@@ -170,6 +172,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         admin: admin_config,
         email: email_config,
         kv: kv_config,
+        database: args.db_pool,
     }
 }
 
@@ -193,6 +196,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
     let mut entries = vec![
         ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
+        ("db_pool", args.db_pool.to_string()),
         ("vault_url", args.vault_url.clone()),
         ("vault_addr", vault_addr.to_string()),
         ("vault_mode", mode.to_string()),
@@ -380,11 +384,18 @@ fn configure_tls_paths(args: &Args) {
 mod tests {
     use super::*;
 
-    fn default_args() -> Args {
-        Args {
+    fn default_args() -> anyhow::Result<Args> {
+        Ok(Args {
             port: 8080,
             socket_path: None,
             dsn: "postgres://user:pass@localhost:5432/db".to_string(),
+            db_pool: PoolConfig::new(
+                10,
+                2,
+                std::time::Duration::from_secs(3),
+                std::time::Duration::from_mins(10),
+                std::time::Duration::from_mins(30),
+            )?,
             vault_url: "http://localhost:8200".to_string(),
             vault_target: vault_client::VaultTarget::Tcp {
                 base_url: "http://localhost:8200".to_string(),
@@ -418,12 +429,12 @@ mod tests {
             vault_kv_mount: "kv".to_string(),
             vault_kv_path: "config".to_string(),
             vault_transit_mount: "transit/permesi".to_string(),
-        }
+        })
     }
 
     #[test]
-    fn test_socket_mode_sets_tls_paths() {
-        let mut args = default_args();
+    fn test_socket_mode_sets_tls_paths() -> anyhow::Result<()> {
+        let mut args = default_args()?;
         // Socket mode simulation: No bundle, but CA path present
         args.tls_pem_bundle = None;
         args.admission_paserk_ca_path = Some("/tmp/ca.pem".to_string());
@@ -443,11 +454,12 @@ mod tests {
             // Check if the extra CA path matches what we set
             assert_eq!(p.extra_ca_path(), Some(std::path::Path::new("/tmp/ca.pem")));
         }
+        Ok(())
     }
 
     #[test]
-    fn test_tls_mode_sets_tls_paths() {
-        let mut args = default_args();
+    fn test_tls_mode_sets_tls_paths() -> anyhow::Result<()> {
+        let mut args = default_args()?;
         args.tls_pem_bundle = Some("/tmp/bundle.pem".to_string());
         args.admission_paserk_ca_path = Some("/tmp/ca.pem".to_string());
 
@@ -455,5 +467,6 @@ mod tests {
 
         let paths = crate::tls::runtime_paths();
         assert!(paths.is_ok(), "TLS paths should be configured in TLS mode");
+        Ok(())
     }
 }

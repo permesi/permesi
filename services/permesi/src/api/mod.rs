@@ -11,7 +11,8 @@
 //! 3) Serve until SIGTERM/SIGINT or a fail-closed signal starts a drain bounded
 //!    by `shutdown::DRAIN_TIMEOUT`.
 //! 4) Stop the email worker at a batch boundary before returning, so a batch
-//!    that is being delivered is committed rather than cut off.
+//!    that is being delivered is committed rather than cut off, then close the
+//!    PostgreSQL pool so the database sees clean disconnects.
 //!
 //! A platform-requested stop returns `Ok` (clean exit); a fail-closed stop
 //! returns an error so the supervisor restarts the process with fresh Vault
@@ -34,8 +35,10 @@ use axum::{
     },
     routing::{get, options},
 };
-use service_utils::{request_id, shutdown};
-use sqlx::postgres::PgPoolOptions;
+use service_utils::{
+    database::{self, PoolConfig},
+    request_id, shutdown,
+};
 use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, mpsc},
@@ -82,6 +85,8 @@ pub struct AppConfig {
     pub email: email::EmailWorkerConfig,
     /// Vault KV module configuration.
     pub kv: VaultKvConfig,
+    /// PostgreSQL pool shape shared by handlers and the email outbox worker.
+    pub database: PoolConfig,
 }
 
 /// Start the server
@@ -100,15 +105,10 @@ pub async fn new(
 
     vault::renew::try_renew(globals, shutdown_tx.clone()).await?;
 
-    // Connect to database
-    let pool = PgPoolOptions::new()
-        .min_connections(1)
-        .max_connections(5)
-        .max_lifetime(Duration::from_mins(2))
-        .test_before_acquire(true)
-        .connect(&dsn)
-        .await
-        .context("Failed to connect to database")?;
+    let pool = config
+        .database
+        .connect(&dsn, env!("CARGO_PKG_NAME"))
+        .await?;
 
     let secrets = vault::kv::read_config_secrets(globals, &config.kv.mount, &config.kv.path)
         .await
@@ -190,7 +190,7 @@ pub async fn new(
     // delivers/logs them, and retries failures with exponential backoff.
     let workers = CancellationToken::new();
     let email_worker = email::spawn_outbox_worker(
-        pool,
+        pool.clone(),
         Arc::new(email::LogEmailSender),
         config.email,
         workers.child_token(),
@@ -203,6 +203,7 @@ pub async fn new(
 
     workers.cancel();
     stop_worker("email outbox", email_worker).await;
+    database::close(&pool).await;
 
     served
 }

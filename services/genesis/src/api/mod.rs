@@ -19,9 +19,11 @@ use axum::{
     http::Method,
     routing::{get, options},
 };
-use service_utils::{request_id, shutdown};
-use sqlx::postgres::PgPoolOptions;
-use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
+use service_utils::{
+    database::{self, PoolConfig},
+    request_id, shutdown,
+};
+use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc};
 use tokio::{
     sync::{Mutex, mpsc},
     time::sleep,
@@ -54,6 +56,7 @@ pub async fn new(
     port: u16,
     socket_path: Option<String>,
     dsn: String,
+    pool_config: PoolConfig,
     globals: &GlobalArgs,
 ) -> Result<()> {
     // Renew vault token, gracefully shutdown if failed
@@ -61,15 +64,7 @@ pub async fn new(
 
     vault::renew::try_renew(globals, shutdown_tx.clone()).await?;
 
-    // Connect to database
-    let pool = PgPoolOptions::new()
-        .min_connections(1)
-        .max_connections(5)
-        .max_lifetime(Duration::from_mins(2))
-        .test_before_acquire(true)
-        .connect(&dsn)
-        .await
-        .context("Failed to connect to database")?;
+    let pool = pool_config.connect(&dsn, env!("CARGO_PKG_NAME")).await?;
 
     let admission = Arc::new(admission::AdmissionSigner::new(globals).await?);
 
@@ -92,16 +87,16 @@ pub async fn new(
                 .layer(Extension(shutdown_tx))
                 .layer(Extension(pool.clone())),
         )
-        .layer(Extension(pool));
+        .layer(Extension(pool.clone()));
     let app = request_id::with_request_correlation(app);
 
-    if let Some(path) = socket_path {
-        serve_socket(app, path, rx).await?;
-    } else {
-        serve_tls(app, port, rx).await?;
-    }
+    let served = match socket_path {
+        Some(path) => serve_socket(app, path, rx).await,
+        None => serve_tls(app, port, rx).await,
+    };
+    database::close(&pool).await;
 
-    Ok(())
+    served
 }
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.

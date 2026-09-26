@@ -1,3 +1,4 @@
+pub mod database;
 mod logging;
 mod tls;
 mod vault;
@@ -77,6 +78,7 @@ pub fn new() -> Command {
 
     let command = vault::with_args(command);
     let command = tls::with_args(command);
+    let command = database::with_args(command);
     logging::with_args(command)
 }
 

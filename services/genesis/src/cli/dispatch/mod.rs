@@ -50,10 +50,13 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let tls_pem_bundle = matches.get_one::<String>("tls-pem-bundle").cloned();
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
+    let db_pool = crate::cli::commands::database::parse(matches)?;
+
     Ok(Action::Server(Args {
         port,
         socket_path,
         dsn,
+        db_pool,
         vault_url,
         vault_target,
         vault_role_id,

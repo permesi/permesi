@@ -1,5 +1,6 @@
 pub mod admission;
 pub mod auth;
+pub mod database;
 pub mod logging;
 pub mod tls;
 pub mod vault;
@@ -89,6 +90,7 @@ pub fn new() -> Command {
     let command = tls::with_args(command);
     let command = vault::with_args(command);
     let command = auth::with_args(command);
+    let command = database::with_args(command);
     logging::with_args(command)
 }
 

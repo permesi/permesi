@@ -1,3 +1,4 @@
+pub mod database;
 pub mod globals;
 pub mod request_id;
 pub mod shutdown;

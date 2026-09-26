@@ -45,7 +45,7 @@ struct TestTlsPaths {
 }
 
 struct TestContext {
-    _postgres: PostgresContainer,
+    postgres: PostgresContainer,
     vault: VaultContainer,
     tls: TestTlsPaths,
     port: u16,
@@ -72,7 +72,7 @@ impl TestContext {
         );
 
         Ok(Self {
-            _postgres: postgres,
+            postgres,
             vault,
             tls,
             port: pick_port()?,
@@ -329,7 +329,7 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
     command.env_remove("PERMESI_VAULT_SECRET_ID");
     command.env_remove("PERMESI_VAULT_WRAPPED_TOKEN");
 
-    let _child = ChildGuard(
+    let mut child = ChildGuard(
         command
             .args([
                 "--port",
@@ -370,6 +370,39 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
 
     let resp = client.get(format!("{base}/health")).send().await?;
     assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. Pool connections are labelled for pg_stat_activity.
+    let mut admin = PgConnection::connect(&ctx.postgres.admin_dsn_for_db("permesi")).await?;
+    let labelled: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'permesi'",
+    )
+    .fetch_one(&mut admin)
+    .await?;
+    assert!(
+        labelled >= 1,
+        "expected pooled connections labelled 'permesi'"
+    );
+
+    // 5. SIGTERM drains and exits cleanly (status 0), unlike a fail-closed stop.
+    let pid = child.0.id().to_string();
+    let status = std::process::Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()?;
+    assert!(status.success(), "failed to send SIGTERM");
+    let exit = tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            if let Some(exit) = child.0.try_wait()? {
+                return Ok::<_, std::io::Error>(exit);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .context("permesi did not exit after SIGTERM")??;
+    assert!(
+        exit.success(),
+        "SIGTERM must be a clean shutdown, got {exit}"
+    );
 
     Ok(())
 }

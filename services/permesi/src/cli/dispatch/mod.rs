@@ -4,7 +4,7 @@
 //! action, such as starting the API server with its full configuration state.
 
 use crate::cli::actions::{Action, server::Args};
-use crate::cli::commands::{admission, auth, tls, vault};
+use crate::cli::commands::{admission, auth, database, tls, vault};
 use anyhow::{Context, Result, anyhow};
 
 /// Normalize a Vault mount path received from CLI/env.
@@ -80,10 +80,13 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let tls_opts = tls::Options::parse(matches)?;
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
+    let db_pool = database::parse(matches)?;
+
     Ok(Action::Server(Args {
         port,
         socket_path,
         dsn,
+        db_pool,
         vault_url: vault_opts.url,
         vault_target,
         vault_role_id: vault_opts.role_id,

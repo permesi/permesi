@@ -322,6 +322,16 @@ Maintenance:
 - `--email-outbox-backoff-base-seconds` / `PERMESI_EMAIL_OUTBOX_BACKOFF_BASE_SECONDS` (default `5`)
 - `--email-outbox-backoff-max-seconds` / `PERMESI_EMAIL_OUTBOX_BACKOFF_MAX_SECONDS` (default `300`)
 
+### Database pool flags
+
+- `--db-max-connections` / `PERMESI_DB_MAX_CONNECTIONS` (default `10`, range 1-200)
+- `--db-min-connections` / `PERMESI_DB_MIN_CONNECTIONS` (default `2`, must not exceed the maximum)
+- `--db-acquire-timeout-ms` / `PERMESI_DB_ACQUIRE_TIMEOUT_MS` (default `3000`, range 100-30000)
+- `--db-idle-timeout-seconds` / `PERMESI_DB_IDLE_TIMEOUT_SECONDS` (default `600`, at least 10 and below the lifetime)
+- `--db-max-lifetime-seconds` / `PERMESI_DB_MAX_LIFETIME_SECONDS` (default `1800`, range 60-86400)
+
+The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`permesi`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the Vault-issued username and password are fixed for the life of the process, and a new database lease means a restart.
+
 ## Admission Token Verification
 
 - `permesi` verifies Admission Tokens offline using the PASERK keyset (file/string/URL).
