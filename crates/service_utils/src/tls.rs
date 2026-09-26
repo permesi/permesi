@@ -535,6 +535,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::unwrap_used)]
     async fn test_bundle_extraction_details() {
+        // The workspace enables both rustls providers (reqwest: aws-lc-rs, sqlx: ring),
+        // so a test that builds a server config must choose one explicitly.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let dir = std::env::temp_dir().join(format!("utils-tls-bundle-details-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let bundle_path = dir.join("full_bundle.pem");
