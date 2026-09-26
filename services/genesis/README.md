@@ -53,6 +53,8 @@ Implemented routes (see `services/genesis/src/genesis/mod.rs`):
 | `OPTIONS` | `/health` | Health preflight |
 | `GET` | `/headers` | Debug: echoes request headers |
 
+Every response carries an `x-request-id` header holding a ULID issued by the server for that request. The same ID is recorded on the request's `http.request` trace span, so a failing response can be matched to its log lines. A client-supplied `x-request-id` is never adopted as the correlation ID; it is only logged as `client_request_id`, and only when it is at most 128 visible ASCII characters.
+
 Note: there is no public token introspection endpoint. `jti` + metadata are persisted for audit
 and potential future revocation tooling.
 The `/token` response includes `Cache-Control: no-store` to discourage intermediaries from caching

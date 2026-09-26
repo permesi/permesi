@@ -28,15 +28,13 @@ use crate::{
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Extension, Router,
-    body::Body,
-    extract::MatchedPath,
     http::{
-        HeaderName, HeaderValue, Method, Request,
+        HeaderName, Method,
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
     routing::{get, options},
 };
-use service_utils::shutdown;
+use service_utils::{request_id, shutdown};
 use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
 use tokio::{
@@ -46,14 +44,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
-use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
-    request_id::PropagateRequestIdLayer,
-    set_header::SetRequestHeaderLayer,
-    trace::TraceLayer,
-};
-use tracing::{Span, debug, info, info_span, warn};
-use ulid::Ulid;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use tracing::{debug, info, warn};
 use url::Url;
 use utoipa_axum::router::OpenApiRouter;
 // Keep these internal to the crate while allowing CLI/server wiring to reference them.
@@ -266,20 +258,14 @@ fn build_router(
 
     // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
+    // Request correlation wraps everything last, so every response (CORS preflights included)
+    // carries the server-issued `x-request-id`.
     let (router, _openapi) = router().split_for_parts();
     let app = router
         .route("/", get(root::root))
         .route("/health", options(health::health))
         .layer(
             ServiceBuilder::new()
-                .layer(SetRequestHeaderLayer::if_not_present(
-                    HeaderName::from_static("x-request-id"),
-                    |_req: &_| HeaderValue::from_str(Ulid::generate().to_string().as_str()).ok(),
-                ))
-                .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
-                    "x-request-id",
-                )))
-                .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
                 .layer(Extension(auth_state))
                 .layer(Extension(admin_state))
@@ -292,7 +278,7 @@ fn build_router(
                 .layer(Extension(Arc::new(passkey_service))),
         )
         .layer(Extension(pool));
-    Ok(app)
+    Ok(request_id::with_request_correlation(app))
 }
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
@@ -406,25 +392,6 @@ async fn serve_tls(
     }
 
     Ok(())
-}
-
-fn make_span(request: &Request<Body>) -> Span {
-    let request_id = request
-        .headers()
-        .get("x-request-id")
-        .and_then(|val| val.to_str().ok())
-        .unwrap_or("none");
-    let matched_path = request
-        .extensions()
-        .get::<MatchedPath>()
-        .map_or_else(|| request.uri().path(), MatchedPath::as_str);
-
-    info_span!(
-        "http.request",
-        http.method = %request.method(),
-        http.route = matched_path,
-        request_id
-    )
 }
 
 fn frontend_origins(urls: &[String]) -> Result<Vec<String>> {

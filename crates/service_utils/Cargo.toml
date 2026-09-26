@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 vault_client = { workspace = true }
 anyhow = { workspace = true }
+axum = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
@@ -21,8 +22,11 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json.workspace = true
 http.workspace = true
+tower-http = { workspace = true }
+ulid = { workspace = true }
 
 [dev-dependencies]
+tower = { workspace = true }
 serde_json = { workspace = true }
 wiremock = "0.6"
 rcgen = { workspace = true }

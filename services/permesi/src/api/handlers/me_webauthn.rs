@@ -13,6 +13,7 @@ use axum::{
 };
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use service_utils::request_id::RequestId;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -97,6 +98,7 @@ pub struct PasskeyCredentialListResponse {
 /// current session and validates the request Origin before issuing options.
 pub async fn register_options(
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     pool: Extension<PgPool>,
     auth_state: Extension<Arc<AuthState>>,
     admission: Extension<Arc<AdmissionVerifier>>,
@@ -107,7 +109,7 @@ pub async fn register_options(
         Err(status) => return status.into_response(),
     };
 
-    let request_id = request_id(&headers);
+    let request_id = request_id.to_string();
     info!(
         user_id = %principal.user_id,
         request_id = %request_id,
@@ -206,6 +208,7 @@ pub async fn register_options(
 /// challenge and never persists credentials while preview mode is enabled.
 pub async fn register_finish(
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     pool: Extension<PgPool>,
     auth_state: Extension<Arc<AuthState>>,
     admission: Extension<Arc<AdmissionVerifier>>,
@@ -214,6 +217,7 @@ pub async fn register_finish(
 ) -> impl IntoResponse {
     let context = match load_register_finish_context(
         &headers,
+        request_id,
         &pool,
         &auth_state,
         &admission,
@@ -315,6 +319,7 @@ pub async fn register_finish(
 /// Returns an empty list in preview mode; requires a full session.
 pub async fn list_credentials(
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     pool: Extension<PgPool>,
     passkey_service: Extension<Arc<PasskeyService>>,
 ) -> impl IntoResponse {
@@ -323,7 +328,7 @@ pub async fn list_credentials(
         Err(status) => return status.into_response(),
     };
 
-    let request_id = request_id(&headers);
+    let request_id = request_id.to_string();
     info!(
         user_id = %principal.user_id,
         request_id = %request_id,
@@ -393,6 +398,7 @@ pub async fn list_credentials(
 pub async fn delete_credential(
     Path(credential_id_b64): Path<String>,
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     pool: Extension<PgPool>,
     admission: Extension<Arc<AdmissionVerifier>>,
     passkey_service: Extension<Arc<PasskeyService>>,
@@ -402,7 +408,7 @@ pub async fn delete_credential(
         Err(status) => return status.into_response(),
     };
 
-    let request_id = request_id(&headers);
+    let request_id = request_id.to_string();
     info!(
         user_id = %principal.user_id,
         request_id = %request_id,
@@ -484,6 +490,7 @@ fn extract_origin(
 
 async fn load_register_finish_context(
     headers: &HeaderMap,
+    request_id: RequestId,
     pool: &PgPool,
     auth_state: &AuthState,
     admission: &AdmissionVerifier,
@@ -495,7 +502,7 @@ async fn load_register_finish_context(
         Err(status) => return Err(Box::new(status.into_response())),
     };
 
-    let request_id = request_id(headers);
+    let request_id = request_id.to_string();
     info!(
         user_id = %principal.user_id,
         request_id = %request_id,
@@ -696,16 +703,6 @@ async fn enforce_rate_limits(
     Ok(())
 }
 
-fn request_id(headers: &HeaderMap) -> String {
-    headers
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
 async fn fetch_display_name(pool: &PgPool, user_id: Uuid) -> Result<Option<String>, sqlx::Error> {
     let row = sqlx::query("SELECT display_name FROM users WHERE id = $1")
         .bind(user_id)
@@ -730,6 +727,7 @@ mod tests {
     };
     use chrono::Utc;
     use ed25519_dalek::Signer;
+    use service_utils::request_id::with_request_correlation;
     use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
     use test_support::{postgres::PostgresContainer, runtime};
     use tokio::time::Duration;
@@ -877,12 +875,14 @@ mod tests {
 
         let (admission, zero_token) = build_admission()?;
 
-        let app = Router::new()
-            .route("/v1/me/webauthn/register/options", post(register_options))
-            .layer(Extension(auth_state))
-            .layer(Extension(admission))
-            .layer(Extension(passkey_service))
-            .layer(Extension(db.pool));
+        let app = with_request_correlation(
+            Router::new()
+                .route("/v1/me/webauthn/register/options", post(register_options))
+                .layer(Extension(auth_state))
+                .layer(Extension(admission))
+                .layer(Extension(passkey_service))
+                .layer(Extension(db.pool)),
+        );
 
         let response = app
             .oneshot(
@@ -929,10 +929,12 @@ mod tests {
         )?;
         let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
 
-        let app = Router::new()
-            .route("/v1/me/webauthn/credentials", get(list_credentials))
-            .layer(Extension(passkey_service))
-            .layer(Extension(db.pool));
+        let app = with_request_correlation(
+            Router::new()
+                .route("/v1/me/webauthn/credentials", get(list_credentials))
+                .layer(Extension(passkey_service))
+                .layer(Extension(db.pool)),
+        );
 
         let response = app
             .oneshot(
@@ -996,15 +998,17 @@ mod tests {
         let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
         let (admission, _zero_token) = build_admission()?;
 
-        let app = Router::new()
-            .route(
-                "/v1/me/webauthn/credentials/{credential_id}",
-                delete(delete_credential),
-            )
-            .layer(Extension(auth_state))
-            .layer(Extension(admission))
-            .layer(Extension(passkey_service))
-            .layer(Extension(db.pool));
+        let app = with_request_correlation(
+            Router::new()
+                .route(
+                    "/v1/me/webauthn/credentials/{credential_id}",
+                    delete(delete_credential),
+                )
+                .layer(Extension(auth_state))
+                .layer(Extension(admission))
+                .layer(Extension(passkey_service))
+                .layer(Extension(db.pool)),
+        );
 
         let response = app
             .oneshot(
@@ -1055,15 +1059,17 @@ mod tests {
         let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
         let (admission, zero_token) = build_admission()?;
 
-        let app = Router::new()
-            .route(
-                "/v1/me/webauthn/credentials/{credential_id}",
-                delete(delete_credential),
-            )
-            .layer(Extension(auth_state))
-            .layer(Extension(admission))
-            .layer(Extension(passkey_service))
-            .layer(Extension(db.pool));
+        let app = with_request_correlation(
+            Router::new()
+                .route(
+                    "/v1/me/webauthn/credentials/{credential_id}",
+                    delete(delete_credential),
+                )
+                .layer(Extension(auth_state))
+                .layer(Extension(admission))
+                .layer(Extension(passkey_service))
+                .layer(Extension(db.pool)),
+        );
 
         let response = app
             .oneshot(

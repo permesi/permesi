@@ -16,11 +16,10 @@ use crate::{
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Extension, Router,
-    body::Body,
-    http::{HeaderName, HeaderValue, Method, Request},
+    http::Method,
     routing::{get, options},
 };
-use service_utils::shutdown;
+use service_utils::{request_id, shutdown};
 use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
 use tokio::{
@@ -29,14 +28,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    request_id::PropagateRequestIdLayer,
-    set_header::SetRequestHeaderLayer,
-    trace::TraceLayer,
-};
-use tracing::{Span, debug_span, info, warn};
-use ulid::Ulid;
+use tower_http::cors::{Any, CorsLayer};
+use tracing::{info, warn};
 use utoipa_axum::router::OpenApiRouter;
 
 // OpenAPI router wiring and route registration live in openapi.rs.
@@ -86,26 +79,21 @@ pub async fn new(
         // allow requests from any origin
         .allow_origin(Any);
 
+    // Register every route before layering so `/` and `OPTIONS /health` get the same
+    // CORS, state, and correlation layers as the documented routes.
     let (router, _openapi) = router().split_for_parts();
     let app = router
+        .route("/", get(root::root))
+        .route("/health", options(health::health))
         .layer(
             ServiceBuilder::new()
-                .layer(SetRequestHeaderLayer::if_not_present(
-                    HeaderName::from_static("x-request-id"),
-                    |_req: &_| HeaderValue::from_str(Ulid::generate().to_string().as_str()).ok(),
-                ))
-                .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
-                    "x-request-id",
-                )))
-                .layer(TraceLayer::new_for_http().make_span_with(make_span))
                 .layer(cors)
                 .layer(Extension(admission.clone()))
                 .layer(Extension(shutdown_tx))
                 .layer(Extension(pool.clone())),
         )
-        .route("/", get(root::root))
-        .route("/health", options(health::health))
         .layer(Extension(pool));
+    let app = request_id::with_request_correlation(app);
 
     if let Some(path) = socket_path {
         serve_socket(app, path, rx).await?;
@@ -227,21 +215,6 @@ async fn serve_tls(
     }
 
     Ok(())
-}
-
-/// Build a request tracing span without recording request headers.
-///
-/// This avoids leaking secret-bearing headers (for example authorization cookies
-/// or tokens) into logs and tracing backends.
-fn make_span(request: &Request<Body>) -> Span {
-    let path = request.uri().path();
-    let request_id = request
-        .headers()
-        .get("x-request-id")
-        .and_then(|val| val.to_str().ok())
-        .unwrap_or("none");
-
-    debug_span!("http-request", path, request_id)
 }
 
 #[cfg(test)]

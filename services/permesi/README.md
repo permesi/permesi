@@ -93,6 +93,8 @@ the OPAQUE registration record (`opaque_registration_record`).
 let (router, openapi) = permesi::api::router().split_for_parts();
 ```
 
+Every response carries an `x-request-id` header holding a ULID issued by the server for that request. The same ID is recorded on the request's `http.request` trace span, so a failing response can be matched to its log lines. A client-supplied `x-request-id` is never adopted as the correlation ID; it is only logged as `client_request_id`, and only when it is at most 128 visible ASCII characters.
+
 Endpoints:
 
 - `GET /live`

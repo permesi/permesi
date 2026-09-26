@@ -32,6 +32,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use service_utils::request_id::RequestId;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -75,12 +76,13 @@ pub struct PasskeyLoginFinishRequest {
 /// Start passkey login by issuing an authentication challenge.
 pub async fn passkey_login_start(
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     auth_state: Extension<Arc<AuthState>>,
     admission: Extension<Arc<AdmissionVerifier>>,
     passkey_service: Extension<Arc<PasskeyService>>,
     payload: Option<Json<PasskeyLoginStartRequest>>,
 ) -> impl IntoResponse {
-    let request_id = request_id(&headers);
+    let request_id = request_id.to_string();
     let Some(Json(_request)) = payload else {
         return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response();
     };
@@ -157,13 +159,14 @@ pub async fn passkey_login_start(
 /// Finish passkey login and issue a session cookie.
 pub async fn passkey_login_finish(
     headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
     pool: Extension<PgPool>,
     auth_state: Extension<Arc<AuthState>>,
     admission: Extension<Arc<AdmissionVerifier>>,
     passkey_service: Extension<Arc<PasskeyService>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    let request_id = request_id(&headers);
+    let request_id = request_id.to_string();
     let request = match parse_passkey_finish(&body) {
         Ok(parsed) => parsed,
         Err(response) => return *response,
@@ -632,12 +635,4 @@ fn extract_origin(
     passkey_service
         .match_origin(origin)
         .ok_or_else(|| Box::new((StatusCode::BAD_REQUEST, "Origin not allowed").into_response()))
-}
-
-fn request_id(headers: &HeaderMap) -> String {
-    headers
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string()
 }
