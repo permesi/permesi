@@ -54,13 +54,8 @@ async fn test_tls_lifecycle_with_bundle() {
         2,
         "Expected 2 certs extracted from bundle (Leaf + CA)"
     );
-    println!(
-        "✅ Verified: load_reqwest_ca successfully extracted {} certs from bundle",
-        cas.len()
-    );
 
     // 7. Test atomic reload: Simulate Vault Agent updating the file
-    println!("Simulating certificate rotation...");
     let new_leaf_key = KeyPair::generate().expect("Failed to generate new leaf key");
     let new_leaf_cert = CertificateParams::new(vec!["localhost".to_string()])
         .unwrap()
@@ -87,11 +82,8 @@ async fn test_tls_lifecycle_with_bundle() {
     // Let's verify the file update.
     sleep(Duration::from_millis(500)).await; // Small delay
     fs::write(&bundle_path, new_bundle_content).expect("Failed to update bundle");
-    println!("Bundle updated on disk.");
 
     // We can't easily check the private state of the DynamicCertResolver without reflection,
     // but the unit test `test_tls_watcher_reloads` in tls.rs already verified the logic.
     // Here we focus on the integration of all components.
-
-    println!("✅ Verified: Full TLS lifecycle with single PEM bundle is operational.");
 }

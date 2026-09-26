@@ -21,6 +21,7 @@ use test_support::{
     runtime,
     vault::{DatabaseConfig, VaultContainer},
 };
+use uuid::Uuid;
 
 const GENESIS_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -45,7 +46,10 @@ async fn vault_runtime_roles_survive_revocation() -> Result<()> {
     let network = TestNetwork::new("vault-db-runtime");
     let postgres = PostgresContainer::start(network.name()).await?;
     postgres.wait_until_ready().await?;
-    bootstrap_database(&postgres).await?;
+    // Per-run passwords for Vault's root connection roles; never fixed literals.
+    let permesi_root_password = Uuid::new_v4().simple().to_string();
+    let genesis_root_password = Uuid::new_v4().simple().to_string();
+    bootstrap_database(&postgres, &permesi_root_password, &genesis_root_password).await?;
 
     let vault = VaultContainer::start(network.name()).await?;
     vault.enable_secrets_engine("database", "database").await?;
@@ -53,7 +57,7 @@ async fn vault_runtime_roles_survive_revocation() -> Result<()> {
     let permesi_config = DatabaseConfig::new(
         postgres.vault_connection_url_for_db("permesi"),
         "vault_permesi",
-        "vault_permesi",
+        permesi_root_password.as_str(),
         vec!["permesi".to_string()],
     );
     vault
@@ -63,7 +67,7 @@ async fn vault_runtime_roles_survive_revocation() -> Result<()> {
     let genesis_config = DatabaseConfig::new(
         postgres.vault_connection_url_for_db("genesis"),
         "vault_genesis",
-        "vault_genesis",
+        genesis_root_password.as_str(),
         vec!["genesis".to_string()],
     );
     vault
@@ -245,13 +249,17 @@ async fn verify_genesis_runtime(
     Ok(())
 }
 
-async fn bootstrap_database(postgres: &PostgresContainer) -> Result<()> {
+async fn bootstrap_database(
+    postgres: &PostgresContainer,
+    permesi_password: &str,
+    genesis_password: &str,
+) -> Result<()> {
     let mut admin = PgConnection::connect(&postgres.admin_dsn())
         .await
         .context("Failed to connect to Postgres admin DB")?;
 
-    create_role_if_missing(&mut admin, "vault_permesi", "vault_permesi").await?;
-    create_role_if_missing(&mut admin, "vault_genesis", "vault_genesis").await?;
+    create_role_if_missing(&mut admin, "vault_permesi", permesi_password).await?;
+    create_role_if_missing(&mut admin, "vault_genesis", genesis_password).await?;
 
     sqlx::query("GRANT pg_signal_backend TO vault_permesi")
         .execute(&mut admin)

@@ -259,12 +259,13 @@ mod tests {
 
     #[test]
     fn postgres_config_overrides_fields() {
+        let password = uuid::Uuid::new_v4().to_string();
         let config = PostgresConfig::new()
             .with_user("app")
-            .with_password("secret")
+            .with_password(password.as_str())
             .with_db_name("appdb");
         assert_eq!(config.user, "app");
-        assert_eq!(config.password, "secret");
+        assert_eq!(config.password, password);
         assert_eq!(config.db_name, "appdb");
     }
 }

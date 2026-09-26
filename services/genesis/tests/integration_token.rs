@@ -61,8 +61,20 @@ struct ClaimsExpectations {
 
 struct ChildGuard(Child);
 
+/// HTTPS client that trusts only the test's self-signed certificate and resolves
+/// `host` to loopback, so hostname and chain verification stay enabled.
+fn test_https_client(ca_path: &str, host: &str, port: u16) -> Result<reqwest::Client> {
+    let ca = reqwest::Certificate::from_pem(&fs::read(ca_path).context("Failed to read test CA")?)
+        .context("Failed to parse test CA")?;
+    reqwest::Client::builder()
+        .tls_certs_only([ca])
+        .resolve(host, SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+        .build()
+        .context("Failed to build HTTPS client")
+}
+
 struct TestTlsPaths {
-    _ca: String,
+    ca: String,
     bundle: String,
 }
 
@@ -224,7 +236,7 @@ fn prepare_tls_assets() -> Result<Option<TestTlsPaths>> {
     }
 
     Ok(Some(TestTlsPaths {
-        _ca: ca_path.display().to_string(),
+        ca: ca_path.display().to_string(),
         bundle: bundle_path.display().to_string(),
     }))
 }
@@ -340,14 +352,7 @@ async fn token_endpoint_mints_and_persists() -> Result<()> {
 
     let _child = spawn_genesis(config, &context.tls)?;
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .resolve(
-            "genesis.permesi.localhost",
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.port),
-        )
-        .build()
-        .context("Failed to build HTTPS client")?;
+    let client = test_https_client(&context.tls.ca, "genesis.permesi.localhost", config.port)?;
     wait_for_ready(&client, &base).await?;
 
     let token = request_token(&client, &base, &config.client_id).await?;
@@ -427,14 +432,7 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
             .context("Failed to spawn genesis binary")?,
     );
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .resolve(
-            "genesis.permesi.localhost",
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.port),
-        )
-        .build()
-        .context("Failed to build HTTPS client")?;
+    let client = test_https_client(&context.tls.ca, "genesis.permesi.localhost", config.port)?;
     wait_for_ready(&client, &base).await?;
     wait_for_healthy(&client, &base).await?;
 

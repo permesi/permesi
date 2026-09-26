@@ -88,10 +88,15 @@ fn construct_aad(tenant_id: Option<Uuid>, user_id: Uuid, credential_id: Uuid) ->
 mod tests {
     use super::*;
 
+    /// A fresh random DEK per test, as production DEKs are Vault-generated keys.
+    fn random_dek() -> [u8; 32] {
+        rand::random()
+    }
+
     #[test]
     #[allow(clippy::unwrap_used)]
     fn test_encrypt_decrypt_roundtrip() {
-        let dek = [42u8; 32];
+        let dek = random_dek();
         let seed = b"my-secret-seed-123";
         let user_id = Uuid::new_v4();
         let credential_id = Uuid::new_v4();
@@ -107,7 +112,7 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn test_decrypt_fails_wrong_aad() {
-        let dek = [42u8; 32];
+        let dek = random_dek();
         let seed = b"secret";
         let user_id = Uuid::new_v4();
         let credential_id = Uuid::new_v4();
@@ -122,7 +127,7 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
     fn test_decrypt_fails_tampered_ciphertext() {
-        let dek = [42u8; 32];
+        let dek = random_dek();
         let seed = b"secret";
         let user_id = Uuid::new_v4();
         let credential_id = Uuid::new_v4();

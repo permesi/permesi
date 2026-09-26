@@ -39,8 +39,20 @@ impl Drop for ChildGuard {
     }
 }
 
+/// HTTPS client that trusts only the test's self-signed certificate and resolves
+/// `host` to loopback, so hostname and chain verification stay enabled.
+fn test_https_client(ca_path: &str, host: &str, port: u16) -> Result<reqwest::Client> {
+    let ca = reqwest::Certificate::from_pem(&fs::read(ca_path).context("Failed to read test CA")?)
+        .context("Failed to parse test CA")?;
+    reqwest::Client::builder()
+        .tls_certs_only([ca])
+        .resolve(host, SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+        .build()
+        .context("Failed to build HTTPS client")
+}
+
 struct TestTlsPaths {
-    _ca: String,
+    ca: String,
     bundle: String,
 }
 
@@ -62,10 +74,12 @@ impl TestContext {
         // 1. Setup Postgres
         let postgres = PostgresContainer::start(network.name()).await?;
         postgres.wait_until_ready().await?;
-        setup_permesi_database(&postgres).await?;
+        // Per-run password for Vault's root connection role; never a fixed literal.
+        let vault_db_password = Uuid::new_v4().simple().to_string();
+        setup_permesi_database(&postgres, &vault_db_password).await?;
 
         let (vault, vault_url, role_id, secret_id) =
-            setup_permesi_vault(network.name(), &postgres).await?;
+            setup_permesi_vault(network.name(), &postgres, &vault_db_password).await?;
         let dsn = format!(
             "postgres://127.0.0.1:{}/permesi?sslmode=disable",
             postgres.host_port()
@@ -84,14 +98,17 @@ impl TestContext {
     }
 }
 
-async fn setup_permesi_database(postgres: &PostgresContainer) -> Result<()> {
+async fn setup_permesi_database(postgres: &PostgresContainer, vault_password: &str) -> Result<()> {
     let mut admin = PgConnection::connect(&postgres.admin_dsn())
         .await
         .context("Failed to connect to Postgres admin DB")?;
 
-    sqlx::query("CREATE ROLE vault_permesi WITH LOGIN PASSWORD 'vault_permesi' CREATEROLE")
-        .execute(&mut admin)
-        .await?;
+    // `vault_password` is a hex UUID, so it cannot break out of the SQL literal.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE vault_permesi WITH LOGIN PASSWORD '{vault_password}' CREATEROLE"
+    )))
+    .execute(&mut admin)
+    .await?;
     sqlx::query("GRANT pg_signal_backend TO vault_permesi")
         .execute(&mut admin)
         .await?;
@@ -110,6 +127,7 @@ async fn setup_permesi_database(postgres: &PostgresContainer) -> Result<()> {
 async fn setup_permesi_vault(
     network_name: &str,
     postgres: &PostgresContainer,
+    vault_db_password: &str,
 ) -> Result<(VaultContainer, String, String, String)> {
     let vault = VaultContainer::start(network_name).await?;
     vault.enable_secrets_engine("database", "database").await?;
@@ -135,7 +153,7 @@ async fn setup_permesi_vault(
     let db_config = test_support::vault::DatabaseConfig::new(
         postgres.vault_connection_url_for_db("permesi"),
         "vault_permesi",
-        "vault_permesi",
+        vault_db_password,
         vec!["permesi".to_string()],
     );
     vault
@@ -260,7 +278,7 @@ fn prepare_tls_assets() -> Result<Option<TestTlsPaths>> {
     fs::write(&bundle_path, bundle_content)?;
 
     Ok(Some(TestTlsPaths {
-        _ca: ca_path.display().to_string(),
+        ca: ca_path.display().to_string(),
         bundle: bundle_path.display().to_string(),
     }))
 }
@@ -358,13 +376,7 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
     );
 
     // 3. Verify connectivity
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .resolve(
-            "api.permesi.localhost",
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ctx.port),
-        )
-        .build()?;
+    let client = test_https_client(&ctx.tls.ca, "api.permesi.localhost", ctx.port)?;
 
     wait_for_ready(&client, &base).await?;
 
@@ -467,13 +479,7 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
             .context("Failed to spawn permesi binary")?,
     );
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .resolve(
-            "api.permesi.localhost",
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ctx.port),
-        )
-        .build()?;
+    let client = test_https_client(&ctx.tls.ca, "api.permesi.localhost", ctx.port)?;
     wait_for_ready(&client, &base).await?;
 
     ctx.vault

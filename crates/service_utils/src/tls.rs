@@ -567,39 +567,23 @@ mod tests {
 
         std::fs::write(&bundle_path, &bundle_content).unwrap();
 
-        // 3. Manually inspect for the test log
+        // 3. Count the PEM components the bundle contains
         let file = File::open(&bundle_path).unwrap();
         let mut reader = BufReader::new(file);
         let mut cert_count = 0;
         let mut key_count = 0;
         for item in rustls_pemfile::read_all(&mut reader) {
             match item.unwrap() {
-                rustls_pemfile::Item::X509Certificate(_) => {
-                    cert_count += 1;
-                    println!("Found certificate component #{}", cert_count);
-                }
+                rustls_pemfile::Item::X509Certificate(_) => cert_count += 1,
                 rustls_pemfile::Item::Pkcs1Key(_)
                 | rustls_pemfile::Item::Pkcs8Key(_)
-                | rustls_pemfile::Item::Sec1Key(_) => {
-                    key_count += 1;
-                    println!("Found private key component #{}", key_count);
-                }
+                | rustls_pemfile::Item::Sec1Key(_) => key_count += 1,
                 _ => {}
             }
-        }
-        println!(
-            "Bundle inspection complete: found {cert_count} certificates and {key_count} keys"
-        );
-        if cert_count > 1 {
-            println!("Detected a chained or multi-certificate configuration");
         }
 
         // 4. Verify extraction logic
         let cas = load_reqwest_ca_from(&bundle_path).expect("Should extract CAs from bundle");
-        println!(
-            "Successfully extracted and parsed {} CA certificates from bundle",
-            cas.len()
-        );
 
         assert_eq!(cert_count, 3, "Expected 3 certs in bundle");
         assert_eq!(key_count, 1, "Expected 1 key in bundle");

@@ -57,6 +57,12 @@ fn unix_now() -> i64 {
         .unwrap_or_default()
 }
 
+/// A fresh random password per test; OPAQUE only needs the bytes to match between
+/// signup and login inside one test, and distinct calls never collide.
+fn test_password() -> Vec<u8> {
+    Uuid::new_v4().to_string().into_bytes()
+}
+
 /// A well-formed `CredentialFinalization` (the 64-byte KE3 MAC for this suite) that
 /// matches no server login state, so the server gets as far as MAC verification.
 fn bogus_credential_finalization() -> String {
@@ -820,7 +826,8 @@ async fn opaque_login_start_rejects_when_pending_state_capacity_is_full() -> Res
     let zero_token = issue_zero_token(&signing_key, &kid)?;
     let app = opaque_router(auth_state_with_pending_limit(1), admission, db.pool.clone());
     let email = "pending-capacity@example.com";
-    let password = b"OpaquePassword123!";
+    let password = test_password();
+    let password = password.as_slice();
 
     for (seed, expected) in [
         ([41u8; 32], StatusCode::OK),
@@ -860,7 +867,8 @@ async fn opaque_signup_login_flow_success() -> Result<()> {
     let app = opaque_router(auth_state(), admission, db.pool.clone());
 
     let email = "opaque-flow@example.com";
-    let password = b"OpaquePassword123!";
+    let password = test_password();
+    let password = password.as_slice();
     run_opaque_signup(&app, email, password, &zero_token, [11u8; 32]).await?;
 
     let row = sqlx::query("SELECT id, status::text FROM users WHERE email = $1")
@@ -971,8 +979,10 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
     let app = opaque_router(auth_state(), admission, db.pool.clone());
 
     let email = "opaque-wrong-password@example.com";
-    let real_password = b"CorrectPassword123!";
-    let wrong_password = b"WrongPassword123!";
+    let real_password = test_password();
+    let real_password = real_password.as_slice();
+    let wrong_password = test_password();
+    let wrong_password = wrong_password.as_slice();
     run_opaque_signup(&app, email, real_password, &zero_token, [13u8; 32]).await?;
 
     sqlx::query("UPDATE users SET status = 'active', email_verified_at = NOW() WHERE email = $1")
@@ -1067,7 +1077,8 @@ async fn opaque_login_finish_rejects_unknown_user_after_dummy_flow() -> Result<(
     let app = opaque_router(auth_state(), admission, db.pool.clone());
 
     let email = "opaque-unknown-user@example.com";
-    let password = b"OpaquePassword123!";
+    let password = test_password();
+    let password = password.as_slice();
 
     let mut rng = ChaCha20Rng::from_seed([15u8; 32]);
     let ksf = opaque_argon2::Argon2::default();
@@ -1165,8 +1176,10 @@ async fn password_change_flow() -> Result<()> {
 
     // 1. Setup user with known password
     let email = "change@example.com";
-    let old_password = b"OldPassword123!";
-    let new_password = b"NewPassword456!";
+    let old_password = test_password();
+    let old_password = old_password.as_slice();
+    let new_password = test_password();
+    let new_password = new_password.as_slice();
 
     let mut rng = ChaCha20Rng::from_seed([1u8; 32]);
     let server_setup = ServerSetup::<OpaqueSuite>::new(&mut rng);
@@ -1364,8 +1377,10 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
 
     // 1. Setup user
     let email = "fail@example.com";
-    let real_password = b"CorrectPassword123!";
-    let wrong_password = b"WrongPassword123!";
+    let real_password = test_password();
+    let real_password = real_password.as_slice();
+    let wrong_password = test_password();
+    let wrong_password = wrong_password.as_slice();
 
     let mut rng = ChaCha20Rng::from_seed([2u8; 32]);
     let server_setup = ServerSetup::<OpaqueSuite>::new(&mut rng);

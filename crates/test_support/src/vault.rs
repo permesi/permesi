@@ -60,7 +60,7 @@ mod tests {
         let config = DatabaseConfig::new(
             "postgresql://localhost/db",
             "user",
-            "pass",
+            uuid::Uuid::new_v4().to_string(),
             vec!["role1".to_string(), "role2".to_string()],
         );
         let value = config.as_value();
