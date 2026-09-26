@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.29"
+    "version": "0.3.44"
   },
   "paths": {
     "/headers": {
@@ -103,7 +103,14 @@
             "description": "Service is ready to receive traffic"
           },
           "503": {
-            "description": "Service dependencies are not ready"
+            "description": "Service dependencies are not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -138,9 +145,9 @@
           "400": {
             "description": "Missing or invalid client ID",
             "content": {
-              "text/plain": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -148,9 +155,9 @@
           "500": {
             "description": "Error creating the token",
             "content": {
-              "text/plain": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -161,6 +168,36 @@
   },
   "components": {
     "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "description": "Stable error code plus a human-readable message.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable, machine-readable code (for example `rate_limited`)."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation; safe to show to the caller."
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "Body of every error response.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [

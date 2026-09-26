@@ -36,6 +36,7 @@ use axum::{
     routing::{get, options},
 };
 use service_utils::{
+    api_error,
     database::{self, PoolConfig},
     request_id, shutdown,
 };
@@ -225,8 +226,9 @@ async fn stop_worker(name: &str, worker: JoinHandle<()>) {
     }
 }
 
-/// Assemble the served router: documented routes, `/`, `OPTIONS /health`, CORS,
-/// shared state, and request correlation (outermost, so every response carries it).
+/// Assemble the served router: documented routes, `/`, `OPTIONS /health`, the JSON
+/// error envelope, CORS, shared state, and request correlation (outermost, so every
+/// response carries it).
 fn build_router(state: AppState) -> Result<Router> {
     let allowed_origins = frontend_origins(state.auth.config().cors_allowed_origins())?;
     let cors = CorsLayer::new()
@@ -252,12 +254,15 @@ fn build_router(state: AppState) -> Result<Router> {
 
     // Build the router from OpenAPI-wired routes, then extend it with non-doc routes like `/` and
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
+    // Error responses get the JSON envelope inside CORS, so browsers can read them.
     let (router, _openapi) = router().split_for_parts();
-    let app = router
-        .route("/", get(root::root))
-        .route("/health", options(health::health))
-        .layer(cors)
-        .with_state(state);
+    let app = api_error::with_error_envelope(
+        router
+            .route("/", get(root::root))
+            .route("/health", options(health::health)),
+    )
+    .layer(cors)
+    .with_state(state);
     Ok(request_id::with_request_correlation(app))
 }
 
@@ -508,6 +513,73 @@ mod tests {
             "expected socket file to be removed on shutdown"
         );
         let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// The full router composed exactly as the server composes it, with inert state.
+    fn served_app() -> Result<Router> {
+        let pool =
+            sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
+        super::build_router(super::AppState::for_tests(pool)?)
+    }
+
+    async fn error_envelope(
+        response: axum::response::Response,
+    ) -> Result<service_utils::api_error::ErrorEnvelope> {
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        assert!(response.headers().contains_key("x-request-id"));
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await?;
+        Ok(serde_json::from_slice(&body)?)
+    }
+
+    #[tokio::test]
+    async fn served_router_answers_unknown_routes_with_envelope() -> Result<()> {
+        use tower::ServiceExt;
+        let response = served_app()?
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/does-not-exist")
+                    .body(axum::body::Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(error_envelope(response).await?.error.code, "not_found");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn served_router_wraps_handler_errors_and_keeps_cors() -> Result<()> {
+        use tower::ServiceExt;
+        // Signup start without a zero token fails before touching the database.
+        let response = served_app()?
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/auth/opaque/signup/start")
+                    .header("content-type", "application/json")
+                    .header("origin", "https://permesi.dev")
+                    .body(axum::body::Body::from(
+                        r#"{"email":"user@example.com","registration_request":"AA"}"#,
+                    ))?,
+            )
+            .await?;
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("https://permesi.dev")
+        );
+        let envelope = error_envelope(response).await?;
+        assert_eq!(envelope.error.code, "invalid_request");
+        assert_eq!(envelope.error.message, "Missing zero token");
         Ok(())
     }
 

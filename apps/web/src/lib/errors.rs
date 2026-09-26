@@ -11,7 +11,13 @@ pub enum AppError {
     Config(String),
     Network(String),
     Timeout(String),
-    Http { status: u16, message: String },
+    /// Non-success HTTP response. `code` is the API's stable error code when the
+    /// body was the JSON error envelope; branch on it rather than on `message`.
+    Http {
+        status: u16,
+        code: Option<String>,
+        message: String,
+    },
     Parse(String),
     Serialization(String),
 }
@@ -23,7 +29,15 @@ impl fmt::Display for AppError {
             AppError::Config(message) => write!(formatter, "Config error: {message}"),
             AppError::Network(message) => write!(formatter, "Network error: {message}"),
             AppError::Timeout(message) => write!(formatter, "Timeout: {message}"),
-            AppError::Http { status, message } => {
+            // Branch on the stable API code, never on message text.
+            AppError::Http {
+                code: Some(code), ..
+            } if code == "rate_limited" => {
+                formatter.write_str("Too many attempts. Please wait a moment and try again.")
+            }
+            AppError::Http {
+                status, message, ..
+            } => {
                 write!(formatter, "Request failed ({status}): {message}")
             }
             AppError::Parse(message) => write!(formatter, "Response error: {message}"),

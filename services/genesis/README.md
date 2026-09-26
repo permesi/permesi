@@ -55,6 +55,14 @@ Implemented routes (see `services/genesis/src/genesis/mod.rs`):
 
 Every response carries an `x-request-id` header holding a ULID issued by the server for that request. The same ID is recorded on the request's `http.request` trace span, so a failing response can be matched to its log lines. A client-supplied `x-request-id` is never adopted as the correlation ID; it is only logged as `client_request_id`, and only when it is at most 128 visible ASCII characters.
 
+Every error response (4xx/5xx) uses one JSON body, `{"error": {"code": "...", "message": "..."}}`,
+with `content-type: application/json`. `code` is stable and machine-readable (`invalid_request`,
+`unauthenticated`, `forbidden`, `not_found`, `method_not_allowed`, `conflict`, `payload_too_large`,
+`unsupported_media_type`, `rate_limited`, `dependency_unavailable`, `internal_error`); clients should
+branch on it rather than on `message`, which is human-readable text capped at 256 characters. Handler
+errors, malformed request bodies, unknown routes, and unsupported methods all use this shape, and the
+OpenAPI document declares it as `ErrorEnvelope` on every error response.
+
 Note: there is no public token introspection endpoint. `jti` + metadata are persisted for audit
 and potential future revocation tooling.
 The `/token` response includes `Cache-Control: no-store` to discourage intermediaries from caching

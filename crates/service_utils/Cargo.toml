@@ -19,12 +19,13 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 socket2 = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sqlx = { workspace = true }
 http.workspace = true
 tower-http = { workspace = true }
 ulid = { workspace = true }
+utoipa = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

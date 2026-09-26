@@ -6,7 +6,7 @@
 use super::{config::AppConfig, errors::AppError};
 use gloo_net::http::Request;
 use gloo_timers::callback::Timeout;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::to_string;
 use web_sys::{AbortController, RequestCredentials};
 
@@ -297,10 +297,7 @@ async fn handle_json_response<T: DeserializeOwned>(
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        Err(AppError::Http {
-            status,
-            message: sanitize_body(body),
-        })
+        Err(http_error(status, &body))
     }
 }
 
@@ -311,10 +308,7 @@ async fn handle_empty_response(response: gloo_net::http::Response) -> Result<(),
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        Err(AppError::Http {
-            status,
-            message: sanitize_body(body),
-        })
+        Err(http_error(status, &body))
     }
 }
 
@@ -337,19 +331,77 @@ async fn handle_optional_json_response<T: DeserializeOwned>(
             return Ok(None);
         }
         let body = response.text().await.unwrap_or_default();
-        Err(AppError::Http {
+        Err(http_error(status, &body))
+    }
+}
+
+/// API error body: `{"error": {"code": "...", "message": "..."}}`.
+#[derive(Deserialize)]
+struct ErrorEnvelope {
+    error: ErrorBody,
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    code: String,
+    message: String,
+}
+
+/// Build an HTTP error, preferring the API's JSON envelope and falling back to the
+/// raw body for responses that do not carry it (proxies, older servers).
+fn http_error(status: u16, body: &str) -> AppError {
+    match serde_json::from_str::<ErrorEnvelope>(body) {
+        Ok(envelope) => AppError::Http {
             status,
+            code: Some(envelope.error.code),
+            message: sanitize_body(&envelope.error.message),
+        },
+        Err(_) => AppError::Http {
+            status,
+            code: None,
             message: sanitize_body(body),
-        })
+        },
     }
 }
 
 /// Sanitizes HTTP error bodies for user-facing messages by trimming and truncating.
-fn sanitize_body(body: String) -> String {
+fn sanitize_body(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         "Request failed.".to_string()
     } else {
         trimmed.chars().take(MAX_ERROR_CHARS).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppError, http_error};
+
+    #[test]
+    fn http_error_reads_the_error_envelope() {
+        let error = http_error(
+            429,
+            r#"{"error":{"code":"rate_limited","message":"Rate limited"}}"#,
+        );
+        assert!(matches!(
+            &error,
+            AppError::Http { status: 429, code: Some(code), message }
+                if code == "rate_limited" && message == "Rate limited"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Too many attempts. Please wait a moment and try again."
+        );
+    }
+
+    #[test]
+    fn http_error_falls_back_to_plain_text() {
+        let error = http_error(502, "  Bad Gateway  ");
+        assert!(matches!(
+            &error,
+            AppError::Http { status: 502, code: None, message } if message == "Bad Gateway"
+        ));
+        assert_eq!(error.to_string(), "Request failed (502): Bad Gateway");
     }
 }

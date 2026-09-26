@@ -94,6 +94,15 @@ let (router, openapi) = permesi::api::router().split_for_parts();
 let app = router.with_state(state); // state: permesi::api::AppState
 ```
 
+Every error response (4xx/5xx) uses one JSON body, `{"error": {"code": "...", "message": "..."}}`,
+with `content-type: application/json`. `code` is stable and machine-readable (`invalid_request`,
+`unauthenticated`, `forbidden`, `not_found`, `method_not_allowed`, `conflict`, `payload_too_large`,
+`unsupported_media_type`, `rate_limited`, `dependency_unavailable`, `internal_error`); clients should
+branch on it rather than on `message`, which is human-readable text capped at 256 characters. Handler
+errors, malformed request bodies, unknown routes, and unsupported methods all use this shape, and the
+OpenAPI document declares it as `ErrorEnvelope` on every error response. The auth endpoints keep their
+deliberately generic messages (no account enumeration), and their codes depend only on the status.
+
 Handlers receive shared dependencies through axum `State` extractors (`State<PgPool>`,
 `State<Arc<AuthState>>`, ...) derived from `AppState` with `FromRef`, so routing a handler whose
 dependency the state does not provide fails to compile instead of returning a runtime 500 from a

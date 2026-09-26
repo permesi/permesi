@@ -20,6 +20,7 @@ use axum::{
     routing::{get, options},
 };
 use service_utils::{
+    api_error,
     database::{self, PoolConfig},
     request_id, shutdown,
 };
@@ -71,25 +72,11 @@ pub async fn new(
 
     let admission = Arc::new(admission::AdmissionSigner::new(globals).await?);
 
-    let cors = CorsLayer::new()
-        // allow `GET` and `POST` when accessing the resource
-        .allow_methods([Method::GET, Method::POST])
-        // allow requests from any origin
-        .allow_origin(Any);
-
-    // Register every route before layering so `/` and `OPTIONS /health` get the same
-    // CORS, state, and correlation layers as the documented routes.
-    let (router, _openapi) = router().split_for_parts();
-    let app = router
-        .route("/", get(root::root))
-        .route("/health", options(health::health))
-        .layer(cors)
-        .with_state(AppState {
-            admission,
-            shutdown: shutdown_tx,
-            pool: pool.clone(),
-        });
-    let app = request_id::with_request_correlation(app);
+    let app = build_router(AppState {
+        admission,
+        shutdown: shutdown_tx,
+        pool: pool.clone(),
+    });
 
     let served = match socket_path {
         Some(path) => serve_socket(app, path, rx).await,
@@ -98,6 +85,29 @@ pub async fn new(
     database::close(&pool).await;
 
     served
+}
+
+/// Assemble the served router: documented routes, `/`, `OPTIONS /health`, the JSON
+/// error envelope, CORS, shared state, and request correlation (outermost).
+///
+/// Every route is registered before layering so `/` and `OPTIONS /health` get the
+/// same layers as the documented routes, and error responses carry CORS headers.
+fn build_router(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        // allow `GET` and `POST` when accessing the resource
+        .allow_methods([Method::GET, Method::POST])
+        // allow requests from any origin
+        .allow_origin(Any);
+
+    let (router, _openapi) = router().split_for_parts();
+    let app = api_error::with_error_envelope(
+        router
+            .route("/", get(root::root))
+            .route("/health", options(health::health)),
+    )
+    .layer(cors)
+    .with_state(state);
+    request_id::with_request_correlation(app)
 }
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.

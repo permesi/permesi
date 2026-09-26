@@ -5,8 +5,10 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    // Reuse the same router wiring and only return the generated OpenAPI spec.
-    let (_router, openapi) = api_router().split_for_parts();
+    // Reuse the same router wiring and only return the generated OpenAPI spec, with the
+    // shared JSON error envelope documented on every error response that has no body.
+    let (_router, mut openapi) = api_router().split_for_parts();
+    service_utils::api_error::document_error_envelope(&mut openapi);
     openapi
 }
 
