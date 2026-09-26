@@ -110,7 +110,12 @@ pub fn load_reqwest_ca() -> Result<Vec<Certificate>> {
 ///
 /// The listener first tries `[::]:port` with `IPV6_V6ONLY` disabled so one socket
 /// accepts both IPv6 and IPv4-mapped connections. If the host does not provide a
-/// usable IPv6 stack, the helper falls back to `0.0.0.0:port`.
+/// usable IPv6 stack, or a sandbox refuses IPv6 sockets with a permission error,
+/// the helper falls back to `0.0.0.0:port`.
+///
+/// Both sockets set `SO_REUSEADDR` so a restarted process can rebind while
+/// connections from the previous one linger in `TIME_WAIT`. On Linux this does
+/// not let two live listeners share the port; that would need `SO_REUSEPORT`.
 ///
 /// # Errors
 /// Returns an error if neither the dual-stack IPv6 listener nor the IPv4 fallback
@@ -163,6 +168,9 @@ fn bind_ipv6_dual_stack_listener(addr: SocketAddr) -> Result<TcpListener> {
         .set_only_v6(false)
         .context("Failed to configure IPv6 socket for dual-stack mode")?;
     socket
+        .set_reuse_address(true)
+        .context("Failed to enable address reuse on IPv6 socket")?;
+    socket
         .bind(&addr.into())
         .with_context(|| format!("Failed to bind dual-stack IPv6 listener on {addr}"))?;
     socket
@@ -177,6 +185,9 @@ fn bind_ipv6_dual_stack_listener(addr: SocketAddr) -> Result<TcpListener> {
 fn bind_ipv4_listener(addr: SocketAddr) -> Result<TcpListener> {
     let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
         .context("Failed to create IPv4 TCP socket")?;
+    socket
+        .set_reuse_address(true)
+        .context("Failed to enable address reuse on IPv4 socket")?;
     socket
         .bind(&addr.into())
         .with_context(|| format!("Failed to bind IPv4 listener on {addr}"))?;
@@ -207,11 +218,15 @@ fn ipv6_unavailable(err: &anyhow::Error) -> bool {
     })
 }
 
+/// Classify socket errors that mean "no usable IPv6 here" rather than a real bind failure.
+///
+/// `PermissionDenied`/`EPERM` covers sandboxes (seccomp, LSMs) that refuse IPv6
+/// sockets outright; the IPv4 fallback then still gets a chance to bind.
 fn io_error_is_ipv6_unavailable(err: &io::Error) -> bool {
     matches!(
         err.kind(),
-        ErrorKind::AddrNotAvailable | ErrorKind::Unsupported
-    ) || matches!(err.raw_os_error(), Some(43 | 47 | 49 | 93 | 97 | 99))
+        ErrorKind::AddrNotAvailable | ErrorKind::PermissionDenied | ErrorKind::Unsupported
+    ) || matches!(err.raw_os_error(), Some(1 | 43 | 47 | 49 | 93 | 97 | 99))
 }
 
 fn load_server_config_from(paths: &TlsPaths) -> Result<ServerConfig> {
@@ -632,6 +647,44 @@ mod tests {
             "Failed to load valid server config: {:?}",
             config.err()
         );
+    }
+
+    #[test]
+    fn bind_dual_stack_listener_rebinds_after_completed_connection() -> Result<()> {
+        let (first, _) = bind_dual_stack_listener(0)?;
+        let port = first.local_addr()?.port();
+        let client = std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))?;
+        let (accepted, _) = first.accept()?;
+        // Closing the accepted socket first leaves the server side in TIME_WAIT.
+        drop(accepted);
+        drop(client);
+        drop(first);
+
+        let (replacement, _) = bind_dual_stack_listener(port)?;
+        assert_eq!(replacement.local_addr()?.port(), port);
+        Ok(())
+    }
+
+    #[test]
+    fn bind_dual_stack_listener_rejects_port_held_by_active_listener() -> Result<()> {
+        let (first, _) = bind_dual_stack_listener(0)?;
+        let port = first.local_addr()?.port();
+        assert!(bind_dual_stack_listener(port).is_err());
+        drop(first);
+        Ok(())
+    }
+
+    #[test]
+    fn permission_denied_ipv6_socket_uses_ipv4_fallback() {
+        assert!(io_error_is_ipv6_unavailable(&io::Error::from(
+            ErrorKind::PermissionDenied
+        )));
+        assert!(io_error_is_ipv6_unavailable(&io::Error::from_raw_os_error(
+            1
+        )));
+        assert!(!io_error_is_ipv6_unavailable(&io::Error::from(
+            ErrorKind::AddrInUse
+        )));
     }
 
     #[test]
