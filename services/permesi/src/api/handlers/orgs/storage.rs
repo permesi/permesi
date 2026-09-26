@@ -262,7 +262,7 @@ pub(super) async fn resolve_org_context(
             o.slug,
             o.name,
             to_char(o.created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-            m.status,
+            m.status::text AS status,
             COALESCE(
                 array_agg(r.role_name) FILTER (WHERE r.role_name IS NOT NULL),
                 '{}'
