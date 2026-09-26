@@ -217,48 +217,8 @@ async fn bootstrap_runtime_role(conn: &mut PgConnection) -> Result<()> {
 }
 
 async fn apply_schema(connection: &mut PgConnection, sql: &str) -> Result<()> {
-    for (index, statement) in split_sql_statements(sql).iter().enumerate() {
-        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-            .execute(&mut *connection)
-            .await
-            .with_context(|| format!("Failed to execute schema statement {}", index + 1))?;
-    }
+    test_support::sql::execute_script(&mut *connection, "schema", sql).await?;
     Ok(())
-}
-
-fn split_sql_statements(sql: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current = String::new();
-    let mut in_dollar_quote = false;
-
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(r"\ir ") {
-            continue;
-        }
-        current.push_str(line);
-        current.push('\n');
-
-        let dollar_markers = line.match_indices("$$").count();
-        if dollar_markers % 2 == 1 {
-            in_dollar_quote = !in_dollar_quote;
-        }
-
-        if !in_dollar_quote && trimmed.ends_with(';') {
-            let statement = current.trim();
-            if !statement.is_empty() {
-                statements.push(statement.to_string());
-            }
-            current.clear();
-        }
-    }
-
-    let leftover = current.trim();
-    if !leftover.is_empty() {
-        statements.push(leftover.to_string());
-    }
-
-    statements
 }
 
 fn pick_port() -> Result<u16> {

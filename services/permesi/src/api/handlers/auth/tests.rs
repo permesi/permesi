@@ -32,7 +32,7 @@ use base64::{
 use opaque_ke::{
     ClientLogin, ClientLoginFinishParameters, ClientRegistration,
     ClientRegistrationFinishParameters, CredentialResponse, Identifiers, RegistrationResponse,
-    ServerRegistration, ServerSetup,
+    ServerRegistration, ServerSetup, errors::ProtocolError,
 };
 use opaque_rand_chacha::ChaCha20Rng;
 use opaque_rand_core::SeedableRng;
@@ -56,6 +56,12 @@ fn unix_now() -> i64 {
         .unwrap_or_default()
 }
 
+/// A well-formed `CredentialFinalization` (the 64-byte KE3 MAC for this suite) that
+/// matches no server login state, so the server gets as far as MAC verification.
+fn bogus_credential_finalization() -> String {
+    STANDARD.encode([0u8; 64])
+}
+
 fn identifiers<'a>(client: &'a [u8], server: &'a [u8]) -> Identifiers<'a> {
     Identifiers {
         client: Some(client),
@@ -69,10 +75,10 @@ struct TestDb {
 }
 
 impl TestDb {
-    async fn new() -> Result<Self> {
+    async fn new() -> Result<Option<Self>> {
         if let Err(err) = runtime::ensure_container_runtime() {
             eprintln!("Skipping integration test: {err}");
-            return Err(err);
+            return Ok(None);
         }
 
         let postgres = PostgresContainer::start("bridge").await?;
@@ -85,10 +91,10 @@ impl TestDb {
             .await
             .context("failed to connect test pool")?;
 
-        Ok(Self {
+        Ok(Some(Self {
             _postgres: postgres,
             pool,
-        })
+        }))
     }
 }
 
@@ -97,43 +103,10 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
         .await
         .context("failed to connect for schema setup")?;
 
-    for (index, statement) in split_sql_statements(PERMESI_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-            .execute(&mut connection)
-            .await
-            .with_context(|| format!("failed to execute schema statement {}", index + 1))?;
-    }
+    test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
+        .await?;
 
     Ok(())
-}
-
-fn split_sql_statements(sql: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current = String::new();
-
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("\\ir ") {
-            continue;
-        }
-        current.push_str(line);
-        current.push('\n');
-
-        if trimmed.ends_with(';') {
-            let statement = current.trim();
-            if !statement.is_empty() {
-                statements.push(statement.to_string());
-            }
-            current.clear();
-        }
-    }
-
-    let leftover = current.trim();
-    if !leftover.is_empty() {
-        statements.push(leftover.to_string());
-    }
-
-    statements
 }
 
 fn auth_config() -> AuthConfig {
@@ -254,7 +227,7 @@ async fn issue_verification_token(
 
 #[tokio::test]
 async fn signup_concurrent_email_unique() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -287,7 +260,7 @@ async fn signup_concurrent_email_unique() -> Result<()> {
 
 #[tokio::test]
 async fn rate_limiter_enforces_shared_ip_and_account_limits() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -345,7 +318,7 @@ async fn login_mfa_resolution_fails_closed_on_storage_error() -> Result<()> {
 
 #[tokio::test]
 async fn verify_token_reuse_rejected() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -378,7 +351,7 @@ async fn verify_token_reuse_rejected() -> Result<()> {
 
 #[tokio::test]
 async fn verify_token_expired_rejected() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -396,7 +369,7 @@ async fn verify_token_expired_rejected() -> Result<()> {
     let token_hash = hash_verification_token(&token);
 
     sqlx::query(
-        "UPDATE email_verification_tokens SET expires_at = NOW() - INTERVAL '1 second' WHERE token_hash = $1",
+        "UPDATE email_verification_tokens SET created_at = NOW() - INTERVAL '1 hour', expires_at = NOW() - INTERVAL '1 second' WHERE token_hash = $1",
     )
     .bind(&token_hash)
     .execute(&db.pool)
@@ -413,7 +386,7 @@ async fn verify_token_expired_rejected() -> Result<()> {
 
 #[tokio::test]
 async fn resend_verification_respects_cooldown() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -520,10 +493,10 @@ fn issue_zero_token(signing_key: &ed25519_dalek::SigningKey, kid: &str) -> Resul
         iss: "https://genesis.test".to_string(),
         aud: "permesi".to_string(),
         iat: rfc3339_from_unix(now_unix)?,
-        exp: rfc3339_from_unix(now_unix + 600)?,
+        exp: rfc3339_from_unix(now_unix + 120)?,
         jti: Uuid::new_v4().to_string(),
         sub: None,
-        action: "zero".to_string(),
+        action: "admission".to_string(),
     };
     let footer = AdmissionTokenFooter {
         kid: kid.to_string(),
@@ -655,7 +628,7 @@ fn app_router(auth_state: Arc<AuthState>, pool: PgPool) -> Router {
             get(crate::api::handlers::me::list_sessions),
         )
         .route(
-            "/v1/me/sessions/:sid",
+            "/v1/me/sessions/{sid}",
             delete(crate::api::handlers::me::revoke_session),
         )
         .layer(Extension(auth_state))
@@ -664,7 +637,7 @@ fn app_router(auth_state: Arc<AuthState>, pool: PgPool) -> Router {
 
 #[tokio::test]
 async fn me_requires_auth() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let app = app_router(auth_state(), db.pool.clone());
@@ -679,7 +652,7 @@ async fn me_requires_auth() -> Result<()> {
 
 #[tokio::test]
 async fn me_returns_current_user() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -715,7 +688,7 @@ async fn me_returns_current_user() -> Result<()> {
 
 #[tokio::test]
 async fn me_patch_updates_allowed_fields() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -749,7 +722,7 @@ async fn me_patch_updates_allowed_fields() -> Result<()> {
 
 #[tokio::test]
 async fn me_ignores_other_user_ids() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -789,7 +762,7 @@ async fn me_ignores_other_user_ids() -> Result<()> {
 
 #[tokio::test]
 async fn me_revoke_session_rejects_invalid_session_id() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -814,7 +787,7 @@ async fn me_revoke_session_rejects_invalid_session_id() -> Result<()> {
 
 #[tokio::test]
 async fn opaque_login_start_rejects_when_pending_state_capacity_is_full() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -853,7 +826,7 @@ async fn opaque_login_start_rejects_when_pending_state_capacity_is_full() -> Res
 
 #[tokio::test]
 async fn opaque_signup_login_flow_success() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -926,6 +899,7 @@ async fn opaque_signup_login_flow_success() -> Result<()> {
 
     let login_finish_payload = json!({
         "login_id": login_id,
+        "email": email,
         "credential_finalization": STANDARD.encode(login_finish.message.serialize())
     });
     let finish_response = app
@@ -963,7 +937,7 @@ async fn opaque_signup_login_flow_success() -> Result<()> {
 
 #[tokio::test]
 async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -1022,16 +996,24 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
         identifiers(email.as_bytes(), b"api.permesi.dev"),
         Some(&ksf),
     );
-    let login_finish = login_start.state.finish(
+    // opaque-ke detects the wrong password on the client: the envelope cannot be
+    // opened, so no finalization is produced.
+    let client_result = login_start.state.finish(
         &mut rng,
         wrong_password,
         credential_response,
         login_finish_params,
-    )?;
+    );
+    assert!(matches!(
+        client_result,
+        Err(ProtocolError::InvalidLoginError)
+    ));
 
+    // A client that sends a finalization anyway must not get a session.
     let login_finish_payload = json!({
         "login_id": login_id,
-        "credential_finalization": STANDARD.encode(login_finish.message.serialize())
+        "email": email,
+        "credential_finalization": bogus_credential_finalization(),
     });
     let finish_response = app
         .oneshot(
@@ -1050,9 +1032,8 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
 }
 
 #[tokio::test]
-async fn opaque_login_finish_rejects_unknown_user_after_client_completes_dummy_flow() -> Result<()>
-{
-    let Ok(db) = TestDb::new().await else {
+async fn opaque_login_finish_rejects_unknown_user_after_dummy_flow() -> Result<()> {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -1104,14 +1085,21 @@ async fn opaque_login_finish_rejects_unknown_user_after_client_completes_dummy_f
         identifiers(email.as_bytes(), b"api.permesi.dev"),
         Some(&ksf),
     );
-    let login_finish =
+    // The server answered with a dummy record, which the client cannot open: an
+    // unknown user fails exactly like a wrong password, without revealing which.
+    let client_result =
         login_start
             .state
-            .finish(&mut rng, password, credential_response, login_finish_params)?;
+            .finish(&mut rng, password, credential_response, login_finish_params);
+    assert!(matches!(
+        client_result,
+        Err(ProtocolError::InvalidLoginError)
+    ));
 
     let login_finish_payload = json!({
         "login_id": login_id,
-        "credential_finalization": STANDARD.encode(login_finish.message.serialize())
+        "email": email,
+        "credential_finalization": bogus_credential_finalization(),
     });
     let finish_response = app
         .oneshot(
@@ -1146,7 +1134,7 @@ async fn password_change_flow() -> Result<()> {
     use ed25519_dalek::Signer;
     use opaque_ke::{ClientRegistration, RegistrationResponse};
 
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -1190,10 +1178,9 @@ async fn password_change_flow() -> Result<()> {
     let token = generate_session_token()?;
     let hash = hash_session_token(&token);
     let now_unix = unix_now();
-    sqlx::query("INSERT INTO user_sessions (user_id, session_hash, expires_at, auth_time) VALUES ($1, $2, NOW() + INTERVAL '1 hour', $3)")
+    sqlx::query("INSERT INTO user_sessions (user_id, session_hash, expires_at, auth_time) VALUES ($1, $2, NOW() + INTERVAL '1 hour', NOW())")
         .bind(user_id)
         .bind(hash)
-        .bind(now_unix)
         .execute(&db.pool)
         .await?;
 
@@ -1249,10 +1236,10 @@ async fn password_change_flow() -> Result<()> {
         iss: "https://genesis.test".to_string(),
         aud: "permesi".to_string(),
         iat: admission_token::rfc3339_from_unix(now_unix)?,
-        exp: admission_token::rfc3339_from_unix(now_unix + 600)?,
+        exp: admission_token::rfc3339_from_unix(now_unix + 120)?,
         jti: "test".to_string(),
         sub: None,
-        action: "zero".to_string(),
+        action: "admission".to_string(),
     };
     let footer = AdmissionTokenFooter {
         kid: key.kid.clone(),
@@ -1344,7 +1331,7 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
     use ed25519_dalek::Signer;
     use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
 
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
 
@@ -1440,10 +1427,10 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
         iss: "https://genesis.test".to_string(),
         aud: "permesi".to_string(),
         iat: admission_token::rfc3339_from_unix(now_unix)?,
-        exp: admission_token::rfc3339_from_unix(now_unix + 600)?,
+        exp: admission_token::rfc3339_from_unix(now_unix + 120)?,
         jti: "test".to_string(),
         sub: None,
-        action: "zero".to_string(),
+        action: "admission".to_string(),
     };
     let si = encode_signing_input(
         &admission_claims,
@@ -1483,15 +1470,19 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
         Some(&ksf),
     );
 
-    // The OPAQUE client will produce a proof, but it won't match the server's expected proof
-    // because the "wrong_password" was used to derive the client keys.
-    let client_login_final =
+    // With the wrong password the OPAQUE client cannot open the envelope, so it refuses
+    // to produce a proof at all.
+    let client_result =
         client_login_start
             .state
-            .finish(&mut rng, wrong_password, cred_res, login_params)?;
+            .finish(&mut rng, wrong_password, cred_res, login_params);
+    assert!(matches!(
+        client_result,
+        Err(ProtocolError::InvalidLoginError)
+    ));
     let finish_payload = json!({
         "login_id": start_res["login_id"],
-        "credential_finalization": STANDARD.encode(client_login_final.message.serialize())
+        "credential_finalization": bogus_credential_finalization(),
     });
 
     let response = app
@@ -1506,8 +1497,8 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
         )
         .await?;
 
-    // Server should reject the invalid proof
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // A proof that does not match the server's login state is rejected as unauthorized.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     Ok(())
 }

@@ -1,6 +1,7 @@
 pub mod genesis;
 pub mod postgres;
 pub mod runtime;
+pub mod sql;
 pub mod vault;
 
 use uuid::Uuid;

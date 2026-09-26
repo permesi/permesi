@@ -746,10 +746,10 @@ mod tests {
     }
 
     impl TestDb {
-        async fn new() -> anyhow::Result<Self> {
+        async fn new() -> anyhow::Result<Option<Self>> {
             if let Err(err) = runtime::ensure_container_runtime() {
                 eprintln!("Skipping integration test: {err}");
-                return Err(err);
+                return Ok(None);
             }
 
             let postgres = PostgresContainer::start("bridge").await?;
@@ -761,46 +761,20 @@ mod tests {
                 .connect(&postgres.admin_dsn())
                 .await?;
 
-            Ok(Self {
+            Ok(Some(Self {
                 _postgres: postgres,
                 pool,
-            })
+            }))
         }
     }
 
     async fn apply_schema(postgres: &PostgresContainer) -> anyhow::Result<()> {
         let mut connection = PgConnection::connect(&postgres.admin_dsn()).await?;
 
-        for statement in split_sql_statements(PERMESI_SCHEMA_SQL) {
-            sqlx::query(sqlx::AssertSqlSafe(statement))
-                .execute(&mut connection)
-                .await?;
-        }
+        test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
+            .await?;
 
         Ok(())
-    }
-
-    fn split_sql_statements(sql: &str) -> Vec<String> {
-        let mut statements = Vec::new();
-        let mut current = String::new();
-
-        for line in sql.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("\\ir ") {
-                continue;
-            }
-            current.push_str(line);
-            current.push('\n');
-            if trimmed.ends_with(';') {
-                let statement = current.trim();
-                if !statement.is_empty() {
-                    statements.push(statement.to_string());
-                }
-                current.clear();
-            }
-        }
-
-        statements
     }
 
     async fn insert_user(pool: &PgPool) -> anyhow::Result<(Uuid, String)> {
@@ -853,10 +827,10 @@ mod tests {
             iss: "https://genesis.test".to_string(),
             aud: "permesi".to_string(),
             iat: admission_token::rfc3339_from_unix(now_unix)?,
-            exp: admission_token::rfc3339_from_unix(now_unix + 600)?,
+            exp: admission_token::rfc3339_from_unix(now_unix + 120)?,
             jti: "test".to_string(),
             sub: None,
-            action: "zero".to_string(),
+            action: "admission".to_string(),
         };
         let footer = AdmissionTokenFooter { kid: key.kid };
         let signing_input = encode_signing_input(&admission_claims, &footer)?;
@@ -872,7 +846,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_options_returns_public_key() -> anyhow::Result<()> {
-        let Ok(db) = TestDb::new().await else {
+        let Some(db) = TestDb::new().await? else {
             return Ok(());
         };
 
@@ -939,7 +913,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_credentials_returns_empty_in_preview_mode() -> anyhow::Result<()> {
-        let Ok(db) = TestDb::new().await else {
+        let Some(db) = TestDb::new().await? else {
             return Ok(());
         };
 
@@ -992,7 +966,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_credential_requires_zero_token() -> anyhow::Result<()> {
-        let Ok(db) = TestDb::new().await else {
+        let Some(db) = TestDb::new().await? else {
             return Ok(());
         };
 
@@ -1024,7 +998,7 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/me/webauthn/credentials/:credential_id",
+                "/v1/me/webauthn/credentials/{credential_id}",
                 delete(delete_credential),
             )
             .layer(Extension(auth_state))
@@ -1051,7 +1025,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_credential_rejects_invalid_credential_id() -> anyhow::Result<()> {
-        let Ok(db) = TestDb::new().await else {
+        let Some(db) = TestDb::new().await? else {
             return Ok(());
         };
 
@@ -1083,7 +1057,7 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/me/webauthn/credentials/:credential_id",
+                "/v1/me/webauthn/credentials/{credential_id}",
                 delete(delete_credential),
             )
             .layer(Extension(auth_state))

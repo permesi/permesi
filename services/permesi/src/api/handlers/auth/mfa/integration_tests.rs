@@ -16,7 +16,6 @@ use axum::{
     http::{Request, StatusCode, header::COOKIE},
     routing::{delete, get, post},
 };
-use base64::Engine;
 use secrecy::SecretString;
 use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
@@ -38,10 +37,12 @@ struct TestContext {
 }
 
 impl TestContext {
-    async fn new() -> Result<Self> {
+    /// Returns `None` only when no container runtime is available; any other setup
+    /// failure is an error so a broken fixture fails the test instead of skipping it.
+    async fn new() -> Result<Option<Self>> {
         if let Err(err) = runtime::ensure_container_runtime() {
             eprintln!("Skipping integration test: {err}");
-            return Err(err);
+            return Ok(None);
         }
 
         let network = TestNetwork::new("permesi-mfa");
@@ -55,13 +56,12 @@ impl TestContext {
             .create_transit_key("transit/permesi", "totp", "chacha20-poly1305")
             .await?;
 
-        vault
-            .enable_secrets_engine("secret/permesi", "kv-v2")
-            .await?;
+        // Vault dev mode already mounts KV v2 at `secret/`, so a nested `secret/permesi`
+        // mount is rejected; store the config under the existing mount instead.
         vault
             .write_kv_v2(
-                "secret/permesi",
-                "config",
+                "secret",
+                "permesi/config",
                 json!({
                     "opaque_server_seed": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
                     "mfa_recovery_pepper": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
@@ -96,12 +96,12 @@ impl TestContext {
 
         let totp_service = TotpService::new(dek_manager, pool.clone(), "Permesi".to_string());
 
-        Ok(Self {
+        Ok(Some(Self {
             _postgres: postgres,
             _vault: vault,
             pool,
             totp_service,
-        })
+        }))
     }
 }
 
@@ -111,43 +111,10 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
         .context("failed to connect for schema setup")?;
 
     // Apply Base Schema
-    for (index, statement) in split_sql_statements(PERMESI_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-            .execute(&mut connection)
-            .await
-            .with_context(|| format!("failed to execute schema statement {}", index + 1))?;
-    }
+    test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
+        .await?;
 
     Ok(())
-}
-
-fn split_sql_statements(sql: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current = String::new();
-
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(r"\ir ") {
-            continue;
-        }
-        current.push_str(line);
-        current.push('\n');
-
-        if trimmed.ends_with(';') {
-            let statement = current.trim();
-            if !statement.is_empty() {
-                statements.push(statement.to_string());
-            }
-            current.clear();
-        }
-    }
-
-    let leftover = current.trim();
-    if !leftover.is_empty() {
-        statements.push(leftover.to_string());
-    }
-
-    statements
 }
 
 fn auth_state() -> AuthState {
@@ -226,7 +193,7 @@ fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) ->
 
 #[tokio::test]
 async fn mfa_enrollment_flow() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -253,15 +220,13 @@ async fn mfa_enrollment_flow() -> Result<()> {
     let start_data: crate::api::handlers::auth::types::MfaTotpEnrollStartResponse =
         serde_json::from_slice(&body)?;
 
-    // Note: secret is already plaintext base32 string
-    let secret_bytes =
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&start_data.secret) {
-            bytes
-        } else {
-            use base32::Alphabet;
-            base32::decode(Alphabet::Rfc4648 { padding: false }, &start_data.secret)
-                .ok_or_else(|| anyhow!("Invalid base32 secret"))?
-        };
+    // The secret is unpadded RFC 4648 base32 (`TotpService::enroll_start`). Do not try
+    // base64 first: base32 text is often valid base64 too and would decode to the wrong key.
+    let secret_bytes = base32::decode(
+        base32::Alphabet::Rfc4648 { padding: false },
+        &start_data.secret,
+    )
+    .ok_or_else(|| anyhow!("Invalid base32 secret"))?;
 
     // 2. Generate Code
     let totp = totp_rs::Builder::new()
@@ -318,7 +283,7 @@ async fn mfa_enrollment_flow() -> Result<()> {
 
 #[tokio::test]
 async fn security_key_deletion_disables_mfa() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -368,7 +333,7 @@ async fn security_key_deletion_disables_mfa() -> Result<()> {
 
 #[tokio::test]
 async fn security_key_preserves_totp() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -420,7 +385,7 @@ async fn security_key_preserves_totp() -> Result<()> {
 
 #[tokio::test]
 async fn security_key_delete_rejects_invalid_hex_credential_id() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -445,7 +410,7 @@ async fn security_key_delete_rejects_invalid_hex_credential_id() -> Result<()> {
 
 #[tokio::test]
 async fn totp_deletion_preserves_security_key() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -454,7 +419,7 @@ async fn totp_deletion_preserves_security_key() -> Result<()> {
     let token = insert_session(&ctx.pool, user_id).await?;
 
     // 1. Insert fake security key
-    let cred_id = vec![9, 10, 11, 12];
+    let cred_id = vec![9u8, 10, 11, 12];
     sqlx::query(
         "INSERT INTO security_keys (credential_id, user_id, label, public_key, sign_count) VALUES ($1, $2, 'test', $3, 0)"
     )
@@ -499,7 +464,7 @@ async fn totp_deletion_preserves_security_key() -> Result<()> {
 
 #[tokio::test]
 async fn totp_deletion_disables_mfa_when_no_keys() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -538,7 +503,7 @@ async fn totp_deletion_disables_mfa_when_no_keys() -> Result<()> {
 
 #[tokio::test]
 async fn session_response_includes_mfa_flags() -> Result<()> {
-    let Ok(ctx) = TestContext::new().await else {
+    let Some(ctx) = TestContext::new().await? else {
         return Ok(());
     };
 
@@ -547,7 +512,7 @@ async fn session_response_includes_mfa_flags() -> Result<()> {
     let token = insert_session(&ctx.pool, user_id).await?;
 
     // 1. Setup both factors
-    let cred_id = vec![1, 3, 3, 7];
+    let cred_id = vec![1u8, 3, 3, 7];
     sqlx::query(
         "INSERT INTO security_keys (credential_id, user_id, label, public_key, sign_count) VALUES ($1, $2, 'test', $3, 0)"
     )

@@ -31,11 +31,12 @@ struct TestDb {
 
 impl TestDb {
     /// Creates a fresh ephemeral database by starting a `PostgresContainer` and applying the schema.
-    /// If the container runtime is unavailable, returns an error so callers can skip the test cleanly.
-    async fn new() -> Result<Self> {
+    /// Returns `None` only when no container runtime is available so callers can skip; any
+    /// other setup failure (container start, schema) is an error and fails the test.
+    async fn new() -> Result<Option<Self>> {
         if let Err(err) = runtime::ensure_container_runtime() {
             eprintln!("Skipping integration test: {err}");
-            return Err(err);
+            return Ok(None);
         }
 
         let postgres = PostgresContainer::start("bridge").await?;
@@ -48,59 +49,23 @@ impl TestDb {
             .await
             .context("failed to connect test pool")?;
 
-        Ok(Self {
+        Ok(Some(Self {
             _postgres: postgres,
             pool,
-        })
+        }))
     }
 }
 
 /// Applies the embedded schema SQL to the provided `PostgresContainer` using a single connection.
-/// It assumes statements are safe to run sequentially and are separated by semicolons in `schema.sql`.
 async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
     let mut connection = PgConnection::connect(&postgres.admin_dsn())
         .await
         .context("failed to connect for schema setup")?;
 
-    for (index, statement) in split_sql_statements(PERMESI_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-            .execute(&mut connection)
-            .await
-            .with_context(|| format!("failed to execute schema statement {}", index + 1))?;
-    }
+    test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
+        .await?;
 
     Ok(())
-}
-
-/// Splits a schema file into individual SQL statements, skipping `\\ir` includes used by `psql`.
-/// This is a lightweight parser that assumes statements end with `;` and do not nest semicolons.
-fn split_sql_statements(sql: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current = String::new();
-
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("\\ir ") {
-            continue;
-        }
-        current.push_str(line);
-        current.push('\n');
-
-        if trimmed.ends_with(';') {
-            let statement = current.trim();
-            if !statement.is_empty() {
-                statements.push(statement.to_string());
-            }
-            current.clear();
-        }
-    }
-
-    let leftover = current.trim();
-    if !leftover.is_empty() {
-        statements.push(leftover.to_string());
-    }
-
-    statements
 }
 
 /// Inserts an `active` user row with a random id for use in handler tests.
@@ -176,20 +141,20 @@ fn app_router(pool: PgPool) -> Router {
             post(super::organizations::create_org).get(super::organizations::list_orgs),
         )
         .route(
-            "/v1/orgs/:org_slug",
+            "/v1/orgs/{org_slug}",
             get(super::organizations::get_org).patch(super::organizations::patch_org),
         )
         .route(
-            "/v1/orgs/:org_slug/projects",
+            "/v1/orgs/{org_slug}/projects",
             post(super::projects::create_project).get(super::projects::list_projects),
         )
         .route(
-            "/v1/orgs/:org_slug/projects/:project_slug/envs",
+            "/v1/orgs/{org_slug}/projects/{project_slug}/envs",
             post(super::environments::create_environment)
                 .get(super::environments::list_environments),
         )
         .route(
-            "/v1/orgs/:org_slug/projects/:project_slug/envs/:env_slug/apps",
+            "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps",
             post(super::applications::create_application)
                 .get(super::applications::list_applications),
         )
@@ -200,7 +165,7 @@ fn app_router(pool: PgPool) -> Router {
 /// Verifies that creating an org enrolls the caller as a member and assigns the `owner` role.
 /// This guards the authorization invariant relied on by `OrgContext::can_manage`.
 async fn org_creation_assigns_owner_role() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "owner@example.com").await?;
@@ -235,7 +200,7 @@ async fn org_creation_assigns_owner_role() -> Result<()> {
 /// Ensures project creation is restricted to org managers (owner/admin) and returns `404` otherwise.
 /// This `404` behavior avoids leaking tenant membership via authorization errors.
 async fn project_creation_requires_owner_or_admin() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let owner_id = insert_active_user(&db.pool, "owner2@example.com").await?;
@@ -298,7 +263,7 @@ async fn project_creation_requires_owner_or_admin() -> Result<()> {
 /// Confirms environment creation enforces the production-tier rules (prod first, only one prod).
 /// This matches the invariants enforced in `storage::insert_environment`.
 async fn environment_creation_enforces_single_production() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "env-owner@example.com").await?;
@@ -399,7 +364,7 @@ async fn environment_creation_enforces_single_production() -> Result<()> {
 /// Ensures the environment list endpoint is reachable for members and returns `200` after creation.
 /// It should only return environment DTO fields, not role/membership metadata.
 async fn environment_list_returns_created_envs() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "env-list@example.com").await?;
@@ -498,7 +463,7 @@ async fn environment_list_returns_created_envs() -> Result<()> {
 /// Confirms that a non-member cannot fetch an org and receives `404` rather than `403`.
 /// This is the anti-enumeration behavior: resource existence is hidden across tenants.
 async fn non_member_access_returns_404() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let owner_id = insert_active_user(&db.pool, "owner3@example.com").await?;
@@ -542,7 +507,7 @@ async fn non_member_access_returns_404() -> Result<()> {
 /// Exercises the happy-path flow for creating an org → project → env → application as an owner.
 /// This implicitly checks that nested resolution keeps org/project/env boundaries consistent.
 async fn owner_can_create_app() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "app-owner@example.com").await?;
@@ -628,7 +593,7 @@ async fn owner_can_create_app() -> Result<()> {
 /// Verifies soft-deleted orgs are hidden from `get` and removed from the list endpoint.
 /// This prevents clients from observing deleted resources via stale slugs.
 async fn soft_deleted_org_is_hidden_by_default() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "hidden-org@example.com").await?;
@@ -693,7 +658,7 @@ async fn soft_deleted_org_is_hidden_by_default() -> Result<()> {
 /// Verifies soft-deleted projects are excluded from project lists and make nested env routes return `404`.
 /// This ensures soft-delete is enforced transitively and prevents access through child resources.
 async fn soft_deleted_project_is_hidden_even_with_envs() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "hidden-project@example.com").await?;
@@ -796,7 +761,7 @@ async fn soft_deleted_project_is_hidden_even_with_envs() -> Result<()> {
 /// Verifies soft-deleted environments are excluded from lists and make nested app routes return `404`.
 /// This ensures soft-delete is enforced transitively, even when applications still exist.
 async fn soft_deleted_environment_is_hidden_even_with_apps() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "hidden-env@example.com").await?;
@@ -924,7 +889,7 @@ async fn soft_deleted_environment_is_hidden_even_with_apps() -> Result<()> {
 /// Verifies soft-deleted applications are not returned from the application list endpoint.
 /// This prevents deleted resources from leaking via list APIs.
 async fn soft_deleted_app_is_hidden_by_default() -> Result<()> {
-    let Ok(db) = TestDb::new().await else {
+    let Some(db) = TestDb::new().await? else {
         return Ok(());
     };
     let user_id = insert_active_user(&db.pool, "hidden-app@example.com").await?;

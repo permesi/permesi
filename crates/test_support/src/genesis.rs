@@ -39,19 +39,9 @@ pub async fn apply_genesis_schema(postgres: &PostgresContainer) -> Result<()> {
         .await
         .context("Failed to connect to Postgres for schema setup")?;
 
-    for (index, statement) in split_sql_statements(GENESIS_SCHEMA_SQL).iter().enumerate() {
-        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-            .execute(&mut connection)
-            .await
-            .with_context(|| format!("Failed to execute schema statement {}", index + 1))?;
-    }
+    crate::sql::execute_script(&mut connection, "01_genesis.sql", GENESIS_SCHEMA_SQL).await?;
 
-    for (index, statement) in split_sql_statements(GENESIS_SEED_SQL).iter().enumerate() {
-        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-            .execute(&mut connection)
-            .await
-            .with_context(|| format!("Failed to execute seed statement {}", index + 1))?;
-    }
+    crate::sql::execute_script(&mut connection, "seed_test_client.sql", GENESIS_SEED_SQL).await?;
 
     Ok(())
 }
@@ -180,35 +170,6 @@ path "sys/leases/renew" {{
     )
 }
 
-fn split_sql_statements(sql: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current = String::new();
-
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("\\ir ") {
-            continue;
-        }
-        current.push_str(line);
-        current.push('\n');
-
-        if trimmed.ends_with(';') {
-            let statement = current.trim();
-            if !statement.is_empty() {
-                statements.push(statement.to_string());
-            }
-            current.clear();
-        }
-    }
-
-    let leftover = current.trim();
-    if !leftover.is_empty() {
-        statements.push(leftover.to_string());
-    }
-
-    statements
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,26 +179,5 @@ mod tests {
         let policy = genesis_policy("transit/custom");
         assert!(policy.contains("transit/custom/keys"));
         assert!(policy.contains("transit/custom/sign"));
-    }
-
-    #[test]
-    fn split_sql_statements_skips_include_lines() {
-        let sql = r"
-CREATE TABLE users(id int);
-\ir /db/sql/partitioning.sql
-INSERT INTO users(id) VALUES (1);
-";
-        let statements = split_sql_statements(sql);
-        assert_eq!(statements.len(), 2);
-        assert!(
-            statements
-                .first()
-                .is_some_and(|statement| statement.contains("CREATE TABLE users"))
-        );
-        assert!(
-            statements
-                .get(1)
-                .is_some_and(|statement| statement.contains("INSERT INTO users"))
-        );
     }
 }
