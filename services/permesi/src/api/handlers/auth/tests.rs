@@ -265,7 +265,11 @@ async fn rate_limiter_enforces_shared_ip_and_account_limits() -> Result<()> {
         return Ok(());
     };
 
-    let limiter = RateLimiter::postgres(db.pool.clone(), RateLimitConfig::new(600, 2, 1));
+    let limiter = RateLimiter::postgres(
+        db.pool.clone(),
+        RateLimitConfig::new(600, 2, 1),
+        super::SubjectKey::derive(&[3u8; 32])?,
+    );
     assert_eq!(
         limiter
             .check_ip(Some("192.0.2.10"), RateLimitAction::Login)

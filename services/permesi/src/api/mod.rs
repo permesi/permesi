@@ -144,6 +144,7 @@ pub async fn new(
                 config.auth.rate_limit_ip_attempts(),
                 config.auth.rate_limit_account_attempts(),
             ),
+            auth::SubjectKey::derive(&secrets.opaque_server_seed)?,
         )),
         mfa_config,
     ));

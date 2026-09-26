@@ -46,7 +46,7 @@ mod zero_token;
 
 pub use admin::{AdminConfig, AdminState};
 pub(crate) use rate_limit::{RateLimitAction, RateLimitDecision};
-pub use rate_limit::{RateLimitConfig, RateLimiter};
+pub use rate_limit::{RateLimitConfig, RateLimiter, SubjectKey};
 pub use state::{AuthConfig, AuthState, OpaqueState};
 #[cfg(test)]
 pub(crate) use utils::generate_session_token;

@@ -30,6 +30,7 @@ base64ct = { version = "1.8.3", features = ["alloc"] }
 blake2 = "0.11"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
 getrandom = "0.4"
+hmac = "0.13"
 pasetors = "0.8"
 opaque-ke = { version = "4.0.1", features = ["argon2", "std"] }
 # opaque-ke 4.x exposes protocol traits from the older digest, password-hash, and

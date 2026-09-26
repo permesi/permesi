@@ -1,12 +1,20 @@
 //! Shared rate limiting for unauthenticated authentication flows.
 //!
 //! Production checks use `PostgreSQL` so limits are enforced consistently across
-//! replicas. Subjects are hashed before persistence, and any storage failure
-//! fails closed. Tests can use the explicit no-op backend where throttling is
-//! outside the behavior under test.
+//! replicas, and any storage failure fails closed. Tests can use the explicit
+//! no-op backend where throttling is outside the behavior under test.
+//!
+//! Subjects (client IPs and normalized emails) are stored only as HMAC-SHA256
+//! tags under a [`SubjectKey`] derived from a Vault-held server secret. A plain
+//! hash would not protect them: the IPv4 space and likely email addresses are
+//! small enough to enumerate, so anyone reading `auth_rate_limits` could recover
+//! who attempted to log in. The key is identical on every replica, so counters
+//! stay shared, and it never leaves process memory.
 
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
 use sqlx::PgPool;
+use std::fmt;
 use tracing::error;
 
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +62,46 @@ impl RateLimitConfig {
     }
 }
 
+type HmacSha256 = Hmac<Sha256>;
+
+/// Domain label that separates the rate-limit key from the secret's primary use.
+const SUBJECT_KEY_LABEL: &[u8] = b"permesi/auth-rate-limit/subject-key/v1";
+
+/// Secret key for rate-limit subject tags; its `Debug` output is redacted.
+#[derive(Clone)]
+pub struct SubjectKey([u8; 32]);
+
+impl SubjectKey {
+    /// Derive the key as `HMAC-SHA256(secret, label)`, so it is independent of any
+    /// other use of `secret` (the OPAQUE server seed in production).
+    ///
+    /// # Errors
+    /// Returns an error if the HMAC key cannot be initialized.
+    pub fn derive(secret: &[u8]) -> anyhow::Result<Self> {
+        mac(secret, SUBJECT_KEY_LABEL)
+            .map(Self)
+            .ok_or_else(|| anyhow::anyhow!("failed to derive the rate-limit subject key"))
+    }
+
+    /// Keyed tag stored in place of the raw subject.
+    fn tag(&self, subject: &str) -> Option<[u8; 32]> {
+        mac(&self.0, subject.as_bytes())
+    }
+}
+
+impl fmt::Debug for SubjectKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SubjectKey(<redacted>)")
+    }
+}
+
+/// `HMAC-SHA256(key, message)`; HMAC accepts any key length, so `None` is not expected.
+fn mac(key: &[u8], message: &[u8]) -> Option<[u8; 32]> {
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).ok()?;
+    mac.update(message);
+    Some(mac.finalize().into_bytes().into())
+}
+
 #[derive(Clone, Debug)]
 enum Backend {
     #[cfg(test)]
@@ -61,6 +109,7 @@ enum Backend {
     Postgres {
         pool: PgPool,
         config: RateLimitConfig,
+        key: SubjectKey,
     },
 }
 
@@ -82,10 +131,11 @@ impl RateLimiter {
         }
     }
 
+    /// Build the shared `PostgreSQL` limiter; subjects are tagged with `key`.
     #[must_use]
-    pub fn postgres(pool: PgPool, config: RateLimitConfig) -> Self {
+    pub fn postgres(pool: PgPool, config: RateLimitConfig, key: SubjectKey) -> Self {
         Self {
-            backend: Backend::Postgres { pool, config },
+            backend: Backend::Postgres { pool, config, key },
         }
     }
 
@@ -113,13 +163,16 @@ impl RateLimiter {
         action: RateLimitAction,
         limit: impl FnOnce(RateLimitConfig) -> i64,
     ) -> RateLimitDecision {
-        let (pool, config) = match &self.backend {
+        let (pool, config, key) = match &self.backend {
             #[cfg(test)]
             Backend::Noop => return RateLimitDecision::Allowed,
-            Backend::Postgres { pool, config } => (pool, config),
+            Backend::Postgres { pool, config, key } => (pool, config, key),
         };
 
-        let subject_hash = Sha256::digest(subject.as_bytes()).to_vec();
+        let Some(subject_hash) = key.tag(subject) else {
+            error!(dimension, "rate-limit subject tag failed; failing closed");
+            return RateLimitDecision::Limited;
+        };
         let query = r"
             INSERT INTO auth_rate_limits (
                 dimension, subject_hash, action, attempts, expires_at
@@ -142,7 +195,7 @@ impl RateLimiter {
 
         match sqlx::query_scalar::<_, i64>(query)
             .bind(dimension)
-            .bind(subject_hash)
+            .bind(subject_hash.as_slice())
             .bind(action.as_str())
             .bind(config.window_seconds)
             .fetch_one(pool)
@@ -193,7 +246,11 @@ mod tests {
         let pool =
             sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
         pool.close().await;
-        let limiter = RateLimiter::postgres(pool, RateLimitConfig::new(60, 10, 5));
+        let limiter = RateLimiter::postgres(
+            pool,
+            RateLimitConfig::new(60, 10, 5),
+            SubjectKey::derive(b"test secret")?,
+        );
 
         assert_eq!(
             limiter
@@ -201,6 +258,23 @@ mod tests {
                 .await,
             RateLimitDecision::Limited
         );
+        Ok(())
+    }
+
+    #[test]
+    fn subject_tags_are_keyed_and_not_plain_hashes() -> anyhow::Result<()> {
+        use sha2::Digest;
+        let key = SubjectKey::derive(&[7u8; 32])?;
+        let tag = key.tag("user@example.com");
+
+        assert!(tag.is_some());
+        assert_eq!(tag, key.tag("user@example.com"));
+        assert_ne!(tag, SubjectKey::derive(&[8u8; 32])?.tag("user@example.com"));
+        assert_ne!(
+            tag.map(|tag| tag.to_vec()),
+            Some(Sha256::digest(b"user@example.com").to_vec())
+        );
+        assert_eq!(format!("{key:?}"), "SubjectKey(<redacted>)");
         Ok(())
     }
 
