@@ -100,6 +100,9 @@ jobs:
       - name: test
         run: cargo test --workspace --lib --bins
 
+      - name: test (telemetry feature)
+        run: cargo test -p permesi -p genesis --lib --features permesi/telemetry,genesis/telemetry cli::telemetry
+
   integration:
     name: Integration Tests
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}

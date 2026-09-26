@@ -100,10 +100,8 @@ impl SecurityKeyService {
     ) -> Result<(CreationChallengeResponse, Uuid)> {
         // Fetch existing keys to prevent duplicate registration
         let existing_keys = SecurityKeyRepo::list_user_keys(&self.pool, user_id).await?;
-        let exclude_credentials: Vec<CredentialID> = existing_keys
-            .into_iter()
-            .map(|k| k.credential_id.into())
-            .collect();
+        let exclude_credentials: Vec<CredentialID> =
+            existing_keys.into_iter().map(|k| k.credential_id).collect();
 
         let webauthn = self.webauthn_for_origin(origin)?;
         let (challenge, registration) = webauthn.start_securitykey_registration(
@@ -262,6 +260,23 @@ fn normalize_origin(origin: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::SecurityKeyService;
+    use webauthn_rs::prelude::SecurityKey;
+
+    /// `security_keys.public_key` as persisted by webauthn-rs 0.5, including a packed
+    /// Basic attestation chain (real soft-token registration).
+    const SECURITY_KEY_JSON_WEBAUTHN_RS_0_5: &str = r#"{"cred":{"cred_id":"TebR8Rr_qYQKk8xPX_ycjSbaC-9Mfe2S1lF8lQ7NGW4","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":"pueHeWVe74FeBplzCUHa0Sq6iuVQBzUDElyrg4ti4So","y":"DpDkcMC-l-og4XeINO0iNK0WcaF-migzDI3T9zyti4I"}}},"counter":0,"transports":["internal"],"user_verified":false,"backup_eligible":false,"backup_state":false,"registration_policy":"preferred","extensions":{"cred_protect":"Ignored","hmac_create_secret":"NotRequested","appid":"NotRequested","cred_props":"Ignored"},"attestation":{"data":{"Basic":["MIICYDCCAgegAwIBAgIBAjAKBggqhkjOPQQDAjCBgzELMAkGA1UEBhMCQVUxDDAKBgNVBAgMA1FMRDEiMCAGA1UECgwZV2ViYXV0aG4gQXV0aGVudGljYXRvciBSUzFCMEAGA1UEAww5RHluYW1pYyBTb2Z0dG9rZW4gQ0EgNTcwOWZlNTctZTczNi00NzAwLThhMzktMDU3OTMzOTg3MzRjMB4XDTI2MDkyNjE4MzgzOFoXDTI2MDkyNzE4MzgzOFowgZAxCzAJBgNVBAYTAkFVMQwwCgYDVQQIDANRTEQxIjAgBgNVBAoMGVdlYmF1dGhuIEF1dGhlbnRpY2F0b3IgUlMxKzApBgNVBAMMIkR5bmFtaWMgU29mdHRva2VuIExlYWYgQ2VydGlmaWNhdGUxIjAgBgNVBAsMGUF1dGhlbnRpY2F0b3IgQXR0ZXN0YXRpb24wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARAjV1rEBdEmTurczMJ8oFuWWxB7O5ovCf4jO3W73xC9Nb3ZoPCHHWyS3XQAW1CMy5zsyoqkH_FyIZzVBRdqLDVo10wWzAJBgNVHRMEAjAAMA4GA1UdDwEB_wQEAwIF4DAdBgNVHQ4EFgQUkTVEX39RZwslV6K2gbSFyUT0WXYwHwYDVR0jBBgwFoAU2jmj7l5rSw0yVb_vlWAYkK_YBwkwCgYIKoZIzj0EAwIDRwAwRAIgQ8-yhsjkTcWcIAM6QNYo3HopKOs-q5CPUZsQKIs5-LcCIGpkX2trYkC7HqyBqcPXdkTP770Z7XiWjk-XRdzO2fYc"]},"metadata":{"Packed":{"aaguid":"0fb9bcbc-a0d4-4042-bbb0-559bc1631e28"}}},"attestation_format":"packed"}}"#;
+
+    /// `auth_begin` silently skips keys that fail to deserialize, so a storage-format
+    /// break would make registered keys vanish rather than error.
+    #[test]
+    fn security_key_json_accepts_webauthn_rs_0_5_format() -> anyhow::Result<()> {
+        let key: SecurityKey = serde_json::from_str(SECURITY_KEY_JSON_WEBAUTHN_RS_0_5)?;
+        assert_eq!(key.cred_id().len(), 32);
+
+        let stored: serde_json::Value = serde_json::from_str(SECURITY_KEY_JSON_WEBAUTHN_RS_0_5)?;
+        assert_eq!(serde_json::to_value(&key)?, stored);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn match_origin_accepts_configured_subdomain_origin() -> anyhow::Result<()> {

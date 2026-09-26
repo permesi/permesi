@@ -13,7 +13,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN cargo build --release --locked -p genesis --target "${TARGET}" && \
+RUN cargo build --release --locked -p genesis --features telemetry --target "${TARGET}" && \
     strip "target/${TARGET}/release/genesis"
 
 # Stage 2: grab CA certs from Alpine (for TLS).

@@ -34,6 +34,20 @@ assets = [
 [lints]
 workspace = true
 
+# OTLP trace export is a compile-time capability: the default build keeps local
+# structured logging only and does not compile the OpenTelemetry/tonic stack.
+# Release images, packages, and the dev stack build with `--features telemetry`;
+# such a binary exports spans only when OTEL_EXPORTER_OTLP_ENDPOINT is set at startup.
+[features]
+default = []
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tonic",
+    "dep:tracing-opentelemetry",
+]
+
 [dependencies]
 admission_token = { workspace = true }
 vault_client = { workspace = true }
@@ -47,15 +61,14 @@ clap = { workspace = true, features = ["env"] }
 ed25519-dalek = { workspace = true }
 getrandom = { workspace = true }
 http = { workspace = true }
-once_cell = { workspace = true }
 opaque-ke = { workspace = true }
 opaque_argon2 = { workspace = true }
 opaque_rand_chacha = { workspace = true }
 opaque_rand_core = { workspace = true }
 opaque_sha2 = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls"] }
-opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls-ring"], optional = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"], optional = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }
@@ -81,7 +94,7 @@ sqlx = { workspace = true, features = [
 temp-env = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tonic = { workspace = true, features = ["tls-native-roots"] }
+tonic = { workspace = true, features = ["tls-native-roots"], optional = true }
 tower = { workspace = true }
 tower-http = { workspace = true, features = [
     "trace",
@@ -91,7 +104,7 @@ tower-http = { workspace = true, features = [
     "request-id",
 ] }
 tracing = { workspace = true }
-tracing-opentelemetry = { workspace = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 ulid = { workspace = true }
 url = { workspace = true }
@@ -99,17 +112,11 @@ utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v4", "v7"] }
 chacha20poly1305 = "0.11.0"
-webauthn-rs = { version = "0.5", features = ["conditional-ui", "danger-allow-state-serialisation"] }
+# webauthn-rs 0.6 uses RustCrypto (via crypto-glue) instead of OpenSSL, which keeps
+# the whole workspace OpenSSL-free. Credentials serialized by 0.5 load unchanged.
+webauthn-rs = { version = "0.6.1-dev", features = ["conditional-ui", "danger-allow-state-serialisation"] }
 hex = "0.4"
 service_utils = { workspace = true }
-
-# webauthn-rs requires OpenSSL for WebAuthn attestation crypto (no rustls backend).
-# Vendor + statically link it ONLY for the musl/scratch production build, whose runtime
-# image has no system libssl. On glibc (local dev/test) the system OpenSSL is used via
-# pkg-config (libssl-dev) — no perl / no building OpenSSL from source. All TLS in the
-# app already uses rustls; OpenSSL here is purely webauthn-rs's crypto.
-[target.'cfg(target_env = "musl")'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 base32 = "0.5.1"

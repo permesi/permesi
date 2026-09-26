@@ -11,7 +11,11 @@ async fn main() -> Result<()> {
         .context("TLS crypto provider initialization failed")?;
     let action = cli::start()?;
 
-    action.execute().await?;
+    let result = action.execute().await;
 
-    Ok(())
+    // Flush batched spans even when the action failed, so the trace explaining the exit
+    // is exported. Shutdown blocks on the exporter, so keep it off the async workers.
+    let _ = tokio::task::spawn_blocking(cli::telemetry::shutdown_tracer).await;
+
+    result
 }

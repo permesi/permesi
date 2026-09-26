@@ -34,13 +34,26 @@ assets = [
 [lints]
 workspace = true
 
+# OTLP trace export is a compile-time capability: the default build keeps local
+# structured logging only and does not compile the OpenTelemetry/tonic stack.
+# Release images, packages, and the dev stack build with `--features telemetry`;
+# such a binary exports spans only when OTEL_EXPORTER_OTLP_ENDPOINT is set at startup.
+[features]
+default = []
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tonic",
+    "dep:tracing-opentelemetry",
+]
+
 [dependencies]
 admission_token = { workspace = true }
 vault_client = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
-once_cell = { workspace = true }
 axum = { workspace = true, features = ["tracing"] }
 axum-server = { workspace = true }
 chrono = "0.4"
@@ -49,9 +62,9 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 hyper-util = { workspace = true }
 hyperlocal = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls"] }
-opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls-ring"], optional = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"], optional = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
@@ -76,9 +89,9 @@ tower-http = { workspace = true, features = [
     "set-header",
 ] }
 tracing = { workspace = true }
-tracing-opentelemetry = { workspace = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
-tonic = { workspace = true, features = ["tls-native-roots"] }
+tonic = { workspace = true, features = ["tls-native-roots"], optional = true }
 ulid = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras"] }

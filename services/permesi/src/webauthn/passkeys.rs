@@ -464,6 +464,9 @@ mod tests {
         )
     }
 
+    /// `passkey_data` as persisted by webauthn-rs 0.5 (real soft-authenticator registration).
+    const PASSKEY_JSON_WEBAUTHN_RS_0_5: &str = r#"{"cred":{"cred_id":"VXSvM5w3eRIFrbtTrvLI5VzbKFs82BW8AEv3F5rfYw0","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":"BPiDk9FXwQQcOI4ue2xwwxv9Gw6_bv0XdSx3GoovAGc","y":"GVYpvy3R8IVlt13BeU-USvW28DRFmdSTfF9xdirBpw0"}}},"counter":0,"transports":null,"user_verified":true,"backup_eligible":false,"backup_state":false,"registration_policy":"required","extensions":{"cred_protect":"Ignored","hmac_create_secret":"NotRequested","appid":"NotRequested","cred_props":"Ignored"},"attestation":{"data":"Self_","metadata":"None"},"attestation_format":"packed"}}"#;
+
     fn dummy_register_credential() -> Result<RegisterPublicKeyCredential> {
         let credential = serde_json::from_value(serde_json::json!({
             "id": "dummy",
@@ -475,6 +478,18 @@ mod tests {
             }
         }))?;
         Ok(credential)
+    }
+
+    #[test]
+    fn deserialize_passkey_accepts_webauthn_rs_0_5_format() -> Result<()> {
+        let passkey = deserialize_passkey(PASSKEY_JSON_WEBAUTHN_RS_0_5.as_bytes())?;
+        assert_eq!(passkey.cred_id().len(), 32);
+
+        // Re-serializing must reproduce the stored format so a rollback can still read new rows.
+        let stored: serde_json::Value = serde_json::from_str(PASSKEY_JSON_WEBAUTHN_RS_0_5)?;
+        let reencoded: serde_json::Value = serde_json::from_slice(&serialize_passkey(&passkey)?)?;
+        assert_eq!(reencoded, stored);
+        Ok(())
     }
 
     #[test]

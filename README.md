@@ -404,6 +404,14 @@ Production readiness checklist:
 
 - `cargo build -p permesi`
 - `cargo build -p genesis`
+- `cargo build -p permesi --features telemetry` (same for `genesis`) adds OTLP trace export.
+
+Trace export is behind the default-off `telemetry` Cargo feature, so a plain build carries
+only local structured logging and none of the OpenTelemetry/tonic stack. The container
+images, release tarballs, Debian packages, and the `just` dev recipes all build with
+`--features telemetry`. The feature only makes export possible: a telemetry build sends
+spans only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set at startup, and a build without the
+feature logs a warning if that variable is present instead of silently dropping traces.
 - **Terraform** (v1.5+): Required for provisioning local Vault infrastructure.
 
 ## Web Console
@@ -527,7 +535,8 @@ Regenerate them from code:
 
 ## Local Tracing (Jaeger)
 
-Send OTLP traces directly to the local Jaeger collector:
+Send OTLP traces directly to the local Jaeger collector (the service must be built with
+`--features telemetry`, which `just genesis` / `just permesi` already do):
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317

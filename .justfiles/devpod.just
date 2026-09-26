@@ -310,7 +310,7 @@ devpod-dev:
   # PERMESI_DEVPOD_NO_PREBUILD=1.
   if [[ "${PERMESI_DEVPOD_NO_PREBUILD:-}" != "1" ]] && command -v cargo >/dev/null 2>&1; then
     echo "Pre-building genesis + permesi (parallel; avoids cargo-watch lock contention)..."
-    ( cd "{{root}}" && cargo build -p genesis -p permesi ) \
+    ( cd "{{root}}" && cargo build -p genesis -p permesi --features permesi/telemetry,genesis/telemetry ) \
       || echo "Pre-build failed (continuing; services will build on start)." >&2
   fi
   left="$(tmux new-session -d -s "$session" -c "{{root}}" -P -F "#{pane_id}" "just genesis")"

@@ -13,7 +13,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN cargo build --release --locked -p permesi --target "${TARGET}" && \
+RUN cargo build --release --locked -p permesi --features telemetry --target "${TARGET}" && \
     strip "target/${TARGET}/release/permesi"
 
 # Stage 2: grab CA certs from Alpine (for TLS).

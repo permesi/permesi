@@ -161,7 +161,7 @@ echo "==> Reaping any running dev services (frees ports)..."
 # serialize on the shared cargo-watch build lock when their panes start.
 if [ "${PERMESI_DEVPOD_NO_PREBUILD:-}" != "1" ]; then
     echo "==> Pre-building genesis + permesi (parallel; avoids cargo-watch lock contention)..."
-    "$dev_ssh" cargo build -p genesis -p permesi ||
+    "$dev_ssh" cargo build -p genesis -p permesi --features permesi/telemetry,genesis/telemetry ||
         echo "Pre-build failed (continuing; each pane will build on start)." >&2
 fi
 

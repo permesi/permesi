@@ -45,7 +45,7 @@ jobs:
         if: matrix.build == 'linux'
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis
+        run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
 
   frontend-build:
     name: Build Frontend

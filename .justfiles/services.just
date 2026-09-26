@@ -8,7 +8,7 @@ genesis:
     echo "vault CLI not found; install it or set GENESIS_VAULT_SECRET_ID manually before running." >&2
     exit 1
   fi
-  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis -- --port 8000 -vvv'
+  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis --features telemetry -- --port 8000 -vvv'
 
 permesi:
   #!/usr/bin/env zsh
@@ -61,7 +61,7 @@ permesi:
     echo "vault CLI not found; install it or set PERMESI_VAULT_SECRET_ID manually before running." >&2
     exit 1
   fi
-  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi -- --port 8001 -vvv'
+  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi --features telemetry -- --port 8001 -vvv'
 
 genesis-socket:
   #!/usr/bin/env zsh
@@ -78,7 +78,7 @@ genesis-socket:
     exit 1
   fi
   echo "Starting genesis on socket: {{root}}/.tmp/genesis.sock"
-  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis -- --socket-path {{root}}/.tmp/genesis.sock -vvv'
+  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis --features telemetry -- --socket-path {{root}}/.tmp/genesis.sock -vvv'
 
 permesi-socket:
   #!/usr/bin/env zsh
@@ -103,4 +103,4 @@ permesi-socket:
     exit 1
   fi
   echo "Starting permesi on socket: {{root}}/.tmp/permesi.sock"
-  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi -- --socket-path {{root}}/.tmp/permesi.sock -vvv'
+  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi --features telemetry -- --socket-path {{root}}/.tmp/permesi.sock -vvv'

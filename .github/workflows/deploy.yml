@@ -49,7 +49,7 @@ jobs:
         if: matrix.build == 'linux'
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis
+        run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
 
       - name: Build archives
         shell: bash
@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked -p permesi -p genesis
+          cargo build --release --locked -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
           cargo deb -p permesi --no-build
           cargo deb -p genesis --no-build
           permesi_deb="$(ls target/debian/permesi_*.deb)"
