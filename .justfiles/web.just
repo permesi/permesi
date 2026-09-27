@@ -11,8 +11,22 @@ web: web-clean
     fi
   }
   trap cleanup EXIT INT TERM
-  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost}"
-  : "${PERMESI_TOKEN_BASE_URL:=https://genesis.permesi.localhost}"
+  # The two URLs are compiled into the WASM, so take the local-stack values from the
+  # freshly generated .envrc: a long-lived Herdr or tmux server may still carry an
+  # older port. A URL pointing anywhere but the local stack is left alone, and no
+  # other .envrc value (Vault or DB secrets) reaches trunk or npm.
+  if [[ -f {{root}}/.envrc ]]; then
+    for var in PERMESI_API_BASE_URL PERMESI_TOKEN_BASE_URL; do
+      if [[ -z "${(P)var:-}" || "${(P)var}" == https://*.permesi.localhost* ]]; then
+        line="$(rg -N "^export ${var}=" {{root}}/.envrc || true)"
+        if [[ -n "$line" ]]; then
+          eval "$line"
+        fi
+      fi
+    done
+  fi
+  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost{{https_suffix}}}"
+  : "${PERMESI_TOKEN_BASE_URL:=https://genesis.permesi.localhost{{https_suffix}}}"
   : "${PERMESI_CLIENT_ID:=00000000-0000-0000-0000-000000000000}"
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
     PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
@@ -36,8 +50,8 @@ web-build: web-node-setup
   mkdir -p "${dist_dir}"
   rm -rf "${dist_dir}/.stage"
   mkdir -p "${dist_dir}/.stage"
-  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost}"
-  : "${PERMESI_TOKEN_BASE_URL:=https://genesis.permesi.localhost}"
+  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost{{https_suffix}}}"
+  : "${PERMESI_TOKEN_BASE_URL:=https://genesis.permesi.localhost{{https_suffix}}}"
   : "${PERMESI_CLIENT_ID:=00000000-0000-0000-0000-000000000000}"
   XDG_CACHE_HOME="{{root}}/.tmp/xdg-cache" \
     PERMESI_API_BASE_URL="${PERMESI_API_BASE_URL}" \
@@ -111,6 +125,8 @@ firefox:
   #!/usr/bin/env zsh
   set -euo pipefail
   script="{{root}}/firefox-dev.sh"
+  : "${HOME_URLS:=https://permesi.localhost{{https_suffix}}|https://api.permesi.localhost{{https_suffix}}/health|https://genesis.permesi.localhost{{https_suffix}}/health}"
+  export HOME_URLS
   if [[ ! -x "$script" ]]; then
     echo "Missing executable: ${script}" >&2
     exit 1

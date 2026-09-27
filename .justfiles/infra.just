@@ -12,7 +12,7 @@ postgres version="18": setup-network
       -e POSTGRES_USER=postgres \
       -e POSTGRES_HOST_AUTH_METHOD=trust \
       -e PGDATA=/db/data/{{ version }} \
-      -p 5432:5432 \
+      -p {{publish_ip}}5432:5432 \
       -v {{root}}/db:/db \
       -v {{root}}/db/config/postgres:/etc/postgresql/config \
       -v {{root}}/db/sql/container-entrypoint.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
@@ -94,16 +94,16 @@ jaeger: setup-network
     --network {{net}} \
     --label {{stack_label}} \
     -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
-    -p 6831:6831/udp \
-    -p 6832:6832/udp \
-    -p 5778:5778 \
-    -p 16686:16686 \
-    -p 4317:4317 \
-    -p 4318:4318 \
-    -p 14250:14250 \
-    -p 14268:14268 \
-    -p 14269:14269 \
-  -p 9411:9411 \
+    -p {{publish_ip}}6831:6831/udp \
+    -p {{publish_ip}}6832:6832/udp \
+    -p {{publish_ip}}5778:5778 \
+    -p {{publish_ip}}16686:16686 \
+    -p {{publish_ip}}4317:4317 \
+    -p {{publish_ip}}4318:4318 \
+    -p {{publish_ip}}14250:14250 \
+    -p {{publish_ip}}14268:14268 \
+    -p {{publish_ip}}14269:14269 \
+    -p {{publish_ip}}9411:9411 \
   {{jaeger_image}}
 
 jaeger-stop:
@@ -312,11 +312,19 @@ haproxy-start: setup-network
     echo "permesi-haproxy already running."
     exit 0
   fi
-  port_args=(-p 443:8080)
-  if [[ "$(uname -s)" == "Linux" ]] && sysctl -n net.ipv6.conf.all.disable_ipv6 >/dev/null 2>&1; then
-    if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "0" ]]; then
-      port_args=(-p "[::]:443:8080")
-    fi
+  # Publish on PERMESI_HTTPS_PORT: loopback (v4, plus v6 when enabled) by default,
+  # every interface only when PERMESI_BIND_ADDR=0.0.0.0.
+  port="{{https_port}}"
+  if [[ "{{bind_addr}}" == "0.0.0.0" ]]; then
+    v4_args=(-p "${port}:8080")
+    v6_args=(-p "[::]:${port}:8080")
+  else
+    v4_args=(-p "127.0.0.1:${port}:8080")
+    v6_args=("${v4_args[@]}" -p "[::1]:${port}:8080")
+  fi
+  port_args=("${v4_args[@]}")
+  if [[ "$(uname -s)" == "Linux" && "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)" == "0" ]]; then
+    port_args=("${v6_args[@]}")
   fi
   add_host_arg=()
   if [[ "$(uname -s)" == "Linux" ]]; then
@@ -331,10 +339,10 @@ haproxy-start: setup-network
     -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
     -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
     {{haproxy_image}}; then
-    if [[ "${port_args[*]}" == *"[::]:443:8080"* ]]; then
+    if [[ "${port_args[*]}" != "${v4_args[*]}" ]]; then
       echo "IPv6 publish failed; retrying IPv4-only."
       podman rm -f permesi-haproxy >/dev/null 2>&1 || true
-      port_args=(-p 443:8080)
+      port_args=("${v4_args[@]}")
       podman run --replace -d --name permesi-haproxy \
         --network {{net}} \
         --label {{stack_label}} \
@@ -381,11 +389,19 @@ haproxy-socket-start: setup-network
     podman stop permesi-haproxy >/dev/null
   fi
 
-  port_args=(-p 443:8080)
-  if [[ "$(uname -s)" == "Linux" ]] && sysctl -n net.ipv6.conf.all.disable_ipv6 >/dev/null 2>&1; then
-    if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "0" ]]; then
-      port_args=(-p "[::]:443:8080")
-    fi
+  # Publish on PERMESI_HTTPS_PORT: loopback (v4, plus v6 when enabled) by default,
+  # every interface only when PERMESI_BIND_ADDR=0.0.0.0.
+  port="{{https_port}}"
+  if [[ "{{bind_addr}}" == "0.0.0.0" ]]; then
+    v4_args=(-p "${port}:8080")
+    v6_args=(-p "[::]:${port}:8080")
+  else
+    v4_args=(-p "127.0.0.1:${port}:8080")
+    v6_args=("${v4_args[@]}" -p "[::1]:${port}:8080")
+  fi
+  port_args=("${v4_args[@]}")
+  if [[ "$(uname -s)" == "Linux" && "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)" == "0" ]]; then
+    port_args=("${v6_args[@]}")
   fi
 
   add_host_arg=()
@@ -420,8 +436,13 @@ haproxy-sysctl:
     echo "haproxy-sysctl is Linux-only."
     exit 0
   fi
-  echo "Allowing unprivileged binds to port 443..."
-  sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443
+  port="{{https_port}}"
+  if (( port >= 1024 )); then
+    echo "Not needed: PERMESI_HTTPS_PORT=${port} is not a privileged port."
+    exit 0
+  fi
+  echo "Allowing unprivileged binds to port ${port}..."
+  sudo sysctl -w net.ipv4.ip_unprivileged_port_start=${port}
 
 
 # Restart everything: stop infra and tmux, then start again
@@ -523,7 +544,15 @@ start:
   start_session
   tmux attach -t "$session"
 
-dev-start-infra: setup-network postgres vault-persist-ready dev-tls-certs jaeger haproxy-start
+# Warn loudly when the infra is published on every interface (PERMESI_BIND_ADDR=0.0.0.0).
+_warn-exposed:
+  #!/usr/bin/env zsh
+  if [[ "{{bind_addr}}" == "0.0.0.0" ]]; then
+    echo "⚠️  PERMESI_BIND_ADDR=0.0.0.0: Postgres (trust auth, no password) and Vault" >&2
+    echo "   (root token in vault/keys.json) are reachable from the network." >&2
+  fi
+
+dev-start-infra: _warn-exposed setup-network postgres vault-persist-ready dev-tls-certs jaeger haproxy-start
 
 # Stop all services and the tmux session
 stop: tmux-stop dev-stop

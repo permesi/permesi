@@ -303,6 +303,8 @@ feature logs a warning if that variable is present instead of silently dropping 
 Default ports: genesis `8000`, permesi `8001`, web `8081`.
 
 Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443` and runs the backends over HTTPS/TLS (the same transport as production and k8s). The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
+
+Two environment variables adapt the stack to the host. `PERMESI_BIND_ADDR` (default `127.0.0.1`) is where every container publishes its ports: Postgres runs with trust auth and `vault/keys.json` holds the Vault root token, so nothing is reachable from the network unless you set it to `0.0.0.0`. `PERMESI_HTTPS_PORT` (default `443`) is the HAProxy port the browser uses; any other value, for example `8443`, is carried into every browser-facing URL (`.envrc`, the compiled web console, CORS and passkey origins), so the console lives at `https://permesi.localhost:8443` and no `sysctl` change is needed. `just dev-envrc` records both values in `.envrc`, and an explicit value in your environment always wins. One caveat on shared or cloud hosts: genesis (`:8000`), permesi (`:8001`) and trunk (`:8081`) still listen on all interfaces because HAProxy reaches them from its container through `host.containers.internal`, so keep the host firewall closed to everything but SSH.
 If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
 `just start-socket` is an opt-in alternative that serves the backends over Unix domain sockets for a same-host performance optimization. In that mode the HAProxy container runs with your current UID/GID so it can open the `0660` Unix sockets created under `.tmp/` without widening local socket permissions. Sockets are same-host only and are not portable across separate hosts/pods (k8s), so HTTPS remains the default.
 
@@ -384,7 +386,7 @@ podman run -d --name permesi-haproxy \
 ```
 
 On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443` (persist with a sysctl.d config if desired). The services resolve `*.permesi.localhost` through the system resolver: nss-myhostname (`myhostname` in `/etc/nsswitch.conf`) or systemd-resolved map `*.localhost` to loopback; otherwise add `127.0.0.1 permesi.localhost api.permesi.localhost genesis.permesi.localhost` (and a matching `::1` line) to `/etc/hosts`.
-You can run `just haproxy-sysctl` to apply the sysctl setting.
+You can run `just haproxy-sysctl` to apply the sysctl setting, or avoid it entirely with `export PERMESI_HTTPS_PORT=8443`.
 
 ### Testing Admin Claim (Platform Operator)
 To test bootstrapping the first admin or elevating privileges, you need a Vault token with the `permesi-operators` policy.

@@ -34,7 +34,7 @@ vault: _vault-keys-guard vault-stop setup-network
     --network {{net}} \
     --label {{stack_label}} \
     --cap-add=IPC_LOCK \
-    -p 8200:8200 \
+    -p {{publish_ip}}8200:8200 \
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
     -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
     {{vault_image}}
@@ -69,7 +69,7 @@ vault-persist: setup-network
     --label {{stack_label}} \
     --user 0:0 \
     --cap-add=IPC_LOCK \
-    -p 8200:8200 \
+    -p {{publish_ip}}8200:8200 \
     -v {{root}}/vault/config.hcl:/vault/config/vault.hcl:ro \
     -v {{root}}/vault:/workspace/vault:ro \
     -v permesi-vault-data:/vault/data \
@@ -370,6 +370,9 @@ dev-env:
     rg -N '^export PERMESI_' "$tmp" | rg -v '^export PERMESI_OPERATOR_TOKEN='
   )"
   printf '%s\n' \
+    "export PERMESI_BIND_ADDR=\"\${PERMESI_BIND_ADDR:-{{bind_addr}}}\"" \
+    "export PERMESI_HTTPS_PORT=\"\${PERMESI_HTTPS_PORT:-{{https_port}}}\"" \
+    "" \
     "$vault_block" \
     "$operator_block" \
     "" \
@@ -380,10 +383,10 @@ dev-env:
     "export PERMESI_TLS_PEM_BUNDLE=\"{{root}}/certs/permesi/tls.bundle.pem\"" \
     "export PERMESI_ADMISSION_PASERK_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
     "export PERMESI_ADMISSION_PASERK_URL=\"https://genesis.permesi.localhost:8000/paserk.json\"" \
-    "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost\"" \
-    "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost\"" \
-    "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost\"" \
-    "export PERMESI_PASSKEYS_ALLOWED_ORIGINS=\"https://permesi.localhost\"" \
+    "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost{{https_suffix}}\"" \
+    "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost{{https_suffix}}\"" \
+    "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost{{https_suffix}}\"" \
+    "export PERMESI_PASSKEYS_ALLOWED_ORIGINS=\"https://permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_EMAIL_OUTBOX_POLL_SECONDS=\"10\""
 
 vault-envrc:

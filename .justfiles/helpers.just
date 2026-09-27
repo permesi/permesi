@@ -9,7 +9,7 @@ genesis-token:
   # mkcert -install. To hit genesis directly, set GENESIS_API_BASE_URL to
   # https://genesis.permesi.localhost:8000 and GENESIS_CA_PATH to the Vault PKI CA
   # (certs/genesis/ca.pem); GENESIS_CA_PATH also pins a pushed mkcert root on a VM.
-  base="${GENESIS_API_BASE_URL:-https://genesis.permesi.localhost}"
+  base="${GENESIS_API_BASE_URL:-https://genesis.permesi.localhost{{https_suffix}}}"
   verify=()
   if [[ -n "${GENESIS_CA_PATH:-}" ]]; then
     verify=(--verify "${GENESIS_CA_PATH}")

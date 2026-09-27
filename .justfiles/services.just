@@ -17,7 +17,12 @@ permesi:
     source {{root}}/.envrc
   fi
   if [[ -n "${PERMESI_SOCKET_MODE:-}" ]]; then
-    export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost/paserk.json"
+    https_port="${PERMESI_HTTPS_PORT:-443}"
+    https_suffix=""
+    if [[ "$https_port" != "443" ]]; then
+      https_suffix=":${https_port}"
+    fi
+    export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost${https_suffix}/paserk.json"
   fi
   paserk_url="${PERMESI_ADMISSION_PASERK_URL:-}"
   ca_path="{{root}}/certs/permesi/ca.pem"
@@ -91,8 +96,14 @@ permesi-socket:
   export PERMESI_SOCKET_MODE=1
   # Unset TLS bundle to avoid conflict with --socket-path
   unset PERMESI_TLS_PEM_BUNDLE
-  # Override PASERK URL to go through HAProxy (HTTPS on port 443)
-  export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost/paserk.json"
+  # Override PASERK URL to go through HAProxy (HTTPS on PERMESI_HTTPS_PORT, baked
+  # into .envrc by `just dev-envrc`).
+  https_port="${PERMESI_HTTPS_PORT:-443}"
+  https_suffix=""
+  if [[ "$https_port" != "443" ]]; then
+    https_suffix=":${https_port}"
+  fi
+  export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost${https_suffix}/paserk.json"
   # Override CA path to trust mkcert (HAProxy) instead of internal Vault CA
   if [[ -f "{{root}}/certs/mkcert-root.pem" ]]; then
     export PERMESI_ADMISSION_PASERK_CA_PATH="{{root}}/certs/mkcert-root.pem"

@@ -27,7 +27,7 @@ schemathesis-permesi:
     exit 1
   fi
 
-  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost}"
+  : "${PERMESI_API_BASE_URL:=https://api.permesi.localhost{{https_suffix}}}"
   : "${PERMESI_API_TLS_VERIFY:=false}"
   : "${PERMESI_SCHEMATHESIS_PHASES:=examples,coverage}"
   : "${PERMESI_SCHEMATHESIS_MAX_EXAMPLES:=25}"
@@ -112,7 +112,7 @@ schemathesis-genesis:
     exit 1
   fi
 
-  : "${GENESIS_API_BASE_URL:=https://genesis.permesi.localhost}"
+  : "${GENESIS_API_BASE_URL:=https://genesis.permesi.localhost{{https_suffix}}}"
   : "${GENESIS_API_TLS_VERIFY:=false}"
   : "${GENESIS_SCHEMATHESIS_PHASES:=examples,coverage}"
   : "${GENESIS_SCHEMATHESIS_MAX_EXAMPLES:=25}"
@@ -227,7 +227,7 @@ schemathesis-permesi-auth-env email="schemathesis.local@example.com" role="owner
           ON CONFLICT (user_id) DO UPDATE SET enabled = TRUE;" >/dev/null
 
     vault_token="$(just --quiet operator-token)"
-    api_base="${PERMESI_API_BASE_URL:-https://api.permesi.localhost}"
+    api_base="${PERMESI_API_BASE_URL:-https://api.permesi.localhost{{https_suffix}}}"
     admin_response="$(
       curl -fsS -k \
         -H "Content-Type: application/json" \

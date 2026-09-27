@@ -15,8 +15,20 @@ vault_ctr := "permesi-vault"
 jaeger_ctr := "permesi-jaeger"
 stack_label := "io.permesi.stack=dev"
 
+# Where published container ports listen, and the browser-facing HTTPS port.
+# PERMESI_BIND_ADDR defaults to loopback because Postgres uses trust auth and
+# vault/keys.json holds the Vault root token; 0.0.0.0 restores LAN access. Host clients
+# hard-code loopback (VAULT_ADDR, the DSNs, terraform), so no other address works.
+# PERMESI_HTTPS_PORT is the HAProxy port the browser uses; every browser-facing URL
+# carries it when it is not 443, because CORS and WebAuthn compare origins including
+# the port. Over an SSH forward, use the same number on both ends.
+bind_addr := env_var_or_default("PERMESI_BIND_ADDR", "127.0.0.1")
+https_port := env_var_or_default("PERMESI_HTTPS_PORT", "443")
+https_suffix := if https_port == "443" { "" } else { ":" + https_port }
+publish_ip := if bind_addr == "0.0.0.0" { "" } else { bind_addr + ":" }
+
 # Validated eagerly so a bad override fails before any recipe runs.
-_knobs_ok := if subnet !~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' { error("PERMESI_SUBNET must be an IPv4 CIDR such as 172.31.20.0/24") } else { "" }
+_knobs_ok := if subnet !~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' { error("PERMESI_SUBNET must be an IPv4 CIDR such as 172.31.20.0/24") } else if bind_addr !~ '^(127\.0\.0\.1|0\.0\.0\.0)$' { error("PERMESI_BIND_ADDR must be 127.0.0.1 or 0.0.0.0") } else if https_port !~ '^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$' { error("PERMESI_HTTPS_PORT must be a TCP port (1-65535)") } else if https_port =~ '^(4317|4318|5432|8000|8001|8081|8200|16686)$' { error("PERMESI_HTTPS_PORT collides with a dev service port") } else { "" }
 
 # Local infra images: pinned and fully qualified, so rootless podman never has to
 # resolve a short name and every developer runs the same versions.
