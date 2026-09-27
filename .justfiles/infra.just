@@ -905,7 +905,7 @@ doctor:
   section() { print -r -- ""; print -r -- "$*"; }
   have() { command -v "$1" >/dev/null 2>&1; }
   os="$(uname -s)"
-  hint_install="install it with \`mise install\` or your package manager"
+  hint_install="install it with \`mise trust && mise install\` or your package manager"
 
   section "Required tools"
   for tool in zsh jq rg curl vault cargo node npm; do

@@ -1,8 +1,8 @@
 # Project toolchain for the host dev flow (`just start`), the same on Linux and
-# macOS: run `mise install`, then `just doctor`. Keep personal tools in your own
-# ~/.config/mise/config.toml. System packages stay outside mise: zsh (the justfile
-# shell), podman (rootless), jq, curl, and tmux only as the fallback when herdr is
-# not available.
+# macOS: run `mise trust && mise install`, then `just doctor`. Keep personal tools
+# in your own ~/.config/mise/config.toml. System packages stay outside mise: zsh
+# (the justfile shell), podman (rootless), jq, curl, and tmux only as the fallback
+# when herdr is not available.
 
 [settings]
 cargo.binstall = true

@@ -62,7 +62,7 @@ On the VM, once:
 
 ```bash
 # zsh, podman (rootless), jq and curl from the OS packages; the rest from mise.toml
-mise install
+mise trust && mise install
 loginctl enable-linger "$USER"   # keep the stack running after you log out
 git clone https://github.com/permesi/permesi.git ~/permesi
 cd ~/permesi && just doctor
