@@ -868,3 +868,251 @@ podman-check:
     exit 1
   fi
   echo "podman remote API is reachable."
+
+# Check the host before `just start`. Read-only: it installs and changes nothing,
+# prints one line per check (✓ ok, ! warning, ✗ problem, each with a hint) and exits
+# 1 when a required check fails. It is not a dependency of `start`, so startup stays
+# fast; run it on a new laptop or VM and whenever `just start` misbehaves.
+[doc("Check tools, multiplexer, ports, network and Vault state before just start")]
+doctor:
+  #!/usr/bin/env zsh
+  set -uo pipefail
+  autoload -Uz is-at-least
+  root="{{root}}"
+  root="${root:A}"
+  fails=0
+  warns=0
+  ok() { print -r -- "  ✓ $*"; }
+  warn() { print -r -- "  ! $*"; (( warns++ )); }
+  fail() { print -r -- "  ✗ $*"; (( fails++ )); }
+  section() { print -r -- ""; print -r -- "$*"; }
+  have() { command -v "$1" >/dev/null 2>&1; }
+  os="$(uname -s)"
+  hint_install="install it with \`mise install\` or your package manager"
+
+  section "Required tools"
+  for tool in zsh jq rg curl vault cargo node npm; do
+    if have "$tool"; then ok "$tool"; else fail "$tool missing: ${hint_install}"; fi
+  done
+  if have podman; then
+    pv="$(podman version --format '{{{{.Client.Version}}' 2>/dev/null)"
+    if [[ "$(podman info --format '{{{{.Host.Security.Rootless}}' 2>/dev/null)" == "true" ]]; then
+      ok "podman ${pv} (rootless)"
+    else
+      fail "podman ${pv} is not running rootless; the dev stack expects rootless podman"
+    fi
+    if [[ -n "$pv" ]] && ! is-at-least 5.3 "$pv"; then
+      warn "podman ${pv} is older than 5.3; HAProxy's host.containers.internal:host-gateway mapping may not work"
+    fi
+  else
+    fail "podman missing: install it with your package manager (rootless)"
+  fi
+  if have terraform; then
+    tv="$(terraform version -json 2>/dev/null | jq -r '.terraform_version // empty')"
+    if [[ -n "$tv" ]] && is-at-least 1.7 "$tv"; then ok "terraform ${tv}"; else fail "terraform ${tv:-unknown} is older than 1.7 (vault/contrib/terraform requires >= 1.7)"; fi
+  else
+    fail "terraform missing: ${hint_install}"
+  fi
+  if have cargo && cargo watch --version >/dev/null 2>&1; then
+    ok "cargo-watch"
+  else
+    fail "cargo-watch missing: without it the service panes exit at once; ${hint_install}"
+  fi
+  if have rustup; then
+    if rustup target list --installed 2>/dev/null | grep -qx 'wasm32-unknown-unknown'; then
+      ok "rust target wasm32-unknown-unknown"
+    else
+      fail "rust target wasm32-unknown-unknown missing: rustup target add wasm32-unknown-unknown"
+    fi
+  else
+    warn "rustup not found; cannot check the wasm32-unknown-unknown target the web console needs"
+  fi
+
+  section "Multiplexer (just start: Herdr first, tmux fallback)"
+  want="${PERMESI_MUX:-auto}"
+  pick=none
+  if have herdr; then
+    if herdr status server 2>/dev/null | grep -q 'status: running'; then
+      if herdr status 2>/dev/null | grep -q 'endpoint_compatible: yes'; then
+        ok "herdr $(herdr --version 2>/dev/null | awk '{print $2}') (server running)"
+      else
+        warn "herdr server is running but reports an incompatible endpoint; see \`herdr status\`"
+      fi
+    else
+      ok "herdr $(herdr --version 2>/dev/null | awk '{print $2}') (just start will launch a headless server)"
+    fi
+    [[ "$want" == "auto" || "$want" == "herdr" ]] && pick=herdr
+  else
+    warn "herdr not installed (preferred): ${hint_install}"
+  fi
+  if have tmux; then
+    tv="$(tmux -V 2>/dev/null | awk '{print $2}' | tr -cd '0-9.')"
+    if [[ -n "$tv" ]] && is-at-least 3.2 "$tv"; then ok "tmux ${tv} (fallback)"; else warn "tmux ${tv:-unknown} is older than 3.2; the tmux fallback needs new-session -e"; fi
+    [[ "$pick" == "none" && "$want" != "none" && "$want" != "herdr" ]] && pick=tmux
+  fi
+  [[ "$want" == "none" ]] && pick=none
+  if [[ "$pick" == "none" && "$want" != "none" ]]; then
+    warn "neither herdr nor tmux is usable; just start will only start the infra and print the service commands"
+  else
+    ok "just start will use: ${pick} (PERMESI_MUX=${want})"
+  fi
+
+  section "Optional tools"
+  for pair in "trunk:just web installs a pinned release" "direnv:loads .envrc automatically" \
+      "mkcert:laptop-local TLS (a remote VM gets its cert from scripts/dev-remote)" \
+      "xh:just genesis-token" "python3:just genesis-token" "uv:schemathesis recipes" \
+      "openssl:schemathesis auth recipes" "lsof:just stop process cleanup"; do
+    tool="${pair%%:*}"
+    if have "$tool"; then ok "$tool"; else warn "$tool missing (${pair#*:})"; fi
+  done
+
+  section "Settings"
+  ok "PERMESI_BIND_ADDR={{bind_addr}} PERMESI_HTTPS_PORT={{https_port}} PERMESI_NET={{net}} PERMESI_SUBNET={{subnet}}"
+  if [[ "{{bind_addr}}" == "0.0.0.0" ]]; then
+    warn "PERMESI_BIND_ADDR=0.0.0.0 exposes Postgres (trust auth) and Vault (root token on disk) to the network"
+  fi
+  if [[ -f "${root}/.envrc" ]]; then
+    baked="$(sed -n 's/^export PERMESI_HTTPS_PORT="\${PERMESI_HTTPS_PORT:-\([0-9]*\)}"$/\1/p' "${root}/.envrc")"
+    if [[ -n "$baked" && "$baked" != "{{https_port}}" ]]; then
+      warn ".envrc was generated for port ${baked}, not {{https_port}}: run \`just dev-envrc\` (or \`just restart\`)"
+    fi
+  fi
+
+  section "Host"
+  port="{{https_port}}"
+  if [[ "$os" == "Linux" ]] && (( port < 1024 )); then
+    start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+    if (( port < start )); then
+      fail "port ${port} is privileged (ip_unprivileged_port_start=${start}): run \`just haproxy-sysctl\` or export PERMESI_HTTPS_PORT=8443"
+    else
+      ok "unprivileged binds allowed from port ${start}"
+    fi
+  fi
+  resolved=""
+  if [[ "$os" == "Darwin" ]]; then
+    resolved="$(dscacheutil -q host -a name genesis.permesi.localhost 2>/dev/null | awk '/address:/{print $2}')"
+  elif have getent; then
+    resolved="$(getent hosts genesis.permesi.localhost 2>/dev/null | awk '{print $1}')"
+  fi
+  if print -r -- "$resolved" | grep -Eq '^(127\.|::1$)'; then
+    ok "*.permesi.localhost resolves to loopback for the services"
+  else
+    fail "genesis.permesi.localhost does not resolve to loopback (permesi fetches PASERK by that name); add '127.0.0.1 permesi.localhost api.permesi.localhost genesis.permesi.localhost' to /etc/hosts"
+  fi
+  if [[ -n "${SSH_CONNECTION:-}" ]] && have loginctl; then
+    if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" == "yes" ]]; then
+      ok "systemd linger enabled (containers and sessions survive logout)"
+    else
+      warn "systemd linger is off: containers and the dev session may stop when you log out; run \`loginctl enable-linger $USER\`"
+    fi
+  fi
+  owner_cwd() {
+    local pid cwd
+    for pid in ${=$(lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null)}; do
+      if [[ -r "/proc/${pid}/cwd" ]]; then
+        cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null)"
+      else
+        cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+      fi
+      print -r -- "$cwd"
+    done
+  }
+  listening() {
+    if have lsof; then
+      lsof -t -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+    elif have ss; then
+      [[ -n "$(ss -Hltn "sport = :$1" 2>/dev/null)" ]]
+    else
+      return 1
+    fi
+  }
+  running() { [[ -n "$(podman ps -q --filter "name=^$1\$" 2>/dev/null)" ]]; }
+  for spec in "5432:postgres-permesi" "8200:{{vault_ctr}}" "16686:{{jaeger_ctr}}" "4317:{{jaeger_ctr}}" "${port}:permesi-haproxy"; do
+    p="${spec%%:*}"
+    ctr="${spec#*:}"
+    if listening "$p" && ! running "$ctr"; then
+      warn "port ${p} is taken by something other than ${ctr}; ${ctr} will fail to start"
+    fi
+  done
+  if have lsof; then
+    for p in 8000 8001 8081; do
+      for cwd in ${(f)"$(owner_cwd "$p")"}; do
+        if [[ -n "$cwd" && "$cwd" != "$root" && "$cwd" != "$root"/* ]]; then
+          warn "port ${p} is held by a process outside this checkout (${cwd}); the matching service cannot bind"
+        fi
+      done
+    done
+  fi
+
+  section "Isolation"
+  if have podman; then
+    if podman network exists {{net}} 2>/dev/null; then
+      current="$(podman network inspect {{net}} --format '{{{{range .Subnets}}{{{{.Subnet}} {{{{end}}' 2>/dev/null)"
+      current="${current% }"
+      if [[ " ${current} " == *" {{subnet}} "* ]]; then
+        ok "podman network {{net}} uses {{subnet}}"
+      else
+        fail "podman network {{net}} uses ${current:-no subnet}, expected {{subnet}}: remove it or set PERMESI_SUBNET"
+      fi
+    else
+      ok "podman network {{net}} will be created with {{subnet}}"
+    fi
+    if [[ "$os" == "Linux" ]] && have ip; then
+      ip2int() { local a b c d; IFS=. read -r a b c d <<<"$1"; print -r -- $(( (a << 24) + (b << 16) + (c << 8) + d )); }
+      net_ip="{{subnet}}"; net_ip="${net_ip%/*}"; net_len="{{subnet}}"; net_len="${net_len#*/}"
+      n1=$(ip2int "$net_ip"); m1=$(( (0xFFFFFFFF << (32 - net_len)) & 0xFFFFFFFF ))
+      for route in ${(f)"$(ip -o -4 route show 2>/dev/null | awk '$1 ~ /\// {print $1" "$3}')"}; do
+        dst="${route%% *}"; dev="${route#* }"
+        r_ip="${dst%/*}"; r_len="${dst#*/}"
+        n2=$(ip2int "$r_ip"); m2=$(( (0xFFFFFFFF << (32 - r_len)) & 0xFFFFFFFF ))
+        m=$(( m1 < m2 ? m1 : m2 ))
+        if (( (n1 & m) == (n2 & m) )); then
+          fail "{{subnet}} overlaps host route ${dst} (dev ${dev}); containers could not reach that range: set PERMESI_SUBNET to a free range"
+        fi
+      done
+    fi
+    leaked="$(podman ps -a --format '{{{{.Names}}' 2>/dev/null | grep -c '^permesi-test-' || true)"
+    leaked_nets="$(podman network ls --format '{{{{.Name}}' 2>/dev/null | grep -c '^permesi-test-' || true)"
+    if (( leaked + leaked_nets > 0 )); then
+      warn "${leaked} leaked test container(s) and ${leaked_nets} test network(s): run \`just test-clean\`"
+    fi
+    for legacy in vault jaeger; do
+      if podman container exists "$legacy" 2>/dev/null; then
+        nets="$(podman container inspect "$legacy" --format '{{{{range $k, $v := .NetworkSettings.Networks}}{{{{$k}} {{{{end}}' 2>/dev/null)"
+        if [[ " ${nets} " == *" {{net}} "* ]]; then
+          warn "legacy container '${legacy}' from the old permesi flow is still around: podman rm -f ${legacy}"
+        fi
+      fi
+    done
+    for ctr in ${(f)"$(podman ps --filter label={{stack_label}} --format '{{{{.Names}}' 2>/dev/null)"}; do
+      nets="$(podman container inspect "$ctr" --format '{{{{range $k, $v := .NetworkSettings.Networks}}{{{{$k}} {{{{end}}' 2>/dev/null)"
+      if [[ " ${nets} " != *" {{net}} "* ]]; then
+        warn "${ctr} runs outside {{net}}: restart it with \`just stop && just start\`"
+      fi
+    done
+  fi
+
+  section "Vault state"
+  keys="${root}/vault/keys.json"
+  volume=0
+  have podman && podman volume exists permesi-vault-data 2>/dev/null && volume=1
+  if [[ -f "$keys" ]]; then
+    if jq -e '.unseal_keys_b64' "$keys" >/dev/null 2>&1; then
+      ok "vault/keys.json holds the persistent Vault's unseal key"
+    elif (( volume )); then
+      fail "vault/keys.json has no unseal key but the persistent Vault volume exists (overwritten by \`just vault\`?): run \`just vault-reset\`"
+    else
+      ok "vault/keys.json is from the ephemeral dev Vault"
+    fi
+  elif (( volume )); then
+    fail "the Vault volume permesi-vault-data exists but vault/keys.json is missing, so Vault cannot be unsealed: restore the keys file or run \`just vault-reset\`"
+  else
+    ok "no Vault state yet; just start initializes it"
+  fi
+
+  print -r -- ""
+  if (( fails )); then
+    print -r -- "✗ ${fails} problem(s), ${warns} warning(s)."
+    exit 1
+  fi
+  print -r -- "✓ Ready (${warns} warning(s))."

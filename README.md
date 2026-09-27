@@ -21,13 +21,17 @@
 git clone https://github.com/permesi/permesi.git
 cd permesi
 
-# 2. Allow listening on privileged ports (Linux only, for HAProxy on :443)
+# 2. Check the host: tools, ports, name resolution, network and Vault state
+just doctor
+
+# 3. Allow listening on privileged ports (Linux only, for HAProxy on :443),
+#    or skip it with: export PERMESI_HTTPS_PORT=8443
 just haproxy-sysctl
 
-# 3. Ignite the engine: this opens a `permesi` Herdr workspace (tmux as the fallback) with all services running in panes.
+# 4. Ignite the engine: this opens a `permesi` Herdr workspace (tmux as the fallback) with all services running in panes.
 just start
 
-# 4. (Optional) run firefox in deveper mode:
+# 5. (Optional) run firefox in developer mode:
 just firefox
 ```
 
