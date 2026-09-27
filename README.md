@@ -11,7 +11,7 @@
 ## ⚡ Quick Start (Full Local Stack)
 
 **Prerequisites (intentional):**
-- **System**: `zsh`, `podman`, `tmux`, `jq`, `curl`, `xh`, `ripgrep` (rg)
+- **System**: `zsh`, `podman`, `jq`, `curl`, `xh`, `ripgrep` (rg), and [`herdr`](https://herdr.dev) (or `tmux` as the fallback)
 - **Languages**: `rust` (stable) with `cargo-watch`, `node` (LTS)
 - **Infrastructure**: `just`, `terraform`, `vault`, `mkcert`, `direnv`
 > These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, Vault-backed cryptography, and reproducible infrastructure. `zsh` is a hard requirement: the justfile runs under it, so no recipe works without it.
@@ -24,7 +24,7 @@ cd permesi
 # 2. Allow listening on privileged ports (Linux only, for HAProxy on :443)
 just haproxy-sysctl
 
-# 3. Ignite the engine, This will open a tmux session with all services running in panes.
+# 3. Ignite the engine: this opens a `permesi` Herdr workspace (tmux as the fallback) with all services running in panes.
 just start
 
 # 4. (Optional) run firefox in deveper mode:
@@ -35,9 +35,10 @@ just firefox
 
 *`just start` launches the full infrastructure (Postgres, Vault, Jaeger,
 HAProxy) and starts the services (`genesis`, `permesi`, and the `web` console)
-in a `tmux` session over HTTPS/TLS — the same transport used in production and
-k8s, so local dev mirrors real deployments. If `tmux` is not installed, it will
-start the infra and you can run the services manually.*
+in a Herdr workspace over HTTPS/TLS — the same transport used in production and
+k8s, so local dev mirrors real deployments. Without Herdr it falls back to a `tmux`
+session, and without either it starts the infra and prints the commands to run the
+services in your own terminals.*
 
 *For a same-host performance optimization you can instead run `just start-socket`,
 which serves the backends over Unix domain sockets (opt-in; not portable across
@@ -311,15 +312,13 @@ If HAProxy can't reach host services on macOS, it falls back to `host.docker.int
 If you want to run services manually instead of using the all-in-one `just start`:
 1) Run services: `just genesis` and `just permesi` (HTTPS/TCP), or `just genesis-socket` and `just permesi-socket` for the socket flow. They auto-source `.envrc`, so direnv is optional. (`just start-http` is kept as an alias of `just start`.)
 
-`just start` uses tmux when available to start a `permesi` session with genesis + permesi + web panes, plus a fourth pane for ad hoc commands.
-If you're already inside tmux, it creates the `permesi` session in the background and prints attach instructions.
-Re-running attaches to the existing session when not inside tmux; stop with `tmux kill-session -t permesi`.
+`just start` runs genesis, permesi and web, plus a fourth pane for ad hoc commands, in a `permesi` [Herdr](https://herdr.dev) workspace, and falls back to a `tmux` session named `permesi` when Herdr is not installed. Set `PERMESI_MUX=herdr|tmux|none` to force a choice; `none` starts the infra and prints the three commands for your own terminals. Inside Herdr the command creates the workspace and switches to it (Herdr does not nest); outside it attaches to your running Herdr, starting a headless Herdr server first if none is running. `PERMESI_NO_ATTACH=1` builds the session without attaching. Re-running `just start` while the session is alive only attaches, `just attach` does the same from any shell, and `just logs [genesis|permesi|web]` prints a pane's recent output without attaching. Before opening the panes, `just start` builds genesis and permesi once so the two cargo-watch runs do not queue on the shared build lock; set `PERMESI_NO_PREBUILD=1` to skip that. `just stop` stops the containers and dev processes first and closes the session last, so it also works from the session's own spare pane (it then keeps that pane open).
 
 Because AppRole SecretIDs are single-use (`secret_id_num_uses=1`), `just genesis` and `just permesi` fetch a fresh
 SecretID before each `cargo watch` run using the Vault CLI. Make sure `vault` is installed and authenticated (via
 `VAULT_ADDR`/`VAULT_TOKEN` or your Vault token helper).
 
-If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also runs `direnv allow` if available).
+If you want infra only: `just infra` (the infra containers plus `.envrc`; it also runs `direnv allow` if available), then `just genesis`, `just permesi` and `just web` in terminals of your choice.
 If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
 to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
 

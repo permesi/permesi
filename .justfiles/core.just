@@ -4,6 +4,7 @@ default: fmt clippy test
 # Create the dedicated dev network (PERMESI_NET / PERMESI_SUBNET). An existing network
 # must already carry the expected subnet, and a range that another podman network or
 # a host route uses is reported instead of silently landing on a different subnet.
+[doc("Create the dedicated permesi-net podman network (PERMESI_NET / PERMESI_SUBNET)")]
 setup-network:
   #!/usr/bin/env zsh
   set -euo pipefail

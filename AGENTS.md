@@ -60,7 +60,7 @@ Authorization helper rule:
 - Build: `cargo build -p permesi` / `cargo build -p genesis`
 - Telemetry: OTLP trace export is behind the default-off `telemetry` Cargo feature. Container images, release artifacts, and the `just` dev recipes build with `--features telemetry`; keep both the default and `--all-features` builds compiling and tested.
 - Frontend: `just web` / `just web-build` / `just web-check`
-- Dev: `just start` (starts infra + services in a `tmux` session named `permesi` when `tmux` is available; backends run over HTTPS/TLS, matching production/k8s). Use `just start-socket` for the opt-in same-host Unix-socket flow; `just start-http` is an alias of `just start`.
+- Dev: `just start` (starts infra + services in a `permesi` Herdr workspace, falling back to a `tmux` session named `permesi`; `PERMESI_MUX` forces a choice; backends run over HTTPS/TLS, matching production/k8s). `just infra` starts only the infra for running services in your own terminals, `just attach` reattaches, and `just logs <service>` reads a pane without attaching. Use `just start-socket` for the opt-in same-host Unix-socket flow; `just start-http` is an alias of `just start`.
 - Just entrypoint is `.justfile`; recipe modules are split under `.justfiles/*.just` and imported from `.justfile`.
 - Verify link helper: `just signup-verify-url`
 - Tests: `cargo test --workspace`

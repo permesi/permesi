@@ -445,104 +445,285 @@ haproxy-sysctl:
   sudo sysctl -w net.ipv4.ip_unprivileged_port_start=${port}
 
 
-# Restart everything: stop infra and tmux, then start again
+# Restart everything: stop infra and the dev session, then start again
 restart: stop start
 
 # Backward-compatible aliases for the renamed start recipes
 alias start-http := start
 
-start-socket:
-  #!/usr/bin/env zsh
-  set -euo pipefail
-  if ! command -v tmux >/dev/null 2>&1; then
-    just dev-start-infra
-    just haproxy-socket-start
-    just dev-envrc
-    echo "tmux not found; starting web here. Run: just genesis-socket / just permesi-socket in other shells."
-    just web
-    exit 0
-  fi
-  session="permesi"
-  start_session() {
-    local left_pane
-    local right_pane
-    left_pane="$(
-      tmux new-session -d -s "$session" -c "{{root}}" -P -F "#{pane_id}" "just genesis-socket"
-    )"
-    right_pane="$(
-      tmux split-window -t "$left_pane" -h -c "{{root}}" -P -F "#{pane_id}" "just permesi-socket"
-    )"
-    tmux split-window -t "$left_pane" -v -c "{{root}}" "just web"
-    tmux split-window -t "$right_pane" -v -c "{{root}}"
-  }
-  if [[ -n "${TMUX-}" ]]; then
-    just dev-start-infra
-    just haproxy-socket-start
-    just dev-envrc
-    if tmux has-session -t "$session" 2>/dev/null; then
-      echo "tmux session '${session}' already exists."
-      echo "Attach with: tmux attach -t ${session}"
-      exit 0
-    fi
-    start_session
-    echo "Created tmux session '${session}'."
-    echo "Attach with: tmux attach -t ${session}"
-    exit 0
-  fi
-  if tmux has-session -t "$session" 2>/dev/null; then
-    tmux attach -t "$session"
-    exit 0
-  fi
-  just dev-start-infra
-  just haproxy-socket-start
-  just dev-envrc
-  start_session
-  tmux attach -t "$session"
+# Full dev stack over TLS: infra, then genesis, permesi, web and a spare shell in a
+# dev session (Herdr workspace, tmux fallback; see _dev-session).
+[doc("Start infra and genesis, permesi and web in a Herdr workspace (tmux fallback)")]
+start: (_dev-session "tcp")
 
-start:
+# Like `start`, but genesis and permesi serve Unix sockets behind HAProxy. Same host
+# only, so HTTPS stays the default.
+[doc("Like start, but the backends serve Unix sockets behind HAProxy")]
+start-socket: (_dev-session "socket")
+
+# Infra only (containers plus .envrc), for running the services in terminals of your
+# choice: IDE terminals, zellij, or plain shells.
+[doc("Start the infra containers and write .envrc, without the services")]
+infra: dev-start-infra dev-envrc
+  @echo "Infra ready. Start the services in separate terminals: just genesis | just permesi | just web"
+
+# Build and attach the dev session. PERMESI_MUX=auto|herdr|tmux|none picks where
+# genesis, permesi, web and a spare shell run: auto prefers Herdr (starting a headless
+# server when none is running), then tmux, and otherwise prints the commands for
+# plain terminals. Inside Herdr it only focuses the new workspace, because Herdr
+# refuses to nest. PERMESI_NO_ATTACH=1, or a non-interactive caller, builds the
+# session without attaching; scripts/dev-remote relies on that over SSH. Re-running
+# while the session is alive only attaches. The Herdr ids go to
+# .tmp/herdr-session.json so attach, logs and stop act on this workspace alone.
+_dev-session mode:
   #!/usr/bin/env zsh
   set -euo pipefail
-  if ! command -v tmux >/dev/null 2>&1; then
-    just dev-start-infra
-    just dev-envrc
-    echo "tmux not found; starting web here. Run: just genesis / just permesi in other shells."
-    just web
+  root="{{root}}"
+  state="${root}/.tmp/herdr-session.json"
+  session="permesi"
+  if [[ "{{mode}}" == "socket" ]]; then
+    cmd_genesis="just genesis-socket"
+    cmd_permesi="just permesi-socket"
+  else
+    cmd_genesis="just genesis"
+    cmd_permesi="just permesi"
+  fi
+  cmd_web="just web"
+  attach=1
+  if [[ -n "${PERMESI_NO_ATTACH:-}" || ! -t 0 || ! -t 1 ]]; then
+    attach=0
+  fi
+
+  herdr_up() {
+    herdr status server 2>/dev/null | grep -q 'status: running'
+  }
+  attach_herdr() {
+    herdr workspace focus "$1" >/dev/null
+    if [[ -n "${HERDR_ENV:-}" ]]; then
+      echo "Focused herdr workspace '${session}'."
+    elif (( attach )); then
+      exec herdr
+    else
+      echo "herdr workspace '${session}' is ready. Attach with: just attach"
+    fi
+  }
+  attach_tmux() {
+    if [[ -n "${TMUX:-}" ]] || (( ! attach )); then
+      echo "tmux session '${session}' is ready. Attach with: tmux attach -t ${session}"
+    else
+      exec tmux attach -t "$session"
+    fi
+  }
+
+  want="${PERMESI_MUX:-auto}"
+  case "$want" in
+    auto|herdr|tmux|none) ;;
+    *) echo "PERMESI_MUX must be auto, herdr, tmux or none (got: ${want})" >&2; exit 1 ;;
+  esac
+  mux=none
+  if [[ "$want" == "auto" || "$want" == "herdr" ]] && command -v herdr >/dev/null 2>&1; then
+    if [[ -n "${HERDR_ENV:-}" ]] || herdr_up; then
+      mux=herdr
+    else
+      echo "Starting a headless herdr server..."
+      if command -v setsid >/dev/null 2>&1; then
+        setsid nohup herdr server </dev/null >/dev/null 2>&1 &!
+      else
+        nohup herdr server </dev/null >/dev/null 2>&1 &!
+      fi
+      for _ in {1..20}; do
+        herdr_up && break
+        sleep 0.5
+      done
+      if herdr_up; then
+        mux=herdr
+      else
+        echo "herdr server did not start; falling back." >&2
+      fi
+    fi
+  fi
+  if [[ "$want" == "herdr" && "$mux" != "herdr" ]]; then
+    echo "PERMESI_MUX=herdr, but herdr is not installed or its server is not reachable." >&2
+    exit 1
+  fi
+  if [[ "$mux" == "none" && "$want" != "none" ]] && command -v tmux >/dev/null 2>&1; then
+    mux=tmux
+  fi
+  if [[ "$want" == "tmux" && "$mux" != "tmux" ]]; then
+    echo "PERMESI_MUX=tmux, but tmux is not installed." >&2
+    exit 1
+  fi
+
+  if [[ "$mux" == "herdr" ]] && ws="$(just --quiet _herdr-ws 2>/dev/null)"; then
+    echo "herdr workspace '${session}' is already running."
+    attach_herdr "$ws"
     exit 0
   fi
-  session="permesi"
-  start_session() {
-    local left_pane
-    local right_pane
-    left_pane="$(
-      tmux new-session -d -s "$session" -c "{{root}}" -P -F "#{pane_id}" "just genesis"
-    )"
-    right_pane="$(
-      tmux split-window -t "$left_pane" -h -c "{{root}}" -P -F "#{pane_id}" "just permesi"
-    )"
-    tmux split-window -t "$left_pane" -v -c "{{root}}" "just web"
-    tmux split-window -t "$right_pane" -v -c "{{root}}"
-  }
-  if [[ -n "${TMUX-}" ]]; then
-    just dev-start-infra
-    just dev-envrc
-    if tmux has-session -t "$session" 2>/dev/null; then
-      echo "tmux session '${session}' already exists."
-      echo "Attach with: tmux attach -t ${session}"
+  if [[ "$mux" == "tmux" ]] && tmux has-session -t "$session" 2>/dev/null; then
+    echo "tmux session '${session}' is already running."
+    attach_tmux
+    exit 0
+  fi
+
+  just dev-start-infra
+  if [[ "{{mode}}" == "socket" ]]; then
+    just haproxy-socket-start
+  fi
+  just dev-envrc
+
+  if [[ "$mux" == "none" ]]; then
+    echo "Neither herdr nor tmux is available; run the services in separate terminals:"
+    printf '  %s\n' "$cmd_genesis" "$cmd_permesi" "$cmd_web"
+    exit 0
+  fi
+
+  just _prebuild
+
+  if [[ "$mux" == "herdr" ]]; then
+    envs=(--env "PERMESI_BIND_ADDR={{bind_addr}}" --env "PERMESI_HTTPS_PORT={{https_port}}")
+    ws_json="$(herdr workspace create --cwd "$root" --label "$session" "${envs[@]}" --no-focus)"
+    ws="$(jq -r '.result.workspace.workspace_id' <<<"$ws_json")"
+    p_genesis="$(jq -r '.result.root_pane.pane_id' <<<"$ws_json")"
+    mkdir -p "${state:h}"
+    jq -n --arg ws "$ws" --arg session "$session" '{workspace: $ws, label: $session, panes: {}}' > "$state"
+    split_pane() {
+      herdr pane split "$1" --direction "$2" --cwd "$root" "${envs[@]}" --no-focus | jq -r '.result.pane.pane_id'
+    }
+    p_permesi="$(split_pane "$p_genesis" right)"
+    p_web="$(split_pane "$p_genesis" down)"
+    p_shell="$(split_pane "$p_permesi" down)"
+    jq -n --arg ws "$ws" --arg session "$session" \
+      --arg g "$p_genesis" --arg p "$p_permesi" --arg w "$p_web" --arg s "$p_shell" \
+      '{workspace: $ws, label: $session, panes: {genesis: $g, permesi: $p, web: $w, shell: $s}}' > "$state"
+    herdr pane rename "$p_genesis" genesis >/dev/null
+    herdr pane rename "$p_permesi" permesi >/dev/null
+    herdr pane rename "$p_web" web >/dev/null
+    herdr pane rename "$p_shell" shell >/dev/null
+    herdr pane run "$p_genesis" "$cmd_genesis" >/dev/null
+    herdr pane run "$p_permesi" "$cmd_permesi" >/dev/null
+    herdr pane run "$p_web" "$cmd_web" >/dev/null
+    echo "Created herdr workspace '${session}' (genesis, permesi, web, shell)."
+    echo "Logs without attaching: just logs [genesis|permesi|web]"
+    attach_herdr "$ws"
+    exit 0
+  fi
+
+  left="$(tmux new-session -d -s "$session" -c "$root" \
+    -e "PERMESI_BIND_ADDR={{bind_addr}}" -e "PERMESI_HTTPS_PORT={{https_port}}" \
+    -P -F "#{pane_id}" "$cmd_genesis")"
+  # Keep a crashed service visible as "[dead]" instead of letting its pane vanish.
+  tmux set-option -t "$session" remain-on-exit on
+  tmux set-option -t "$session" pane-border-status top
+  right="$(tmux split-window -t "$left" -h -c "$root" -P -F "#{pane_id}" "$cmd_permesi")"
+  web="$(tmux split-window -t "$left" -v -c "$root" -P -F "#{pane_id}" "$cmd_web")"
+  shell="$(tmux split-window -t "$right" -v -c "$root" -P -F "#{pane_id}")"
+  tmux select-pane -t "$left" -T genesis
+  tmux select-pane -t "$right" -T permesi
+  tmux select-pane -t "$web" -T web
+  tmux select-pane -t "$shell" -T shell
+  tmux select-pane -t "$left"
+  echo "Created tmux session '${session}' (genesis, permesi, web, shell)."
+  attach_tmux
+
+# Build genesis and permesi once before their panes start, so the cargo-watch runs
+# find fresh artifacts instead of queueing on the shared target-dir lock. The builds
+# mirror the pane commands exactly: a combined `-p genesis -p permesi` build unifies
+# features differently, and the panes would rebuild anyway. Skip with
+# PERMESI_NO_PREBUILD=1; a failure only warns, since the pane shows the error.
+_prebuild:
+  #!/usr/bin/env zsh
+  set -uo pipefail
+  if [[ "${PERMESI_NO_PREBUILD:-}" == "1" ]]; then
+    exit 0
+  fi
+  cd "{{root}}"
+  for svc in genesis permesi; do
+    echo "Pre-building ${svc}..."
+    if ! cargo build -p "$svc" --bin "$svc" --features telemetry; then
+      echo "Pre-build of ${svc} failed; continuing (its pane shows the error)." >&2
+    fi
+  done
+
+# Print the recorded Herdr workspace id if that workspace is still alive and labelled
+# 'permesi', and fail otherwise. The label check keeps a stale id from ever targeting
+# a workspace this checkout did not create.
+_herdr-ws:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  state="{{root}}/.tmp/herdr-session.json"
+  command -v herdr >/dev/null 2>&1 || exit 1
+  [[ -f "$state" ]] || exit 1
+  ws="$(jq -r '.workspace // empty' "$state")"
+  [[ -n "$ws" ]] || exit 1
+  label="$(herdr workspace get "$ws" 2>/dev/null | jq -r '.result.workspace.label // empty')"
+  [[ "$label" == "permesi" ]] || exit 1
+  print -r -- "$ws"
+
+# Attach to the running dev session: the recorded Herdr workspace, else the tmux
+# session 'permesi'.
+[doc("Attach to the running dev session (Herdr workspace, else tmux)")]
+attach:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if ws="$(just --quiet _herdr-ws 2>/dev/null)"; then
+    herdr workspace focus "$ws" >/dev/null
+    if [[ -n "${HERDR_ENV:-}" ]]; then
+      echo "Focused herdr workspace 'permesi'."
       exit 0
     fi
-    start_session
-    echo "Created tmux session '${session}'."
-    echo "Attach with: tmux attach -t ${session}"
+    exec herdr
+  fi
+  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null; then
+    if [[ -n "${TMUX:-}" ]]; then
+      exec tmux switch-client -t permesi
+    fi
+    exec tmux attach -t permesi
+  fi
+  echo "No running dev session. Start one with: just start" >&2
+  exit 1
+
+# Print recent output of a service pane without attaching: `just logs permesi`, or
+# a short tail of genesis, permesi and web with no argument. PERMESI_LOG_LINES sets
+# the length (default 200 for one pane, 40 each for all three).
+[doc("Print recent output of genesis, permesi or web without attaching")]
+logs service="":
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  svc="{{service}}"
+  case "$svc" in
+    ""|genesis|permesi|web) ;;
+    *) echo "usage: just logs [genesis|permesi|web]" >&2; exit 1 ;;
+  esac
+  if [[ -n "$svc" ]]; then
+    names=("$svc")
+    lines="${PERMESI_LOG_LINES:-200}"
+  else
+    names=(genesis permesi web)
+    lines="${PERMESI_LOG_LINES:-40}"
+  fi
+  if just --quiet _herdr-ws >/dev/null 2>&1; then
+    state="{{root}}/.tmp/herdr-session.json"
+    for name in "${names[@]}"; do
+      id="$(jq -r --arg n "$name" '.panes[$n] // empty' "$state")"
+      [[ -n "$id" ]] || continue
+      (( ${#names} > 1 )) && echo "===== ${name} ====="
+      herdr pane read "$id" --source recent-unwrapped --lines "$lines"
+      echo
+    done
     exit 0
   fi
-  if tmux has-session -t "$session" 2>/dev/null; then
-    tmux attach -t "$session"
+  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null; then
+    for name in "${names[@]}"; do
+      id="$(tmux list-panes -t permesi -F '#{pane_title} #{pane_id}' | awk -v s="$name" '$1==s{print $2; exit}')"
+      [[ -n "$id" ]] || continue
+      (( ${#names} > 1 )) && echo "===== ${name} ====="
+      # capture-pane pads to the pane height; drop the trailing blank lines.
+      tmux capture-pane -pt "$id" -S "-${lines}" | awk '{l[NR]=$0} NF{last=NR} END{for(i=1;i<=last;i++) print l[i]}'
+    done
     exit 0
   fi
-  just dev-start-infra
-  just dev-envrc
-  start_session
-  tmux attach -t "$session"
+  echo "No running dev session. Start one with: just start" >&2
+  exit 1
 
 # Warn loudly when the infra is published on every interface (PERMESI_BIND_ADDR=0.0.0.0).
 _warn-exposed:
@@ -554,13 +735,16 @@ _warn-exposed:
 
 dev-start-infra: _warn-exposed setup-network postgres vault-persist-ready dev-tls-certs jaeger haproxy-start
 
-# Stop all services and the tmux session
-stop: tmux-stop dev-stop
+# Stop the containers and service processes, then close the dev session. The session
+# closes last so `just stop` typed in its spare shell still finishes the cleanup.
+[doc("Stop the dev containers and processes, then close the dev session")]
+stop: dev-stop mux-stop
 
 # Stop the dev containers, then any dev process of this checkout that outlived its
 # terminal. Other projects share the host, so a process is only signalled when its
 # working directory is inside this repository; matching by name or port alone would
 # kill another project's cargo-watch or port-8000 server.
+[doc("Stop the dev containers and this checkout's leftover dev processes")]
 dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop test-clean
   #!/usr/bin/env zsh
   set -uo pipefail
@@ -599,6 +783,7 @@ dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop test-clean
 # Tests create uniquely named ones and clean up after themselves; an interrupted run
 # leaves them behind. Nothing outside that prefix is touched, so do not run this
 # while `cargo test` is running.
+[doc("Remove leaked permesi-test-* containers and networks")]
 test-clean:
   #!/usr/bin/env zsh
   set -euo pipefail
@@ -613,10 +798,36 @@ test-clean:
     echo "Removed ${#networks} leaked test network(s)."
   fi
 
-# Kill the tmux session if it exists
-tmux-stop:
+# Close the dev session this checkout started: only the recorded Herdr workspace and
+# the tmux session 'permesi'. Run from inside that session, it closes the other panes
+# and keeps the calling one, so the command that asked for it can finish.
+[doc("Close the Herdr workspace or tmux session this checkout started")]
+mux-stop:
   #!/usr/bin/env zsh
-  tmux kill-session -t permesi 2>/dev/null || true
+  set -uo pipefail
+  state="{{root}}/.tmp/herdr-session.json"
+  if ws="$(just --quiet _herdr-ws 2>/dev/null)"; then
+    if [[ "${HERDR_WORKSPACE_ID:-}" == "$ws" ]]; then
+      for id in $(jq -r '.panes[]?' "$state"); do
+        [[ "$id" == "${HERDR_PANE_ID:-}" ]] && continue
+        herdr pane close "$id" >/dev/null 2>&1 || true
+      done
+      echo "Closed the service panes of herdr workspace 'permesi' (kept this one)."
+    else
+      herdr workspace close "$ws" >/dev/null && echo "Closed herdr workspace 'permesi'."
+    fi
+  fi
+  rm -f "$state"
+  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null; then
+    if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S')" == "permesi" ]]; then
+      tmux kill-pane -a -t "${TMUX_PANE}"
+      echo "Closed the other panes of tmux session 'permesi' (kept this one)."
+    else
+      tmux kill-session -t permesi && echo "Killed tmux session 'permesi'."
+    fi
+  fi
+
+alias tmux-stop := mux-stop
 
 reset: stop
   #!/usr/bin/env zsh
