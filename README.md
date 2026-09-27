@@ -54,6 +54,32 @@ hosts/pods).*
 - **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
 - **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
 
+### 🛰️ Remote VM (one per developer)
+
+The same stack runs on a remote Linux VM while the browser stays on your laptop. Everything runs on the VM with `just start`; the laptop only needs a clone of this repository (for `scripts/dev-remote`), `mkcert` and SSH. One SSH connection carries the HTTPS port plus the Jaeger and Vault UIs, so the browser keeps using the usual `https://*.permesi.localhost` URLs.
+
+On the VM, once:
+
+```bash
+# zsh, podman (rootless), jq and curl from the OS packages; the rest from mise.toml
+mise install
+loginctl enable-linger "$USER"   # keep the stack running after you log out
+git clone https://github.com/permesi/permesi.git ~/permesi
+cd ~/permesi && just doctor
+```
+
+On the laptop:
+
+```bash
+export PERMESI_HTTPS_PORT=8443     # use the same value on the VM (e.g. in ~/.zshenv); no sysctl anywhere
+scripts/dev-remote --start <vm>    # push the cert, forward the ports, start and attach the dev session
+scripts/dev-remote --stop <vm>     # close the tunnel; the session keeps running on the VM
+```
+
+Then open `https://permesi.localhost:8443`. Without `--start`, SSH in your own way and run `just start` (or `just infra` plus the services) on the VM; `scripts/dev-remote <vm>` then only refreshes the certificate and the tunnel. Detaching from the session, Herdr or tmux, leaves both the services and the tunnel running. When your laptop terminal is itself inside Herdr, `--start` builds the session but does not attach it there (Herdr does not nest); open it from a plain terminal or with `herdr --remote <vm>`.
+
+The laptop's mkcert CA issues the HAProxy certificate, limited to the `permesi.localhost` names, and only that leaf plus the CA's public certificate are copied to the VM. The CA private key never leaves the laptop, and the laptop never trusts a CA that lives on a server. If `just start` on the VM stops at a missing TLS certificate, run `scripts/dev-remote` from the laptop first. CORS and passkeys compare origins including the port, so `PERMESI_HTTPS_PORT` must be the same on both ends, and the script refuses to forward when the remote HAProxy listens on another port. Editors that forward ports automatically (VS Code Remote-SSH, JetBrains Gateway) switch to a different local port when the one they want is busy, which breaks those origins: turn automatic forwarding off (`"remote.autoForwardPorts": false` in VS Code) and let `scripts/dev-remote` own the tunnel. On the VM, keep the firewall closed to everything but SSH, because the backend ports listen on all interfaces (see Local Development below). If the stack runs for days, refresh the 24-hour backend certificates with `just dev-tls-certs`; the services pick them up without a restart.
+
 ## Workspace Layout
 
 This repository is a Rust workspace (monorepo) containing:

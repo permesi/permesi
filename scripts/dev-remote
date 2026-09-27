@@ -1,0 +1,366 @@
+#!/usr/bin/env sh
+# The remote scripts below are single-quoted on purpose: they expand on the VM.
+# shellcheck disable=SC2016
+set -eu
+
+# Develop against a permesi stack that runs on a remote VM (one VM per developer)
+# from a Linux or macOS laptop, over a single SSH connection. The browser stays on
+# the laptop and keeps using https://*.permesi.localhost; everything else (infra
+# containers, genesis, permesi, trunk) runs on the VM with `just start`.
+#
+# Flow overview
+#   1. Issue, or reuse, a TLS leaf for permesi.localhost, api.permesi.localhost,
+#      genesis.permesi.localhost and *.permesi.localhost from the laptop's own mkcert
+#      CA (re-issued when the CA changes or the leaf expires within 30 days).
+#   2. Open one SSH ControlMaster connection and run a short preflight on the VM. A
+#      missing checkout is fatal; missing tools, name resolution, privileged ports and
+#      linger only warn.
+#   3. Push the leaf into the remote checkout for HAProxy, and the laptop CA's public
+#      certificate to certs/mkcert-root.pem. HAProxy restarts only when the leaf
+#      changed, so rerunning the script is a no-op.
+#   4. Forward the laptop's PERMESI_HTTPS_PORT to the same port on the VM, plus the
+#      Jaeger (16686) and Vault (8200) UIs unless --no-ui, over that connection.
+#   5. With --start, build the dev session on the VM (Herdr workspace, tmux fallback)
+#      without attaching, then attach to it through the same connection. Detaching
+#      leaves both the session and the tunnel running.
+#
+# Trust model
+#   The CA private key never leaves the laptop, and the laptop never trusts a CA whose
+#   key lives on a server. The VM receives only a leaf limited to the permesi.localhost
+#   names (no localhost, *.localhost or IP SANs), so a stolen VM key cannot impersonate
+#   other local sites; those names already reach the VM through this tunnel, so the VM
+#   gains nothing it did not have. The laptop CA's public certificate is used on the
+#   VM only as an explicit CA file (socket-mode PASERK checks, genesis-token), never
+#   added to its trust store.
+#
+# CORS and WebAuthn compare origins including the port, so the laptop port, the remote
+# HAProxy port and PERMESI_HTTPS_PORT must be the same number. The script refuses to
+# forward when a running remote HAProxy listens on a different port.
+#
+# Usage:
+#   scripts/dev-remote [--start] [--no-ui] [--renew-cert] <ssh-host> [remote-repo-path]
+#   scripts/dev-remote --stop|--status <ssh-host>
+#
+# remote-repo-path defaults to "permesi", relative to the remote $HOME.
+#
+# Environment:
+#   PERMESI_HTTPS_PORT          HTTPS port on both ends (default 443; 8443 needs no
+#                               sysctl change on the laptop or the VM)
+#   PERMESI_REMOTE_SSH_CONFIG   optional OpenSSH client config file (ssh -F)
+
+usage() {
+    cat <<'EOF'
+Usage:
+  scripts/dev-remote [--start] [--no-ui] [--renew-cert] <ssh-host> [remote-repo-path]
+  scripts/dev-remote --stop|--status <ssh-host>
+
+  --start       build the dev session on the VM, then attach to it
+  --no-ui       do not forward the Jaeger (16686) and Vault (8200) UIs
+  --renew-cert  issue a new TLS leaf even if the current one is still valid
+  --stop        close the SSH connection and its forwards
+  --status      report whether the SSH connection is up
+
+Environment: PERMESI_HTTPS_PORT (default 443), PERMESI_REMOTE_SSH_CONFIG
+EOF
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+action=up
+do_start=0
+ui=1
+renew=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --start) do_start=1 ;;
+    --no-ui) ui=0 ;;
+    --renew-cert) renew=1 ;;
+    --stop) action=stop ;;
+    --status) action=status ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --)
+        shift
+        break
+        ;;
+    -*)
+        usage >&2
+        exit 2
+        ;;
+    *) break ;;
+    esac
+    shift
+done
+if [ $# -lt 1 ]; then
+    usage >&2
+    exit 2
+fi
+host="$1"
+repo="${2:-permesi}"
+# A laptop-side "~/..." would expand to the laptop's home; keep it relative instead.
+case "$repo" in
+\~/*) repo="${repo#??}" ;;
+esac
+
+port="${PERMESI_HTTPS_PORT:-443}"
+case "$port" in
+'' | *[!0-9]*) die "PERMESI_HTTPS_PORT must be an integer from 1 to 65535." ;;
+esac
+if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    die "PERMESI_HTTPS_PORT must be an integer from 1 to 65535."
+fi
+case "$port" in
+4317 | 4318 | 5432 | 8000 | 8001 | 8081 | 8200 | 16686)
+    die "PERMESI_HTTPS_PORT=${port} collides with a dev service port."
+    ;;
+esac
+
+project_dir="$(
+    unset CDPATH
+    cd -- "$(dirname -- "$0")/.." && pwd
+)"
+
+ssh_exec() {
+    if [ -n "${PERMESI_REMOTE_SSH_CONFIG:-}" ]; then
+        command ssh -F "$PERMESI_REMOTE_SSH_CONFIG" "$@"
+    else
+        command ssh "$@"
+    fi
+}
+
+# Quote one argument for the remote shell. Remote scripts below avoid single quotes,
+# so the result also parses in non-POSIX login shells.
+shell_quote() {
+    escaped="$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+    printf "'%s'" "$escaped"
+}
+
+# The ControlMaster socket lives in a private directory; %C keeps the path short
+# enough for macOS's socket path limit.
+ctl_dir="${XDG_RUNTIME_DIR:-/tmp}/permesi-remote-$(id -u)"
+(umask 077 && mkdir -p "$ctl_dir")
+if [ -L "$ctl_dir" ] || [ -z "$(find "$ctl_dir" -prune -user "$(id -u)")" ]; then
+    die "${ctl_dir} must be a directory you own (not a symlink)."
+fi
+chmod 0700 "$ctl_dir"
+ctl="${ctl_dir}/%C"
+
+master_up() {
+    ssh_exec -S "$ctl" -O check "$host" >/dev/null 2>&1
+}
+
+# Run a POSIX sh script on the VM over the master connection: $1 is the script, the
+# rest are its positional arguments. The PATH prefix finds tools installed by mise.
+remote_prefix='PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$HOME/.cargo/bin:$PATH"; export PATH;'
+remote_sh() {
+    script="$1"
+    shift
+    args=""
+    for arg in "$@"; do
+        args="${args} $(shell_quote "$arg")"
+    done
+    ssh_exec -S "$ctl" "$host" "sh -c $(shell_quote "${remote_prefix} ${script}") sh${args}"
+}
+
+case "$action" in
+stop)
+    if master_up; then
+        ssh_exec -S "$ctl" -O exit "$host" >/dev/null 2>&1 || true
+        echo "Closed the connection to ${host}."
+    else
+        echo "No connection to ${host}."
+    fi
+    exit 0
+    ;;
+status)
+    if master_up; then
+        echo "Connected to ${host}."
+        exit 0
+    fi
+    echo "No connection to ${host}."
+    exit 1
+    ;;
+esac
+
+# 1. TLS leaf from the laptop CA.
+command -v mkcert >/dev/null 2>&1 || die "mkcert is required on the laptop (mise install, brew install mkcert, or apt install mkcert)."
+mkcert -install >/dev/null
+ca="$(mkcert -CAROOT)/rootCA.pem"
+[ -f "$ca" ] || die "mkcert CA certificate not found at ${ca}."
+cert_dir="${project_dir}/certs/remote"
+(umask 077 && mkdir -p "$cert_dir")
+leaf="${cert_dir}/permesi.localhost.pem"
+issue=0
+if [ ! -f "$leaf" ] || [ "$renew" = 1 ]; then
+    issue=1
+elif command -v openssl >/dev/null 2>&1; then
+    if ! openssl verify -CAfile "$ca" "$leaf" >/dev/null 2>&1 ||
+        ! openssl x509 -in "$leaf" -noout -checkend 2592000 >/dev/null 2>&1; then
+        issue=1
+    fi
+fi
+if [ "$issue" = 1 ]; then
+    tmp="$(mktemp -d "${cert_dir}/.issue.XXXXXX")"
+    trap 'rm -rf "$tmp"' EXIT
+    if ! (umask 077 && mkcert -cert-file "${tmp}/cert.pem" -key-file "${tmp}/key.pem" \
+        permesi.localhost api.permesi.localhost genesis.permesi.localhost '*.permesi.localhost' >/dev/null 2>&1); then
+        die "mkcert could not issue the permesi.localhost certificate."
+    fi
+    (umask 077 && cat "${tmp}/cert.pem" "${tmp}/key.pem" >"$leaf")
+    rm -rf "$tmp"
+    trap - EXIT
+    echo "==> Issued a TLS leaf for *.permesi.localhost from the laptop mkcert CA."
+fi
+
+# 2. One SSH connection, then the preflight.
+if ! master_up; then
+    echo "==> Connecting to ${host}..."
+    ssh_exec -fNT -M -S "$ctl" \
+        -o ControlPersist=no \
+        -o ServerAliveInterval=30 \
+        -o ServerAliveCountMax=3 \
+        "$host" || die "SSH connection to ${host} failed."
+fi
+
+preflight='
+set -eu
+repo="$1"
+port="$2"
+case "$repo" in /*) ;; *) repo="$HOME/$repo" ;; esac
+if [ ! -f "$repo/.justfile" ]; then
+  echo "fatal: no permesi checkout at $repo"
+  exit 3
+fi
+for tool in zsh podman just jq curl terraform vault cargo; do
+  command -v "$tool" >/dev/null 2>&1 || echo "warn: $tool is not installed on the VM (see just doctor there)"
+done
+if ! command -v herdr >/dev/null 2>&1 && ! command -v tmux >/dev/null 2>&1; then
+  echo "warn: neither herdr nor tmux is installed on the VM; --start will only print the service commands"
+fi
+if command -v getent >/dev/null 2>&1 && ! getent hosts genesis.permesi.localhost | grep -Eq "^(127[.]|::1)"; then
+  echo "warn: genesis.permesi.localhost does not resolve to loopback on the VM (see just doctor there)"
+fi
+start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 0)"
+if [ "$port" -lt 1024 ] && [ "$port" -lt "$start" ]; then
+  echo "warn: port $port is privileged on the VM: run just haproxy-sysctl there, or use PERMESI_HTTPS_PORT=8443 on both ends"
+fi
+if command -v loginctl >/dev/null 2>&1 && [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = "no" ]; then
+  echo "warn: linger is off on the VM; run loginctl enable-linger $USER so the stack survives logout"
+fi
+published=""
+if command -v podman >/dev/null 2>&1; then
+  published="$(podman port permesi-haproxy 8080/tcp 2>/dev/null | head -n 1 | sed "s/.*://")"
+fi
+echo "haproxy_port=$published"
+echo "repo=$repo"
+'
+if ! preflight_out="$(remote_sh "$preflight" "$repo" "$port")"; then
+    printf '%s\n' "$preflight_out" | sed -n 's/^fatal: //p' >&2
+    die "preflight on ${host} failed."
+fi
+printf '%s\n' "$preflight_out" | sed -n 's/^warn: /  ! /p' >&2
+repo_abs="$(printf '%s\n' "$preflight_out" | sed -n 's/^repo=//p')"
+remote_haproxy="$(printf '%s\n' "$preflight_out" | sed -n 's/^haproxy_port=//p')"
+if [ -n "$remote_haproxy" ] && [ "$remote_haproxy" != "$port" ]; then
+    die "the remote HAProxy listens on ${remote_haproxy}, but PERMESI_HTTPS_PORT=${port}. Use one value on both ends: rerun with PERMESI_HTTPS_PORT=${remote_haproxy}, or restart the remote stack with PERMESI_HTTPS_PORT=${port}."
+fi
+
+# 3. Push the leaf and the CA's public certificate (atomic, no-op when unchanged).
+push='
+set -eu
+dest="$1"
+umask 022
+mkdir -p "$(dirname "$dest")"
+cat >"$dest.tmp"
+chmod 0644 "$dest.tmp"
+if [ -f "$dest" ] && cmp -s "$dest.tmp" "$dest"; then
+  rm -f "$dest.tmp"
+else
+  mv -f "$dest.tmp" "$dest"
+  echo changed
+fi
+'
+changed="$(remote_sh "$push" "${repo_abs}/config/haproxy/certs/permesi.localhost.pem" <"$leaf")"
+remote_sh "$push" "${repo_abs}/certs/mkcert-root.pem" <"$ca" >/dev/null
+if [ -n "$changed" ]; then
+    echo "==> Pushed the TLS leaf to ${host}."
+    restart='
+set -eu
+cd "$1"
+rm -f config/haproxy/certs/permesi.localhost-cert.pem config/haproxy/certs/permesi.localhost-key.pem
+if command -v podman >/dev/null 2>&1 && [ -n "$(podman ps -q --filter "name=^permesi-haproxy\$")" ]; then
+  podman restart permesi-haproxy >/dev/null
+  echo "==> Restarted the remote HAProxy with the new certificate."
+fi
+'
+    remote_sh "$restart" "$repo_abs"
+fi
+
+# 4. Forwards: the HTTPS port on both loopback families, then the UIs.
+if [ "$(uname -s)" = "Linux" ] && [ "$port" -lt 1024 ]; then
+    start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+    case "$start" in '' | *[!0-9]*) start=1024 ;; esac
+    if [ "$start" -gt "$port" ]; then
+        echo "Port ${port} is privileged on this laptop (net.ipv4.ip_unprivileged_port_start=${start})."
+        if [ -t 0 ]; then
+            printf 'Run "sudo sysctl -w net.ipv4.ip_unprivileged_port_start=%s" now? [y/N] ' "$port"
+            read -r answer
+            case "$answer" in
+            y | Y | yes) sudo sysctl -w "net.ipv4.ip_unprivileged_port_start=${port}" >/dev/null ;;
+            *) die "allow the port, or use PERMESI_HTTPS_PORT=8443 on both ends." ;;
+            esac
+        else
+            die "allow the port, or use PERMESI_HTTPS_PORT=8443 on both ends."
+        fi
+    fi
+fi
+if ! ssh_exec -S "$ctl" -O forward -L "localhost:${port}:127.0.0.1:${port}" "$host" >/dev/null 2>&1; then
+    die "could not forward local port ${port}. If a laptop-local stack holds it, run \`just stop\` here, or pick another PERMESI_HTTPS_PORT on both ends."
+fi
+if [ "$ui" = 1 ]; then
+    for ui_port in 16686 8200; do
+        if ! ssh_exec -S "$ctl" -O forward -L "localhost:${ui_port}:127.0.0.1:${ui_port}" "$host" >/dev/null 2>&1; then
+            echo "  ! local port ${ui_port} is busy; skipped that UI forward (use --no-ui to silence)" >&2
+        fi
+    done
+fi
+
+suffix=""
+if [ "$port" != "443" ]; then
+    suffix=":${port}"
+fi
+echo ""
+echo "Forwarding to ${host}:"
+echo "  Web console  https://permesi.localhost${suffix}"
+echo "  API          https://api.permesi.localhost${suffix}/health"
+echo "  Genesis      https://genesis.permesi.localhost${suffix}/health"
+if [ "$ui" = 1 ]; then
+    echo "  Jaeger       http://localhost:16686"
+    echo "  Vault        http://localhost:8200"
+fi
+echo "  Stop         scripts/dev-remote --stop ${host}"
+
+# 5. Build the dev session on the VM, then attach through the same connection.
+if [ "$do_start" = 1 ]; then
+    echo ""
+    echo "==> Starting the dev stack on ${host}..."
+    start_script='
+set -eu
+cd "$1"
+PERMESI_HTTPS_PORT="$2" PERMESI_NO_ATTACH=1 exec just start
+'
+    remote_sh "$start_script" "$repo_abs" "$port" || die "\`just start\` failed on ${host}; run \`just doctor\` there."
+    if [ -n "${HERDR_ENV:-}" ]; then
+        # Attaching the VM's session here would put one Herdr UI inside another.
+        echo "This terminal runs inside Herdr, so the remote session is not attached here."
+        echo "From a plain terminal: ssh -t ${host} 'cd ${repo_abs} && just attach'"
+        echo "or open it with Herdr's own remote client: herdr --remote ${host}"
+    else
+        ssh_exec -S "$ctl" -t "$host" "sh -c $(shell_quote "${remote_prefix} cd \"\$1\" && exec just attach") sh $(shell_quote "$repo_abs")"
+    fi
+fi

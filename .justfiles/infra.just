@@ -295,7 +295,14 @@ haproxy-start: setup-network
     exit 1
   fi
   if [[ ! -f "$cert" ]]; then
-    if command -v mkcert >/dev/null 2>&1; then
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+      # Over SSH the browser runs on another machine, which would not trust a CA
+      # generated here; the laptop pushes a cert from its own CA instead.
+      echo "Missing TLS cert: ${cert}" >&2
+      echo "On a remote VM, run on your laptop: scripts/dev-remote <this-host> [repo-path]" >&2
+      echo "(or, to trust a CA created on this host instead: just mkcert-local)" >&2
+      exit 1
+    elif command -v mkcert >/dev/null 2>&1; then
       echo "Missing TLS cert; generating with mkcert..."
       just --quiet mkcert-local
     else
@@ -374,7 +381,14 @@ haproxy-socket-start: setup-network
   chmod 755 "$socket_dir" 2>/dev/null || true
 
   if [[ ! -f "$cert" ]]; then
-    if command -v mkcert >/dev/null 2>&1; then
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+      # Over SSH the browser runs on another machine, which would not trust a CA
+      # generated here; the laptop pushes a cert from its own CA instead.
+      echo "Missing TLS cert: ${cert}" >&2
+      echo "On a remote VM, run on your laptop: scripts/dev-remote <this-host> [repo-path]" >&2
+      echo "(or, to trust a CA created on this host instead: just mkcert-local)" >&2
+      exit 1
+    elif command -v mkcert >/dev/null 2>&1; then
       echo "Missing TLS cert; generating with mkcert..."
       just --quiet mkcert-local
     else
