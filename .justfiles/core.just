@@ -268,10 +268,13 @@ bump-major:
 # a clean develop equal to origin/develop that main can fast-forward to, an
 # authenticated gh (to follow CI), a free tag for the version being released, and a
 # working signing setup: a throwaway local tag exercises the key or agent for real.
-_release-preflight kind: check-develop check-clean _require-tag-signing
+_release-preflight kind mode="": check-develop check-clean _require-tag-signing
     #!/usr/bin/env bash
     set -euo pipefail
     kind="{{kind}}"
+    # mode "unpushed-bump": _release recognized a committed-but-unpushed bump and
+    # checks everything else before pushing it; only then may HEAD be one commit ahead.
+    mode="{{mode}}"
 
     current="$(just --quiet _workspace-version)"
     IFS=. read -r major minor patch <<<"${current}"
@@ -287,7 +290,7 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
     fi
 
     git fetch --quiet --tags origin
-    if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/develop)" ]]; then
+    if [[ "${mode}" != "unpushed-bump" && "$(git rev-parse HEAD)" != "$(git rev-parse origin/develop)" ]]; then
         echo "❌ develop differs from origin/develop; pull or push it first." >&2
         exit 1
     fi
@@ -305,10 +308,12 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
         exit 1
     fi
     # The gate's wait settings are checked here, before the bump is pushed.
+    # Canonical numbers only (no leading zeros, at most six digits): the gate uses them
+    # in bash arithmetic, where a leading zero would mean octal.
     check_seconds() {
         local name="$1" value="$2" min="$3"
-        if [[ ! "${value}" =~ ^[0-9]+$ ]] || (( 10#${value} < min )); then
-            echo "❌ ${name} must be a whole number of seconds, at least ${min} (got '${value}')." >&2
+        if [[ ! "${value}" =~ ^(0|[1-9][0-9]{0,5})$ ]] || (( value < min )); then
+            echo "❌ ${name} must be a whole number of seconds from ${min} to 999999, without leading zeros (got '${value}')." >&2
             exit 1
         fi
     }
@@ -526,17 +531,18 @@ _release kind:
     current="$(just --quiet _workspace-version)"
 
     # The bump was committed but its push to develop failed (network, rejected
-    # push): push exactly that commit and carry on. Only a commit that sits directly
-    # on origin/develop, is named "bump version to <current>", touches nothing but
-    # the release files and whose version has no tag qualifies; any other local
-    # commit is still refused by the preflight.
+    # push): after the full preflight (which then tolerates exactly this commit), push
+    # it and carry on. Only a commit that sits directly on origin/develop, is named
+    # "bump version to <current>", touches nothing but the release files and whose
+    # version has no tag qualifies; any other local commit is still refused.
     if [[ "$(git branch --show-current)" == "develop" ]] &&
         ! git rev-parse -q --verify "refs/tags/${current}" >/dev/null &&
         [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/develop)" ]] &&
         [[ "$(git rev-parse -q --verify HEAD^ || true)" == "$(git rev-parse origin/develop)" ]] &&
         [[ "$(git log -1 --format=%s HEAD)" == "bump version to ${current}" ]] &&
         [[ -z "$(git diff --name-only HEAD^ HEAD | grep -vxE 'Cargo\.toml|Cargo\.lock|docs/openapi/(permesi|genesis)\.json' || true)" ]]; then
-        echo "ℹ️  The bump to ${current} was committed but never pushed; pushing it now."
+        echo "ℹ️  The bump to ${current} was committed but never pushed; checking, then pushing it."
+        just _release-preflight current unpushed-bump
         git push origin develop
         just _sync-sandbox
     fi

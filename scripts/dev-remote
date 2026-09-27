@@ -231,7 +231,10 @@ if [ "$issue" = 1 ]; then
         permesi.localhost api.permesi.localhost genesis.permesi.localhost '*.permesi.localhost' >/dev/null 2>&1); then
         die "mkcert could not issue the permesi.localhost certificate."
     fi
-    (umask 077 && cat "${tmp}/cert.pem" "${tmp}/key.pem" >"$leaf")
+    # A new owner-only file renamed over the old leaf: rewriting in place would keep
+    # the old file's mode.
+    (umask 077 && cat "${tmp}/cert.pem" "${tmp}/key.pem" >"${tmp}/leaf.pem")
+    mv -f "${tmp}/leaf.pem" "$leaf"
     rm -rf "$tmp"
     trap - EXIT
     echo "==> Issued a TLS leaf for *.permesi.localhost from the laptop mkcert CA."
