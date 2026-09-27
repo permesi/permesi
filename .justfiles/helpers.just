@@ -5,10 +5,10 @@
 genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
-  # Default targets the HAProxy frontend (host flow, mkcert-trusted). In the devpod
-  # container the *.permesi.localhost names resolve to loopback where only :8000
-  # listens, so .envrc overrides GENESIS_API_BASE_URL to the direct genesis port and
-  # GENESIS_CA_PATH to the Vault PKI CA used to verify it.
+  # Defaults to the HAProxy frontend, which the system trust store accepts after
+  # mkcert -install. To hit genesis directly, set GENESIS_API_BASE_URL to
+  # https://genesis.permesi.localhost:8000 and GENESIS_CA_PATH to the Vault PKI CA
+  # (certs/genesis/ca.pem); GENESIS_CA_PATH also pins a pushed mkcert root on a VM.
   base="${GENESIS_API_BASE_URL:-https://genesis.permesi.localhost}"
   verify=()
   if [[ -n "${GENESIS_CA_PATH:-}" ]]; then

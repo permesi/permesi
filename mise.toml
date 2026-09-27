@@ -1,50 +1,24 @@
+# Project toolchain for the host dev flow (`just start`), the same on Linux and
+# macOS: run `mise install`, then `just doctor`. Keep personal tools in your own
+# ~/.config/mise/config.toml. System packages stay outside mise: zsh (the justfile
+# shell), podman (rootless), jq, curl, and tmux only as the fallback when herdr is
+# not available.
+
 [settings]
-minimum_release_age = "0"
 cargo.binstall = true
 
 [tools]
-"github:nbari/slick" = "latest"
-"github:nbari/pwgen2" = "latest"
-"github:ssh-vault/ssh-vault" = "latest"
-"npm:@anthropic-ai/claude-code" = "latest"
-"npm:@github/copilot" = { version = "latest", allow_builds = [
-  "@github/copilot",
-] }
-"npm:@openai/codex" = "latest"
-atuin = "latest"
-bat = "latest"
 cargo-binstall = "latest"
 "cargo:cargo-edit" = "latest"
 "cargo:cargo-watch" = "latest"
 direnv = "latest"
-eza = "latest"
 herdr = "latest"
 just = "latest"
 mkcert = "latest"
 node = "lts"
-"pipx:pgcli" = "latest"
-python = "3.14"
 ripgrep = "latest"
 rust = "stable"
-sops = "latest"
 terraform = "1.15"
-tree-sitter = "latest"
 uv = "latest"
 vault = "latest"
 xh = "latest"
-
-[env]
-EDITOR = "nvim"
-VISUAL = "nvim"
-
-[tasks.setup-postgres-client]
-run = "sudo apt-get install -y libpq-dev postgresql-client"
-description = "Install postgres client libs"
-
-[tasks.setup-valkey]
-run = "sudo apt-get install -y valkey-tools"
-description = "Install Valkey CLI tools"
-
-[tasks.setup-tig]
-run = "sudo apt-get install -y tig"
-description = "Install tig git browser"

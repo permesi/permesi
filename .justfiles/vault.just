@@ -2,28 +2,6 @@
 # Local dependencies
 # ----------------------
 
-# Guard: the legacy host-podman recipes below target the host podman stack and
-# 127.0.0.1:8200, and some delete vault/keys.json (the devpod Vault's only unseal
-# key). Running them inside the DevPod app container bricks the devpod Vault, so
-# refuse and point at the devpod-* equivalents. (No-op on the host where DEVPOD is
-# unset.)
-_assert-not-devpod:
-  #!/usr/bin/env bash
-  if [[ -n "${DEVPOD:-}" ]]; then
-    echo "❌ This is a legacy host-podman recipe and must not run inside the DevPod" >&2
-    echo "   container (DEVPOD=${DEVPOD}). It targets the host podman stack / 127.0.0.1" >&2
-    echo "   and may delete the devpod Vault's only unseal key (vault/keys.json)." >&2
-    echo "" >&2
-    echo "   Use the devpod-* recipes instead:" >&2
-    echo "     just devpod-vault-unseal   # unseal a sealed Vault" >&2
-    echo "     just devpod-start          # unseal + refresh .envrc + start services" >&2
-    echo "     just devpod-bootstrap      # full (re)bootstrap" >&2
-    echo "" >&2
-    echo "   To wipe & reinit Vault, run on the HOST: just vault-reset" >&2
-    echo "   then re-run: scripts/dev-up --local   (or, in the container: just devpod-bootstrap)" >&2
-    exit 1
-  fi
-
 vault: vault-stop
   #!/usr/bin/env zsh
   set -euo pipefail
@@ -95,7 +73,7 @@ vault-wait:
   echo "Vault did not respond on http://127.0.0.1:8200" >&2
   exit 1
 
-vault-init: _assert-not-devpod
+vault-init:
   #!/usr/bin/env zsh
   set -euo pipefail
   keys="{{root}}/vault/keys.json"
@@ -122,7 +100,7 @@ vault-init: _assert-not-devpod
   chmod 600 "$keys"
   echo "Wrote ${keys}"
 
-vault-unseal: _assert-not-devpod
+vault-unseal:
   #!/usr/bin/env zsh
   set -euo pipefail
   keys="{{root}}/vault/keys.json"
@@ -431,17 +409,17 @@ dev-envrc:
 vault-stop:
   podman stop vault || true
 
-vault-reset: _assert-not-devpod vault-stop
+vault-reset: vault-stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  echo "This will delete the Vault data volume(s), keys file, and Terraform state."
+  echo "This will delete the persistent Vault volume, keys file, and Terraform state."
   printf "Type 'delete' to continue: "
   read -r confirm
   if [[ "$confirm" != "delete" ]]; then
     echo "Aborted."
     exit 1
   fi
-  # Legacy host-podman Vault volume.
+  # Robust volume removal
   if podman volume inspect permesi-vault-data >/dev/null 2>&1; then
     echo "Removing Vault data volume..."
     if ! podman volume rm permesi-vault-data; then
@@ -452,34 +430,9 @@ vault-reset: _assert-not-devpod vault-stop
     echo "Vault data volume not found (already deleted)."
   fi
 
-  # Compose devcontainer Vault volume(s). DevPod names the project-scoped volume
-  # "<project>_vault-data" (project is DevPod-derived), so match any "*_vault-data"
-  # (covers the compose stack and any legacy "permesi-deps_vault-data"). Each is held
-  # by its vault container, so force-remove the matching containers first.
-  compose_reset=0
-  for vol in $(podman volume ls -q 2>/dev/null | grep -E '_vault-data$' || true); do
-    echo "Removing compose Vault data volume (${vol})..."
-    vault_cids="$(podman ps -aq --filter name=vault-1 2>/dev/null || true)"
-    if [[ -n "$vault_cids" ]]; then
-      podman rm -f ${vault_cids} >/dev/null 2>&1 || true
-    fi
-    if podman volume rm "$vol" >/dev/null 2>&1; then
-      compose_reset=1
-    else
-      echo "Note: could not remove ${vol} (in use?). Stop the workspace and retry: devpod stop permesi" >&2
-    fi
-  done
-
   rm -f {{root}}/vault/keys.json
   rm -rf {{root}}/vault/contrib/terraform/.terraform \
          {{root}}/vault/contrib/terraform/.terraform.lock.hcl \
          {{root}}/vault/contrib/terraform/terraform.tfstate \
          {{root}}/vault/contrib/terraform/terraform.tfstate.backup
   echo "Vault keys and Terraform state removed."
-
-  if [[ "$compose_reset" == "1" ]]; then
-    echo ""
-    echo "Compose Vault volume removed. Recreate the stack with a fresh Vault:"
-    echo "  scripts/dev-up --local --recreate"
-    echo "(postCreate re-bootstraps Vault automatically.)"
-  fi

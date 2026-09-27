@@ -49,130 +49,6 @@ hosts/pods).*
 - **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
 - **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
 
-### 🧳 Portable alternative: DevPod + Dev Containers
-
-On hosts where you cannot (or do not want to) install the full toolchain — e.g.
-immutable distros like **Fedora Atomic** — you can run the whole stack inside a Dev
-Container. Designed to work the same on **Linux, macOS, and Fedora-Atomic**, locally
-or on a remote VM. The host needs [`devpod`](https://devpod.sh); local mode also
-needs `podman` and `podman-compose`.
-
-**Model:** a **Compose-based devcontainer** (`.devcontainer/compose.yaml`)
-defines the **app** dev container *and* every backing service
-(postgres/vault/jaeger/haproxy) in one project. DevPod brings the whole stack up
-together, so the environment is fully self-contained — no host-side dependency
-management. Inside the project network, services resolve each other by name and
-HAProxy terminates TLS on `:443` and proxies to the in-app services as `app:8000/8001/8081`.
-
-**1. Choose a provider**
-
-`scripts/dev-up` uses the local provider when `.devpod.env` is absent. Configure the
-local provider once:
-
-```bash
-# Install DevPod (CLI) — see https://devpod.sh/docs/getting-started/install
-# scripts/dev-up creates or updates DevPod's local provider to use persistent
-# rootless Podman/podman-compose adapters. It also installs a user-level Podman
-# Compose provider drop-in and Podman's `nodocker` marker so later `devpod stop`
-# commands cannot select Docker or corrupt DevPod's JSON with compatibility banners.
-# DevPod names that provider type "docker", but no Docker daemon is used.
-```
-
-**2. Create the workspace — `scripts/dev-up` does everything**
-
-```bash
-git clone https://github.com/permesi/permesi.git
-cd permesi
-scripts/dev-up          # no .devpod.env: local; .devpod.env present: remote
-# override explicitly with --local or --remote
-# DevPod brings up app + postgres/vault/jaeger/haproxy, then the lifecycle hooks
-# bootstrap Vault+DB+TLS, write .envrc, and start genesis/permesi/web in tmux
-```
-
-The first run pulls images and builds the dev container (a few minutes). Local mode
-also trusts the dev CA on your host so `https://permesi.localhost` is valid in your
-browser (one `sudo` prompt; opt out with `PERMESI_TRUST_CA=0`). On Linux local mode lowers
-`net.ipv4.ip_unprivileged_port_start` to `443` so HAProxy can bind `:443` under
-rootless Podman. Remote mode provides the same browser URL by opening a local SSH
-tunnel from `127.0.0.1:443` to remote HAProxy and trusting only the public remote
-development CA; the VM itself does not expose or bind port 443.
-
-> The bootstrap runs once (`postCreate`); on every later start (`postStart`) Vault is
-> re-unsealed, `.envrc` is refreshed, and the services are restarted. Set
-> `PERMESI_DEVPOD_NO_AUTOSTART=1` before `scripts/dev-up` to skip auto-starting them.
-
-**3. Enter the workspace and use it**
-
-```bash
-devpod ssh permesi-remote   # default remote workspace (as vscode)
-# local mode: devpod ssh permesi
-tmux attach -t permesi      # watch genesis/permesi/web (detach with your prefix + d)
-# or, without attaching (e.g. if you're already in a host tmux): just devpod-logs
-```
-
-…or open the workspace from your editor's DevPod / Dev Containers integration.
-
-**Remote configuration**
-
-Because the stack is self-contained, the *same* devcontainer runs on a remote VM
-through an existing DevPod provider — DevPod brings everything up on the remote, no
-SSH-staged services. Copy the example configuration once; from then on the same
-one-command entry point selects remote mode automatically:
-
-```bash
-cp .devpod.env.example .devpod.env
-# Edit provider, source, and SSH target as needed.
-scripts/dev-up
-devpod ssh permesi-remote   # then: tmux attach -t permesi
-```
-
-Use `scripts/dev-up --remote` to force remote mode without the file, or
-`scripts/dev-up --local` to force local mode when it exists. `scripts/dev-up-remote`
-remains available as a compatibility entry point.
-
-Overridable: `DEVPOD_REMOTE_PROVIDER`, `DEVPOD_REMOTE_WORKSPACE_NAME`,
-`DEVPOD_REMOTE_SOURCE` (append `@branch`), and `DEVPOD_REMOTE_SSH=host:port` to
-auto-reload HAProxy on the VM. When the named provider does not exist,
-`scripts/dev-up` creates an SSH provider automatically from `DEVPOD_REMOTE_HOST`,
-`DEVPOD_REMOTE_USER`, and `DEVPOD_REMOTE_PORT`.
-Keep `DEVPOD_REMOTE_WORKSPACE_NAME=permesi-remote`; `permesi` is reserved for the
-local workspace so DevPod cannot silently reuse it with the wrong provider. For a
-rootless Podman remote, the script selects `podman-compose` automatically and does
-not install or require Docker or a Docker-compatible socket. DevPod 0.6.15 still
-looks up a command named `docker-compose`, so the script installs a managed remote
-shim at that name which executes `podman-compose` directly. HAProxy, Vault, and
-Jaeger bind only to remote loopback. The script keeps the browser-facing TLS tunnel
-on the local machine, so there is no need to SSH into the VM and run another local
-DevPod there.
-
-By default the tunnel maps local `127.0.0.1:443` to remote
-`127.0.0.1:8443`. Set `DEVPOD_REMOTE_LOCAL_HTTPS_PORT=8443` if the local host cannot
-bind a privileged port, or `DEVPOD_REMOTE_TUNNEL=0` to manage forwarding yourself.
-The local and remote workspaces cannot both own local port 443: stop the local
-workspace with `devpod stop permesi` before switching to the normal remote URL, or
-select a different local tunnel port.
-The automatic trust step imports the remote workspace's public development CA into
-the local system trust store; the CA private key remains remote. Restart an already
-open browser after the first trust operation if it does not immediately recognize
-the certificate.
-
-**Lifecycle (from the host)**
-
-```bash
-devpod stop permesi-remote             # stop the default remote stack
-scripts/dev-up                         # remote when .devpod.env exists
-devpod stop permesi                    # stop a local stack
-scripts/dev-up --local                 # explicitly start local mode
-devpod delete permesi --force          # remove the local workspace
-just vault-reset                       # then: scripts/dev-up --local --recreate
-```
-
-The three Rust services run inside the `app` container and are reached locally
-through HAProxy on `:443` (`https://permesi.localhost`, `api.`, `genesis.`). See
-[`.devcontainer/README.md`](.devcontainer/README.md) for the full architecture,
-environment variables, and host CA-trust steps. The legacy host-podman `just start`
-flow above continues to work unchanged on non-Atomic / macOS hosts.
-
 ## Workspace Layout
 
 This repository is a Rust workspace (monorepo) containing:
@@ -468,9 +344,9 @@ Cleanup: `just stop` to stop containers, and `just reset` to remove the infra co
 Release recipes must run from a clean `develop` branch. `just deploy` performs a
 patch version bump, verifies the workspace, merges `develop` into `main`, and
 creates a signed tag. Tag signing follows Git's configured `gpg.format` and
-supports both SSH signing (including the forwarded DevPod agent) and OpenPGP.
-Release verification uses the repository-local `target` directory so a clean
-build works even when DevPod mounts its shared Cargo target cache as a volume.
+supports both SSH signing and OpenPGP. Release verification uses the
+repository-local `target` directory, so a clean build is isolated from any shared
+`CARGO_TARGET_DIR`.
 
 Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`.
 

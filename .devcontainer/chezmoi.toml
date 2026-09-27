@@ -1,3 +1,0 @@
-[hooks.apply.post]
-command = "/bin/sh"
-args = ["/workspaces/permesi/.devcontainer/chezmoi-post-apply.sh"]

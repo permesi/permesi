@@ -1,7 +1,0 @@
-# Rootless Podman override (merged on top of compose.yaml by devcontainer.json).
-# Maps the container user to the host user so the bind-mounted workspace stays
-# editable as `vscode` without subuid ownership skew in both local and remote mode.
-
-services:
-  app:
-    userns_mode: keep-id

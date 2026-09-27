@@ -422,7 +422,7 @@ restart: stop start
 # Backward-compatible aliases for the renamed start recipes
 alias start-http := start
 
-start-socket: _assert-not-devpod
+start-socket:
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v tmux >/dev/null 2>&1; then
@@ -471,7 +471,7 @@ start-socket: _assert-not-devpod
   start_session
   tmux attach -t "$session"
 
-start: _assert-not-devpod
+start:
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v tmux >/dev/null 2>&1; then
@@ -540,7 +540,7 @@ tmux-stop:
   #!/usr/bin/env zsh
   tmux kill-session -t permesi 2>/dev/null || true
 
-reset: _assert-not-devpod stop
+reset: stop
   #!/usr/bin/env zsh
   set -euo pipefail
   just vault-reset
