@@ -392,14 +392,18 @@ content was squash-merged (the old tip is kept locally as
 touched. If a CI job fails, `just deploy` keeps waiting for 15 minutes
 (`PERMESI_RELEASE_RERUN_WAIT`): click "Re-run failed jobs" in GitHub and the
 release continues by itself once that attempt passes. While it waits it polls
-GitHub (the run every 30 seconds, `PERMESI_RELEASE_POLL_SECONDS`); if GitHub is
-unreachable it says so and keeps retrying until the timeout. Whenever a release stops midway (CI failed and was not
-re-run, the network or SSH connection dropped, Ctrl-C), the bumped version simply
-has no tag yet, and running `just deploy` again finishes that release instead of
-bumping a second time (`just deploy-current` does the same explicitly); to fix
-forward first, commit on `sandbox` and merge into `develop` before rerunning. Run
-it inside the dev session (Herdr or tmux) on the VM so a dropped laptop connection
-does not stop it at all.
+GitHub: every 10 seconds until the run appears (up to 5 minutes), then the run
+every 30 seconds (`PERMESI_RELEASE_POLL_SECONDS`), for at most an hour per attempt
+(`PERMESI_RELEASE_CI_TIMEOUT`); if GitHub is unreachable it says so and keeps
+retrying until the timeout. The preflight validates these settings before anything
+is pushed. Whenever a release stops midway (CI failed and was not re-run, the
+network or SSH connection dropped, the bump's push failed, Ctrl-C), the bumped
+version simply has no tag yet, and running `just deploy` again finishes that
+release instead of bumping a second time, pushing a committed-but-unpushed bump
+first (`just deploy-current` does the same explicitly); to fix forward first,
+commit on `sandbox` and merge into `develop` before rerunning. Run it inside the
+dev session (Herdr or tmux) on the VM so a dropped laptop connection does not stop
+it at all.
 Only `X.Y.Z` tags publish anything; other tags, such as the `t-*` tags from
 `just t-deploy`, run the tests and builds only.
 Dependency updates (`cargo update`) are ordinary changes made on `sandbox`, so CI

@@ -123,6 +123,7 @@ mkcert-local:
   mkdir -p {{root}}/config/haproxy/certs
   cert="{{root}}/config/haproxy/certs/permesi.localhost.pem"
   if [[ -f "$cert" ]]; then
+    chmod 0600 "$cert"
     echo "TLS cert already exists: $cert"
     exit 0
   fi
@@ -314,6 +315,8 @@ haproxy-start: setup-network
       exit 1
     fi
   fi
+  # The combined PEM holds the private key; files from older setups may be 0644.
+  chmod 0600 "$cert"
   if [[ ! -f "$backend_ca" ]]; then
     echo "Missing backend CA: ${backend_ca}. Run: just dev-tls-certs" >&2
     exit 1
@@ -404,6 +407,9 @@ haproxy-socket-start: setup-network
       exit 1
     fi
   fi
+
+  # The combined PEM holds the private key; files from older setups may be 0644.
+  chmod 0600 "$cert"
 
   if [[ -n "$(podman ps -q --filter 'name=^permesi-haproxy$')" ]]; then
     echo "permesi-haproxy already running. Restarting with socket config..."

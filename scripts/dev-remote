@@ -221,6 +221,8 @@ leaf_reusable() {
 issue=0
 if [ ! -f "$leaf" ] || [ "$renew" = 1 ] || ! leaf_reusable; then
     issue=1
+else
+    chmod 0600 "$leaf"
 fi
 if [ "$issue" = 1 ]; then
     tmp="$(mktemp -d "${cert_dir}/.issue.XXXXXX")"
@@ -299,6 +301,7 @@ cat >"$dest.tmp"
 chmod "$mode" "$dest.tmp"
 if [ -f "$dest" ] && cmp -s "$dest.tmp" "$dest"; then
   rm -f "$dest.tmp"
+  chmod "$mode" "$dest"
 else
   mv -f "$dest.tmp" "$dest"
   echo changed

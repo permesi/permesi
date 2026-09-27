@@ -303,11 +303,17 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
         echo "❌ Tag ${version} already exists." >&2
         exit 1
     fi
-    poll="${PERMESI_RELEASE_POLL_SECONDS:-30}"
-    if [[ ! "${poll}" =~ ^[0-9]+$ ]] || (( poll < 5 )); then
-        echo "❌ PERMESI_RELEASE_POLL_SECONDS must be a whole number of seconds, at least 5." >&2
-        exit 1
-    fi
+    # The gate's wait settings are checked here, before the bump is pushed.
+    check_seconds() {
+        local name="$1" value="$2" min="$3"
+        if [[ ! "${value}" =~ ^[0-9]+$ ]] || (( 10#${value} < min )); then
+            echo "❌ ${name} must be a whole number of seconds, at least ${min} (got '${value}')." >&2
+            exit 1
+        fi
+    }
+    check_seconds PERMESI_RELEASE_POLL_SECONDS "${PERMESI_RELEASE_POLL_SECONDS:-30}" 5
+    check_seconds PERMESI_RELEASE_CI_TIMEOUT "${PERMESI_RELEASE_CI_TIMEOUT:-3600}" 60
+    check_seconds PERMESI_RELEASE_RERUN_WAIT "${PERMESI_RELEASE_RERUN_WAIT:-900}" 0
     probe="release-signing-probe-$$"
     if ! git tag -s "${probe}" -m "signing probe" HEAD >/dev/null 2>&1; then
         echo "❌ git could not sign a tag; check the signing key or agent." >&2
@@ -488,8 +494,12 @@ _sync-sandbox:
     if git show-ref --verify --quiet refs/heads/sandbox && [[ "$(git branch --show-current)" != "sandbox" ]]; then
         local_tip="$(git rev-parse refs/heads/sandbox)"
         if [[ "${local_tip}" == "${old}" ]] || git merge-base --is-ancestor "${local_tip}" "${target}"; then
-            git branch -f sandbox "${target}" >/dev/null
-            git branch --set-upstream-to=origin/sandbox sandbox >/dev/null 2>&1 || true
+            if git branch -f sandbox "${target}" >/dev/null 2>&1; then
+                git branch --set-upstream-to=origin/sandbox sandbox >/dev/null 2>&1 || true
+            else
+                echo "⚠️  Could not move the local sandbox branch (checked out in another worktree?);" >&2
+                echo "   origin/sandbox is in sync, pull it there." >&2
+            fi
         else
             echo "⚠️  Local sandbox has commits of its own; left the local branch alone." >&2
         fi
@@ -513,6 +523,23 @@ _release kind:
     # instead of bumping again, so rerunning `just deploy` is always safe.
     git fetch --quiet --tags origin
     current="$(just --quiet _workspace-version)"
+
+    # The bump was committed but its push to develop failed (network, rejected
+    # push): push exactly that commit and carry on. Only a commit that sits directly
+    # on origin/develop, is named "bump version to <current>", touches nothing but
+    # the release files and whose version has no tag qualifies; any other local
+    # commit is still refused by the preflight.
+    if [[ "$(git branch --show-current)" == "develop" ]] &&
+        ! git rev-parse -q --verify "refs/tags/${current}" >/dev/null &&
+        [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/develop)" ]] &&
+        [[ "$(git rev-parse -q --verify HEAD^ || true)" == "$(git rev-parse origin/develop)" ]] &&
+        [[ "$(git log -1 --format=%s HEAD)" == "bump version to ${current}" ]] &&
+        [[ -z "$(git diff --name-only HEAD^ HEAD | grep -vxE 'Cargo\.toml|Cargo\.lock|docs/openapi/(permesi|genesis)\.json' || true)" ]]; then
+        echo "ℹ️  The bump to ${current} was committed but never pushed; pushing it now."
+        git push origin develop
+        just _sync-sandbox
+    fi
+
     if [[ "${kind}" != "current" ]] && ! git rev-parse -q --verify "refs/tags/${current}" >/dev/null; then
         echo "ℹ️  ${current} is bumped but not released yet; finishing that release (no new bump)."
         if [[ "${kind}" != "patch" ]]; then
