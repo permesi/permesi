@@ -22,8 +22,13 @@ stack_label := "io.permesi.stack=dev"
 # PERMESI_HTTPS_PORT is the HAProxy port the browser uses; every browser-facing URL
 # carries it when it is not 443, because CORS and WebAuthn compare origins including
 # the port. Over an SSH forward, use the same number on both ends.
-bind_addr := env_var_or_default("PERMESI_BIND_ADDR", "127.0.0.1")
-https_port := env_var_or_default("PERMESI_HTTPS_PORT", "443")
+# Precedence: the environment, then the values `just dev-envrc` baked into .envrc
+# (so `just restart`, `just web` or `just genesis-token` keep the running stack's
+# port without re-exporting it), then the defaults.
+_envrc_bind_addr := `sed -n 's/^export PERMESI_BIND_ADDR="\${PERMESI_BIND_ADDR:-\(.*\)}"$/\1/p' .envrc 2>/dev/null || true`
+_envrc_https_port := `sed -n 's/^export PERMESI_HTTPS_PORT="\${PERMESI_HTTPS_PORT:-\(.*\)}"$/\1/p' .envrc 2>/dev/null || true`
+bind_addr := env_var_or_default("PERMESI_BIND_ADDR", if _envrc_bind_addr == "" { "127.0.0.1" } else { _envrc_bind_addr })
+https_port := env_var_or_default("PERMESI_HTTPS_PORT", if _envrc_https_port == "" { "443" } else { _envrc_https_port })
 https_suffix := if https_port == "443" { "" } else { ":" + https_port }
 publish_ip := if bind_addr == "0.0.0.0" { "" } else { bind_addr + ":" }
 

@@ -15,7 +15,7 @@ genesis-token:
     verify=(--verify "${GENESIS_CA_PATH}")
   fi
   token="$(
-    xh "${verify[@]}" GET "${base}/token?client_id=00000000-0000-0000-0000-000000000000" \
+    xh --ignore-stdin "${verify[@]}" GET "${base}/token?client_id=00000000-0000-0000-0000-000000000000" \
       | jq -er '.token'
   )"
   python3 - "$token" <<'PY'
