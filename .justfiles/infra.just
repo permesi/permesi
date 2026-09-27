@@ -1,4 +1,4 @@
-postgres version="18":
+postgres version="18": setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
   if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
@@ -8,6 +8,7 @@ postgres version="18":
   mkdir -p db/log/postgres
   podman run --replace --rm -d --name postgres-permesi \
       --network {{net}} \
+      --label {{stack_label}} \
       -e POSTGRES_USER=postgres \
       -e POSTGRES_HOST_AUTH_METHOD=trust \
       -e PGDATA=/db/data/{{ version }} \
@@ -82,15 +83,16 @@ db-bootstrap:
   podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
   podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
-jaeger:
+jaeger: setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
-  if [[ -n "$(podman ps -q --filter 'name=^jaeger$')" ]]; then
+  if [[ -n "$(podman ps -q --filter 'name=^{{jaeger_ctr}}$')" ]]; then
     echo "jaeger already running"
     exit 0
   fi
-  podman run --replace --rm -d --name jaeger \
+  podman run --replace --rm -d --name {{jaeger_ctr}} \
     --network {{net}} \
+    --label {{stack_label}} \
     -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
     -p 6831:6831/udp \
     -p 6832:6832/udp \
@@ -105,7 +107,7 @@ jaeger:
   {{jaeger_image}}
 
 jaeger-stop:
-  podman stop jaeger || true
+  podman stop {{jaeger_ctr}} || true
 
 mkcert-local:
   #!/usr/bin/env zsh
@@ -209,7 +211,7 @@ dev-tls-certs:
     echo "Missing ${keys}. Run: just vault-init" >&2
     exit 1
   fi
-  if [[ -z "$(podman ps -q --filter 'name=^vault$')" ]]; then
+  if [[ -z "$(podman ps -q --filter 'name=^{{vault_ctr}}$')" ]]; then
     echo "Vault container not running. Run: just vault-persist-ready" >&2
     exit 1
   fi
@@ -253,7 +255,7 @@ dev-tls-certs:
 
     cert_json="$(
       podman exec -e VAULT_ADDR="$vault_addr" -e VAULT_TOKEN="$root_token" \
-        vault vault write -format=json "pki-int/issue/${service}-runtime" \
+        {{vault_ctr}} vault write -format=json "pki-int/issue/${service}-runtime" \
         "common_name=${common_name}" \
         "alt_names=${alt_names}" \
         "ttl=24h"
@@ -282,7 +284,7 @@ dev-tls-certs:
   issue_cert genesis "genesis.permesi.localhost" "genesis.permesi.localhost"
   echo "Wrote TLS certs and bundles to ${certs_dir}/permesi and ${certs_dir}/genesis."
 
-haproxy-start:
+haproxy-start: setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
   cfg="{{root}}/config/haproxy/haproxy.cfg"
@@ -321,6 +323,8 @@ haproxy-start:
     add_host_arg=(--add-host=host.containers.internal:host-gateway)
   fi
   if ! podman run --replace -d --name permesi-haproxy \
+    --network {{net}} \
+    --label {{stack_label}} \
     "${add_host_arg[@]}" \
     "${port_args[@]}" \
     -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
@@ -332,6 +336,8 @@ haproxy-start:
       podman rm -f permesi-haproxy >/dev/null 2>&1 || true
       port_args=(-p 443:8080)
       podman run --replace -d --name permesi-haproxy \
+        --network {{net}} \
+        --label {{stack_label}} \
         "${add_host_arg[@]}" \
         "${port_args[@]}" \
         -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
@@ -343,7 +349,7 @@ haproxy-start:
     fi
   fi
 
-haproxy-socket-start:
+haproxy-socket-start: setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
   cfg="{{root}}/config/haproxy/haproxy-socket.cfg"
@@ -390,6 +396,8 @@ haproxy-socket-start:
 
   echo "Starting HAProxy (socket mode)..."
   if ! podman run --replace -d --name permesi-haproxy \
+    --network {{net}} \
+    --label {{stack_label}} \
     "${add_host_arg[@]}" \
     "${socket_user_args[@]}" \
     "${port_args[@]}" \
@@ -520,19 +528,61 @@ dev-start-infra: setup-network postgres vault-persist-ready dev-tls-certs jaeger
 # Stop all services and the tmux session
 stop: tmux-stop dev-stop
 
-# Kill lingering dev processes, containers, and free ports
-dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop
+# Stop the dev containers, then any dev process of this checkout that outlived its
+# terminal. Other projects share the host, so a process is only signalled when its
+# working directory is inside this repository; matching by name or port alone would
+# kill another project's cargo-watch or port-8000 server.
+dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop test-clean
   #!/usr/bin/env zsh
-  echo "Cleaning up lingering dev processes and test containers..."
-  # Kill processes by port to ensure ports are freed (Linux specific)
-  fuser -k 8000/tcp 8001/tcp 8081/tcp 443/tcp 2>/dev/null || true
-  # Specific process names cleanup
-  pkill -f "cargo-watch" || true
-  pkill -f "trunk serve" || true
-  pkill -f "npm run css:watch" || true
-  pkill -f "tailwindcss" || true
-  # Cleanup any leaked testcontainers (permesi-test-*)
-  podman ps -a --format "{{{{.Names}}}}" | grep -E "^permesi-test-" | xargs -r podman rm -f
+  set -uo pipefail
+  root="{{root}}"
+  root="${root:A}"
+  pid_cwd() {
+    if [[ -r "/proc/$1/cwd" ]]; then
+      readlink "/proc/$1/cwd" 2>/dev/null
+    elif command -v lsof >/dev/null 2>&1; then
+      lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+    fi
+  }
+  port_pids() {
+    if command -v lsof >/dev/null 2>&1; then
+      lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null
+    elif command -v fuser >/dev/null 2>&1; then
+      fuser -n tcp "$1" 2>/dev/null
+    fi
+  }
+  typeset -U pids
+  pids=()
+  for port in 8000 8001 8081; do
+    pids+=(${=$(port_pids "$port")})
+  done
+  pids+=(${=$(pgrep -f 'cargo-watch|trunk serve|npm run css:watch|tailwindcss|target/debug/(genesis|permesi)' 2>/dev/null)})
+  for pid in "${pids[@]}"; do
+    [[ "$pid" == "$$" ]] && continue
+    cwd="$(pid_cwd "$pid")"
+    if [[ -n "$cwd" && ( "$cwd" == "$root" || "$cwd" == "$root"/* ) ]]; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  echo "Stopped permesi dev containers and processes."
+
+# Remove integration-test leftovers: containers, then networks, named permesi-test-*.
+# Tests create uniquely named ones and clean up after themselves; an interrupted run
+# leaves them behind. Nothing outside that prefix is touched, so do not run this
+# while `cargo test` is running.
+test-clean:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  containers=(${(f)"$(podman ps -a --format '{{{{.Names}}' | grep -E '^permesi-test-' || true)"})
+  if (( ${#containers} )); then
+    podman rm -f "${containers[@]}" >/dev/null
+    echo "Removed ${#containers} leaked test container(s)."
+  fi
+  networks=(${(f)"$(podman network ls --format '{{{{.Name}}' | grep -E '^permesi-test-' || true)"})
+  if (( ${#networks} )); then
+    podman network rm "${networks[@]}" >/dev/null
+    echo "Removed ${#networks} leaked test network(s)."
+  fi
 
 # Kill the tmux session if it exists
 tmux-stop:
@@ -557,7 +607,7 @@ operator-token:
     fi
     root_token=$(jq -r '.root_token' "$keys")
     podman exec -e VAULT_TOKEN="$root_token" -e VAULT_ADDR="http://127.0.0.1:8200" \
-        vault vault token create -policy=permesi-operators -period=24h -field=token
+        {{vault_ctr}} vault token create -policy=permesi-operators -period=24h -field=token
 
 podman-check:
   #!/usr/bin/env zsh

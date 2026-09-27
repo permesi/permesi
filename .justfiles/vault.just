@@ -15,7 +15,7 @@ _vault-keys-guard:
     exit 1
   fi
 
-vault: _vault-keys-guard vault-stop
+vault: _vault-keys-guard vault-stop setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
 
@@ -24,14 +24,15 @@ vault: _vault-keys-guard vault-stop
          {{root}}/vault/contrib/terraform/terraform.tfstate \
          {{root}}/vault/contrib/terraform/terraform.tfstate.backup
 
-  if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
+  if [[ -n "$(podman ps -q --filter 'name=^{{vault_ctr}}$')" ]]; then
     echo "vault already running"
     exit 0
   fi
 
   # Start ephemeral vault (memory backend)
-  podman run --replace --rm -d --name vault \
+  podman run --replace --rm -d --name {{vault_ctr}} \
     --network {{net}} \
+    --label {{stack_label}} \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
@@ -48,23 +49,24 @@ vault: _vault-keys-guard vault-stop
   echo "Applying Terraform configuration..."
   just vault-tf-apply
 
-vault-persist:
+vault-persist: setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
-  if [[ -n "$(podman ps -q --filter 'name=^vault$')" ]]; then
-    if podman inspect vault | jq -r '.[0].Mounts[]?.Destination' | rg -q '^/workspace/vault$'; then
+  if [[ -n "$(podman ps -q --filter 'name=^{{vault_ctr}}$')" ]]; then
+    if podman inspect {{vault_ctr}} | jq -r '.[0].Mounts[]?.Destination' | rg -q '^/workspace/vault$'; then
       echo "vault already running"
       exit 0
     fi
     echo "vault running without /workspace/vault mount; restarting with persisted config."
-    podman stop vault >/dev/null 2>&1 || true
+    podman stop {{vault_ctr}} >/dev/null 2>&1 || true
   fi
-  podman volume inspect permesi-vault-data >/dev/null 2>&1 || podman volume create permesi-vault-data >/dev/null
+  podman volume inspect permesi-vault-data >/dev/null 2>&1 || podman volume create --label {{stack_label}} permesi-vault-data >/dev/null
   # Vault 2.x images default to the unprivileged `vault` user; the server runs as
   # root here so it can create /var/log/vault for the Terraform file audit device
   # and write a data volume initialized by an older root-run image.
-  podman run --replace --rm -d --name vault \
+  podman run --replace --rm -d --name {{vault_ctr}} \
     --network {{net}} \
+    --label {{stack_label}} \
     --user 0:0 \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
@@ -80,7 +82,7 @@ vault-wait:
   set -euo pipefail
   for _ in {1..40}; do
     vault_status="$(
-      podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true' 2>/dev/null || true
+      podman exec {{vault_ctr}} sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true' 2>/dev/null || true
     )"
     if [[ -n "$vault_status" ]] && rg -q '"initialized":' <<<"$vault_status"; then
       exit 0
@@ -101,7 +103,7 @@ vault-init:
   fi
   just vault-wait
   vault_status="$(
-    podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
+    podman exec {{vault_ctr}} sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
   )"
   if [[ -z "$vault_status" ]]; then
     echo "Vault status unavailable; is the server running?" >&2
@@ -113,7 +115,7 @@ vault-init:
     echo "Restore the keys file or reset the vault data volume." >&2
     exit 1
   fi
-  podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault operator init -key-shares=1 -key-threshold=1 -format=json' > "$keys"
+  podman exec {{vault_ctr}} sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault operator init -key-shares=1 -key-threshold=1 -format=json' > "$keys"
   chmod 600 "$keys"
   echo "Wrote ${keys}"
 
@@ -127,7 +129,7 @@ vault-unseal:
   fi
   just vault-wait
   vault_status="$(
-    podman exec vault sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
+    podman exec {{vault_ctr}} sh -c 'VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true'
   )"
   sealed="$(printf '%s' "$vault_status" | jq -r '.sealed')"
   if [[ "$sealed" != "true" ]]; then
@@ -135,7 +137,7 @@ vault-unseal:
     exit 0
   fi
   unseal_key="$(jq -r '.unseal_keys_b64[0]' "$keys")"
-  podman exec vault sh -c "VAULT_ADDR=http://127.0.0.1:8200 vault operator unseal '${unseal_key}'" >/dev/null
+  podman exec {{vault_ctr}} sh -c "VAULT_ADDR=http://127.0.0.1:8200 vault operator unseal '${unseal_key}'" >/dev/null
   echo "Vault unsealed."
 
 
@@ -203,21 +205,21 @@ vault-tf-env:
     podman exec \
       -e VAULT_ADDR="$vault_addr" \
       -e VAULT_TOKEN="$token" \
-      vault \
+      {{vault_ctr}} \
       vault write -field=secret_id -f "auth/${approle_mount}/role/permesi/secret-id"
   )"
   genesis_secret_id="$(
     podman exec \
       -e VAULT_ADDR="$vault_addr" \
       -e VAULT_TOKEN="$token" \
-      vault \
+      {{vault_ctr}} \
       vault write -field=secret_id -f "auth/${approle_mount}/role/genesis/secret-id"
   )"
   operator_token="$(
     podman exec \
       -e VAULT_ADDR="$vault_addr" \
       -e VAULT_TOKEN="$token" \
-      vault \
+      {{vault_ctr}} \
       vault token create -policy=permesi-operators -period=24h -field=token
   )"
 
@@ -261,35 +263,35 @@ vault-env:
       podman exec \
         -e VAULT_ADDR="$vault_addr" \
         -e VAULT_TOKEN="$token" \
-        vault \
+        {{vault_ctr}} \
         vault read -field=role_id "auth/${approle_mount}/role/permesi/role-id"
     )"
     permesi_secret_id="$(
       podman exec \
         -e VAULT_ADDR="$vault_addr" \
         -e VAULT_TOKEN="$token" \
-        vault \
+        {{vault_ctr}} \
         vault write -field=secret_id -f "auth/${approle_mount}/role/permesi/secret-id"
     )"
     genesis_role_id="$(
       podman exec \
         -e VAULT_ADDR="$vault_addr" \
         -e VAULT_TOKEN="$token" \
-        vault \
+        {{vault_ctr}} \
         vault read -field=role_id "auth/${approle_mount}/role/genesis/role-id"
     )"
     genesis_secret_id="$(
       podman exec \
         -e VAULT_ADDR="$vault_addr" \
         -e VAULT_TOKEN="$token" \
-        vault \
+        {{vault_ctr}} \
         vault write -field=secret_id -f "auth/${approle_mount}/role/genesis/secret-id"
     )"
     operator_token="$(
       podman exec \
         -e VAULT_ADDR="$vault_addr" \
         -e VAULT_TOKEN="$token" \
-        vault \
+        {{vault_ctr}} \
         vault token create -policy=permesi-operators -period=24h -field=token
     )"
     printf '%s\n' \
@@ -314,7 +316,7 @@ vault-env:
   genesis_role_id=""
   genesis_secret_id=""
   for _ in {1..20}; do
-    logs="$(podman logs vault 2>/dev/null || true)"
+    logs="$(podman logs {{vault_ctr}} 2>/dev/null || true)"
     login_url="$(printf '%s\n' "$logs" | rg "Login URL:" | tail -n 1 | sed -E 's/.*Login URL:[[:space:]]*//')"
     permesi_role_id="$(printf '%s\n' "$logs" | rg "permesi RoleID:" | tail -n 1 | sed -E 's/.*permesi RoleID:[[:space:]]*//')"
     permesi_secret_id="$(printf '%s\n' "$logs" | rg "permesi SecretID:" | tail -n 1 | sed -E 's/.*permesi SecretID:[[:space:]]*//')"
@@ -397,8 +399,8 @@ vault-info:
   #!/usr/bin/env zsh
   set -euo pipefail
   echo "Vault container mounts:"
-  if podman container inspect vault >/dev/null 2>&1; then
-    podman container inspect vault \
+  if podman container inspect {{vault_ctr}} >/dev/null 2>&1; then
+    podman container inspect {{vault_ctr}} \
       | jq -r '.[0].Mounts[]? | "\(.Name)\t\(.Destination)\t\(.Source)"'
   else
     echo "vault container not running."
@@ -425,7 +427,7 @@ dev-envrc:
   echo "Wrote .envrc from Vault logs + dev endpoints."
 
 vault-stop:
-  podman stop vault || true
+  podman stop {{vault_ctr}} || true
 
 vault-reset: vault-stop
   #!/usr/bin/env zsh

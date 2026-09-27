@@ -323,6 +323,8 @@ to (re)apply schemas and runtime roles, then `just db-verify` to confirm constra
 
 Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/log`).
 
+The dev stack keeps to itself so it can share a host with other projects. Every container (`postgres-permesi`, `permesi-vault`, `permesi-jaeger`, `permesi-haproxy`) runs on the dedicated `permesi-net` podman network with subnet `172.31.20.0/24` and carries the label `io.permesi.stack=dev`. Set `PERMESI_NET` or `PERMESI_SUBNET` when that range collides with something else on the host; `just setup-network` reports the clash instead of silently picking another subnet. `just stop` only signals processes whose working directory is inside this checkout, so another project's `cargo watch` or port-8000 server survives it. Integration tests create their own uniquely named `permesi-test-*` networks and containers; `just test-clean` removes any that an interrupted run left behind. If you ran the stack before the containers were renamed, remove the old `vault` and `jaeger` containers once (`podman rm -f vault jaeger`) after confirming they are permesi's: the Vault data volume `permesi-vault-data` is reused by `permesi-vault`.
+
 `just dev-envrc` emits Vault credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single Vault PKI CA. `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis Vault CA bundle when fetching `paserk.json` directly from the Genesis service.
 - `PERMESI_TLS_PEM_BUNDLE=.../certs/permesi/tls.bundle.pem`
 - `PERMESI_ADMISSION_PASERK_CA_PATH=.../certs/genesis/ca.pem`
@@ -373,6 +375,7 @@ cat config/haproxy/certs/permesi.localhost-cert.pem config/haproxy/certs/permesi
   > config/haproxy/certs/permesi.localhost.pem
 
 podman run -d --name permesi-haproxy \
+  --network permesi-net \
   --add-host=host.containers.internal:host-gateway \
   -p 443:8080 \
   -v "$(pwd)/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \

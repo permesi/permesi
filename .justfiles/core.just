@@ -1,8 +1,28 @@
 default: fmt clippy test
   @just --list
 
+# Create the dedicated dev network (PERMESI_NET / PERMESI_SUBNET). An existing network
+# must already carry the expected subnet, and a range that another podman network or
+# a host route uses is reported instead of silently landing on a different subnet.
 setup-network:
-  podman network inspect {{net}} >/dev/null 2>&1 || podman network create --subnet {{subnet}} {{net}}
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  if podman network exists {{net}}; then
+    current="$(podman network inspect {{net}} --format '{{{{range .Subnets}}{{{{.Subnet}} {{{{end}}')"
+    current="${current% }"
+    if [[ " ${current} " != *" {{subnet}} "* ]]; then
+      echo "❌ podman network {{net}} uses ${current:-no subnet}, expected {{subnet}}." >&2
+      echo "   Remove it (podman network rm {{net}}) or set PERMESI_SUBNET to match." >&2
+      exit 1
+    fi
+    exit 0
+  fi
+  if ! err="$(podman network create --subnet {{subnet}} --label {{stack_label}} {{net}} 2>&1 >/dev/null)"; then
+    echo "❌ Could not create podman network {{net}} with subnet {{subnet}}:" >&2
+    echo "   ${err}" >&2
+    echo "   Pick a free range, for example: export PERMESI_SUBNET=172.31.21.0/24" >&2
+    exit 1
+  fi
 
 fmt:
   cargo fmt --all -- --check

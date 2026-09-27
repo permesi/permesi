@@ -1,6 +1,6 @@
 # Vault (dev)
 
-Local dev Vault runs as a container using the `hashicorp/vault:latest` image and is configured using **Terraform** from the host.
+Local dev Vault runs as the `permesi-vault` container (pinned `docker.io/hashicorp/vault:2.0`, on the `permesi-net` network) and is configured using **Terraform** from the host.
 
 - **Dev-only (in-memory)**: `just vault` runs Vault in dev mode and configures it via Terraform.
 - **Persistent (recommended)**: `just vault-persist-ready` runs Vault in server mode with `vault/config.hcl` and configures it via Terraform.
