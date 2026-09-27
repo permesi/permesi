@@ -512,13 +512,16 @@ _dev-session mode:
     herdr status server 2>/dev/null | grep -q 'status: running'
   }
   attach_herdr() {
+    # Only an interactive caller gets its Herdr view switched or attached.
+    if (( ! attach )); then
+      echo "herdr workspace '${session}' is ready. Attach with: just attach"
+      return
+    fi
     herdr workspace focus "$1" >/dev/null
     if [[ -n "${HERDR_ENV:-}" ]]; then
       echo "Focused herdr workspace '${session}'."
-    elif (( attach )); then
-      exec herdr
     else
-      echo "herdr workspace '${session}' is ready. Attach with: just attach"
+      exec herdr
     fi
   }
   attach_tmux() {
