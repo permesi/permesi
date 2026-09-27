@@ -303,6 +303,11 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
         echo "❌ Tag ${version} already exists." >&2
         exit 1
     fi
+    poll="${PERMESI_RELEASE_POLL_SECONDS:-30}"
+    if [[ ! "${poll}" =~ ^[0-9]+$ ]] || (( poll < 5 )); then
+        echo "❌ PERMESI_RELEASE_POLL_SECONDS must be a whole number of seconds, at least 5." >&2
+        exit 1
+    fi
     probe="release-signing-probe-$$"
     if ! git tag -s "${probe}" -m "signing probe" HEAD >/dev/null 2>&1; then
         echo "❌ git could not sign a tag; check the signing key or agent." >&2
@@ -321,6 +326,7 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
 # fails, the gate keeps waiting for PERMESI_RELEASE_RERUN_WAIT seconds (default 900):
 # "Re-run failed jobs" in GitHub starts a new attempt of the same run, the gate
 # follows it, and the release continues on its own if that attempt passes.
+# The run is checked every PERMESI_RELEASE_POLL_SECONDS (default 30);
 # PERMESI_RELEASE_CI_TIMEOUT caps each attempt's wait in seconds (default 3600).
 _release-gate sha:
     #!/usr/bin/env bash
@@ -361,6 +367,7 @@ _release-gate sha:
     echo "🔗 ${url}"
 
     rerun_wait="${PERMESI_RELEASE_RERUN_WAIT:-900}"
+    poll="${PERMESI_RELEASE_POLL_SECONDS:-30}"
     if (( rerun_wait >= 60 )); then window="$((rerun_wait / 60)) minutes"; else window="${rerun_wait} seconds"; fi
     failed_at=""
     last=""
@@ -370,11 +377,11 @@ _release-gate sha:
         read -r status conclusion attempt <<<"${state}"
         if [[ "${status}" == "unknown" ]]; then
             if [[ "${last}" != "unknown" ]]; then
-                echo "⚠️  GitHub unreachable; still waiting (retrying every 20s)..."
+                echo "⚠️  GitHub unreachable; still waiting (retrying every ${poll}s)..."
                 last="unknown"
             fi
             (( SECONDS < deadline )) || { echo "❌ GitHub stayed unreachable; rerun just deploy when back online." >&2; exit 1; }
-            sleep 20
+            sleep "${poll}"
             continue
         fi
         if [[ "${status} ${attempt}" != "${last}" ]]; then
@@ -406,7 +413,7 @@ _release-gate sha:
             echo "   When it passes, run just deploy again to finish (no second bump)" >&2
             exit 1
         fi
-        sleep 20
+        sleep "${poll}"
     done
 
 # Tag the CI-verified commit and move main to it in one atomic push. Either both refs

@@ -392,8 +392,8 @@ content was squash-merged (the old tip is kept locally as
 touched. If a CI job fails, `just deploy` keeps waiting for 15 minutes
 (`PERMESI_RELEASE_RERUN_WAIT`): click "Re-run failed jobs" in GitHub and the
 release continues by itself once that attempt passes. While it waits it polls
-GitHub (the run every 20 seconds); if GitHub is unreachable it says so and keeps
-retrying until the timeout. Whenever a release stops midway (CI failed and was not
+GitHub (the run every 30 seconds, `PERMESI_RELEASE_POLL_SECONDS`); if GitHub is
+unreachable it says so and keeps retrying until the timeout. Whenever a release stops midway (CI failed and was not
 re-run, the network or SSH connection dropped, Ctrl-C), the bumped version simply
 has no tag yet, and running `just deploy` again finishes that release instead of
 bumping a second time (`just deploy-current` does the same explicitly); to fix
