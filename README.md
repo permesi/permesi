@@ -12,9 +12,9 @@
 
 **Prerequisites (intentional):**
 - **System**: `zsh`, `podman`, `tmux`, `jq`, `curl`, `xh`, `ripgrep` (rg)
-- **Languages**: `rust` (stable), `node` (LTS)
+- **Languages**: `rust` (stable) with `cargo-watch`, `node` (LTS)
 - **Infrastructure**: `just`, `terraform`, `vault`, `mkcert`, `direnv`
-> These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, Vault-backed cryptography, and reproducible infrastructure.
+> These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, Vault-backed cryptography, and reproducible infrastructure. `zsh` is a hard requirement: the justfile runs under it, so no recipe works without it.
 
 ```bash
 # 1. Clone the repo
@@ -288,7 +288,7 @@ images, release tarballs, Debian packages, and the `just` dev recipes all build 
 `--features telemetry`. The feature only makes export possible: a telemetry build sends
 spans only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set at startup, and a build without the
 feature logs a warning if that variable is present instead of silently dropping traces.
-- **Terraform** (v1.5+): Required for provisioning local Vault infrastructure.
+- **Terraform** (v1.7+): Required for provisioning local Vault infrastructure.
 
 ## Web Console
 
@@ -300,7 +300,7 @@ feature logs a warning if that variable is present instead of silently dropping 
 
 ## Local Development (Full Flow)
 
-Default ports: genesis `8000`, permesi `8001`, web `8080`.
+Default ports: genesis `8000`, permesi `8001`, web `8081`.
 
 Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443` and runs the backends over HTTPS/TLS (the same transport as production and k8s). The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
 If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
@@ -321,7 +321,7 @@ If you want infra only: `just dev-start-infra` then `just dev-envrc` (this also 
 If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
 to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
 
-Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/logs`).
+Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/log`).
 
 `just dev-envrc` emits Vault credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single Vault PKI CA. `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis Vault CA bundle when fetching `paserk.json` directly from the Genesis service.
 - `PERMESI_TLS_PEM_BUNDLE=.../certs/permesi/tls.bundle.pem`
@@ -380,7 +380,7 @@ podman run -d --name permesi-haproxy \
   docker.io/haproxy:latest
 ```
 
-On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443` (persist with a sysctl.d config if desired). If you want to avoid IPv6 resolution issues, add IPv4 host entries via `just localhost-hosts`.
+On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443` (persist with a sysctl.d config if desired). The services resolve `*.permesi.localhost` through the system resolver: nss-myhostname (`myhostname` in `/etc/nsswitch.conf`) or systemd-resolved map `*.localhost` to loopback; otherwise add `127.0.0.1 permesi.localhost api.permesi.localhost genesis.permesi.localhost` (and a matching `::1` line) to `/etc/hosts`.
 You can run `just haproxy-sysctl` to apply the sysctl setting.
 
 ### Testing Admin Claim (Platform Operator)

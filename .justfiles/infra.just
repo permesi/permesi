@@ -429,7 +429,6 @@ start-socket:
     just dev-start-infra
     just haproxy-socket-start
     just dev-envrc
-  export PERMESI_SOCKET_MODE=1
     echo "tmux not found; starting web here. Run: just genesis-socket / just permesi-socket in other shells."
     just web
     exit 0
@@ -526,7 +525,7 @@ dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop
   #!/usr/bin/env zsh
   echo "Cleaning up lingering dev processes and test containers..."
   # Kill processes by port to ensure ports are freed (Linux specific)
-  fuser -k 8000/tcp 8001/tcp 8080/tcp 8081/tcp 443/tcp 2>/dev/null || true
+  fuser -k 8000/tcp 8001/tcp 8081/tcp 443/tcp 2>/dev/null || true
   # Specific process names cleanup
   pkill -f "cargo-watch" || true
   pkill -f "trunk serve" || true
@@ -544,7 +543,7 @@ reset: stop
   #!/usr/bin/env zsh
   set -euo pipefail
   just vault-reset
-  rm -rf {{root}}/db/data {{root}}/db/logs
+  rm -rf {{root}}/db/data {{root}}/db/log
   rm -rf {{root}}/config/haproxy/certs
 
 # Generate a fresh platform operator token for admin claim/elevation.

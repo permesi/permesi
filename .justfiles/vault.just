@@ -2,7 +2,20 @@
 # Local dependencies
 # ----------------------
 
-vault: vault-stop
+# Refuse to run the ephemeral dev-mode Vault over a persistent Vault's keys file:
+# `vault` overwrites vault/keys.json with the dev root token, which would destroy
+# the only copy of the persistent Vault's unseal key.
+_vault-keys-guard:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  keys="{{root}}/vault/keys.json"
+  if [[ -f "$keys" ]] && jq -e '.unseal_keys_b64' "$keys" >/dev/null 2>&1; then
+    echo "❌ ${keys} belongs to the persistent Vault (it holds the unseal key)." >&2
+    echo "   Running the ephemeral dev Vault would overwrite it. Run: just vault-reset" >&2
+    exit 1
+  fi
+
+vault: _vault-keys-guard vault-stop
   #!/usr/bin/env zsh
   set -euo pipefail
 
@@ -150,7 +163,8 @@ vault-tf-apply:
     echo "Applying Terraform configuration..."
     terraform apply -auto-approve
 
-    echo "✅ Vault configured via Terraform."  echo "🔑 Operator Token: $(just --quiet operator-token)"
+    echo "✅ Vault configured via Terraform."
+    echo "🔑 Operator Token: $(just --quiet operator-token)"
 
 vault-tf-env:
   #!/usr/bin/env zsh
