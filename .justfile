@@ -14,6 +14,9 @@ subnet := env_var_or_default("PERMESI_SUBNET", "172.31.20.0/24")
 vault_ctr := "permesi-vault"
 jaeger_ctr := "permesi-jaeger"
 stack_label := "io.permesi.stack=dev"
+# Herdr names workspaces after their directory, so the dev session gets a label that
+# cannot be mistaken for the workspace you already have open in this checkout.
+herdr_label := "permesi-dev"
 
 # Where published container ports listen, and the browser-facing HTTPS port.
 # PERMESI_BIND_ADDR defaults to loopback because Postgres uses trust auth and

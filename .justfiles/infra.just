@@ -495,6 +495,7 @@ _dev-session mode:
   root="{{root}}"
   state="${root}/.tmp/herdr-session.json"
   session="permesi"
+  ws_label="{{herdr_label}}"
   if [[ "{{mode}}" == "socket" ]]; then
     cmd_genesis="just genesis-socket"
     cmd_permesi="just permesi-socket"
@@ -514,12 +515,12 @@ _dev-session mode:
   attach_herdr() {
     # Only an interactive caller gets its Herdr view switched or attached.
     if (( ! attach )); then
-      echo "herdr workspace '${session}' is ready. Attach with: just attach"
+      echo "herdr workspace '${ws_label}' is ready. Attach with: just attach"
       return
     fi
     herdr workspace focus "$1" >/dev/null
     if [[ -n "${HERDR_ENV:-}" ]]; then
-      echo "Focused herdr workspace '${session}'."
+      echo "Focused herdr workspace '${ws_label}'."
     else
       exec herdr
     fi
@@ -572,7 +573,7 @@ _dev-session mode:
   fi
 
   if [[ "$mux" == "herdr" ]] && ws="$(just --quiet _herdr-ws 2>/dev/null)"; then
-    echo "herdr workspace '${session}' is already running."
+    echo "herdr workspace '${ws_label}' is already running."
     attach_herdr "$ws"
     exit 0
   fi
@@ -598,18 +599,18 @@ _dev-session mode:
 
   if [[ "$mux" == "herdr" ]]; then
     envs=(--env "PERMESI_BIND_ADDR={{bind_addr}}" --env "PERMESI_HTTPS_PORT={{https_port}}")
-    ws_json="$(herdr workspace create --cwd "$root" --label "$session" "${envs[@]}" --no-focus)"
+    ws_json="$(herdr workspace create --cwd "$root" --label "$ws_label" "${envs[@]}" --no-focus)"
     ws="$(jq -r '.result.workspace.workspace_id' <<<"$ws_json")"
     p_genesis="$(jq -r '.result.root_pane.pane_id' <<<"$ws_json")"
     mkdir -p "${state:h}"
-    jq -n --arg ws "$ws" --arg session "$session" '{workspace: $ws, label: $session, panes: {}}' > "$state"
+    jq -n --arg ws "$ws" --arg session "$ws_label" '{workspace: $ws, label: $session, panes: {}}' > "$state"
     split_pane() {
       herdr pane split "$1" --direction "$2" --cwd "$root" "${envs[@]}" --no-focus | jq -r '.result.pane.pane_id'
     }
     p_permesi="$(split_pane "$p_genesis" right)"
     p_web="$(split_pane "$p_genesis" down)"
     p_shell="$(split_pane "$p_permesi" down)"
-    jq -n --arg ws "$ws" --arg session "$session" \
+    jq -n --arg ws "$ws" --arg session "$ws_label" \
       --arg g "$p_genesis" --arg p "$p_permesi" --arg w "$p_web" --arg s "$p_shell" \
       '{workspace: $ws, label: $session, panes: {genesis: $g, permesi: $p, web: $w, shell: $s}}' > "$state"
     herdr pane rename "$p_genesis" genesis >/dev/null
@@ -619,7 +620,7 @@ _dev-session mode:
     herdr pane run "$p_genesis" "$cmd_genesis" >/dev/null
     herdr pane run "$p_permesi" "$cmd_permesi" >/dev/null
     herdr pane run "$p_web" "$cmd_web" >/dev/null
-    echo "Created herdr workspace '${session}' (genesis, permesi, web, shell)."
+    echo "Created herdr workspace '${ws_label}' (genesis, permesi, web, shell)."
     echo "Logs without attaching: just logs [genesis|permesi|web]"
     attach_herdr "$ws"
     exit 0
@@ -662,7 +663,7 @@ _prebuild:
   done
 
 # Print the recorded Herdr workspace id if that workspace is still alive and labelled
-# 'permesi', and fail otherwise. The label check keeps a stale id from ever targeting
+# {{herdr_label}}, and fail otherwise. The label check keeps a stale id from ever targeting
 # a workspace this checkout did not create.
 _herdr-ws:
   #!/usr/bin/env zsh
@@ -673,7 +674,7 @@ _herdr-ws:
   ws="$(jq -r '.workspace // empty' "$state")"
   [[ -n "$ws" ]] || exit 1
   label="$(herdr workspace get "$ws" 2>/dev/null | jq -r '.result.workspace.label // empty')"
-  [[ "$label" == "permesi" ]] || exit 1
+  [[ "$label" == "{{herdr_label}}" ]] || exit 1
   print -r -- "$ws"
 
 # Attach to the running dev session: the recorded Herdr workspace, else the tmux
@@ -685,7 +686,7 @@ attach:
   if ws="$(just --quiet _herdr-ws 2>/dev/null)"; then
     herdr workspace focus "$ws" >/dev/null
     if [[ -n "${HERDR_ENV:-}" ]]; then
-      echo "Focused herdr workspace 'permesi'."
+      echo "Focused herdr workspace '{{herdr_label}}'."
       exit 0
     fi
     exec herdr
@@ -829,9 +830,9 @@ mux-stop:
         [[ "$id" == "${HERDR_PANE_ID:-}" ]] && continue
         herdr pane close "$id" >/dev/null 2>&1 || true
       done
-      echo "Closed the service panes of herdr workspace 'permesi' (kept this one)."
+      echo "Closed the service panes of herdr workspace '{{herdr_label}}' (kept this one)."
     else
-      herdr workspace close "$ws" >/dev/null && echo "Closed herdr workspace 'permesi'."
+      herdr workspace close "$ws" >/dev/null && echo "Closed herdr workspace '{{herdr_label}}'."
     fi
   fi
   rm -f "$state"

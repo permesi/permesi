@@ -28,7 +28,7 @@ just doctor
 #    or skip it with: export PERMESI_HTTPS_PORT=8443
 just haproxy-sysctl
 
-# 4. Ignite the engine: this opens a `permesi` Herdr workspace (tmux as the fallback) with all services running in panes.
+# 4. Ignite the engine: this opens a `permesi-dev` Herdr workspace (tmux as the fallback) with all services running in panes.
 just start
 
 # 5. (Optional) run firefox in developer mode:
@@ -342,7 +342,7 @@ If HAProxy can't reach host services on macOS, it falls back to `host.docker.int
 If you want to run services manually instead of using the all-in-one `just start`:
 1) Run services: `just genesis` and `just permesi` (HTTPS/TCP), or `just genesis-socket` and `just permesi-socket` for the socket flow. They auto-source `.envrc`, so direnv is optional. (`just start-http` is kept as an alias of `just start`.)
 
-`just start` runs genesis, permesi and web, plus a fourth pane for ad hoc commands, in a `permesi` [Herdr](https://herdr.dev) workspace, and falls back to a `tmux` session named `permesi` when Herdr is not installed. Set `PERMESI_MUX=herdr|tmux|none` to force a choice; `none` starts the infra and prints the three commands for your own terminals. Inside Herdr the command creates the workspace and switches to it (Herdr does not nest); outside it attaches to your running Herdr, starting a headless Herdr server first if none is running. `PERMESI_NO_ATTACH=1` builds the session without attaching. Re-running `just start` while the session is alive only attaches, `just attach` does the same from any shell, and `just logs [genesis|permesi|web]` prints a pane's recent output without attaching. Before opening the panes, `just start` builds genesis and permesi once so the two cargo-watch runs do not queue on the shared build lock; set `PERMESI_NO_PREBUILD=1` to skip that. `just stop` stops the containers and dev processes first and closes the session last, so it also works from the session's own spare pane (it then keeps that pane open).
+`just start` runs genesis, permesi and web, plus a fourth pane for ad hoc commands, in a `permesi-dev` [Herdr](https://herdr.dev) workspace, and falls back to a `tmux` session named `permesi` when Herdr is not installed. Set `PERMESI_MUX=herdr|tmux|none` to force a choice; `none` starts the infra and prints the three commands for your own terminals. Inside Herdr the command creates the workspace and switches to it (Herdr does not nest); outside it attaches to your running Herdr, starting a headless Herdr server first if none is running. `PERMESI_NO_ATTACH=1` builds the session without attaching. Re-running `just start` while the session is alive only attaches, `just attach` does the same from any shell, and `just logs [genesis|permesi|web]` prints a pane's recent output without attaching. Before opening the panes, `just start` builds genesis and permesi once so the two cargo-watch runs do not queue on the shared build lock; set `PERMESI_NO_PREBUILD=1` to skip that. `just stop` stops the containers and dev processes first and closes the session last, so it also works from the session's own spare pane (it then keeps that pane open).
 
 Because AppRole SecretIDs are single-use (`secret_id_num_uses=1`), `just genesis` and `just permesi` fetch a fresh
 SecretID before each `cargo watch` run using the Vault CLI. Make sure `vault` is installed and authenticated (via
