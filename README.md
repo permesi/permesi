@@ -385,9 +385,12 @@ the release version), after a clean local `verify-release`. Next it waits for th
 Test & Build CI run of that exact commit, and only if it passes does it sign the
 tag on that commit and push it to `main` together with the tag in one atomic,
 fast-forward-only push, so `main`, the tag and the tested commit are always the
-same. Finally `sandbox` is reset to the release with `--force-with-lease`; its
-previous tip is kept locally as `refs/backup/sandbox/<version>`. If CI fails or
-the wait is interrupted, `develop` only holds the bump commit: fix forward and run
+same. `sandbox` follows `develop` throughout: right after the bump, and again
+after the release, it moves to `develop` when that is a fast-forward or when its
+content was squash-merged (the old tip is kept locally as
+`refs/backup/sandbox/<tip>`); work on `sandbox` that `develop` lacks is never
+touched. If CI fails or the wait is interrupted, `develop` and `sandbox` both hold
+the bump commit: fix forward on `sandbox`, merge into `develop`, and run
 `just deploy-current`, which releases the current version without bumping again.
 Dependency updates (`cargo update`) are ordinary changes made on `sandbox`, so CI
 tests them before a release. Tag signing follows Git's configured `gpg.format`

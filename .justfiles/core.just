@@ -248,6 +248,7 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
     git commit -m "bump version to ${new_version}"
     git push origin develop
     echo "✅ Version bumped and pushed to develop"
+    just _sync-sandbox
 
 # Bump version and commit (patch level)
 bump:
@@ -394,47 +395,70 @@ _release-promote version sha:
     fi
     echo "✅ Released ${version}: main and the tag point at ${sha:0:12}"
 
-# Point sandbox (local and origin) at the released commit. The push uses
-# --force-with-lease against the sandbox tip recorded before the release, so anything
-# pushed to sandbox in the meantime makes the reset fail instead of vanishing, and the
-# previous tip is kept locally as refs/backup/sandbox/<version> in case it held
-# changes the release does not contain.
-_release-reset-sandbox version sha previous:
+# Keep sandbox equal to develop; runs after the version bump and again after a
+# release, with develop checked out. sandbox (local and on origin) moves to develop's
+# HEAD when it is an ancestor of it (a fast-forward), or when its content equals HEAD
+# or the commit before it (work that was squash-merged and then bumped). A forced move
+# uses --force-with-lease and keeps the old tip as refs/backup/sandbox/<tip>. A
+# sandbox that holds work develop lacks, or is already ahead of it, is left alone, and
+# no outcome here fails the release.
+_sync-sandbox:
     #!/usr/bin/env bash
     set -euo pipefail
-    version="{{version}}"
-    sha="{{sha}}"
-    previous="{{previous}}"
-
-    git update-ref "refs/backup/sandbox/${version}" "${previous}"
-    if ! git diff --quiet "${previous}" "${sha}" -- . \
-        ':(exclude)Cargo.toml' ':(exclude)Cargo.lock' ':(exclude)docs/openapi'; then
-        echo "ℹ️  sandbox's previous tip differs from the release; it is kept as refs/backup/sandbox/${version}"
-    fi
-    echo "🔄 Resetting sandbox to the released commit..."
-    if ! git push --force-with-lease="sandbox:${previous}" origin "${sha}:refs/heads/sandbox"; then
-        echo "⚠️  sandbox changed on origin during the release; left it alone. Reset it yourself when ready." >&2
+    target="$(git rev-parse HEAD)"
+    if ! git fetch --quiet origin sandbox 2>/dev/null; then
+        echo "ℹ️  origin has no sandbox branch; nothing to sync."
         exit 0
     fi
-    if [[ "$(git branch --show-current)" != "sandbox" ]]; then
-        git branch -f sandbox "${sha}" >/dev/null
-        git branch --set-upstream-to=origin/sandbox sandbox >/dev/null 2>&1 || true
+    old="$(git rev-parse refs/remotes/origin/sandbox)"
+
+    if [[ "${old}" == "${target}" ]]; then
+        echo "✅ sandbox matches develop (${target:0:12})"
+    elif git merge-base --is-ancestor "${target}" "${old}"; then
+        echo "ℹ️  sandbox is ahead of develop; left as is."
+        exit 0
+    elif git merge-base --is-ancestor "${old}" "${target}"; then
+        if ! git push --quiet origin "${target}:refs/heads/sandbox"; then
+            echo "⚠️  Could not fast-forward sandbox; sync it yourself." >&2
+            exit 0
+        fi
+        echo "✅ sandbox fast-forwarded to develop (${target:0:12})"
+    elif git diff --quiet "${old}" "${target}" ||
+        { git rev-parse -q --verify "${target}^" >/dev/null && git diff --quiet "${old}" "${target}^"; }; then
+        git update-ref "refs/backup/sandbox/${old:0:12}" "${old}"
+        if ! git push --quiet --force-with-lease="sandbox:${old}" origin "${target}:refs/heads/sandbox"; then
+            echo "⚠️  sandbox changed on origin meanwhile; left it alone." >&2
+            exit 0
+        fi
+        echo "✅ sandbox moved to develop (${target:0:12}); its squash-merged history is kept as refs/backup/sandbox/${old:0:12}"
+    else
+        echo "⚠️  sandbox has changes develop does not contain; left it alone." >&2
+        exit 0
     fi
-    echo "✅ sandbox reset to ${sha:0:12}"
+
+    if git show-ref --verify --quiet refs/heads/sandbox && [[ "$(git branch --show-current)" != "sandbox" ]]; then
+        local_tip="$(git rev-parse refs/heads/sandbox)"
+        if [[ "${local_tip}" == "${old}" ]] || git merge-base --is-ancestor "${local_tip}" "${target}"; then
+            git branch -f sandbox "${target}" >/dev/null
+            git branch --set-upstream-to=origin/sandbox sandbox >/dev/null 2>&1 || true
+        else
+            echo "⚠️  Local sandbox has commits of its own; left the local branch alone." >&2
+        fi
+    fi
 
 # Release flow behind the deploy recipes (kind: patch, minor, major or current).
-# Flow: preflight, version bump pushed to develop (skipped for current), wait for CI
-# on that exact commit, then tag it and fast-forward main to it in one atomic push,
-# then reset sandbox. Nothing reaches main or gets tagged unless CI passed on that
-# very commit. If CI fails or the wait is interrupted, develop only has the bump
-# commit: fix forward and run `just deploy-current`, which releases without bumping.
+# Flow: preflight, version bump pushed to develop with sandbox kept in step (skipped
+# for current), wait for CI on that exact commit, then tag it and fast-forward main
+# to it in one atomic push, and sync sandbox once more. Nothing reaches main or gets
+# tagged unless CI passed on that very commit. If CI fails or the wait is
+# interrupted, develop and sandbox hold the bump commit: fix forward on sandbox,
+# merge into develop, and run `just deploy-current`, which releases without bumping.
 _release kind:
     #!/usr/bin/env bash
     set -euo pipefail
     kind="{{kind}}"
 
     just _release-preflight "${kind}"
-    previous_sandbox="$(git rev-parse -q --verify refs/remotes/origin/sandbox || true)"
     if [[ "${kind}" != "current" ]]; then
         just _bump "${kind}"
     fi
@@ -443,9 +467,7 @@ _release kind:
 
     just _release-gate "${sha}"
     just _release-promote "${version}" "${sha}"
-    if [[ -n "${previous_sandbox}" ]]; then
-        just _release-reset-sandbox "${version}" "${sha}" "${previous_sandbox}"
-    fi
+    just _sync-sandbox
 
     echo "🎉 Version ${version} released"
     echo "🔗 Monitor the release: https://github.com/permesi/permesi/actions"
