@@ -17,7 +17,7 @@ postgres version="18":
       -v {{root}}/db/sql/container-entrypoint.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
       --userns keep-id:uid={{ uid }},gid={{ gid }} \
       --user {{ uid }}:{{ gid }} \
-      postgres:{{ version }} \
+      docker.io/library/postgres:{{ version }} \
       postgres -c config_file=/etc/postgresql/config/postgresql.conf
   until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do sleep 0.2; done
 
@@ -102,7 +102,7 @@ jaeger:
     -p 14268:14268 \
     -p 14269:14269 \
   -p 9411:9411 \
-  jaegertracing/jaeger:latest
+  {{jaeger_image}}
 
 jaeger-stop:
   podman stop jaeger || true
@@ -326,7 +326,7 @@ haproxy-start:
     -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
     -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
     -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
-    docker.io/haproxy:latest; then
+    {{haproxy_image}}; then
     if [[ "${port_args[*]}" == *"[::]:443:8080"* ]]; then
       echo "IPv6 publish failed; retrying IPv4-only."
       podman rm -f permesi-haproxy >/dev/null 2>&1 || true
@@ -337,7 +337,7 @@ haproxy-start:
         -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
         -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
         -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
-        docker.io/haproxy:latest
+        {{haproxy_image}}
     else
       exit 1
     fi
@@ -397,7 +397,7 @@ haproxy-socket-start:
     -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
     -v "${backend_ca}:/usr/local/etc/haproxy/ca.pem:ro" \
     -v "${socket_dir}:/var/run/permesi:z" \
-    docker.io/haproxy:latest; then
+    {{haproxy_image}}; then
       echo "Failed to start HAProxy."
       exit 1
   fi

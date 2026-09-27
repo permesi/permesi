@@ -377,7 +377,7 @@ podman run -d --name permesi-haproxy \
   -p 443:8080 \
   -v "$(pwd)/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
   -v "$(pwd)/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
-  docker.io/haproxy:latest
+  docker.io/library/haproxy:3.4
 ```
 
 On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443` (persist with a sysctl.d config if desired). The services resolve `*.permesi.localhost` through the system resolver: nss-myhostname (`myhostname` in `/etc/nsswitch.conf`) or systemd-resolved map `*.localhost` to loopback; otherwise add `127.0.0.1 permesi.localhost api.permesi.localhost genesis.permesi.localhost` (and a matching `::1` line) to `/etc/hosts`.

@@ -36,7 +36,7 @@ vault: _vault-keys-guard vault-stop
     -p 8200:8200 \
     -e VAULT_DEV_ROOT_TOKEN_ID=dev-root \
     -e VAULT_LISTEN_ADDRESS=0.0.0.0:8200 \
-    hashicorp/vault:latest
+    {{vault_image}}
 
   # Create a temporary keys file for vault-tf-apply to consume
   mkdir -p {{root}}/vault
@@ -60,15 +60,19 @@ vault-persist:
     podman stop vault >/dev/null 2>&1 || true
   fi
   podman volume inspect permesi-vault-data >/dev/null 2>&1 || podman volume create permesi-vault-data >/dev/null
+  # Vault 2.x images default to the unprivileged `vault` user; the server runs as
+  # root here so it can create /var/log/vault for the Terraform file audit device
+  # and write a data volume initialized by an older root-run image.
   podman run --replace --rm -d --name vault \
     --network {{net}} \
+    --user 0:0 \
     --cap-add=IPC_LOCK \
     -p 8200:8200 \
     -v {{root}}/vault/config.hcl:/vault/config/vault.hcl:ro \
     -v {{root}}/vault:/workspace/vault:ro \
     -v permesi-vault-data:/vault/data \
     --entrypoint vault \
-    hashicorp/vault:latest \
+    {{vault_image}} \
     server -config=/vault/config/vault.hcl
 
 vault-wait:
