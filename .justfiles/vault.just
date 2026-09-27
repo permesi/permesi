@@ -170,7 +170,7 @@ vault-tf-apply:
     terraform apply -auto-approve
 
     echo "✅ Vault configured via Terraform."
-    echo "🔑 Operator Token: $(just --quiet operator-token)"
+    echo "🔑 Operator token: in .envrc as PERMESI_OPERATOR_TOKEN, or mint one with: just operator-token"
 
 vault-tf-env:
   #!/usr/bin/env zsh

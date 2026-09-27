@@ -140,9 +140,12 @@ mkcert-local:
     -cert-file {{root}}/config/haproxy/certs/permesi.localhost-cert.pem \
     "localhost" "127.0.0.1" "::1" "*.localhost" \
     "permesi.localhost" "api.permesi.localhost" "genesis.permesi.localhost" "*.permesi.localhost"
-  cat {{root}}/config/haproxy/certs/permesi.localhost-cert.pem \
+  # The combined file holds the private key: owner-only. HAProxy runs with your
+  # uid (--userns keep-id), so it can still read it.
+  (umask 077 && cat {{root}}/config/haproxy/certs/permesi.localhost-cert.pem \
     {{root}}/config/haproxy/certs/permesi.localhost-key.pem \
-    > {{root}}/config/haproxy/certs/permesi.localhost.pem
+    > {{root}}/config/haproxy/certs/permesi.localhost.pem)
+  chmod 0600 {{root}}/config/haproxy/certs/permesi.localhost.pem
   echo "Wrote {{root}}/config/haproxy/certs/permesi.localhost.pem"
   if [[ "$(uname -s)" == "Linux" ]]; then
     echo "If HTTPS still fails for server-side fetches, run: just mkcert-trust"
@@ -337,10 +340,13 @@ haproxy-start: setup-network
   if [[ "$(uname -s)" == "Linux" ]]; then
     add_host_arg=(--add-host=host.containers.internal:host-gateway)
   fi
+  # Run HAProxy with your uid so it reads the owner-only (0600) certificate key.
+  user_args=(--userns keep-id --user "$(id -u):$(id -g)")
   if ! podman run --replace -d --name permesi-haproxy \
     --network {{net}} \
     --label {{stack_label}} \
     "${add_host_arg[@]}" \
+    "${user_args[@]}" \
     "${port_args[@]}" \
     -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
     -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
@@ -354,6 +360,7 @@ haproxy-start: setup-network
         --network {{net}} \
         --label {{stack_label}} \
         "${add_host_arg[@]}" \
+        "${user_args[@]}" \
         "${port_args[@]}" \
         -v "{{root}}/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
         -v "{{root}}/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
@@ -578,6 +585,11 @@ _dev-session mode:
     exit 0
   fi
   if [[ "$mux" == "tmux" ]] && tmux has-session -t "$session" 2>/dev/null; then
+    if [[ "$(tmux show-options -t "$session" -v @permesi_root 2>/dev/null)" != "$root" ]]; then
+      echo "A tmux session named '${session}' exists that this checkout did not start." >&2
+      echo "Close or rename it (tmux rename-session -t ${session} <name>), then rerun." >&2
+      exit 1
+    fi
     echo "tmux session '${session}' is already running."
     attach_tmux
     exit 0
@@ -629,6 +641,9 @@ _dev-session mode:
   left="$(tmux new-session -d -s "$session" -c "$root" \
     -e "PERMESI_BIND_ADDR={{bind_addr}}" -e "PERMESI_HTTPS_PORT={{https_port}}" \
     -P -F "#{pane_id}" "$cmd_genesis")"
+  # Mark the session as this checkout's, so attach, logs and stop never act on a
+  # same-named session started elsewhere.
+  tmux set-option -t "$session" @permesi_root "$root"
   # Keep a crashed service visible as "[dead]" instead of letting its pane vanish.
   tmux set-option -t "$session" remain-on-exit on
   tmux set-option -t "$session" pane-border-status top
@@ -691,7 +706,7 @@ attach:
     fi
     exec herdr
   fi
-  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null; then
+  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null && [[ "$(tmux show-options -t permesi -v @permesi_root 2>/dev/null)" == "{{root}}" ]]; then
     if [[ -n "${TMUX:-}" ]]; then
       exec tmux switch-client -t permesi
     fi
@@ -730,7 +745,7 @@ logs service="":
     done
     exit 0
   fi
-  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null; then
+  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null && [[ "$(tmux show-options -t permesi -v @permesi_root 2>/dev/null)" == "{{root}}" ]]; then
     for name in "${names[@]}"; do
       id="$(tmux list-panes -t permesi -F '#{pane_title} #{pane_id}' | awk -v s="$name" '$1==s{print $2; exit}')"
       [[ -n "$id" ]] || continue
@@ -817,7 +832,7 @@ test-clean:
   fi
 
 # Close the dev session this checkout started: only the recorded Herdr workspace and
-# the tmux session 'permesi'. Run from inside that session, it closes the other panes
+# the tmux session 'permesi' marked with this checkout's path. Run from inside that session, it closes the other panes
 # and keeps the calling one, so the command that asked for it can finish.
 [doc("Close the Herdr workspace or tmux session this checkout started")]
 mux-stop:
@@ -836,7 +851,7 @@ mux-stop:
     fi
   fi
   rm -f "$state"
-  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null; then
+  if command -v tmux >/dev/null 2>&1 && tmux has-session -t permesi 2>/dev/null && [[ "$(tmux show-options -t permesi -v @permesi_root 2>/dev/null)" == "{{root}}" ]]; then
     if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S')" == "permesi" ]]; then
       tmux kill-pane -a -t "${TMUX_PANE}"
       echo "Closed the other panes of tmux session 'permesi' (kept this one)."
@@ -1069,6 +1084,9 @@ doctor:
       current="${current% }"
       if [[ " ${current} " == *" {{subnet}} "* ]]; then
         ok "podman network {{net}} uses {{subnet}}"
+        if [[ "$(podman network inspect {{net}} --format '{{{{index .Labels "io.permesi.stack"}}' 2>/dev/null)" != "dev" ]]; then
+          warn "podman network {{net}} lacks the {{stack_label}} label (older setup): just stop && podman network rm {{net}}"
+        fi
       else
         fail "podman network {{net}} uses ${current:-no subnet}, expected {{subnet}}: remove it or set PERMESI_SUBNET"
       fi

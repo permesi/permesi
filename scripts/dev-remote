@@ -11,13 +11,15 @@ set -eu
 # Flow overview
 #   1. Issue, or reuse, a TLS leaf for permesi.localhost, api.permesi.localhost,
 #      genesis.permesi.localhost and *.permesi.localhost from the laptop's own mkcert
-#      CA (re-issued when the CA changes or the leaf expires within 30 days).
+#      CA. An existing leaf is reused only while it chains to that CA, has more than
+#      30 days left, names exactly those four hosts and matches its key.
 #   2. Open one SSH ControlMaster connection and run a short preflight on the VM. A
 #      missing checkout is fatal; missing tools, name resolution, privileged ports and
 #      linger only warn.
-#   3. Push the leaf into the remote checkout for HAProxy, and the laptop CA's public
-#      certificate to certs/mkcert-root.pem. HAProxy restarts only when the leaf
-#      changed, so rerunning the script is a no-op.
+#   3. Push the leaf into the remote checkout for HAProxy (mode 0600; HAProxy runs
+#      with the VM user's uid), and the laptop CA's public certificate to
+#      certs/mkcert-root.pem (0644). HAProxy restarts only when the leaf changed, so
+#      rerunning the script is a no-op.
 #   4. Forward the laptop's PERMESI_HTTPS_PORT to the same port on the VM, plus the
 #      Jaeger (16686) and Vault (8200) UIs unless --no-ui, over that connection.
 #   5. With --start, build the dev session on the VM (Herdr workspace, tmux fallback)
@@ -31,7 +33,8 @@ set -eu
 #   other local sites; those names already reach the VM through this tunnel, so the VM
 #   gains nothing it did not have. The laptop CA's public certificate is used on the
 #   VM only as an explicit CA file (socket-mode PASERK checks, genesis-token), never
-#   added to its trust store.
+#   added to its trust store. Trusting the laptop CA on the laptop is a one-time,
+#   explicit `mkcert -install`; this script never changes a trust store itself.
 #
 # CORS and WebAuthn compare origins including the port, so the laptop port, the remote
 # HAProxy port and PERMESI_HTTPS_PORT must be the same number. The script refuses to
@@ -189,20 +192,35 @@ esac
 
 # 1. TLS leaf from the laptop CA.
 command -v mkcert >/dev/null 2>&1 || die "mkcert is required on the laptop (mise install, brew install mkcert, or apt install mkcert)."
-mkcert -install >/dev/null
 ca="$(mkcert -CAROOT)/rootCA.pem"
-[ -f "$ca" ] || die "mkcert CA certificate not found at ${ca}."
+if [ ! -f "$ca" ]; then
+    die "no local mkcert CA yet. Create it and trust it on this laptop once with \`mkcert -install\`, then rerun."
+fi
 cert_dir="${project_dir}/certs/remote"
 (umask 077 && mkdir -p "$cert_dir")
 leaf="${cert_dir}/permesi.localhost.pem"
+# The exact SAN set a pushed leaf may carry, normalized for comparison.
+sans_of() {
+    tr -d ' ' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ','
+}
+expected_sans="$(printf '%s' 'DNS:permesi.localhost,DNS:api.permesi.localhost,DNS:genesis.permesi.localhost,DNS:*.permesi.localhost' | sans_of)"
+# Reuse a leaf only if it chains to the laptop CA, has more than 30 days left, names
+# exactly the four permesi hosts and matches the key stored with it. Without openssl
+# nothing can be checked, so a fresh leaf is issued every time.
+leaf_reusable() {
+    command -v openssl >/dev/null 2>&1 || return 1
+    openssl verify -CAfile "$ca" "$leaf" >/dev/null 2>&1 || return 1
+    openssl x509 -in "$leaf" -noout -checkend 2592000 >/dev/null 2>&1 || return 1
+    sans="$(openssl x509 -in "$leaf" -noout -text 2>/dev/null |
+        sed -n '/X509v3 Subject Alternative Name/{n;p;}' | sans_of)"
+    [ "$sans" = "$expected_sans" ] || return 1
+    cert_pub="$(openssl x509 -in "$leaf" -noout -pubkey 2>/dev/null)"
+    key_pub="$(openssl pkey -in "$leaf" -pubout 2>/dev/null)"
+    [ -n "$cert_pub" ] && [ "$cert_pub" = "$key_pub" ]
+}
 issue=0
-if [ ! -f "$leaf" ] || [ "$renew" = 1 ]; then
+if [ ! -f "$leaf" ] || [ "$renew" = 1 ] || ! leaf_reusable; then
     issue=1
-elif command -v openssl >/dev/null 2>&1; then
-    if ! openssl verify -CAfile "$ca" "$leaf" >/dev/null 2>&1 ||
-        ! openssl x509 -in "$leaf" -noout -checkend 2592000 >/dev/null 2>&1; then
-        issue=1
-    fi
 fi
 if [ "$issue" = 1 ]; then
     tmp="$(mktemp -d "${cert_dir}/.issue.XXXXXX")"
@@ -274,10 +292,11 @@ fi
 push='
 set -eu
 dest="$1"
-umask 022
+mode="$2"
+umask 077
 mkdir -p "$(dirname "$dest")"
 cat >"$dest.tmp"
-chmod 0644 "$dest.tmp"
+chmod "$mode" "$dest.tmp"
 if [ -f "$dest" ] && cmp -s "$dest.tmp" "$dest"; then
   rm -f "$dest.tmp"
 else
@@ -285,8 +304,8 @@ else
   echo changed
 fi
 '
-changed="$(remote_sh "$push" "${repo_abs}/config/haproxy/certs/permesi.localhost.pem" <"$leaf")"
-remote_sh "$push" "${repo_abs}/certs/mkcert-root.pem" <"$ca" >/dev/null
+changed="$(remote_sh "$push" "${repo_abs}/config/haproxy/certs/permesi.localhost.pem" 0600 <"$leaf")"
+remote_sh "$push" "${repo_abs}/certs/mkcert-root.pem" 0644 <"$ca" >/dev/null
 if [ -n "$changed" ]; then
     echo "==> Pushed the TLS leaf to ${host}."
     restart='

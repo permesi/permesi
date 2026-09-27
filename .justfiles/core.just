@@ -16,6 +16,11 @@ setup-network:
       echo "   Remove it (podman network rm {{net}}) or set PERMESI_SUBNET to match." >&2
       exit 1
     fi
+    # Networks created before the stack label existed are accepted, with a hint.
+    if [[ "$(podman network inspect {{net}} --format '{{{{index .Labels "io.permesi.stack"}}')" != "dev" ]]; then
+      echo "⚠️  podman network {{net}} lacks the {{stack_label}} label (created by an older setup)." >&2
+      echo "   Recreate it while the stack is stopped: just stop && podman network rm {{net}}" >&2
+    fi
     exit 0
   fi
   if ! err="$(podman network create --subnet {{subnet}} --label {{stack_label}} {{net}} 2>&1 >/dev/null)"; then

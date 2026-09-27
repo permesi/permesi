@@ -38,7 +38,7 @@ https_suffix := if https_port == "443" { "" } else { ":" + https_port }
 publish_ip := if bind_addr == "0.0.0.0" { "" } else { bind_addr + ":" }
 
 # Validated eagerly so a bad override fails before any recipe runs.
-_knobs_ok := if subnet !~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' { error("PERMESI_SUBNET must be an IPv4 CIDR such as 172.31.20.0/24") } else if bind_addr !~ '^(127\.0\.0\.1|0\.0\.0\.0)$' { error("PERMESI_BIND_ADDR must be 127.0.0.1 or 0.0.0.0") } else if https_port !~ '^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$' { error("PERMESI_HTTPS_PORT must be a TCP port (1-65535)") } else if https_port =~ '^(4317|4318|5432|8000|8001|8081|8200|16686)$' { error("PERMESI_HTTPS_PORT collides with a dev service port") } else { "" }
+_knobs_ok := if net !~ '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$' { error("PERMESI_NET must be a podman network name (letters, digits, '.', '_', '-')") } else if subnet !~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/([89]|[12][0-9]|30)$' { error("PERMESI_SUBNET must be an IPv4 CIDR with a /8 to /30 prefix, such as 172.31.20.0/24") } else if bind_addr !~ '^(127\.0\.0\.1|0\.0\.0\.0)$' { error("PERMESI_BIND_ADDR must be 127.0.0.1 or 0.0.0.0") } else if https_port !~ '^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$' { error("PERMESI_HTTPS_PORT must be a TCP port (1-65535)") } else if https_port =~ '^(4317|4318|5432|8000|8001|8081|8200|16686)$' { error("PERMESI_HTTPS_PORT collides with a dev service port") } else { "" }
 
 # Local infra images: pinned and fully qualified, so rootless podman never has to
 # resolve a short name and every developer runs the same versions.
