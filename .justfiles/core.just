@@ -191,7 +191,8 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
         status=$?
         if [ $status -ne 0 ]; then
             echo "↩️  Restoring version files after failure..."
-            git checkout -- "${release_files[@]}" >/dev/null 2>&1 || true
+            # From HEAD, not the index: the bumped files may already be staged.
+            git checkout HEAD -- "${release_files[@]}" >/dev/null 2>&1 || true
         fi
         exit $status
     }
