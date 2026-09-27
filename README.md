@@ -374,10 +374,24 @@ The dev stack keeps to itself so it can share a host with other projects. Every 
 - `just db-verify`: Confirm database constraints and schema state.
 - `just openapi`: Regenerate OpenAPI specs from code.
 
-Release recipes must run from a clean `develop` branch. `just deploy` performs a
-patch version bump, verifies the workspace, merges `develop` into `main`, and
-creates a signed tag. Tag signing follows Git's configured `gpg.format` and
-supports both SSH signing and OpenPGP. Release verification uses the
+Work lands on `sandbox`; once its CI run is green it is merged into `develop`, and
+releases run from a clean `develop` that matches `origin/develop`. `just deploy`
+(or `deploy-minor` / `deploy-major`) first checks everything that could fail
+later: `main` can fast-forward to `develop`, the tag is free, `gh` is
+authenticated, and git can actually sign. It then pushes a bump commit to
+`develop` that changes only the version (`Cargo.toml`, the workspace entries of
+`Cargo.lock`, and the OpenAPI specs regenerated so the published API docs carry
+the release version), after a clean local `verify-release`. Next it waits for the
+Test & Build CI run of that exact commit, and only if it passes does it sign the
+tag on that commit and push it to `main` together with the tag in one atomic,
+fast-forward-only push, so `main`, the tag and the tested commit are always the
+same. Finally `sandbox` is reset to the release with `--force-with-lease`; its
+previous tip is kept locally as `refs/backup/sandbox/<version>`. If CI fails or
+the wait is interrupted, `develop` only holds the bump commit: fix forward and run
+`just deploy-current`, which releases the current version without bumping again.
+Dependency updates (`cargo update`) are ordinary changes made on `sandbox`, so CI
+tests them before a release. Tag signing follows Git's configured `gpg.format`
+and supports both SSH signing and OpenPGP. Release verification uses the
 repository-local `target` directory, so a clean build is isolated from any shared
 `CARGO_TARGET_DIR`.
 

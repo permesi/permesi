@@ -168,17 +168,25 @@ _require-tag-signing:
             ;;
     esac
 
+# Bump the workspace version on develop and push the bump commit. The commit changes
+# nothing but the version: Cargo.toml, the workspace entries of Cargo.lock
+# (`cargo update --workspace` leaves third-party crates alone; dependency updates go
+# through sandbox like any other change) and the OpenAPI specs regenerated from the
+# already-tested code so the published API docs carry the release version. A clean
+# local build and `verify-release` run before the push as a fast fail; CI on develop
+# is the gate that decides whether the commit is released.
 _bump bump_kind: check-develop check-clean _require-bump-tools
     #!/usr/bin/env bash
     set -euo pipefail
 
     bump_kind="{{bump_kind}}"
+    release_files=(Cargo.toml Cargo.lock docs/openapi/permesi.json docs/openapi/genesis.json)
 
     cleanup() {
         status=$?
         if [ $status -ne 0 ]; then
             echo "↩️  Restoring version files after failure..."
-            git checkout -- Cargo.toml Cargo.lock >/dev/null 2>&1 || true
+            git checkout -- "${release_files[@]}" >/dev/null 2>&1 || true
         fi
         exit $status
     }
@@ -219,8 +227,11 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
         exit 1
     fi
 
-    echo "🔄 Updating dependencies..."
-    cargo update
+    echo "🔒 Updating the workspace entries in Cargo.lock..."
+    cargo update --workspace
+
+    echo "📄 Regenerating the OpenAPI specs..."
+    just openapi
 
     echo "🧹 Running clean build..."
     just clean
@@ -228,7 +239,7 @@ _bump bump_kind: check-develop check-clean _require-bump-tools
     echo "🧪 Running release verification (including frontend build)..."
     CARGO_TARGET_DIR="{{root}}/target" just verify-release
 
-    git add Cargo.toml Cargo.lock
+    git add "${release_files[@]}"
     git commit -m "bump version to ${new_version}"
     git push origin develop
     echo "✅ Version bumped and pushed to develop"
@@ -245,101 +256,206 @@ bump-minor:
 bump-major:
     @just _bump major
 
-# Internal function to handle the merge and tag process
-_deploy-merge-and-tag: _require-tag-signing
+# Everything a release needs, checked before anything is changed or pushed. `kind`
+# is patch, minor, major or current (release the current version as is). It requires
+# a clean develop equal to origin/develop that main can fast-forward to, an
+# authenticated gh (to follow CI), a free tag for the version being released, and a
+# working signing setup: a throwaway local tag exercises the key or agent for real.
+_release-preflight kind: check-develop check-clean _require-tag-signing
     #!/usr/bin/env bash
     set -euo pipefail
+    kind="{{kind}}"
 
-    start_branch="$(git branch --show-current)"
-    created_tag=""
+    current="$(just --quiet _workspace-version)"
+    IFS=. read -r major minor patch <<<"${current}"
+    case "${kind}" in
+        patch) version="${major}.${minor}.$((patch + 1))" ;;
+        minor) version="${major}.$((minor + 1)).0" ;;
+        major) version="$((major + 1)).0.0" ;;
+        current) version="${current}" ;;
+        *) echo "❌ Unknown release kind '${kind}' (patch, minor, major or current)." >&2; exit 1 ;;
+    esac
+    if [[ "${kind}" != "current" ]]; then
+        just --quiet _require-bump-tools
+    fi
 
-    cleanup() {
-        status=$?
-        if [ $status -ne 0 ]; then
-            if [[ -n "$created_tag" ]] && git rev-parse -q --verify "refs/tags/${created_tag}" >/dev/null 2>&1; then
-                git tag -d "$created_tag" >/dev/null 2>&1 || true
+    git fetch --quiet --tags origin
+    if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/develop)" ]]; then
+        echo "❌ develop differs from origin/develop; pull or push it first." >&2
+        exit 1
+    fi
+    if ! git merge-base --is-ancestor origin/main HEAD; then
+        echo "❌ origin/main has commits develop lacks, so main cannot fast-forward." >&2
+        echo "   Merge main into develop first." >&2
+        exit 1
+    fi
+    if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+        echo "❌ gh must be installed and authenticated to follow CI (gh auth login)." >&2
+        exit 1
+    fi
+    if git rev-parse -q --verify "refs/tags/${version}" >/dev/null 2>&1; then
+        echo "❌ Tag ${version} already exists." >&2
+        exit 1
+    fi
+    probe="release-signing-probe-$$"
+    if ! git tag -s "${probe}" -m "signing probe" HEAD >/dev/null 2>&1; then
+        echo "❌ git could not sign a tag; check the signing key or agent." >&2
+        exit 1
+    fi
+    git tag -d "${probe}" >/dev/null
+    echo "✅ Release preflight passed for ${version}"
+
+# Wait for the push-triggered "Test & Build" run of exactly this commit and fail
+# unless it succeeds, so only a commit CI has passed is ever tagged or put on main.
+# A run of the same commit on sandbox counts too: it is the same code. Re-running
+# failed jobs in GitHub and then `just deploy-current` picks up the newest attempt.
+# PERMESI_RELEASE_CI_TIMEOUT caps the wait in seconds (default 3600).
+_release-gate sha:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sha="{{sha}}"
+    timeout="${PERMESI_RELEASE_CI_TIMEOUT:-3600}"
+    deadline=$((SECONDS + timeout))
+    appear_deadline=$((SECONDS + 300))
+
+    echo "⏳ Waiting for the Test & Build run of ${sha:0:12}..."
+    run_id=""
+    while [[ -z "${run_id}" ]]; do
+        run_id="$(gh run list --workflow build.yml --commit "${sha}" --event push --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+        if [[ -z "${run_id}" ]]; then
+            if (( SECONDS >= appear_deadline )); then
+                echo "❌ No Test & Build run appeared for ${sha} within 5 minutes." >&2
+                exit 1
             fi
-            if [[ -n "$start_branch" ]]; then
-                git checkout "$start_branch" >/dev/null 2>&1 || true
-            fi
+            sleep 10
         fi
-        trap - EXIT
-        exit $status
-    }
-    trap cleanup EXIT
+    done
+    url="$(gh run view "${run_id}" --json url --jq .url)"
+    echo "🔗 ${url}"
 
-    new_version="$(just --quiet _workspace-version)"
-    echo "🚀 Starting deployment for version $new_version..."
+    last=""
+    while true; do
+        state="$(gh run view "${run_id}" --json status,conclusion \
+            --jq '"\(.status) \(.conclusion // "-")"' 2>/dev/null || echo "unknown -")"
+        status="${state%% *}"
+        conclusion="${state#* }"
+        if [[ "${status}" != "${last}" ]]; then
+            echo "   CI: ${status}"
+            last="${status}"
+        fi
+        if [[ "${status}" == "completed" ]]; then
+            if [[ "${conclusion}" == "success" ]]; then
+                echo "✅ CI passed for ${sha:0:12}"
+                exit 0
+            fi
+            echo "❌ CI finished with '${conclusion}': ${url}" >&2
+            echo "   Fix forward on develop (or re-run the failed jobs), then: just deploy-current" >&2
+            exit 1
+        fi
+        if (( SECONDS >= deadline )); then
+            echo "❌ CI did not finish within ${timeout}s: ${url}" >&2
+            echo "   When it passes, finish with: just deploy-current" >&2
+            exit 1
+        fi
+        sleep 20
+    done
 
-    # Double-check tag doesn't exist (safety check)
-    echo "🔍 Verifying tag doesn't exist..."
-    git fetch --tags --quiet
-    if git rev-parse -q --verify "refs/tags/${new_version}" >/dev/null 2>&1; then
-        echo "❌ Tag ${new_version} already exists on remote!"
-        echo "This should not happen. The tag may have been created in a previous run."
+# Tag the CI-verified commit and move main to it in one atomic push. Either both refs
+# land or neither does, and GitHub rejects a push that is not a fast-forward of main,
+# so main and the tag always point at the exact commit CI tested; no merge happens.
+_release-promote version sha:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    sha="{{sha}}"
+
+    echo "🏷️  Creating signed tag ${version} on ${sha:0:12}..."
+    git tag -s "${version}" "${sha}" -m "Release version ${version}"
+    echo "⬆️  Pushing ${sha:0:12} to main together with tag ${version} (atomic)..."
+    if ! git push --atomic origin "${sha}:refs/heads/main" "refs/tags/${version}"; then
+        git tag -d "${version}" >/dev/null 2>&1 || true
+        echo "❌ Push rejected; nothing was released and the local tag was removed." >&2
         exit 1
     fi
 
-    # Ensure develop is up to date
-    echo "🔄 Ensuring develop is up to date..."
-    git pull --ff-only origin develop
+    git fetch --quiet origin
+    if git show-ref --verify --quiet refs/heads/main && [[ "$(git branch --show-current)" != "main" ]]; then
+        if git merge-base --is-ancestor main origin/main; then
+            git branch -f main origin/main >/dev/null
+        else
+            echo "⚠️  Local main has commits origin/main lacks; left it untouched." >&2
+        fi
+    fi
+    echo "✅ Released ${version}: main and the tag point at ${sha:0:12}"
 
-    # Switch to main and merge develop
-    echo "🔄 Switching to main branch..."
-    git checkout main
-    git pull --ff-only origin main
+# Point sandbox (local and origin) at the released commit. The push uses
+# --force-with-lease against the sandbox tip recorded before the release, so anything
+# pushed to sandbox in the meantime makes the reset fail instead of vanishing, and the
+# previous tip is kept locally as refs/backup/sandbox/<version> in case it held
+# changes the release does not contain.
+_release-reset-sandbox version sha previous:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    sha="{{sha}}"
+    previous="{{previous}}"
 
-    echo "🔀 Merging develop into main..."
-    if ! git merge develop --no-edit; then
-        echo "❌ Merge failed! Please resolve conflicts manually."
-        exit 1
+    git update-ref "refs/backup/sandbox/${version}" "${previous}"
+    if ! git diff --quiet "${previous}" "${sha}" -- . \
+        ':(exclude)Cargo.toml' ':(exclude)Cargo.lock' ':(exclude)docs/openapi'; then
+        echo "ℹ️  sandbox's previous tip differs from the release; it is kept as refs/backup/sandbox/${version}"
+    fi
+    echo "🔄 Resetting sandbox to the released commit..."
+    if ! git push --force-with-lease="sandbox:${previous}" origin "${sha}:refs/heads/sandbox"; then
+        echo "⚠️  sandbox changed on origin during the release; left it alone. Reset it yourself when ready." >&2
+        exit 0
+    fi
+    if [[ "$(git branch --show-current)" != "sandbox" ]]; then
+        git branch -f sandbox "${sha}" >/dev/null
+        git branch --set-upstream-to=origin/sandbox sandbox >/dev/null 2>&1 || true
+    fi
+    echo "✅ sandbox reset to ${sha:0:12}"
+
+# Release flow behind the deploy recipes (kind: patch, minor, major or current).
+# Flow: preflight, version bump pushed to develop (skipped for current), wait for CI
+# on that exact commit, then tag it and fast-forward main to it in one atomic push,
+# then reset sandbox. Nothing reaches main or gets tagged unless CI passed on that
+# very commit. If CI fails or the wait is interrupted, develop only has the bump
+# commit: fix forward and run `just deploy-current`, which releases without bumping.
+_release kind:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kind="{{kind}}"
+
+    just _release-preflight "${kind}"
+    previous_sandbox="$(git rev-parse -q --verify refs/remotes/origin/sandbox || true)"
+    if [[ "${kind}" != "current" ]]; then
+        just _bump "${kind}"
+    fi
+    version="$(just --quiet _workspace-version)"
+    sha="$(git rev-parse HEAD)"
+
+    just _release-gate "${sha}"
+    just _release-promote "${version}" "${sha}"
+    if [[ -n "${previous_sandbox}" ]]; then
+        just _release-reset-sandbox "${version}" "${sha}" "${previous_sandbox}"
     fi
 
-    # Create signed tag
-    echo "🏷️  Creating signed tag $new_version..."
-    git tag -s "$new_version" -m "Release version $new_version"
-    created_tag="$new_version"
+    echo "🎉 Version ${version} released"
+    echo "🔗 Monitor the release: https://github.com/permesi/permesi/actions"
 
-    # Push main and tag atomically
-    echo "⬆️  Pushing main branch and tag..."
-    if ! git push origin main "$new_version"; then
-        echo "❌ Push failed! Rolling back..."
-        exit 1
-    fi
-
-    # Switch back to develop
-    echo "🔄 Switching back to develop..."
-    git checkout develop
-
-    echo "✅ Deployment complete!"
-    echo "🎉 Version $new_version has been released"
-    echo "📋 Summary:"
-    echo "   - develop branch: bumped and pushed"
-    echo "   - main branch: merged and pushed"
-    echo "   - tag $new_version: created and pushed"
-    echo "🔗 Monitor release: https://github.com/nbari/permesi/actions"
-
-    if git rev-parse --verify sandbox >/dev/null 2>&1; then
-        echo "🔄 Resetting sandbox branch to origin/develop..."
-        git fetch origin
-        git branch -f sandbox origin/develop
-        # Track origin/sandbox so "git push" works without arguments
-        git branch --set-upstream-to=origin/sandbox sandbox
-        git push --force origin sandbox:sandbox
-        echo "✅ Sandbox reset to origin/develop (pushed to origin/sandbox for CI)"
-    fi
-
-# Deploy: merge to main, tag, and push everything
-deploy: bump _deploy-merge-and-tag
+# Deploy: bump the patch version, wait for CI on develop, then tag and fast-forward main
+deploy: (_release "patch")
 
 # Deploy with minor version bump
-deploy-minor: bump-minor _deploy-merge-and-tag
+deploy-minor: (_release "minor")
 
 # Deploy with major version bump
-deploy-major: bump-major _deploy-merge-and-tag
+deploy-major: (_release "major")
 
-# Deploy current version without bumping
-deploy-current: check-develop check-clean verify-release _deploy-merge-and-tag
+# Release the current develop commit without bumping (also resumes an interrupted deploy)
+deploy-current: (_release "current")
 
 # ----------------------
 # Sandbox branch helpers

@@ -30,8 +30,10 @@ herdr_label := "permesi-dev"
 # port without re-exporting it), then the defaults.
 _envrc_bind_addr := `sed -n 's/^export PERMESI_BIND_ADDR="\${PERMESI_BIND_ADDR:-\(.*\)}"$/\1/p' .envrc 2>/dev/null || true`
 _envrc_https_port := `sed -n 's/^export PERMESI_HTTPS_PORT="\${PERMESI_HTTPS_PORT:-\(.*\)}"$/\1/p' .envrc 2>/dev/null || true`
-bind_addr := env_var_or_default("PERMESI_BIND_ADDR", if _envrc_bind_addr == "" { "127.0.0.1" } else { _envrc_bind_addr })
-https_port := env_var_or_default("PERMESI_HTTPS_PORT", if _envrc_https_port == "" { "443" } else { _envrc_https_port })
+# A baked value is used only when it looks valid: `just --dry-run` leaves backticks
+# unevaluated, and a hand-edited .envrc should not break every recipe.
+bind_addr := env_var_or_default("PERMESI_BIND_ADDR", if _envrc_bind_addr =~ '^[0-9.]+$' { _envrc_bind_addr } else { "127.0.0.1" })
+https_port := env_var_or_default("PERMESI_HTTPS_PORT", if _envrc_https_port =~ '^[0-9]+$' { _envrc_https_port } else { "443" })
 https_suffix := if https_port == "443" { "" } else { ":" + https_port }
 publish_ip := if bind_addr == "0.0.0.0" { "" } else { bind_addr + ":" }
 
