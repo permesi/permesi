@@ -16,7 +16,48 @@ permissions:
   packages: write
 
 jobs:
+  # A release tag (X.Y.Z) may only publish a commit that is already on main and has a
+  # successful "Test & Build" run, which is what `just deploy` guarantees. The guard
+  # stops a hand-pushed or stray tag before anything is built or published. Other
+  # tags (for example t-* from `just t-deploy`) and manual dispatches pass through.
+  guard:
+    name: Release guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require the tagged commit to be on main and to have passed Test & Build
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ ! "${tag}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag ${tag} is not a release version; guard not applied."
+            exit 0
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag ${tag} points at ${GITHUB_SHA}, which is not on main; refusing to release."
+            exit 1
+          fi
+          passed="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow build.yml \
+            --commit "${GITHUB_SHA}" --event push --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "${passed}" ]]; then
+            echo "::error::${GITHUB_SHA} has no successful Test & Build run; refusing to release ${tag}."
+            exit 1
+          fi
+          echo "Tag ${tag}: ${GITHUB_SHA} is on main and passed Test & Build (run ${passed})."
+
   test:
+    needs: guard
     uses: ./.github/workflows/test.yml
     with:
       runner: ubuntu-latest
