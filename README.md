@@ -389,9 +389,14 @@ same. `sandbox` follows `develop` throughout: right after the bump, and again
 after the release, it moves to `develop` when that is a fast-forward or when its
 content was squash-merged (the old tip is kept locally as
 `refs/backup/sandbox/<tip>`); work on `sandbox` that `develop` lacks is never
-touched. If CI fails or the wait is interrupted, `develop` and `sandbox` both hold
-the bump commit: fix forward on `sandbox`, merge into `develop`, and run
+touched. If a CI job fails, `just deploy` keeps waiting for 15 minutes
+(`PERMESI_RELEASE_RERUN_WAIT`): click "Re-run failed jobs" in GitHub and the
+release continues by itself once that attempt passes. If nobody re-runs it, or the
+wait is interrupted, `develop` and `sandbox` both hold the bump commit: re-run the
+jobs or fix forward on `sandbox` and merge into `develop`, then run
 `just deploy-current`, which releases the current version without bumping again.
+Only `X.Y.Z` tags publish anything; other tags, such as the `t-*` tags from
+`just t-deploy`, run the tests and builds only.
 Dependency updates (`cargo update`) are ordinary changes made on `sandbox`, so CI
 tests them before a release. Tag signing follows Git's configured `gpg.format`
 and supports both SSH signing and OpenPGP. Release verification uses the

@@ -313,9 +313,11 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
 
 # Wait for the push-triggered "Test & Build" run of exactly this commit and fail
 # unless it succeeds, so only a commit CI has passed is ever tagged or put on main.
-# A run of the same commit on sandbox counts too: it is the same code. Re-running
-# failed jobs in GitHub and then `just deploy-current` picks up the newest attempt.
-# PERMESI_RELEASE_CI_TIMEOUT caps the wait in seconds (default 3600).
+# A run of the same commit on sandbox counts too: it is the same code. When the run
+# fails, the gate keeps waiting for PERMESI_RELEASE_RERUN_WAIT seconds (default 900):
+# "Re-run failed jobs" in GitHub starts a new attempt of the same run, the gate
+# follows it, and the release continues on its own if that attempt passes.
+# PERMESI_RELEASE_CI_TIMEOUT caps each attempt's wait in seconds (default 3600).
 _release-gate sha:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -340,26 +342,39 @@ _release-gate sha:
     url="$(gh run view "${run_id}" --json url --jq .url)"
     echo "🔗 ${url}"
 
+    rerun_wait="${PERMESI_RELEASE_RERUN_WAIT:-900}"
+    if (( rerun_wait >= 60 )); then window="$((rerun_wait / 60)) minutes"; else window="${rerun_wait} seconds"; fi
+    failed_at=""
     last=""
     while true; do
-        state="$(gh run view "${run_id}" --json status,conclusion \
-            --jq '"\(.status) \(.conclusion // "-")"' 2>/dev/null || echo "unknown -")"
-        status="${state%% *}"
-        conclusion="${state#* }"
-        if [[ "${status}" != "${last}" ]]; then
-            echo "   CI: ${status}"
-            last="${status}"
+        state="$(gh run view "${run_id}" --json status,conclusion,attempt \
+            --jq '"\(.status) \(.conclusion // "-") \(.attempt)"' 2>/dev/null || echo "unknown - ?")"
+        read -r status conclusion attempt <<<"${state}"
+        if [[ "${status} ${attempt}" != "${last}" ]]; then
+            echo "   CI: ${status} (attempt ${attempt})"
+            last="${status} ${attempt}"
         fi
         if [[ "${status}" == "completed" ]]; then
             if [[ "${conclusion}" == "success" ]]; then
                 echo "✅ CI passed for ${sha:0:12}"
                 exit 0
             fi
-            echo "❌ CI finished with '${conclusion}': ${url}" >&2
-            echo "   Fix forward on develop (or re-run the failed jobs), then: just deploy-current" >&2
-            exit 1
+            if [[ -z "${failed_at}" ]]; then
+                failed_at="${SECONDS}"
+                echo "❌ CI finished with '${conclusion}': ${url}" >&2
+                echo "   Re-run the failed jobs in GitHub within ${window} and this release" >&2
+                echo "   continues by itself; Ctrl-C to stop waiting." >&2
+            elif (( SECONDS - failed_at >= rerun_wait )); then
+                echo "❌ No re-run started within ${window}; nothing was released." >&2
+                echo "   Re-run the jobs or fix forward (sandbox, then develop), then: just deploy-current" >&2
+                exit 1
+            fi
+        elif [[ -n "${failed_at}" ]]; then
+            echo "🔁 Re-run started; following attempt ${attempt}"
+            failed_at=""
+            deadline=$((SECONDS + timeout))
         fi
-        if (( SECONDS >= deadline )); then
+        if [[ -z "${failed_at}" ]] && (( SECONDS >= deadline )); then
             echo "❌ CI did not finish within ${timeout}s: ${url}" >&2
             echo "   When it passes, finish with: just deploy-current" >&2
             exit 1
