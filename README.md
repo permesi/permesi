@@ -391,10 +391,15 @@ content was squash-merged (the old tip is kept locally as
 `refs/backup/sandbox/<tip>`); work on `sandbox` that `develop` lacks is never
 touched. If a CI job fails, `just deploy` keeps waiting for 15 minutes
 (`PERMESI_RELEASE_RERUN_WAIT`): click "Re-run failed jobs" in GitHub and the
-release continues by itself once that attempt passes. If nobody re-runs it, or the
-wait is interrupted, `develop` and `sandbox` both hold the bump commit: re-run the
-jobs or fix forward on `sandbox` and merge into `develop`, then run
-`just deploy-current`, which releases the current version without bumping again.
+release continues by itself once that attempt passes. While it waits it polls
+GitHub (the run every 20 seconds); if GitHub is unreachable it says so and keeps
+retrying until the timeout. Whenever a release stops midway (CI failed and was not
+re-run, the network or SSH connection dropped, Ctrl-C), the bumped version simply
+has no tag yet, and running `just deploy` again finishes that release instead of
+bumping a second time (`just deploy-current` does the same explicitly); to fix
+forward first, commit on `sandbox` and merge into `develop` before rerunning. Run
+it inside the dev session (Herdr or tmux) on the VM so a dropped laptop connection
+does not stop it at all.
 Only `X.Y.Z` tags publish anything; other tags, such as the `t-*` tags from
 `just t-deploy`, run the tests and builds only.
 Dependency updates (`cargo update`) are ordinary changes made on `sandbox`, so CI

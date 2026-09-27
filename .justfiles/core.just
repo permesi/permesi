@@ -309,6 +309,10 @@ _release-preflight kind: check-develop check-clean _require-tag-signing
         exit 1
     fi
     git tag -d "${probe}" >/dev/null
+    if [[ -n "${SSH_CONNECTION:-}" && -z "${HERDR_ENV:-}" && -z "${TMUX:-}" ]]; then
+        echo "⚠️  On SSH outside Herdr/tmux: a dropped connection stops this release midway."
+        echo "   It is safe to rerun just deploy afterwards; running it inside the dev session avoids that."
+    fi
     echo "✅ Release preflight passed for ${version}"
 
 # Wait for the push-triggered "Test & Build" run of exactly this commit and fail
@@ -328,18 +332,32 @@ _release-gate sha:
 
     echo "⏳ Waiting for the Test & Build run of ${sha:0:12}..."
     run_id=""
+    offline=0
     while [[ -z "${run_id}" ]]; do
-        run_id="$(gh run list --workflow build.yml --commit "${sha}" --event push --limit 1 \
-            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
-        if [[ -z "${run_id}" ]]; then
-            if (( SECONDS >= appear_deadline )); then
+        if listed="$(gh run list --workflow build.yml --commit "${sha}" --event push --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null)"; then
+            offline=0
+            run_id="${listed}"
+            if [[ -z "${run_id}" ]] && (( SECONDS >= appear_deadline )); then
                 echo "❌ No Test & Build run appeared for ${sha} within 5 minutes." >&2
                 exit 1
             fi
-            sleep 10
+        else
+            # GitHub unreachable: keep trying until the overall deadline, not the
+            # 5-minute window meant for a run that never starts.
+            if (( ! offline )); then
+                echo "⚠️  GitHub unreachable; still waiting (retrying every 10s)..."
+                offline=1
+            fi
+            appear_deadline=$((SECONDS + 300))
+            if (( SECONDS >= deadline )); then
+                echo "❌ GitHub stayed unreachable for ${timeout}s; rerun just deploy when back online." >&2
+                exit 1
+            fi
         fi
+        [[ -n "${run_id}" ]] || sleep 10
     done
-    url="$(gh run view "${run_id}" --json url --jq .url)"
+    url="$(gh run view "${run_id}" --json url --jq .url 2>/dev/null || echo "run ${run_id}")"
     echo "🔗 ${url}"
 
     rerun_wait="${PERMESI_RELEASE_RERUN_WAIT:-900}"
@@ -350,6 +368,15 @@ _release-gate sha:
         state="$(gh run view "${run_id}" --json status,conclusion,attempt \
             --jq '"\(.status) \(.conclusion // "-") \(.attempt)"' 2>/dev/null || echo "unknown - ?")"
         read -r status conclusion attempt <<<"${state}"
+        if [[ "${status}" == "unknown" ]]; then
+            if [[ "${last}" != "unknown" ]]; then
+                echo "⚠️  GitHub unreachable; still waiting (retrying every 20s)..."
+                last="unknown"
+            fi
+            (( SECONDS < deadline )) || { echo "❌ GitHub stayed unreachable; rerun just deploy when back online." >&2; exit 1; }
+            sleep 20
+            continue
+        fi
         if [[ "${status} ${attempt}" != "${last}" ]]; then
             echo "   CI: ${status} (attempt ${attempt})"
             last="${status} ${attempt}"
@@ -366,7 +393,7 @@ _release-gate sha:
                 echo "   continues by itself; Ctrl-C to stop waiting." >&2
             elif (( SECONDS - failed_at >= rerun_wait )); then
                 echo "❌ No re-run started within ${window}; nothing was released." >&2
-                echo "   Re-run the jobs or fix forward (sandbox, then develop), then: just deploy-current" >&2
+                echo "   Re-run the jobs or fix forward (sandbox, then develop), then run just deploy again" >&2
                 exit 1
             fi
         elif [[ -n "${failed_at}" ]]; then
@@ -376,7 +403,7 @@ _release-gate sha:
         fi
         if [[ -z "${failed_at}" ]] && (( SECONDS >= deadline )); then
             echo "❌ CI did not finish within ${timeout}s: ${url}" >&2
-            echo "   When it passes, finish with: just deploy-current" >&2
+            echo "   When it passes, run just deploy again to finish (no second bump)" >&2
             exit 1
         fi
         sleep 20
@@ -465,13 +492,27 @@ _sync-sandbox:
 # Flow: preflight, version bump pushed to develop with sandbox kept in step (skipped
 # for current), wait for CI on that exact commit, then tag it and fast-forward main
 # to it in one atomic push, and sync sandbox once more. Nothing reaches main or gets
-# tagged unless CI passed on that very commit. If CI fails or the wait is
-# interrupted, develop and sandbox hold the bump commit: fix forward on sandbox,
-# merge into develop, and run `just deploy-current`, which releases without bumping.
+# tagged unless CI passed on that very commit. If a run stops midway (CI failed and
+# was not re-run, the wait or the SSH connection was interrupted), develop and
+# sandbox hold the bump commit and the version has no tag: running `just deploy`
+# again, or `just deploy-current`, finishes that release without a second bump.
 _release kind:
     #!/usr/bin/env bash
     set -euo pipefail
     kind="{{kind}}"
+
+    # An untagged current version means an earlier deploy stopped after its bump
+    # (CI failed, the wait or the connection was interrupted). Finish that release
+    # instead of bumping again, so rerunning `just deploy` is always safe.
+    git fetch --quiet --tags origin
+    current="$(just --quiet _workspace-version)"
+    if [[ "${kind}" != "current" ]] && ! git rev-parse -q --verify "refs/tags/${current}" >/dev/null; then
+        echo "ℹ️  ${current} is bumped but not released yet; finishing that release (no new bump)."
+        if [[ "${kind}" != "patch" ]]; then
+            echo "   Run just deploy-${kind} again afterwards for the ${kind} bump."
+        fi
+        kind="current"
+    fi
 
     just _release-preflight "${kind}"
     if [[ "${kind}" != "current" ]]; then
