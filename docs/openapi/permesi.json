@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.47"
+    "version": "0.3.48"
   },
   "paths": {
     "/health": {
