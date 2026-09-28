@@ -63,13 +63,14 @@ where
             Ok(started) => return Ok((started, name)),
             Err(err) => {
                 let err = Error::new(err);
+                // A failed start can leave the created container behind, whatever failed.
+                remove_leftover(&name);
                 if attempt >= attempts || !is_port_race(&err) {
                     return Err(err.context(format!("Failed to start {what} container")));
                 }
                 eprintln!(
                     "{what} container lost a race for its host port ({attempt}/{attempts}); retrying: {err:#}"
                 );
-                remove_leftover(&name);
                 sleep(Duration::from_millis(200 * u64::from(attempt))).await;
                 attempt += 1;
             }
@@ -77,14 +78,17 @@ where
     }
 }
 
-/// Whether a start error is the rootless host-port race: the runtime chose a host port
-/// that something else bound first. Checks the whole error chain.
+/// Whether a start error is the host-port race: the runtime chose a host port that
+/// something else bound first (Podman's `rootlessport ... bind: address already in
+/// use`, Docker's `port is already allocated`). Checks the whole error chain.
 pub(crate) fn is_port_race(err: &Error) -> bool {
-    format!("{err:#}").contains("address already in use")
+    let message = format!("{err:#}");
+    message.contains("bind: address already in use")
+        || message.contains("port is already allocated")
 }
 
-/// Remove a container a failed start may have left behind; errors are ignored because
-/// the next attempt uses a new name anyway.
+/// Remove a container a failed start may have left behind, with whichever runtime
+/// knows it; failures are ignored because every attempt uses a new name anyway.
 fn remove_leftover(name: &str) {
     for runtime in ["podman", "docker"] {
         let removed = Command::new(runtime)
@@ -92,7 +96,7 @@ fn remove_leftover(name: &str) {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        if removed.is_ok() {
+        if removed.is_ok_and(|status| status.success()) {
             return;
         }
     }
@@ -182,6 +186,21 @@ mod tests {
     fn is_port_race_checks_the_whole_error_chain() {
         let err = anyhow!("bind: address already in use").context("failed to start a container");
         assert!(is_port_race(&err));
+    }
+
+    #[test]
+    fn is_port_race_detects_docker_port_allocation_error() {
+        let err = anyhow!(
+            "failed to start a container: driver failed programming external connectivity: Bind for 0.0.0.0:32768 failed: port is already allocated"
+        );
+        assert!(is_port_race(&err));
+    }
+
+    #[test]
+    fn is_port_race_ignores_an_address_in_use_that_is_not_the_host_port() {
+        let err =
+            anyhow!("failed to start a container: vault: listen tcp :8200: address already in use");
+        assert!(!is_port_race(&err));
     }
 
     #[test]

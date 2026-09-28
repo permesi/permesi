@@ -40,8 +40,10 @@ jobs:
   #   never changes.
   # - `test-tag`: any other tag, or a manual run on a tag (t-* from `just t-deploy`):
   #   tests and builds only.
-  # The production-facing steps (the `latest` image tag, Cloudflare Pages, Helm and the
-  # API docs) only run for the highest released version, so recovering an older tag
+  # The production-facing steps (GitHub's Latest release, the `latest` image tag,
+  # Cloudflare Pages, Helm and the API docs) each check right before they act that the
+  # tag is the highest promoted release (.github/actions/release-is-latest), and each runs
+  # in its own concurrency group across runs, so a late or re-run job of an older tag
   # never rolls production back.
   guard:
     name: Release guard
@@ -55,7 +57,6 @@ jobs:
       tag: ${{ steps.classify.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
       candidate_run: ${{ steps.release.outputs.candidate_run }}
-      latest: ${{ steps.release.outputs.latest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -159,16 +160,11 @@ jobs:
             echo "::error::Run ${candidate_run} is not a successful candidate run of ${commit} (${head_sha} ${event} ${conclusion} ${path})."
             exit 1
           fi
-          # Production follows only the highest released version.
-          highest="$(gh api --paginate "repos/${repo}/tags" --jq '.[].name' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
-          latest=false
-          [[ "${highest}" != "${TAG}" ]] || latest=true
           {
             echo "commit=${commit}"
             echo "candidate_run=${candidate_run}"
-            echo "latest=${latest}"
           } >> "$GITHUB_OUTPUT"
-          echo "Tag ${TAG}: ${commit} is on main, passed Test & Build (run ${passed}) and candidate run ${candidate_run}; highest release: ${highest}."
+          echo "Tag ${TAG}: ${commit} is on main, passed Test & Build (run ${passed}) and candidate run ${candidate_run}."
 
   # ----- Candidate and test tags: test and build everything once -----
 
@@ -533,17 +529,25 @@ jobs:
 
   # ----- Release tags and recovery runs: publish only, nothing is built -----
 
-  # The GitHub release gets exactly the files of the candidate run's manifest. Safe to
-  # re-run: the release is updated in place and existing assets are overwritten.
+  # The GitHub release gets exactly the files of the candidate run's manifest, and no
+  # others. Safe to re-run: the release is updated in place, existing assets are
+  # overwritten and stray ones removed; it is GitHub's Latest release only when the tag
+  # is the highest promoted release at that moment.
   release:
     name: GitHub release
     runs-on: ubuntu-latest
     needs: guard
     if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
+    concurrency:
+      group: permesi-production-release
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Download the candidate run's manifest
         uses: actions/download-artifact@v8
         with:
@@ -583,12 +587,41 @@ jobs:
           (cd dist && sha256sum -c ../manifest/SHA256SUMS)
           cp manifest/SHA256SUMS dist/
 
+      - name: Is this the latest release
+        id: latest
+        uses: ./.github/actions/release-is-latest
+        with:
+          tag: ${{ needs.guard.outputs.tag }}
+          token: ${{ github.token }}
+
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.guard.outputs.tag }}
           draft: false
+          make_latest: ${{ steps.latest.outputs.latest }}
           files: dist/*
+
+      - name: Keep exactly the manifest's files on the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          set -euo pipefail
+          expected="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
+          while read -r asset; do
+            [[ -n "${asset}" ]] || continue
+            if ! grep -qxF "${asset}" <<<"${expected}"; then
+              echo "Removing ${asset}, which is not in the candidate manifest."
+              gh release delete-asset "${TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}" --yes
+            fi
+          done < <(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')
+          actual="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::Release ${TAG} holds $(tr '\n' ' ' <<<"${actual}"), expected $(tr '\n' ' ' <<<"${expected}")."
+            exit 1
+          fi
 
   # Add the version tag (and `latest`, for the highest release) to the candidate's image
   # digests. skopeo copies within the same repository with the digest preserved, so
@@ -598,6 +631,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [guard, release]
     if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
+    concurrency:
+      group: permesi-production-images
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
@@ -606,7 +642,18 @@ jobs:
       permesi_digest: ${{ steps.tag.outputs.permesi_digest }}
       genesis_digest: ${{ steps.tag.outputs.genesis_digest }}
       web_digest: ${{ steps.tag.outputs.web_digest }}
+      latest: ${{ steps.latest.outputs.latest }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Is this the latest release
+        id: latest
+        uses: ./.github/actions/release-is-latest
+        with:
+          tag: ${{ needs.guard.outputs.tag }}
+          token: ${{ github.token }}
+
       - name: Download the candidate run's manifest
         uses: actions/download-artifact@v8
         with:
@@ -622,7 +669,7 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
           VERSION: ${{ needs.guard.outputs.version }}
-          LATEST: ${{ needs.guard.outputs.latest }}
+          LATEST: ${{ steps.latest.outputs.latest }}
         run: |
           set -euo pipefail
           command -v skopeo >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y skopeo; }
@@ -645,16 +692,30 @@ jobs:
             echo "${service}_digest=${digest}" >> "$GITHUB_OUTPUT"
           done < "${RUNNER_TEMP}/manifest/IMAGES"
 
-  # Deploy the candidate's signed production web build to Cloudflare Pages.
+  # Deploy the candidate's signed production web build to Cloudflare Pages, only while
+  # the tag is the highest promoted release.
   deploy-frontend:
     name: Deploy Frontend
     runs-on: ubuntu-latest
     needs: [guard, release]
-    if: (needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover') && needs.guard.outputs.latest == 'true'
+    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
+    concurrency:
+      group: permesi-production-frontend
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Is this the latest release
+        id: latest
+        uses: ./.github/actions/release-is-latest
+        with:
+          tag: ${{ needs.guard.outputs.tag }}
+          token: ${{ github.token }}
+
       - name: Download the candidate run's manifest
         uses: actions/download-artifact@v8
         with:
@@ -679,26 +740,33 @@ jobs:
           set -euo pipefail
           package="permesi-web-dist-${VERSION}.tar.gz"
           (cd "${RUNNER_TEMP}/web" && grep " ${package}\$" "${RUNNER_TEMP}/manifest/SHA256SUMS" | sha256sum -c -)
-          mkdir -p apps/web
-          tar -xzf "${RUNNER_TEMP}/web/${package}" -C apps/web
-          test -f apps/web/dist/index.html
+          mkdir -p "${RUNNER_TEMP}/site"
+          tar -xzf "${RUNNER_TEMP}/web/${package}" -C "${RUNNER_TEMP}/site"
+          test -f "${RUNNER_TEMP}/site/dist/index.html"
 
       - name: Set up Node
+        if: steps.latest.outputs.latest == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 24
 
       - name: Cloudflare Pages
-        working-directory: apps/web
+        if: steps.latest.outputs.latest == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler pages deploy dist --project-name permesi --branch main
+        run: npx wrangler pages deploy "${RUNNER_TEMP}/site/dist" --project-name permesi --branch main
+
+      - name: Not the latest release
+        if: steps.latest.outputs.latest != 'true'
+        env:
+          HIGHEST: ${{ steps.latest.outputs.highest }}
+        run: echo "A newer release (${HIGHEST}) is in production; Cloudflare Pages left alone."
 
   dispatch-helm-release:
     name: Dispatch Helm Release
     needs: [guard, images-publish]
-    if: (needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover') && needs.guard.outputs.latest == 'true'
+    if: (needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover') && needs.images-publish.outputs.latest == 'true'
     uses: ./.github/workflows/dispatch-helm-release.yml
     permissions:
       contents: read
@@ -716,16 +784,33 @@ jobs:
     name: Deploy Documentation
     runs-on: ubuntu-latest
     needs: [guard, release]
-    if: (needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover') && needs.guard.outputs.latest == 'true'
+    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
+    concurrency:
+      group: permesi-production-docs
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Is this the latest release
+        id: latest
+        uses: ./.github/actions/release-is-latest
+        with:
+          tag: ${{ needs.guard.outputs.tag }}
+          token: ${{ github.token }}
+
       - name: Checkout the tag's sources
+        if: steps.latest.outputs.latest == 'true'
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ needs.guard.outputs.tag }}
+          path: tagged
 
       - name: Check the specs carry the release version
+        if: steps.latest.outputs.latest == 'true'
+        working-directory: tagged
         shell: bash
         env:
           VERSION: ${{ needs.guard.outputs.version }}
@@ -740,13 +825,16 @@ jobs:
           done
 
       - name: Build Redoc Page
+        if: steps.latest.outputs.latest == 'true'
+        working-directory: tagged
         run: |
           mkdir -p docs/redoc
           cp apps/web/public/logo.svg docs/redoc/logo.svg
           cp docs/openapi/*.json docs/redoc/
 
       - name: Deploy to GitHub Pages
+        if: steps.latest.outputs.latest == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/redoc
+          publish_dir: ./tagged/docs/redoc

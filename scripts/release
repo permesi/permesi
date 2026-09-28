@@ -773,7 +773,7 @@ deploy() {
     if tag_exists "${current}"; then
         if [[ "$(git rev-parse "refs/tags/${current}^{commit}")" == "${base}" ]]; then
             is_released "${current}" ||
-                die "Tag ${current} is on ${DEVELOP_BRANCH} (${base:0:12}), but origin/${MAIN_BRANCH} does not contain it, so it was never released (the Deploy guard publishes only tags on ${MAIN_BRANCH}). Delete the tag (git push origin :refs/tags/${current} && git tag -d ${current}) and run the deploy again: it releases this commit as is once CI passes on it."
+                die "Tag ${current} is on ${DEVELOP_BRANCH} (${base:0:12}), but origin/${MAIN_BRANCH} does not contain it, so it was never released (the Deploy guard publishes only tags on ${MAIN_BRANCH}). Either release the next version instead, leaving that tag unpublished: merge any change into ${DEVELOP_BRANCH} and run the deploy again. Or delete the tag (git push origin :refs/tags/${current} && git tag -d ${current}) and run the deploy again to release this commit as is."
             # Also finishes the tidy-up of a release whose run was cut off after its push.
             finish_release "${base}"
             echo "✅ ${DEVELOP_BRANCH} is release ${current}; nothing new to release."

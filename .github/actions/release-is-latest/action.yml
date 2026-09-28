@@ -1,0 +1,58 @@
+name: Release is latest
+description: >-
+  Whether a tag is the highest promoted release right now: the highest X.Y.Z tag whose
+  commit is on main and carries that version in Cargo.toml. Production steps (the
+  `latest` image tag, Cloudflare Pages, Helm, the docs, GitHub's Latest release) call it
+  immediately before they act, so a late or re-run job of an older tag never rolls
+  production back, and a stray higher tag that was never promoted is ignored.
+inputs:
+  tag:
+    description: The X.Y.Z tag being published.
+    required: true
+  token:
+    description: A token that can read the repository.
+    required: true
+outputs:
+  latest:
+    description: "'true' when the tag is the highest promoted release, otherwise 'false'."
+    value: ${{ steps.check.outputs.latest }}
+  highest:
+    description: The highest promoted release (empty when there is none).
+    value: ${{ steps.check.outputs.highest }}
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        repo="${GITHUB_REPOSITORY}"
+        highest=""
+        while read -r candidate; do
+          [[ -n "${candidate}" ]] || continue
+          commit="$(gh api "repos/${repo}/commits/refs/tags/${candidate}" --jq '.sha')"
+          status="$(gh api "repos/${repo}/compare/${commit}...main" --jq '.status')"
+          if [[ "${status}" != identical && "${status}" != ahead ]]; then
+            echo "Ignoring ${candidate}: ${commit} is not on main (${status})."
+            continue
+          fi
+          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = /{print $2; exit}')"
+          if [[ "${version}" != "${candidate}" ]]; then
+            echo "Ignoring ${candidate}: its commit carries version ${version}."
+            continue
+          fi
+          highest="${candidate}"
+          break
+        done < <(gh api --paginate "repos/${repo}/tags" --jq '.[].name' | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -rV)
+        latest=false
+        if [[ -n "${highest}" && "${highest}" == "${TAG}" ]]; then
+          latest=true
+        fi
+        {
+          echo "latest=${latest}"
+          echo "highest=${highest}"
+        } >> "$GITHUB_OUTPUT"
+        echo "Highest promoted release: ${highest:-none}; ${TAG} is the latest: ${latest}."
