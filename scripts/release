@@ -436,8 +436,10 @@ gate() {
     echo "🔗 ${url}"
 
     while true; do
+        # gh reports the conclusion of an unfinished run as "", not null: map both to "-"
+        # so the three fields stay in place when read splits them.
         state="$(gh run view "${run_id}" --json status,conclusion,attempt \
-            --jq '"\(.status) \(.conclusion // "-") \(.attempt)"' 2>/dev/null || echo "unknown - ?")"
+            --jq '"\(.status) \(if (.conclusion // "") == "" then "-" else .conclusion end) \(.attempt)"' 2>/dev/null || echo "unknown - ?")"
         read -r status conclusion attempt <<<"${state}"
         if [[ "${status}" == "unknown" ]]; then
             if ((NO_WAIT == 1)); then
@@ -683,7 +685,7 @@ status() {
     echo "${STAGING_BRANCH}: ${staging:0:12} \"${subject}\" ($([[ -z "${reason}" ]] && echo "${kind} candidate for ${v}; a ${kind} deploy resumes it" || echo "stale: ${reason}"))"
     run="$(find_run "${staging}" 2>/dev/null || true)"
     if [[ -n "${run}" ]]; then
-        state="$(gh run view "${run}" --json status,conclusion,attempt,url --jq '"\(.status) \(.conclusion // "-") (attempt \(.attempt)) \(.url)"' 2>/dev/null || echo "unknown")"
+        state="$(gh run view "${run}" --json status,conclusion,attempt,url --jq '"\(.status) \(if (.conclusion // "") == "" then "-" else .conclusion end) (attempt \(.attempt)) \(.url)"' 2>/dev/null || echo "unknown")"
         echo "   CI: ${state}"
     else
         echo "   CI: no run found yet"
