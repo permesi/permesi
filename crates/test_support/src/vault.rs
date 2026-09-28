@@ -5,11 +5,10 @@ use testcontainers::core::wait::HttpWaitStrategy;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
 };
 use tokio::time::{Duration, sleep};
 
-use crate::unique_name;
+use crate::container::start_with_port_retry;
 
 const VAULT_PORT: u16 = 8200;
 
@@ -149,7 +148,6 @@ impl VaultContainer {
     /// Returns an error if the container fails to start or the port cannot be resolved.
     pub async fn start_with_config(network: &str, config: VaultConfig) -> Result<Self> {
         crate::runtime::ensure_container_runtime()?;
-        let container_name = unique_name("vault");
         let command = vec![
             "server".to_string(),
             "-dev".to_string(),
@@ -157,25 +155,24 @@ impl VaultContainer {
             "-dev-listen-address=0.0.0.0:8200".to_string(),
         ];
 
-        let mut image = GenericImage::new(&config.image, &config.tag)
-            .with_exposed_port(VAULT_PORT.tcp())
-            .with_wait_for(WaitFor::http(
-                HttpWaitStrategy::new("/v1/sys/health")
-                    .with_port(VAULT_PORT.tcp())
-                    // testcontainers requires an explicit response matcher; Vault dev-mode returns 200.
-                    .with_expected_status_code(200_u16),
-            ))
-            .with_cmd(command)
-            .with_container_name(&container_name);
-
-        if network != "bridge" && network != "default" {
-            image = image.with_network(network);
-        }
-
-        let container = image
-            .start()
-            .await
-            .context("Failed to start Vault container")?;
+        let (container, _) = start_with_port_retry("Vault", "vault", |container_name| {
+            let image = GenericImage::new(&config.image, &config.tag)
+                .with_exposed_port(VAULT_PORT.tcp())
+                .with_wait_for(WaitFor::http(
+                    HttpWaitStrategy::new("/v1/sys/health")
+                        .with_port(VAULT_PORT.tcp())
+                        // testcontainers requires an explicit response matcher; Vault dev-mode returns 200.
+                        .with_expected_status_code(200_u16),
+                ))
+                .with_cmd(command.clone())
+                .with_container_name(container_name);
+            if network != "bridge" && network != "default" {
+                image.with_network(network)
+            } else {
+                image
+            }
+        })
+        .await?;
 
         let mut host_port = None;
         let mut last_error = None;

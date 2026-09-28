@@ -3,11 +3,10 @@ use sqlx::{Connection, PgConnection};
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
 };
 use tokio::time::{Duration, sleep};
 
-use crate::unique_name;
+use crate::container::start_with_port_retry;
 
 const POSTGRES_PORT: u16 = 5432;
 
@@ -80,25 +79,24 @@ impl PostgresContainer {
     /// Returns an error if the container fails to start or the port cannot be resolved.
     pub async fn start_with_config(network: &str, config: PostgresConfig) -> Result<Self> {
         crate::runtime::ensure_container_runtime()?;
-        let container_name = unique_name("postgres");
-        let mut image = GenericImage::new(&config.image, &config.tag)
-            .with_exposed_port(POSTGRES_PORT.tcp())
-            .with_wait_for(WaitFor::message_on_stdout(
-                "database system is ready to accept connections",
-            ))
-            .with_env_var("POSTGRES_USER", &config.user)
-            .with_env_var("POSTGRES_PASSWORD", &config.password)
-            .with_env_var("POSTGRES_DB", &config.db_name)
-            .with_container_name(&container_name);
-
-        if network != "bridge" && network != "default" {
-            image = image.with_network(network);
-        }
-
-        let container = image
-            .start()
-            .await
-            .context("Failed to start Postgres container")?;
+        let (container, container_name) =
+            start_with_port_retry("Postgres", "postgres", |container_name| {
+                let image = GenericImage::new(&config.image, &config.tag)
+                    .with_exposed_port(POSTGRES_PORT.tcp())
+                    .with_wait_for(WaitFor::message_on_stdout(
+                        "database system is ready to accept connections",
+                    ))
+                    .with_env_var("POSTGRES_USER", &config.user)
+                    .with_env_var("POSTGRES_PASSWORD", &config.password)
+                    .with_env_var("POSTGRES_DB", &config.db_name)
+                    .with_container_name(container_name);
+                if network != "bridge" && network != "default" {
+                    image.with_network(network)
+                } else {
+                    image
+                }
+            })
+            .await?;
 
         let mut host_port = None;
         let mut last_error = None;
