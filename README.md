@@ -418,8 +418,8 @@ itself was wrong, fix it, release as usual, and run `just release-republish X.Y.
 recovery run on `main` checks that tag like its own run would and publishes its
 candidate artifacts, without touching the tag. GitHub's Latest release, the `latest`
 image tag, Cloudflare Pages, Helm and the docs only follow the highest promoted release
-(on `main`, with a matching version), checked right before each of them acts and
-serialized across runs, so a late, re-run or recovered older tag never rolls production
+(a verified signed tag on `main`, with a matching version), checked right before each of
+them acts, with every pending job kept in order across runs, so a late, re-run or recovered older tag never rolls production
 back, and extra assets a broken run left on a release are removed. Recovery needs the candidate run's artifacts (kept 90 days by
 default), and re-runs work for 30 days.
 

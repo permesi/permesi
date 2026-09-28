@@ -1,0 +1,7 @@
+# actionlint 1.7.12 does not know the concurrency `queue` key yet, which GitHub Actions
+# supports (`queue: max` keeps every pending job instead of replacing it). deploy.yml uses
+# it on its production jobs; ignore only that message, only there.
+paths:
+  .github/workflows/deploy.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

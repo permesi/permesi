@@ -1,7 +1,8 @@
 name: Release is latest
 description: >-
-  Whether a tag is the highest promoted release right now: the highest X.Y.Z tag whose
-  commit is on main and carries that version in Cargo.toml. Production steps (the
+  Whether a tag is the highest promoted release right now: the highest X.Y.Z tag that
+  is a GitHub-verified annotated tag whose commit is on main and carries that version in
+  Cargo.toml. It fails when GitHub cannot be asked. Production steps (the
   `latest` image tag, Cloudflare Pages, Helm, the docs, GitHub's Latest release) call it
   immediately before they act, so a late or re-run job of an older tag never rolls
   production back, and a stray higher tag that was never promoted is ignored.
@@ -30,9 +31,17 @@ runs:
       run: |
         set -euo pipefail
         repo="${GITHUB_REPOSITORY}"
+        # A plain assignment, so a failing listing fails the step instead of looking
+        # like "no releases".
+        tags="$(gh api --paginate "repos/${repo}/tags" --jq '.[].name')"
         highest=""
         while read -r candidate; do
           [[ -n "${candidate}" ]] || continue
+          read -r type object <<<"$(gh api "repos/${repo}/git/ref/tags/${candidate}" --jq '"\(.object.type) \(.object.sha)"')"
+          if [[ "${type}" != tag || "$(gh api "repos/${repo}/git/tags/${object}" --jq '.verification.verified')" != true ]]; then
+            echo "Ignoring ${candidate}: not a verified annotated tag."
+            continue
+          fi
           commit="$(gh api "repos/${repo}/commits/refs/tags/${candidate}" --jq '.sha')"
           status="$(gh api "repos/${repo}/compare/${commit}...main" --jq '.status')"
           if [[ "${status}" != identical && "${status}" != ahead ]]; then
@@ -46,7 +55,7 @@ runs:
           fi
           highest="${candidate}"
           break
-        done < <(gh api --paginate "repos/${repo}/tags" --jq '.[].name' | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -rV)
+        done < <(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"${tags}" | sort -rV || true)
         latest=false
         if [[ -n "${highest}" && "${highest}" == "${TAG}" ]]; then
           latest=true

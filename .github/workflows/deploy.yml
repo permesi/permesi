@@ -43,8 +43,9 @@ jobs:
   # The production-facing steps (GitHub's Latest release, the `latest` image tag,
   # Cloudflare Pages, Helm and the API docs) each check right before they act that the
   # tag is the highest promoted release (.github/actions/release-is-latest), and each runs
-  # in its own concurrency group across runs, so a late or re-run job of an older tag
-  # never rolls production back.
+  # in its own concurrency group across runs with `queue: max` (every pending job waits
+  # its turn instead of being replaced), so a late or re-run job of an older tag never
+  # rolls production back and a newer release is never cancelled by an older one.
   guard:
     name: Release guard
     runs-on: ubuntu-latest
@@ -541,6 +542,7 @@ jobs:
     concurrency:
       group: permesi-production-release
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
       actions: read
@@ -634,6 +636,7 @@ jobs:
     concurrency:
       group: permesi-production-images
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       actions: read
@@ -702,6 +705,7 @@ jobs:
     concurrency:
       group: permesi-production-frontend
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       actions: read
@@ -763,20 +767,48 @@ jobs:
           HIGHEST: ${{ steps.latest.outputs.highest }}
         run: echo "A newer release (${HIGHEST}) is in production; Cloudflare Pages left alone."
 
-  dispatch-helm-release:
+  # Dispatch Helm with the tested digests, only while the tag is the highest promoted
+  # release: checked right here, inside the Helm group, so a delayed older run cannot
+  # dispatch after a newer release.
+  helm:
     name: Dispatch Helm Release
+    runs-on: ubuntu-latest
     needs: [guard, images-publish]
-    if: (needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover') && needs.images-publish.outputs.latest == 'true'
-    uses: ./.github/workflows/dispatch-helm-release.yml
+    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
+    concurrency:
+      group: permesi-production-helm
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
-    with:
-      version: ${{ needs.guard.outputs.tag }}
-      source_sha: ${{ needs.guard.outputs.commit }}
-      permesi_digest: ${{ needs.images-publish.outputs.permesi_digest }}
-      genesis_digest: ${{ needs.images-publish.outputs.genesis_digest }}
-      web_digest: ${{ needs.images-publish.outputs.web_digest }}
-    secrets: inherit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Is this the latest release
+        id: latest
+        uses: ./.github/actions/release-is-latest
+        with:
+          tag: ${{ needs.guard.outputs.tag }}
+          token: ${{ github.token }}
+
+      - name: Dispatch release to permesi-helm
+        if: steps.latest.outputs.latest == 'true'
+        uses: ./.github/actions/dispatch-helm
+        with:
+          version: ${{ needs.guard.outputs.tag }}
+          source_sha: ${{ needs.guard.outputs.commit }}
+          permesi_digest: ${{ needs.images-publish.outputs.permesi_digest }}
+          genesis_digest: ${{ needs.images-publish.outputs.genesis_digest }}
+          web_digest: ${{ needs.images-publish.outputs.web_digest }}
+          app_id: ${{ vars.PERMESI_HELM_APP_ID }}
+          private_key: ${{ secrets.PERMESI_HELM_APP_PRIVATE_KEY }}
+
+      - name: Not the latest release
+        if: steps.latest.outputs.latest != 'true'
+        env:
+          HIGHEST: ${{ steps.latest.outputs.highest }}
+        run: echo "A newer release (${HIGHEST}) is in production; Helm left alone."
 
   # Publish the tag's committed OpenAPI specs: `just deploy` regenerated and compared
   # them before promoting, so nothing is generated here.
@@ -788,6 +820,7 @@ jobs:
     concurrency:
       group: permesi-production-docs
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
     steps:
