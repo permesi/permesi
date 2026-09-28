@@ -8,6 +8,11 @@ on:
         description: Release tag to dispatch (X.Y.Z or vX.Y.Z)
         required: true
         type: string
+      source_sha:
+        description: Commit the release was built from; defaults to the run's commit.
+        required: false
+        default: ''
+        type: string
       permesi_digest:
         description: Published GHCR digest for ghcr.io/permesi/permesi.
         required: false
@@ -28,6 +33,11 @@ on:
       version:
         description: Release tag to dispatch (X.Y.Z or vX.Y.Z)
         required: true
+        type: string
+      source_sha:
+        description: Commit the release was built from; defaults to the run's commit.
+        required: false
+        default: ''
         type: string
       permesi_digest:
         description: Published GHCR digest for ghcr.io/permesi/permesi.
@@ -60,6 +70,8 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
 
@@ -82,6 +94,12 @@ jobs:
             fi
           done
 
+          source_sha="${SOURCE_SHA:-${GITHUB_SHA}}"
+          if [[ ! "${source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid source commit '${source_sha}'." >&2
+            exit 1
+          fi
+          echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "source_tag=${source_tag}" >> "$GITHUB_OUTPUT"
           echo "permesi_digest=${permesi_digest}" >> "$GITHUB_OUTPUT"
@@ -108,7 +126,7 @@ jobs:
             "client_payload": {
               "version": "${{ steps.meta.outputs.version }}",
               "source_repo": "${{ github.repository }}",
-              "source_sha": "${{ github.sha }}",
+              "source_sha": "${{ steps.meta.outputs.source_sha }}",
               "source_tag": "${{ steps.meta.outputs.source_tag }}",
               "images": {
                 "permesi": {

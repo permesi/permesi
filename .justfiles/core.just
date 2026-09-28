@@ -166,8 +166,10 @@ _require-tag-signing:
     esac
 
 # Releases run scripts/release (see its header for the whole flow): the version bump
-# is staged on the scratch `release` branch, CI tests that exact commit, and only then
-# do develop, main and the signed tag move together in one atomic push. The bump
+# is staged on the scratch `release` branch, Test & Build and a candidate run of the
+# Deploy workflow (every build, package and image, published nowhere) test that exact
+# commit, and only then do develop, main and the signed tag move together in one atomic
+# push; the tag's run then publishes exactly what the candidate run built. The bump
 # changes only the version (Cargo.toml, the workspace entries of Cargo.lock and the
 # OpenAPI specs' info.version) and is verified locally in a temporary worktree first.
 # Every deploy recipe is idempotent: rerunning it resumes the staged candidate, or
@@ -196,6 +198,10 @@ release-status:
 # Check everything a release needs; changes nothing apart from fetching
 release-preflight:
     @scripts/release preflight
+
+# Publish an existing release tag again if its own run cannot (recovery run on main)
+release-republish version:
+    @scripts/release republish {{version}}
 
 # Apply the branch protection the release flow relies on (main requires "CI OK")
 protect-branches:

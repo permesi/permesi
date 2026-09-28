@@ -374,54 +374,66 @@ The dev stack keeps to itself so it can share a host with other projects. Every 
 - `just db-verify`: Confirm database constraints and schema state.
 - `just openapi`: Regenerate OpenAPI specs from code.
 
-Work lands on `sandbox`; once its CI run is green it is merged into `develop`, and
-releases run from a clean `develop` that matches `origin/develop`. `just deploy`
-(or `deploy-minor` / `deploy-major`) runs `scripts/release`, which first checks
-everything that could fail later: `main` can fast-forward to `develop`, `gh` is
-authenticated, git can actually sign, and the settings are valid. It then builds
-the candidate in a temporary worktree under `.git`, so your checkout stays on a
-clean `develop` and your `target` directory is left alone: a signed commit that
-changes only the version (`Cargo.toml`, the workspace entries of `Cargo.lock` and
-the `info.version` of the OpenAPI specs), verified there with `just openapi` (the
-regenerated specs must match, otherwise `develop`'s specs are stale and the release
-stops) and a clean `verify-release`. The candidate goes to the scratch `release`
-branch only, where Test & Build runs on it (without a Cloudflare preview);
-`develop` and `main` are not touched yet. When that run passes, the script signs
-the tag on the candidate and pushes it to `develop` and `main` together with the
-tag in one atomic, fast-forward-only push, so the three move together or not at
-all. It then brings `sandbox` in step (a fast-forward, or a move when its content
-was squash-merged, with the old tip kept locally as `refs/backup/sandbox/<tip>`;
-work on `sandbox` that `develop` lacks is never touched) and deletes `release`.
-
-`just deploy` is idempotent. A rerun resumes the candidate on `release` when it is
-signed, still sits on the current `develop` and its content is exactly the version
-bump, replaces an outdated candidate when `develop` has moved on (the old tip is
-kept as a local `refs/backup/release/<sha>` ref), and reports "nothing new to
-release" when `develop` is already the last release (tagged, with the tag on
-`main`). It never overwrites a `release` branch holding anything other than a
-former candidate. Until the final atomic push succeeds, a failed or interrupted
-release leaves `develop` and `main` as they were: re-run the failed jobs, or fix on
-`sandbox` and merge into `develop`, then run `just deploy` again. If a CI job fails,
-`just deploy` keeps waiting for 15 minutes (`RELEASE_RERUN_WAIT`), so "Re-run
-failed jobs" in GitHub lets the release continue by itself. While it waits it polls
-GitHub every 10 seconds until the run appears (up to 5 minutes), then every 30
-seconds (`RELEASE_POLL_SECONDS`), for at most an hour per attempt
-(`RELEASE_CI_TIMEOUT`); with `RELEASE_NO_WAIT=1` it stops once the candidate is
-staged (or while CI still runs), and a later `just deploy` finishes the release.
-Run it inside the dev session (Herdr or tmux) on the VM so a dropped laptop
-connection does not stop the wait. `just release-status` shows `develop`, `main`,
-the staged candidate and its CI run without changing anything, and
-`just release-preflight` runs only the checks. Branch protection is kept as code:
-`just protect-branches` makes `main` accept only commits whose aggregate **CI OK**
-check passed, admins included, with signed commits and linear history.
-Only `X.Y.Z` tags publish anything, and only for a commit on `main` that carries
-that version and passed Test & Build; other tags, such as the `t-*` tags from
-`just t-deploy`, run the tests and builds only.
-Dependency updates (`cargo update`) are ordinary changes made on `sandbox`, so CI
-tests them before a release. Tag and commit signing follow Git's configured
-`gpg.format` (SSH or OpenPGP).
-
 Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`.
+
+#### Releasing
+
+Work lands on `sandbox`; once its CI run is green it is merged into `develop`, and
+`just deploy` (or `deploy-minor` / `deploy-major`) releases from a clean `develop`. The
+release rule is that the commit tagged and put on `main` is exactly the commit CI
+tested, and everything published is exactly what CI built from it, so a release never
+needs a tag deleted or moved:
+
+```
+just deploy
+ 1. preflight       read-only checks: clean develop equal to origin, main can
+                    fast-forward, gh logged in, git can sign
+ 2. candidate       temporary worktree: version bump (Cargo.toml, Cargo.lock, the OpenAPI
+                    specs' info.version), `just openapi` must reproduce the specs, a clean
+                    `verify-release`, then a signed commit pushed to the `release` branch
+ 3. two CI runs     Test & Build, and a candidate run of the Deploy workflow: tests, the
+                    musl archives and Debian packages, the signed production web build,
+                    and the permesi, genesis and web images pushed to GHCR only as
+                    `:sha-<commit>`, all recorded in a manifest (SHA-256 sums, image
+                    digests); nothing is published
+ 4. pre-tag check   the manifest and every artifact are downloaded and checked
+ 5. promotion       one atomic push of develop, main and the signed tag, which names the
+                    candidate run
+ 6. tag run         publish only: the GitHub release gets the manifest's files, the
+                    image digests get the version (and `latest`) tags, the signed web
+                    build goes to Cloudflare Pages, Helm is dispatched with the digests,
+                    and the committed API docs go to GitHub Pages; nothing is rebuilt
+```
+
+`just deploy` ends at the promotion and prints "Promoted"; `just release-status` then
+shows the tag run's state. Everything before the promotion is idempotent: if a test,
+build or check fails, or the run is interrupted, `develop` and `main` are untouched and
+no tag exists. Re-run the failed jobs in GitHub (a waiting deploy continues by itself
+within 15 minutes, `RELEASE_RERUN_WAIT`), or fix on `sandbox` and merge; either way,
+running `just deploy` again resumes the same candidate or builds a fresh one. After the
+promotion only the publishing steps remain. If one of them hits an outage, "Re-run
+failed jobs" on the tag run finishes it; every step is safe to repeat (the release is
+updated in place, images are retagged to the same digests). If the tagged workflow
+itself was wrong, fix it, release as usual, and run `just release-republish X.Y.Z`: a
+recovery run on `main` checks that tag like its own run would and publishes its
+candidate artifacts, without touching the tag. The `latest` image tag, Cloudflare Pages,
+Helm and the docs only follow the highest release, so recovering an older tag never
+rolls production back. Recovery needs the candidate run's artifacts (kept 90 days by
+default), and re-runs work for 30 days.
+
+While it waits, `just deploy` polls GitHub every 10 seconds until a run appears (up to
+5 minutes), then every 30 seconds (`RELEASE_POLL_SECONDS`), for at most an hour per
+attempt (`RELEASE_CI_TIMEOUT`); with `RELEASE_NO_WAIT=1` it stops once the candidate is
+staged or while CI runs, and a later `just deploy` finishes. Run it inside the dev
+session (Herdr or tmux) on the VM so a dropped connection does not stop the wait.
+`just release-preflight` runs only the checks, and `just protect-branches` keeps the
+branch protection as code: `main` accepts only commits whose aggregate **CI OK** check
+passed, admins included, with signed commits and linear history. Other tags, such as
+the `t-*` tags from `just t-deploy`, only test and build. Dependency updates
+(`cargo update`) are ordinary changes made on `sandbox`, so CI tests them before a
+release. Tag and commit signing follow Git's configured `gpg.format` (SSH or OpenPGP).
+The same flow, and how to set it up in another repository, is documented in
+cron-when's README, which serves as the template.
 
 ### Local HTTPS for Passkeys (mkcert + HAProxy)
 

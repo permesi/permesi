@@ -14,6 +14,11 @@ on:
         type: string
         required: false
         default: ''
+      deploy:
+        description: Deploy after signing; a release candidate only signs.
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   integrity:
@@ -69,6 +74,7 @@ jobs:
   deploy:
     runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     needs: integrity
+    if: inputs.deploy
     permissions:
       contents: read
     steps:
