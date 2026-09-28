@@ -37,9 +37,17 @@ runs:
         highest=""
         while read -r candidate; do
           [[ -n "${candidate}" ]] || continue
-          read -r type object <<<"$(gh api "repos/${repo}/git/ref/tags/${candidate}" --jq '"\(.object.type) \(.object.sha)"')"
-          if [[ "${type}" != tag || "$(gh api "repos/${repo}/git/tags/${object}" --jq '.verification.verified')" != true ]]; then
-            echo "Ignoring ${candidate}: not a verified annotated tag."
+          # Every API result is a plain assignment: a GitHub error fails the step, and never
+          # makes a valid higher release look invalid.
+          ref="$(gh api "repos/${repo}/git/ref/tags/${candidate}" --jq '"\(.object.type) \(.object.sha)"')"
+          read -r type object <<<"${ref}"
+          if [[ "${type}" != tag ]]; then
+            echo "Ignoring ${candidate}: a lightweight tag."
+            continue
+          fi
+          verified="$(gh api "repos/${repo}/git/tags/${object}" --jq '.verification.verified')"
+          if [[ "${verified}" != true ]]; then
+            echo "Ignoring ${candidate}: its signature is not verified by GitHub."
             continue
           fi
           commit="$(gh api "repos/${repo}/commits/refs/tags/${candidate}" --jq '.sha')"

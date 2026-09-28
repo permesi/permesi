@@ -44,16 +44,16 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: Orchestrates tagged releases by building Rust binaries, building the Leptos frontend dist, and publishing Debian packages, release tarballs, and container images. It injects `github.sha` into service image builds so `/health` and CLI build metadata keep the tagged commit even though `.git` is not present in the container build context. It also runs the frontend deploy workflow, serializes deploy runs with a workflow-level concurrency gate, and waits until the pushed GHCR tags are readable before it triggers downstream Helm automation.
-- **`dispatch-helm-release.yml`**: Sends a `repository_dispatch` event to `permesi/permesi-helm` so that repo can open a PR bumping chart `appVersion` and image tags. It is invoked from `deploy.yml` only after the GHCR package job succeeds, which avoids racing Helm updates ahead of published container images, and it now carries the published image digests in the dispatch payload so Helm can pin exact artifacts.
+- **`deploy.yml`**: The release pipeline, in modes set by its guard job. A manual run on a branch is a release candidate (started by `just deploy`): it tests and builds everything once, the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), and records them in a `release-manifest` artifact. A pushed `X.Y.Z` tag builds nothing: after checking the signed tag and its named candidate run, it publishes exactly the manifest's files as the GitHub release, adds the version tag (and `latest`) to the tested image digests, deploys the signed web build to Cloudflare Pages, dispatches Helm through `.github/actions/dispatch-helm`, and publishes the committed API docs. A manual run on `main` with `publish: X.Y.Z` recovers a tag whose publishing failed. The production steps check `.github/actions/release-is-latest` right before they act and queue across runs (`queue: max`), so an older tag never rolls production back.
+- **`dispatch-helm-release.yml`**: Manual (or `workflow_call`) entry point that sends the `repository_dispatch` event to `permesi/permesi-helm` through the same `.github/actions/dispatch-helm` composite action the release uses; the payload carries the image digests so Helm can pin exact artifacts.
 
 ## Required Secrets
 
-- **`PERMESI_HELM_APP_PRIVATE_KEY`**: GitHub App private key PEM used to mint a short-lived installation token in `dispatch-helm-release.yml`.
+- **`PERMESI_HELM_APP_PRIVATE_KEY`**: GitHub App private key PEM used to mint a short-lived installation token in `.github/actions/dispatch-helm` (from `deploy.yml` and `dispatch-helm-release.yml`).
 
 ## Required Variables
 
-- **`PERMESI_HELM_APP_ID`**: Numeric GitHub App ID used by `dispatch-helm-release.yml`.
+- **`PERMESI_HELM_APP_ID`**: Numeric GitHub App ID used by `.github/actions/dispatch-helm`.
 
 ## Composite Actions
 
@@ -74,3 +74,17 @@ don’t duplicate it across multiple workflows and jobs. It:
 
 If a future workflow needs containers, add this action as a step instead of copying the setup
 script.
+
+### `release-is-latest`
+
+Answers whether a tag is the highest promoted release right now: the highest `X.Y.Z` tag that is
+a GitHub-verified annotated tag whose commit is on `main` and carries that version in
+`Cargo.toml`. Every production step in `deploy.yml` (GitHub's Latest release, the `latest` image
+tag, Cloudflare Pages, Helm, the docs) calls it right before acting, so an older tag never rolls
+production back. Any GitHub API error fails the step instead of changing the answer.
+
+### `dispatch-helm`
+
+Validates a release's version, source commit and image digests, mints a GitHub App token and sends
+the `permesi-release` repository dispatch to `permesi/permesi-helm`. Used by `deploy.yml`'s Helm
+job and by `dispatch-helm-release.yml`.

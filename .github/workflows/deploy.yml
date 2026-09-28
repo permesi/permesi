@@ -14,9 +14,12 @@ on:
         required: false
         default: ''
 
+# Runs of the same ref (recovery runs on main, candidate runs on release) wait in order;
+# `queue: max` keeps every pending run instead of replacing the pending one.
 concurrency:
   group: deploy-${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
+  queue: max
 
 # Read-only by default; jobs that publish ask for more.
 permissions:
