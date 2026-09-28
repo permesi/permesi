@@ -128,9 +128,12 @@ jobs:
           path: apps/web/dist
           if-no-files-found: error
 
+  # The scratch `release` branch only exists for `just deploy` to test a release
+  # candidate; it gets no Cloudflare Pages preview of its own.
   deploy-frontend:
     name: Deploy Frontend
     needs: frontend-build
+    if: github.ref_name != 'release'
     uses: ./.github/workflows/frontend.yml
     permissions:
       contents: read
@@ -188,4 +191,29 @@ jobs:
               -t "${image}:develop" \
               .
             ${CONTAINER_TOOL} push "${image}:develop"
+          done
+
+  # One aggregate check for branch protection and the release flow: it passes only
+  # when every test and build job succeeded, so the required check never depends on
+  # job or matrix names. Coverage and the deploy/package side effects are not gates.
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs:
+      - test
+      - build
+      - frontend-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have succeeded
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::A required job finished with '${result}'."
+              exit 1
+            fi
           done

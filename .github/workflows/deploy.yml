@@ -19,9 +19,9 @@ jobs:
   # Classifies the ref for the jobs below: `release` for an X.Y.Z tag, `test-tag` for
   # any other tag (for example t-* from `just t-deploy`, which only tests and builds),
   # `dispatch` for a manual run. A release tag may only publish a commit that is
-  # already on main and has a successful "Test & Build" run, which is what
-  # `just deploy` guarantees; a hand-pushed or stray tag stops here, before anything
-  # is built or published.
+  # already on main, carries the tag's version in Cargo.toml and has a successful
+  # "Test & Build" run, which is what `just deploy` guarantees; a hand-pushed or stray
+  # tag stops here, before anything is built or published.
   guard:
     name: Release guard
     runs-on: ubuntu-latest
@@ -60,6 +60,11 @@ jobs:
           git fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
             echo "::error::Tag ${tag} points at ${GITHUB_SHA}, which is not on main; refusing to release."
+            exit 1
+          fi
+          version="$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)"
+          if [[ "${version}" != "${tag}" ]]; then
+            echo "::error::Tag ${tag} does not match the workspace version ${version} at ${GITHUB_SHA}; refusing to release."
             exit 1
           fi
           passed="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow build.yml \
