@@ -441,7 +441,8 @@ updates (`cargo update`) are ordinary changes made on `sandbox`, so CI tests the
 a release. Tag and commit signing follow Git's configured `gpg.format` (SSH or OpenPGP).
 
 The workflows are hardened the same way as the template: every action is pinned to a
-full commit SHA with its version in a comment (update them deliberately), the Rust
+full commit SHA with its version in a comment (Dependabot proposes updates once a week,
+as one pull request into `sandbox`), the Rust
 toolchain comes from `rustup` through `.github/actions/rust-toolchain` instead of a
 third-party action, no checkout keeps the token, and every Cargo command uses
 `--locked`. To check a downloaded release file:

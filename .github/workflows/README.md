@@ -49,8 +49,10 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 
 ## Hardening
 
-Every action is pinned to a full commit SHA, with its version in a comment; update the
-pins deliberately. No checkout keeps the GitHub token (`persist-credentials: false`), the
+Every action is pinned to a full commit SHA, with its version in a comment.
+`.github/dependabot.yml` proposes updates once a week, grouped into one pull request into
+`sandbox` (never `main`, which only holds releases), for the workflows and the composite
+actions. No checkout keeps the GitHub token (`persist-credentials: false`), the
 reusable workflows are read-only by default, and every Cargo command uses `--locked`.
 The release workflow uses no build cache.
 
