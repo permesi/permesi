@@ -21,9 +21,11 @@ jobs:
     name: Format
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
         with:
           components: rustfmt
 
@@ -34,35 +36,41 @@ jobs:
     name: Clippy
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
         with:
           components: clippy
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   check:
     name: Check
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
 
       - name: Check
-        run: cargo check --workspace
+        run: cargo check --locked --workspace
 
   npm-audit:
     name: Security Audit (Web)
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           cache: npm
@@ -91,17 +99,19 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
 
       - uses: ./.github/actions/ensure-container-runtime
 
       - name: test
-        run: cargo test --workspace --lib --bins
+        run: cargo test --locked --workspace --lib --bins
 
       - name: test (telemetry feature)
-        run: cargo test -p permesi -p genesis --lib --features permesi/telemetry,genesis/telemetry cli::telemetry
+        run: cargo test --locked -p permesi -p genesis --lib --features permesi/telemetry,genesis/telemetry cli::telemetry
 
   integration:
     name: Integration Tests
@@ -112,14 +122,16 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
 
       - uses: ./.github/actions/ensure-container-runtime
 
       - name: integration
-        run: cargo test --workspace --tests
+        run: cargo test --locked --workspace --tests
 
   db-schema:
     name: DB Schema
@@ -130,9 +142,11 @@ jobs:
       - check
       - npm-audit
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
 
       - uses: ./.github/actions/ensure-container-runtime
 

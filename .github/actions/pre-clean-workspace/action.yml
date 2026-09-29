@@ -12,7 +12,7 @@ runs:
       if: ${{ runner.environment == 'self-hosted' }}
       shell: bash
       run: |
-        # dtolnay/rust-toolchain@stable runs `rustup toolchain install stable`. On this
+        # The rust-toolchain action runs `rustup toolchain install stable`. On this
         # self-hosted runner an interrupted earlier run left corruption in the shared
         # RUSTUP_HOME: a partial component tarball in the downloads cache is re-extracted on
         # every reinstall, producing a stable toolchain whose `cargo` binary is missing

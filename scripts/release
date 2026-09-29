@@ -116,6 +116,11 @@ verify_locally() {
     CARGO_TARGET_DIR="${PWD}/target" just verify-release
 }
 # --- End of project configuration ---
+# Optional in the configuration block: PROTECT_TAGS=false keeps `protect` from managing
+# the "Release tags" ruleset.
+PROTECT_TAGS="${PROTECT_TAGS:-true}"
+SYNC_NOTE=""
+SYNC_INFO=""
 
 POLL_SECONDS="${RELEASE_POLL_SECONDS:-30}"
 CI_TIMEOUT="${RELEASE_CI_TIMEOUT:-3600}"
@@ -137,6 +142,22 @@ bump_is_valid() {
         major) ((nm == pm + 1 && nn == 0 && np == 0)) ;;
         *) return 1 ;;
     esac
+}
+
+# True when X.Y.Z version $1 is higher than $2 (plain numbers, no pre-release parts).
+# Portable: no GNU `sort -V`, which macOS lacks.
+version_gt() {
+    local re='^[0-9]+\.[0-9]+\.[0-9]+$' a1 a2 a3 b1 b2 b3
+    [[ "$1" =~ ${re} && "$2" =~ ${re} ]] || return 1
+    IFS=. read -r a1 a2 a3 <<<"$1"
+    IFS=. read -r b1 b2 b3 <<<"$2"
+    if ((10#${a1} != 10#${b1})); then
+        ((10#${a1} > 10#${b1}))
+    elif ((10#${a2} != 10#${b2})); then
+        ((10#${a2} > 10#${b2}))
+    else
+        ((10#${a3} > 10#${b3}))
+    fi
 }
 
 next_version() {
@@ -177,6 +198,13 @@ check_local() {
     for tool in cargo jq gh git; do
         command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required."
     done
+    local git_version git_major git_minor
+    git_version="$(git version | awk '{print $3}')"
+    IFS=. read -r git_major git_minor _ <<<"${git_version}"
+    ((git_major > 2 || (git_major == 2 && git_minor >= 31))) ||
+        die "git 2.31 or later is required (found ${git_version})."
+    command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 ||
+        die "sha256sum or shasum is required to check the candidate's checksums."
     cargo set-version -h >/dev/null 2>&1 || die "cargo set-version not found; install cargo-edit (cargo install cargo-edit)."
     check_seconds RELEASE_POLL_SECONDS "${POLL_SECONDS}" 5
     check_seconds RELEASE_CI_TIMEOUT "${CI_TIMEOUT}" 60
@@ -206,13 +234,14 @@ check_remote() {
     git tag -s "${probe}" -m "signing probe" HEAD >/dev/null 2>&1 ||
         die "git could not sign a tag; check the signing key or agent."
     git tag -d "${probe}" >/dev/null
-    if [[ -n "${SSH_CONNECTION:-}" && -z "${HERDR_ENV:-}" && -z "${TMUX:-}" ]]; then
-        echo "⚠️  On SSH outside Herdr/tmux: a dropped connection stops the wait; rerun the deploy to resume."
+    if [[ -n "${SSH_CONNECTION:-}" && -z "${TMUX:-}${STY:-}${ZELLIJ:-}${HERDR_ENV:-}" ]]; then
+        echo "⚠️  On SSH outside a terminal multiplexer: a dropped connection stops the wait; rerun the deploy to resume."
     fi
 }
 
-# Everything a release needs, checked before anything is changed or pushed. Read-only
-# apart from the fetch; deploy passes `catch-up` to first fast-forward a local
+# Everything a release needs, checked before anything is changed or pushed. Nothing it
+# does lasts (a fetch, and a signed probe tag deleted at once); deploy passes `catch-up`
+# to first fast-forward a local
 # DEVELOP_BRANCH that is behind a release which already landed on origin.
 preflight() {
     check_local
@@ -223,7 +252,7 @@ preflight() {
 }
 
 # A version counts as released when its tag exists and origin/MAIN_BRANCH contains the
-# tagged commit. The Deploy guard publishes nothing else, so a tag anywhere else (made
+# tagged commit. The release guard publishes nothing else, so a tag anywhere else (made
 # by hand, or by an older flow) is an incomplete release, never a finished one.
 is_released() {
     tag_exists "$1" &&
@@ -722,8 +751,9 @@ promote() {
 
 # Keep SYNC_BRANCH equal to DEVELOP_BRANCH: fast-forward it, or move it with
 # --force-with-lease when its content was squash-merged (no backup ref: the old tip
-# stays in the reflog of origin/<branch>); leave a branch that is ahead or holds
-# unmerged work alone. Never fails the release.
+# stays in the reflog of origin/<branch>); leave a branch that holds new work alone and
+# say so as information (SYNC_INFO), since working on it during a release is normal.
+# Only a failed update is a warning (SYNC_NOTE). Never fails the release.
 sync_branch() {
     [[ -n "${SYNC_BRANCH}" ]] || return 0
     local target old local_tip
@@ -736,19 +766,27 @@ sync_branch() {
     if [[ "${old}" == "${target}" ]]; then
         echo "✅ ${SYNC_BRANCH} matches ${DEVELOP_BRANCH} (${target:0:12})"
     elif git merge-base --is-ancestor "${target}" "${old}"; then
-        echo "ℹ️  ${SYNC_BRANCH} is ahead of ${DEVELOP_BRANCH}; left as is."
+        SYNC_INFO="${SYNC_BRANCH} holds $(git rev-list --count "${target}..${old}") commit(s) of new work ahead of ${DEVELOP_BRANCH}; left as is: merge them into ${DEVELOP_BRANCH} when they are ready for a release."
+        echo "ℹ️  ${SYNC_INFO}"
         return 0
     elif git merge-base --is-ancestor "${old}" "${target}"; then
-        git push --quiet origin "${target}:refs/heads/${SYNC_BRANCH}" ||
-            { echo "⚠️  Could not fast-forward ${SYNC_BRANCH}; sync it yourself." >&2; return 0; }
+        git push --quiet origin "${target}:refs/heads/${SYNC_BRANCH}" || {
+            SYNC_NOTE="Could not fast-forward ${SYNC_BRANCH} to ${DEVELOP_BRANCH}; sync it yourself (git push origin ${target}:refs/heads/${SYNC_BRANCH})."
+            echo "⚠️  ${SYNC_NOTE}" >&2
+            return 0
+        }
         echo "✅ ${SYNC_BRANCH} fast-forwarded to ${DEVELOP_BRANCH} (${target:0:12})"
     elif git diff --quiet "${old}" "${target}" ||
         { git rev-parse -q --verify "${target}^" >/dev/null && git diff --quiet "${old}" "${target}^"; }; then
-        git push --quiet --force-with-lease="${SYNC_BRANCH}:${old}" origin "${target}:refs/heads/${SYNC_BRANCH}" ||
-            { echo "⚠️  ${SYNC_BRANCH} changed on origin meanwhile; left it alone." >&2; return 0; }
+        git push --quiet --force-with-lease="${SYNC_BRANCH}:${old}" origin "${target}:refs/heads/${SYNC_BRANCH}" || {
+            SYNC_NOTE="${SYNC_BRANCH} changed on origin meanwhile, so it was left alone; it differs from ${DEVELOP_BRANCH}."
+            echo "⚠️  ${SYNC_NOTE}" >&2
+            return 0
+        }
         echo "✅ ${SYNC_BRANCH} moved to ${DEVELOP_BRANCH}, whose content it already had; its old tip ${old:0:12} stays in the reflog of origin/${SYNC_BRANCH} (restore: git push origin ${old}:refs/heads/${SYNC_BRANCH})"
     else
-        echo "⚠️  ${SYNC_BRANCH} has changes ${DEVELOP_BRANCH} does not contain; left it alone." >&2
+        SYNC_INFO="${SYNC_BRANCH} holds changes ${DEVELOP_BRANCH} does not contain yet (new work); left as is: merge them into ${DEVELOP_BRANCH} when they are ready for a release."
+        echo "ℹ️  ${SYNC_INFO}"
         return 0
     fi
     if git show-ref --verify --quiet "refs/heads/${SYNC_BRANCH}" && [[ "$(git branch --show-current)" != "${SYNC_BRANCH}" ]]; then
@@ -772,10 +810,12 @@ deploy() {
     if tag_exists "${current}"; then
         if [[ "$(git rev-parse "refs/tags/${current}^{commit}")" == "${base}" ]]; then
             is_released "${current}" ||
-                die "Tag ${current} is on ${DEVELOP_BRANCH} (${base:0:12}), but origin/${MAIN_BRANCH} does not contain it, so it was never released (the Deploy guard publishes only tags on ${MAIN_BRANCH}). Either release the next version instead, leaving that tag unpublished: merge any change into ${DEVELOP_BRANCH} and run the deploy again. Or delete the tag (git push origin :refs/tags/${current} && git tag -d ${current}) and run the deploy again to release this commit as is."
+                die "Tag ${current} is on ${DEVELOP_BRANCH} (${base:0:12}), but origin/${MAIN_BRANCH} does not contain it, so it was never released (the release guard publishes only tags on ${MAIN_BRANCH}). Release the next version instead, leaving that tag unpublished: merge any change into ${DEVELOP_BRANCH} and run the deploy again. (Where your tag rules allow deleting tags, deleting it, git push origin :refs/tags/${current} && git tag -d ${current}, lets the deploy release this commit as is.)"
             # Also finishes the tidy-up of a release whose run was cut off after its push.
             finish_release "${base}"
             echo "✅ ${DEVELOP_BRANCH} is release ${current}; nothing new to release."
+            [[ -z "${SYNC_NOTE}" ]] || echo "⚠️  ${SYNC_NOTE}"
+            [[ -z "${SYNC_INFO}" ]] || echo "ℹ️  ${SYNC_INFO}"
             return 0
         fi
         [[ "${kind}" != "current" ]] ||
@@ -837,6 +877,8 @@ deploy() {
         echo "🎉 Version ${version} released"
     fi
     echo "🔗 Monitor the release: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "<owner>/<repo>")/actions"
+    [[ -z "${SYNC_NOTE}" ]] || echo "⚠️  Released, but: ${SYNC_NOTE}"
+    [[ -z "${SYNC_INFO}" ]] || echo "ℹ️  ${SYNC_INFO}"
 }
 
 # Local backups of replaced candidates (refs/backup/<STAGING_BRANCH>/*) only matter
@@ -850,8 +892,7 @@ prune_backups() {
     while read -r ref; do
         [[ -n "${ref}" ]] || continue
         version="$(version_at "${ref}" 2>/dev/null || true)"
-        if [[ "${ref}" == "refs/backup/${STAGING_BRANCH}/"* && -n "${version}" &&
-            "$(printf '%s\n%s\n' "${version}" "${released}" | sort -V | tail -n 1)" != "${released}" ]]; then
+        if [[ "${ref}" == "refs/backup/${STAGING_BRANCH}/"* ]] && version_gt "${version}" "${released}"; then
             continue # a replaced candidate for a version above this release: keep it
         fi
         git update-ref -d "${ref}" &&
@@ -893,6 +934,21 @@ status() {
         run_state "${CANDIDATE_WORKFLOW}" "$(git rev-parse "refs/tags/${current}^{commit}")" push "${current}" "publish of ${current}"
     fi
     echo "origin/${MAIN_BRANCH}:    $(remote_tip "${MAIN_BRANCH}" | cut -c1-12)"
+    if [[ -n "${SYNC_BRANCH}" ]]; then
+        local sync
+        sync="$(remote_tip "${SYNC_BRANCH}")"
+        if [[ -z "${sync}" ]]; then
+            echo "origin/${SYNC_BRANCH}: none"
+        elif [[ "${sync}" == "${base}" ]]; then
+            echo "origin/${SYNC_BRANCH}: ${sync:0:12} (equal to ${DEVELOP_BRANCH})"
+        elif git merge-base --is-ancestor "${base}" "${sync}"; then
+            echo "origin/${SYNC_BRANCH}: ${sync:0:12} ($(git rev-list --count "${base}..${sync}") commit(s) of new work ahead of ${DEVELOP_BRANCH})"
+        elif git merge-base --is-ancestor "${sync}" "${base}"; then
+            echo "origin/${SYNC_BRANCH}: ${sync:0:12} (behind ${DEVELOP_BRANCH}; the next deploy fast-forwards it)"
+        else
+            echo "origin/${SYNC_BRANCH}: ${sync:0:12} (has changes ${DEVELOP_BRANCH} lacks; merge them into ${DEVELOP_BRANCH})"
+        fi
+    fi
     if ! tag_exists "${current}"; then
         # An untagged version is released as is: its candidate is DEVELOP_BRANCH itself.
         echo "   deploy releases ${current} as is; its runs:"
@@ -968,6 +1024,26 @@ republish() {
 # unprotected because the release flow replaces it. No pull requests are required.
 # Push restrictions (MAIN_BRANCH only) and conversation resolution come from the
 # configuration, so an organization repository keeps who may push.
+# Build and package the current branch exactly like a release candidate, releasing
+# nothing: a manual run of CANDIDATE_WORKFLOW on the branch, which the release guard
+# classifies as a candidate run. No version bump and no tag; the artifacts carry the
+# branch's current version. It replaces pushing test tags, which then had to be deleted.
+dry_run() {
+    local branch sha output
+    [[ -n "${CANDIDATE_WORKFLOW}" ]] || die "CANDIDATE_WORKFLOW is empty; there is nothing to build."
+    branch="$(git branch --show-current)"
+    [[ -n "${branch}" ]] || die "Check out a branch first (currently a detached HEAD)."
+    [[ "${branch}" != "${STAGING_BRANCH}" ]] || die "${STAGING_BRANCH} belongs to deploy; run the dry run from another branch."
+    gh auth status >/dev/null 2>&1 || die "gh must be authenticated (gh auth login)."
+    git fetch --quiet origin "${branch}" 2>/dev/null || die "origin has no ${branch} branch; push it first."
+    sha="$(git rev-parse HEAD)"
+    [[ "$(remote_tip "${branch}")" == "${sha}" ]] ||
+        die "${branch} differs from origin/${branch}; push it first (the run builds origin's copy)."
+    output="$(gh workflow run "${CANDIDATE_WORKFLOW}" --ref "${branch}" 2>&1)" || die "Could not start the run: ${output}"
+    echo "🚀 Started ${CANDIDATE_WORKFLOW} on ${branch} (${sha:0:12}): every test, build and package of version $(version_at HEAD), kept as artifacts; nothing is released."
+    echo "🔗 $(grep -oE 'https://[^ ]+/actions/runs/[0-9]+' <<<"${output}" || echo "See the Actions tab.")"
+}
+
 protect() {
     local repo
     jq -e 'type == "null" or type == "object"' <<<"${MAIN_PUSH_RESTRICTIONS}" >/dev/null 2>&1 ||
@@ -1011,6 +1087,35 @@ EOF
         gh api -X POST "repos/${repo}/branches/${branch}/protection/required_signatures" >/dev/null
     done
     echo "✅ ${MAIN_BRANCH} requires '${REQUIRED_CHECK}' (admins included); ${DEVELOP_BRANCH} and ${MAIN_BRANCH} require signed, linear history."
+    [[ "${PROTECT_TAGS}" == true ]] || return 0
+    protect_tags "${repo}"
+}
+
+# A published version is immutable: the "Release tags" ruleset lets X.Y.Z tags be
+# created but never moved or deleted, by anyone (no bypass actors), so a release can
+# never be rewritten after the fact. Other tags (t-* test tags) are not covered.
+# Idempotent: it updates the ruleset of that name, or creates it.
+protect_tags() {
+    local repo=$1 id body
+    body='{
+  "name": "Release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {"ref_name": {"include": ["refs/tags/[0-9]*.[0-9]*.[0-9]*"], "exclude": []}},
+  "rules": [{"type": "update"}, {"type": "deletion"}, {"type": "non_fast_forward"}]
+}'
+    id="$(gh api "repos/${repo}/rulesets" --jq '.[] | select(.name == "Release tags" and .target == "tag") | .id')"
+    if [[ -n "${id}" ]]; then
+        gh api -X PUT "repos/${repo}/rulesets/${id}" --input - >/dev/null <<<"${body}"
+    else
+        gh api -X POST "repos/${repo}/rulesets" --input - >/dev/null <<<"${body}"
+    fi
+    echo "✅ X.Y.Z tags can be created but never moved or deleted (ruleset \"Release tags\")."
+}
+
+usage() {
+    sed -n '/^# Usage:/,/^#         still runs/p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -1018,9 +1123,11 @@ case "${1:-}" in
     republish) republish "${2:-}" ;;
     status) status ;;
     preflight) preflight ;;
+    dry-run) dry_run ;;
     protect) protect ;;
+    help | -h | --help) usage ;;
     *)
-        sed -n '/^# Usage:/,/^#         still runs/p' "$0" | sed 's/^# \{0,1\}//' >&2
+        usage >&2
         exit 2
         ;;
 esac

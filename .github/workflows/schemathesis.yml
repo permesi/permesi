@@ -15,7 +15,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Resolve permesi base URL
@@ -82,7 +84,7 @@ jobs:
           fi
 
       - name: Run Schemathesis (permesi core)
-        uses: schemathesis/action@v3
+        uses: schemathesis/action@806cace2053cbbac93188e1281ff7da415643160 # v3.0.0
         with:
           schema: docs/openapi/permesi.json
           base-url: ${{ steps.permesi_base.outputs.base_url }}
@@ -97,7 +99,7 @@ jobs:
             --report-dir schemathesis-report/core
 
       - name: Run Schemathesis (permesi logout)
-        uses: schemathesis/action@v3
+        uses: schemathesis/action@806cace2053cbbac93188e1281ff7da415643160 # v3.0.0
         with:
           schema: docs/openapi/permesi.json
           base-url: ${{ steps.permesi_base.outputs.base_url }}
@@ -112,7 +114,7 @@ jobs:
             --report-dir schemathesis-report/logout
 
       - name: Upload Schemathesis report (permesi)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: schemathesis-permesi-report
@@ -125,7 +127,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Resolve genesis base URL
@@ -197,7 +201,7 @@ jobs:
           fi
 
       - name: Run Schemathesis (genesis)
-        uses: schemathesis/action@v3
+        uses: schemathesis/action@806cace2053cbbac93188e1281ff7da415643160 # v3.0.0
         with:
           schema: docs/openapi/genesis.json
           base-url: ${{ steps.genesis_base.outputs.base_url }}
@@ -211,7 +215,7 @@ jobs:
             --report-dir schemathesis-report
 
       - name: Upload Schemathesis report (genesis)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: schemathesis-genesis-report

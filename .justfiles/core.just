@@ -93,17 +93,6 @@ check-clean:
     fi
     echo "✅ Working directory is clean"
 
-# Check if on develop branch
-check-develop:
-    #!/usr/bin/env bash
-    current_branch=$(git branch --show-current)
-    if [[ "$current_branch" != "develop" ]]; then
-        echo "❌ Not on develop branch (currently on: $current_branch)"
-        echo "Switch to develop branch first: git checkout develop"
-        exit 1
-    fi
-    echo "✅ On develop branch"
-
 # Check if tag already exists for a given version
 check-tag-not-exists version:
     #!/usr/bin/env bash
@@ -118,52 +107,6 @@ check-tag-not-exists version:
     fi
 
     echo "✅ No tag exists for version ${version}"
-
-_require-tag-signing:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    signing_format="$(git config --get gpg.format || true)"
-    signing_format="${signing_format:-openpgp}"
-
-    case "${signing_format}" in
-        ssh)
-            if ! command -v ssh-keygen >/dev/null 2>&1; then
-                echo "❌ ssh-keygen not found; required for SSH-signed tags." >&2
-                exit 1
-            fi
-            if [[ -z "$(git config --get user.signingkey || true)" ]]; then
-                echo "❌ user.signingkey is required for SSH-signed tags." >&2
-                echo "Configure it with: git config user.signingkey '<SSH public key or key path>'" >&2
-                exit 1
-            fi
-            ;;
-        openpgp)
-            gpg_cmd="$(git config --get gpg.program || true)"
-            if [[ -n "$gpg_cmd" ]]; then
-                if ! command -v "$gpg_cmd" >/dev/null 2>&1; then
-                    echo "❌ Configured gpg.program '${gpg_cmd}' not found." >&2
-                    exit 1
-                fi
-            elif command -v gpg >/dev/null 2>&1; then
-                gpg_cmd="gpg"
-            elif command -v gpg2 >/dev/null 2>&1; then
-                gpg_cmd="gpg2"
-            else
-                echo "❌ gpg not found; required for OpenPGP-signed tags." >&2
-                exit 1
-            fi
-            if ! "$gpg_cmd" --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
-                echo "❌ No OpenPGP secret keys found for signing." >&2
-                echo "Configure a signing key and retry (git config user.signingkey <KEYID>)." >&2
-                exit 1
-            fi
-            ;;
-        *)
-            echo "❌ Unsupported Git signing format '${signing_format}' for release tags." >&2
-            echo "Use SSH or OpenPGP signing." >&2
-            exit 1
-            ;;
-    esac
 
 # Releases run scripts/release (see its header for the whole flow): the version bump
 # is staged on the scratch `release` branch, Test & Build and a candidate run of the
@@ -191,11 +134,11 @@ deploy-major:
 deploy-current:
     @scripts/release deploy current
 
-# Show where a release stands: develop, main, the staged candidate and its CI run
+# Show where a release stands: develop, main, sandbox, the staged candidate and its runs
 release-status:
     @scripts/release status
 
-# Check everything a release needs; changes nothing apart from fetching
+# Check everything a release needs; changes nothing that lasts
 release-preflight:
     @scripts/release preflight
 
@@ -203,9 +146,13 @@ release-preflight:
 release-republish version:
     @scripts/release republish {{version}}
 
-# Apply the branch protection the release flow relies on (main requires "CI OK")
+# Apply branch protection (main requires "CI OK") and the rule that release tags never move
 protect-branches:
     @scripts/release protect
+
+# Build and package the current branch like a release candidate; releases nothing, no tag
+release-dry-run:
+    @scripts/release dry-run
 
 # ----------------------
 # Sandbox branch helpers
@@ -269,30 +216,3 @@ sandbox-squash message="" base="origin/develop": check-clean
         git commit -m "squash $(date +%Y-%m-%d)" -m "${detail_body}"
     fi
     git push --force-with-lease origin HEAD
-
-# Create & push a test tag like t-YYYYMMDD-HHMMSS (skips publish/release in CI)
-# Usage:
-#   just t-deploy
-#   just t-deploy "optional tag message"
-t-deploy message="CI test": check-develop check-clean _require-tag-signing test
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    message="{{message}}"
-    ts="$(date -u +%Y%m%d-%H%M%S)"
-    tag="t-${ts}"
-
-    echo "🏷️  Creating signed test tag: ${tag}"
-    git fetch --tags --quiet
-
-    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-        echo "❌ Tag ${tag} already exists. Aborting." >&2
-        exit 1
-    fi
-
-    git tag -s "${tag}" -m "${message}"
-    git push origin "${tag}"
-
-    echo "✅ Pushed ${tag}"
-    echo "🧹 To remove it:"
-    echo "   git push origin :refs/tags/${tag} && git tag -d ${tag}"
