@@ -386,8 +386,9 @@ needs a tag deleted or moved:
 
 ```
 just deploy
- 1. preflight       read-only checks: clean develop equal to origin, main can
-                    fast-forward, gh logged in, git can sign
+ 1. preflight       checks that change nothing that lasts: clean develop equal to
+                    origin, main can fast-forward, gh logged in, git 2.31+, and a
+                    signing test (a temporary local tag, deleted at once)
  2. candidate       temporary worktree: version bump (Cargo.toml, Cargo.lock, the OpenAPI
                     specs' info.version), `just openapi` must reproduce the specs, a clean
                     `verify-release`, then a signed commit pushed to the `release` branch
@@ -395,11 +396,13 @@ just deploy
                     musl archives and Debian packages, the signed production web build,
                     and the permesi, genesis and web images pushed to GHCR only as
                     `:sha-<commit>`, all recorded in a manifest (SHA-256 sums, image
-                    digests); nothing is published
+                    digests) with build-provenance attestations for the release files;
+                    nothing is published, and nothing is built from a cache
  4. pre-tag check   the manifest and every artifact are downloaded and checked
  5. promotion       one atomic push of develop, main and the signed tag, which names the
                     candidate run
- 6. tag run         publish only: the GitHub release gets the manifest's files, the
+ 6. tag run         publish only: the GitHub release gets the manifest's files and
+                    notes made from the commit subjects since the previous release, the
                     image digests get the version (and `latest`) tags, the signed web
                     build goes to Cloudflare Pages, Helm is dispatched with the digests,
                     and the committed API docs go to GitHub Pages; nothing is rebuilt
@@ -429,13 +432,28 @@ attempt (`RELEASE_CI_TIMEOUT`); with `RELEASE_NO_WAIT=1` it stops once the candi
 staged or while CI runs, and a later `just deploy` finishes. Run it inside the dev
 session (Herdr or tmux) on the VM so a dropped connection does not stop the wait.
 `just release-preflight` runs only the checks, and `just protect-branches` keeps the
-branch protection as code: `main` accepts only commits whose aggregate **CI OK** check
-passed, admins included, with signed commits and linear history. Other tags, such as
-the `t-*` tags from `just t-deploy`, only test and build. Dependency updates
-(`cargo update`) are ordinary changes made on `sandbox`, so CI tests them before a
-release. Tag and commit signing follow Git's configured `gpg.format` (SSH or OpenPGP).
+protection as code: `main` accepts only commits whose aggregate **CI OK** check passed,
+admins included, with signed commits and linear history, and the "Release tags" ruleset
+lets `X.Y.Z` tags be created but never moved or deleted. `just release-dry-run` builds
+and packages the current branch exactly like a candidate (images included, pushed only
+as `:sha-<commit>`) without a bump or a tag; other tags only test and build. Dependency
+updates (`cargo update`) are ordinary changes made on `sandbox`, so CI tests them before
+a release. Tag and commit signing follow Git's configured `gpg.format` (SSH or OpenPGP).
+
+The workflows are hardened the same way as the template: every action is pinned to a
+full commit SHA with its version in a comment (update them deliberately), the Rust
+toolchain comes from `rustup` through `.github/actions/rust-toolchain` instead of a
+third-party action, no checkout keeps the token, and every Cargo command uses
+`--locked`. To check a downloaded release file:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify <file> --repo permesi/permesi --signer-workflow permesi/permesi/.github/workflows/deploy.yml
+```
+
 The same flow, and how to set it up in another repository, is documented in
-cron-when's README, which serves as the template.
+[cron-when's RELEASING.md](https://github.com/nbari/cron-when/blob/main/RELEASING.md),
+which serves as the template.
 
 ### Local HTTPS for Passkeys (mkcert + HAProxy)
 

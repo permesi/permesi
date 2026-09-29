@@ -44,8 +44,15 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: The release pipeline, in modes set by its guard job. A manual run on a branch is a release candidate (started by `just deploy`): it tests and builds everything once, the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), and records them in a `release-manifest` artifact. A pushed `X.Y.Z` tag builds nothing: after checking the signed tag and its named candidate run, it publishes exactly the manifest's files as the GitHub release, adds the version tag (and `latest`) to the tested image digests, deploys the signed web build to Cloudflare Pages, dispatches Helm through `.github/actions/dispatch-helm`, and publishes the committed API docs. A manual run on `main` with `publish: X.Y.Z` recovers a tag whose publishing failed. The production steps check `.github/actions/release-is-latest` right before they act and queue across runs (`queue: max`), so an older tag never rolls production back.
+- **`deploy.yml`**: The release pipeline, in modes set by its guard job. A manual run on a branch is a release candidate (started by `just deploy`, or by `just release-dry-run` on any branch): it tests and builds everything once, from source with no build cache, the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), records them in a `release-manifest` artifact, and attests the build provenance of the release files. A pushed `X.Y.Z` tag builds nothing: after checking the signed tag and its named candidate run, it publishes exactly the manifest's files as the GitHub release, with notes made from the commit subjects since the previous release, adds the version tag (and `latest`) to the tested image digests, deploys the signed web build to Cloudflare Pages, dispatches Helm through `.github/actions/dispatch-helm`, and publishes the committed API docs. A manual run on `main` with `publish: X.Y.Z` recovers a tag whose publishing failed. The production steps check `.github/actions/release-is-latest` right before they act and queue across runs (`queue: max`), so an older tag never rolls production back.
 - **`dispatch-helm-release.yml`**: Manual (or `workflow_call`) entry point that sends the `repository_dispatch` event to `permesi/permesi-helm` through the same `.github/actions/dispatch-helm` composite action the release uses; the payload carries the image digests so Helm can pin exact artifacts.
+
+## Hardening
+
+Every action is pinned to a full commit SHA, with its version in a comment; update the
+pins deliberately. No checkout keeps the GitHub token (`persist-credentials: false`), the
+reusable workflows are read-only by default, and every Cargo command uses `--locked`.
+The release workflow uses no build cache.
 
 ## Required Secrets
 
@@ -74,6 +81,13 @@ don’t duplicate it across multiple workflows and jobs. It:
 
 If a future workflow needs containers, add this action as a step instead of copying the setup
 script.
+
+### `rust-toolchain`
+
+Installs a Rust toolchain with `rustup` (preinstalled on GitHub-hosted runners, installed
+when missing) and makes it the default, with optional targets and components, so no
+third-party toolchain action runs in these workflows. It validates the toolchain name
+before use.
 
 ### `release-is-latest`
 
