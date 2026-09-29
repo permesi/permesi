@@ -721,9 +721,9 @@ promote() {
 }
 
 # Keep SYNC_BRANCH equal to DEVELOP_BRANCH: fast-forward it, or move it with
-# --force-with-lease (old tip kept as refs/backup/<branch>/<tip>) when its content
-# was squash-merged; leave a branch that is ahead or holds unmerged work alone.
-# Never fails the release.
+# --force-with-lease when its content was squash-merged (no backup ref: the old tip
+# stays in the reflog of origin/<branch>); leave a branch that is ahead or holds
+# unmerged work alone. Never fails the release.
 sync_branch() {
     [[ -n "${SYNC_BRANCH}" ]] || return 0
     local target old local_tip
@@ -744,10 +744,9 @@ sync_branch() {
         echo "✅ ${SYNC_BRANCH} fast-forwarded to ${DEVELOP_BRANCH} (${target:0:12})"
     elif git diff --quiet "${old}" "${target}" ||
         { git rev-parse -q --verify "${target}^" >/dev/null && git diff --quiet "${old}" "${target}^"; }; then
-        git update-ref "refs/backup/${SYNC_BRANCH}/${old:0:12}" "${old}"
         git push --quiet --force-with-lease="${SYNC_BRANCH}:${old}" origin "${target}:refs/heads/${SYNC_BRANCH}" ||
             { echo "⚠️  ${SYNC_BRANCH} changed on origin meanwhile; left it alone." >&2; return 0; }
-        echo "✅ ${SYNC_BRANCH} moved to ${DEVELOP_BRANCH}; old tip kept as refs/backup/${SYNC_BRANCH}/${old:0:12}"
+        echo "✅ ${SYNC_BRANCH} moved to ${DEVELOP_BRANCH}, whose content it already had; its old tip ${old:0:12} stays in the reflog of origin/${SYNC_BRANCH} (restore: git push origin ${old}:refs/heads/${SYNC_BRANCH})"
     else
         echo "⚠️  ${SYNC_BRANCH} has changes ${DEVELOP_BRANCH} does not contain; left it alone." >&2
         return 0
@@ -796,7 +795,7 @@ deploy() {
                 local backup="refs/backup/${STAGING_BRANCH}/${staging:0:12}"
                 git update-ref "${backup}" "${staging}"
                 echo "ℹ️  ${STAGING_BRANCH} holds a stale candidate (${problem}); replacing it."
-                echo "   Old tip kept locally as ${backup}; restore it with: git push origin ${backup}:refs/heads/${STAGING_BRANCH}"
+                echo "   Old tip kept locally as ${backup} until its version is released; restore it with: git push origin ${backup}:refs/heads/${STAGING_BRANCH}"
             fi
             build_candidate "${kind}" "${staging}"
             candidate="${CANDIDATE}"
@@ -840,11 +839,33 @@ deploy() {
     echo "🔗 Monitor the release: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "<owner>/<repo>")/actions"
 }
 
-# After a release: bring SYNC_BRANCH in step and remove STAGING_BRANCH while it still
-# holds the released commit. Best-effort: never fails a release that already landed.
+# Local backups of replaced candidates (refs/backup/<STAGING_BRANCH>/*) only matter
+# until their version, or a later one, is released; remove those, so no stray side
+# branches pile up. Backups left by older versions of this script under
+# refs/backup/<SYNC_BRANCH>/ held content DEVELOP_BRANCH already had; remove them too.
+prune_backups() {
+    local released=$1 ref version prefixes=("refs/backup/${STAGING_BRANCH}/")
+    [[ -z "${SYNC_BRANCH}" ]] || prefixes+=("refs/backup/${SYNC_BRANCH}/")
+    [[ -n "${released}" ]] || return 0
+    while read -r ref; do
+        [[ -n "${ref}" ]] || continue
+        version="$(version_at "${ref}" 2>/dev/null || true)"
+        if [[ "${ref}" == "refs/backup/${STAGING_BRANCH}/"* && -n "${version}" &&
+            "$(printf '%s\n%s\n' "${version}" "${released}" | sort -V | tail -n 1)" != "${released}" ]]; then
+            continue # a replaced candidate for a version above this release: keep it
+        fi
+        git update-ref -d "${ref}" &&
+            echo "🧹 Removed ${ref#refs/} (${version:-no version}); ${released} is released."
+    done < <(git for-each-ref --format='%(refname)' "${prefixes[@]}")
+}
+
+# After a release: bring SYNC_BRANCH in step, drop obsolete backups and remove
+# STAGING_BRANCH while it still holds the released commit. Best-effort: never fails a
+# release that already landed.
 finish_release() {
     local released=$1
     sync_branch || true
+    prune_backups "$(version_at "${released}" 2>/dev/null || true)" || true
     rm -f "$(worktree_root)/release-candidate-run"
     if [[ "$(remote_tip "${STAGING_BRANCH}")" == "${released}" ]]; then
         git push --quiet --force-with-lease="${STAGING_BRANCH}:${released}" origin ":refs/heads/${STAGING_BRANCH}" 2>/dev/null ||
