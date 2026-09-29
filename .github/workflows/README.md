@@ -49,12 +49,15 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 
 ## Hardening
 
-Every action is pinned to a full commit SHA, with its version in a comment.
-`.github/dependabot.yml` proposes updates once a week, grouped into one pull request into
-`sandbox` (never `main`, which only holds releases), for the workflows and the composite
-actions. No checkout keeps the GitHub token (`persist-credentials: false`), the
-reusable workflows are read-only by default, and every Cargo command uses `--locked`.
-The release workflow uses no build cache.
+Actions are referenced by their major version tag (`actions/checkout@v7`), not by a
+commit SHA: fixes within a major version arrive on their own, and a moved tag changes
+the code a workflow runs, so only actions whose maintainers are trusted belong here.
+`sigstore/cosign-installer` has no major tag and is referenced by its exact version.
+`.github/dependabot.yml` proposes new major versions once a week, grouped into one pull
+request into `sandbox` (never `main`, which only holds releases), for the workflows and
+the composite actions. No checkout keeps the GitHub token (`persist-credentials:
+false`), the reusable workflows are read-only by default, and every Cargo command uses
+`--locked`. The release workflow uses no build cache.
 
 ## Required Secrets
 

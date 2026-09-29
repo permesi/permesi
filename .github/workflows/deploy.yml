@@ -63,7 +63,7 @@ jobs:
       candidate_run: ${{ steps.release.outputs.candidate_run }}
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -198,7 +198,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -246,7 +246,7 @@ jobs:
 
       # The release tag publishes exactly these files, downloaded from this run.
       - name: Upload the binaries and packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: dist-binaries
           path: dist/*
@@ -261,14 +261,14 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -321,7 +321,7 @@ jobs:
         run: trunk build --release
 
       - name: Upload Dist Artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: apps/web/dist
@@ -352,7 +352,7 @@ jobs:
       VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - name: Download the signed web build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist-signed
           path: dist
@@ -367,7 +367,7 @@ jobs:
           ls -al out
 
       - name: Upload the web build package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: dist-web
           path: out/*
@@ -388,7 +388,7 @@ jobs:
       genesis_digest: ${{ steps.push.outputs.genesis_digest }}
       web_digest: ${{ steps.push.outputs.web_digest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -401,7 +401,7 @@ jobs:
         run: echo "${TOKEN}" | ${CONTAINER_TOOL} login ghcr.io -u "${ACTOR}" --password-stdin
 
       - name: Download Frontend Dist
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: apps/web/dist
@@ -471,7 +471,7 @@ jobs:
       attestations: write
     steps:
       - name: Download this run's release files
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: artifacts
@@ -532,7 +532,7 @@ jobs:
           cat manifest/*
 
       - name: Upload the manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: release-manifest
           path: manifest/*
@@ -542,7 +542,7 @@ jobs:
       # the same files, so `gh attestation verify <file> --repo permesi/permesi
       # --signer-workflow permesi/permesi/.github/workflows/deploy.yml` works on downloads.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
 
@@ -568,13 +568,13 @@ jobs:
       # Full history and tags: the release notes list the commits since the previous
       # release.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Download the candidate run's manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.guard.outputs.candidate_run }}
           github-token: ${{ github.token }}
@@ -582,7 +582,7 @@ jobs:
           path: manifest
 
       - name: Download the candidate run's release files
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.guard.outputs.candidate_run }}
           github-token: ${{ github.token }}
@@ -651,7 +651,7 @@ jobs:
           token: ${{ github.token }}
 
       - name: GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.guard.outputs.tag }}
           draft: false
@@ -703,7 +703,7 @@ jobs:
       latest: ${{ steps.latest.outputs.latest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -715,7 +715,7 @@ jobs:
           token: ${{ github.token }}
 
       - name: Download the candidate run's manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.guard.outputs.candidate_run }}
           github-token: ${{ github.token }}
@@ -768,7 +768,7 @@ jobs:
       actions: read
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -780,7 +780,7 @@ jobs:
           token: ${{ github.token }}
 
       - name: Download the candidate run's manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.guard.outputs.candidate_run }}
           github-token: ${{ github.token }}
@@ -788,7 +788,7 @@ jobs:
           path: ${{ runner.temp }}/manifest
 
       - name: Download the candidate run's web build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.guard.outputs.candidate_run }}
           github-token: ${{ github.token }}
@@ -809,7 +809,7 @@ jobs:
 
       - name: Set up Node
         if: steps.latest.outputs.latest == 'true'
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -842,7 +842,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -886,7 +886,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -899,7 +899,7 @@ jobs:
 
       - name: Checkout the tag's sources
         if: steps.latest.outputs.latest == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ needs.guard.outputs.tag }}
           path: tagged
@@ -931,7 +931,7 @@ jobs:
 
       - name: Deploy to GitHub Pages
         if: steps.latest.outputs.latest == 'true'
-        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./tagged/docs/redoc

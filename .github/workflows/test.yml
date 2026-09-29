@@ -21,7 +21,7 @@ jobs:
     name: Format
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -36,7 +36,7 @@ jobs:
     name: Clippy
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -51,7 +51,7 @@ jobs:
     name: Check
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -64,13 +64,13 @@ jobs:
     name: Security Audit (Web)
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -99,7 +99,7 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -122,7 +122,7 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -142,7 +142,7 @@ jobs:
       - check
       - npm-audit
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace

@@ -442,12 +442,15 @@ only test and build. Dependency updates (`cargo update`) are ordinary changes ma
 `sandbox`, so CI tests them before a release. Tag and commit signing follow Git's
 configured `gpg.format` (SSH or OpenPGP).
 
-The workflows are hardened the same way as the template: every action is pinned to a
-full commit SHA with its version in a comment (Dependabot proposes updates once a week,
-as one pull request into `sandbox`), the Rust
-toolchain comes from `rustup` through `.github/actions/rust-toolchain` instead of a
-third-party action, no checkout keeps the token, and every Cargo command uses
-`--locked`. To check a downloaded release file:
+The workflows are hardened like the template's, with one deliberate difference: actions
+are referenced by their major version tag (`actions/checkout@v7`) instead of a full
+commit SHA, so fixes within a major version arrive without a pull request and Dependabot
+proposes only new major versions (one weekly pull request into `sandbox`). The cost is
+trust in each action's maintainers: whoever can move a tag changes the code the
+workflows run. `sigstore/cosign-installer` publishes no major tag and is referenced by
+its exact version. The Rust toolchain comes from `rustup` through
+`.github/actions/rust-toolchain` instead of a third-party action, no checkout keeps the
+token, and every Cargo command uses `--locked`. To check a downloaded release file:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
