@@ -434,12 +434,13 @@ staged or while CI runs, and a later `just deploy` finishes. Run it inside the d
 session (Herdr or tmux) on the VM so a dropped connection does not stop the wait.
 `just release-preflight` runs only the checks, and `just protect-branches` keeps the
 protection as code: `main` accepts only commits whose aggregate **CI OK** check passed,
-admins included, with signed commits and linear history, and the "Release tags" ruleset
-lets `X.Y.Z` tags be created but never moved or deleted. `just release-dry-run` builds
-and packages the current branch exactly like a candidate (images included, pushed only
-as `:sha-<commit>`) without a bump or a tag; other tags only test and build. Dependency
-updates (`cargo update`) are ordinary changes made on `sandbox`, so CI tests them before
-a release. Tag and commit signing follow Git's configured `gpg.format` (SSH or OpenPGP).
+admins included, with signed commits, linear history and resolved review conversations,
+and the "Release tags" ruleset lets `X.Y.Z` tags be created but never moved or deleted.
+`just release-dry-run` builds and packages the current branch exactly like a candidate
+(images included, pushed only as `:sha-<commit>`) without a bump or a tag; other tags
+only test and build. Dependency updates (`cargo update`) are ordinary changes made on
+`sandbox`, so CI tests them before a release. Tag and commit signing follow Git's
+configured `gpg.format` (SSH or OpenPGP).
 
 The workflows are hardened the same way as the template: every action is pinned to a
 full commit SHA with its version in a comment (Dependabot proposes updates once a week,
