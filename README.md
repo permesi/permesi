@@ -390,8 +390,9 @@ just deploy
                     origin, main can fast-forward, gh logged in, git 2.31+, and a
                     signing test (a temporary local tag, deleted at once)
  2. candidate       temporary worktree: version bump (Cargo.toml, Cargo.lock, the OpenAPI
-                    specs' info.version), `just openapi` must reproduce the specs, a clean
-                    `verify-release`, then a signed commit pushed to the `release` branch
+                    specs' info.version), `cargo clean`, `just openapi` must reproduce the
+                    specs, `just test` (fmt, clippy, the web build and every test), then
+                    a signed commit pushed to the `release` branch
  3. two CI runs     Test & Build, and a candidate run of the Deploy workflow: tests, the
                     musl archives and Debian packages, the signed production web build,
                     and the permesi, genesis and web images pushed to GHCR only as
@@ -533,7 +534,7 @@ We welcome contributions of all kinds!
 
 1.  **Read the [Agent & Contributor Contract](AGENTS.md)**: It contains mandatory guidelines on code style, security invariants, and module organization.
 2.  **Pick an issue**: Check the [TODO.md](TODO.md) or open issues.
-3.  **Run tests**: `just test` covers the full workspace.
+3.  **Run tests**: `just test` runs rustfmt, clippy, the release web build and every workspace test (the same suite a release runs locally).
 4.  **Linting**: We use strict Clippy rules. Run `just clippy` before submitting.
 
 *Note: This project uses a "Reference Quality" approach. We prefer small, well-documented, and secure diffs over large refactors.*

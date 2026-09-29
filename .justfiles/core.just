@@ -36,7 +36,8 @@ fmt:
 clippy:
   cargo clippy --all-targets --all-features
 
-test:
+# Local test suite: formatting, clippy, the release web build and every workspace test
+test: fmt clippy web-build
   cargo test --workspace
 
 verify-release: fmt clippy test web-build

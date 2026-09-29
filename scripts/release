@@ -64,8 +64,8 @@ CI_WORKFLOW="build.yml"          # workflow that runs on every branch push, STAG
 REQUIRED_CHECK="CI OK"           # aggregate job in CI_WORKFLOW that branch protection requires
 CANDIDATE_WORKFLOW="deploy.yml"  # tag workflow dispatched on the candidate (packages, publishes nothing); empty skips it
 CANDIDATE_MANIFEST="release-manifest" # artifact the candidate run must keep for the tag to publish
-MAIN_PUSH_RESTRICTIONS='{"users":["nbari"],"teams":[],"apps":[]}' # who may push to MAIN_BRANCH
-REQUIRE_CONVERSATION_RESOLUTION=true # PR setting; keep what the repository already uses
+MAIN_PUSH_RESTRICTIONS='{"users":["nbari"],"teams":[],"apps":[]}' # who may push to MAIN_BRANCH (null: anyone with write access)
+REQUIRE_CONVERSATION_RESOLUTION=true # require resolved review conversations on MAIN_BRANCH and DEVELOP_BRANCH
 OPENAPI_SPECS=(docs/openapi/permesi.json docs/openapi/genesis.json)
 RELEASE_FILES=(Cargo.toml Cargo.lock "${OPENAPI_SPECS[@]}")
 
@@ -102,18 +102,21 @@ apply_bump() {
     done
 }
 
-# Local fast fail before the candidate is pushed; CI on that commit is the real gate.
-# It runs in a fresh worktree, so the build starts clean and uses that worktree's own
-# target directory, whatever CARGO_TARGET_DIR says. The specs are regenerated first:
-# any difference from the version-only bump means DEVELOP_BRANCH's specs are stale.
+# Local fast fail before the candidate is pushed; CI and the candidate run on that commit
+# are the real gate. It runs in a fresh worktree whose own target directory is used, so
+# `cargo clean` never touches a shared build cache. The specs are regenerated first: any
+# difference from the version-only bump means DEVELOP_BRANCH's specs are stale. Then
+# `just test`, the project's local test suite (fmt, clippy and every test).
 verify_locally() {
-    CARGO_TARGET_DIR="${PWD}/target" just openapi
+    export CARGO_TARGET_DIR="${PWD}/target"
+    cargo clean
+    just openapi
     if ! git diff --quiet -- "${OPENAPI_SPECS[@]}"; then
         git diff --stat -- "${OPENAPI_SPECS[@]}" >&2
         echo "❌ The OpenAPI specs on ${DEVELOP_BRANCH} are out of date: run just openapi on the work branch, commit, merge, then deploy again." >&2
         return 1
     fi
-    CARGO_TARGET_DIR="${PWD}/target" just verify-release
+    just test
 }
 # --- End of project configuration ---
 # Optional in the configuration block: PROTECT_TAGS=false keeps `protect` from managing
