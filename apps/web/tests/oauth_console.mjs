@@ -22,6 +22,7 @@ let clients=[];
 let environments=[];
 let registry=['openid','profile','email','address','phone','offline_access'].map((name,i)=>({id:`system-${i}`,application_id:app,name,description:`OIDC ${name} scope`,kind:'protocol',created_at:time,updated_at:time}));
 let redirects=[], allowed=[];
+let sessionKind='full';
 let mutationForbidden=false;
 let denyNextLifecycle=false;
 const requests=[];
@@ -36,7 +37,11 @@ const server=http.createServer(async(req,res)=>{
  if(p.startsWith('/v1/')) {
   requests.push({method:req.method,path:p,input});
   if(mutationForbidden && req.method!=='GET')return send(404,'');
-  if(p==='/v1/auth/session')return send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:'full',totp_enabled:true,webauthn_enabled:false});
+  if(p==='/v1/auth/mfa/totp/verify'&&req.method==='POST'){assert.equal(input.code,'123456');sessionKind='full';return send(200,null);}
+  if(p==='/v1/auth/mfa/recovery'&&req.method==='POST'){assert.equal(input.code,'TEST-RECOVERY');sessionKind='mfa_bootstrap';return send(200,null);}
+  if(p==='/v1/auth/mfa/totp/enroll/start'){return send(200,{secret:'JBSWY3DPEHPK3PXP',qr_code_url:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E',credential_id:'test-enrollment'});}
+  if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
+  if(p==='/v1/auth/session')return send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
   if(p==='/v1/orgs')return send(200,[{id:'org',slug:'crono',name:'Crono',created_at:time}]);
   if(p==='/v1/orgs/crono/projects')return send(200,[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]);
   if(p==='/v1/orgs/crono/projects/jobs/envs') {
@@ -79,6 +84,10 @@ const server=http.createServer(async(req,res)=>{
    registry=registry.filter(value=>value.id!=='scope-api');allowed=allowed.filter(value=>value!=='jobs:read');return send(204);
   }
   return send(404,'');
+ }
+ if(p==='/authorize/resume') {
+  requests.push({method:req.method,path:p,request_id:url.searchParams.get('request_id')});
+  res.writeHead(200,{'Content-Type':'text/html'});return res.end('<!doctype html><title>Resume fixture</title><p>Authorization resume reached</p>');
  }
  if(p==='/config.js'){res.writeHead(200,{'Content-Type':'application/javascript'});return res.end(`window.PERMESI_CONFIG={api_base_url:location.origin};`);}
  const target=path.join(root,p==='/'?'index.html':p);
@@ -231,8 +240,70 @@ try {
  assert(await evaluate("[...document.querySelectorAll('#client-delete button')].find(e=>e.textContent==='Delete Client').disabled"));await fill('delete-client-confirmation',clientId);await click('Delete Client');await wait("document.body.innerText.includes('No OAuth clients')");
  assert(requests.filter(value=>value.method==='POST'&&value.path===`${base}/clients`).length===1);
  assert(!requests.some(value=>value.path.includes('internal-row-id')));
+ // Enrollment must preserve one-time recovery codes until the user acknowledges them.
+ sessionKind='mfa_bootstrap';
+ await goto('/login?oauth_request=55555555-5555-4555-8555-555555555555&oauth_expires='+(Date.now()+600000));
+ await wait("document.body.innerText.includes('Already Signed In')");
+ await goto('/console/mfa/setup');await wait("document.body.innerText.includes('Verify and Enable')");
+ const beforeEnrollmentResume=requests.filter(value=>value.path==='/authorize/resume').length;
+ await evaluate("(()=>{const input=document.querySelector('input[type=text]');input.value='123456';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+ await click('Verify and Enable');
+ await wait("document.body.innerText.includes('TEST-RECOVERY-CODE')");
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeEnrollmentResume);
+ await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent.startsWith(\"I've saved my codes\")).click()");
+ await wait("document.body.innerText.includes('Authorization resume reached')");
+ // Expired locators must never survive login initialization.
+ sessionKind='mfa_challenge';
+ await goto('/login?oauth_request=33333333-3333-4333-8333-333333333333&oauth_expires=1');
+ await wait("document.body.innerText.includes('Already Signed In')");
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null,'Expired authorization locator must be discarded');
+ // Only the opaque handle survives the existing restricted-session/MFA routes.
+ const authorizationHandle='33333333-3333-4333-8333-333333333333';
+ sessionKind='mfa_challenge';
+ await goto('/login?oauth_request='+authorizationHandle+'&oauth_expires='+(Date.now()+600000));
+ await wait("document.body.innerText.includes('Already Signed In')");
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),authorizationHandle);
+ assert.equal(await evaluate("location.pathname"),'/login');
+ const beforeChallenge=requests.filter(value=>value.path==='/authorize/resume').length;
+ await goto('/console/mfa/challenge');
+ await wait("location.pathname==='/console/mfa/challenge' && document.body.innerText.includes('Two-factor check')");
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),authorizationHandle);
+ await evaluate("(()=>{const input=document.querySelector('input[type=text]');input.value='123456';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+ await click('Verify');
+ await wait("document.body.innerText.includes('Authorization resume reached')");
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume')[beforeChallenge].request_id,authorizationHandle);
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null);
+ // Recovery authentication must finish re-enrollment before returning to the client.
+ sessionKind='mfa_challenge';
+ await goto('/login?oauth_request='+authorizationHandle+'&oauth_expires='+(Date.now()+600000));
+ await wait("document.body.innerText.includes('Already Signed In')");
+ await goto('/console/mfa/challenge');await wait("document.body.innerText.includes('Two-factor check')");
+ const beforeRecovery=requests.filter(value=>value.path==='/authorize/resume').length;
+ await click('Use a recovery code');
+ await evaluate("(()=>{const input=document.querySelector('input[type=text]');input.value='TEST-RECOVERY';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+ await click('Verify');await wait("document.body.innerText.includes('Verify and Enable')");
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeRecovery);
+ await evaluate("(()=>{const input=document.querySelector('input[type=text]');input.value='123456';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+ await click('Verify and Enable');await wait("document.body.innerText.includes('TEST-RECOVERY-CODE')");
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeRecovery);
+ await click("I've saved my codes - Continue");await wait("document.body.innerText.includes('Authorization resume reached')");
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeRecovery+1);
+ // Leaving login/MFA abandons the handle; normal console sessions do not resume it.
+ sessionKind='mfa_challenge';
+ await goto('/login?oauth_request='+authorizationHandle+'&oauth_expires='+(Date.now()+600000));
+ await wait("document.body.innerText.includes('Already Signed In')");
+ const beforeAbandon=requests.filter(value=>value.path==='/authorize/resume').length;
+ sessionKind='full';
+ await goto('/console/dashboard');await wait("document.body.innerText.includes('Dashboard')");
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null);
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeAbandon);
+ const beforeInvalid=requests.filter(value=>value.path==='/authorize/resume').length;
+ await goto('/login?oauth_request='+encodeURIComponent('https://attacker.test/?scope=jobs:write'));
+ await wait("document.body.innerText.includes('Already Signed In')");
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null);
+ assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeInvalid);
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, no JS exceptions.');
+ console.log('Browser smoke passed: independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, and malicious return-handle rejection, no JS exceptions.');
  fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

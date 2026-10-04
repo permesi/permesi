@@ -14,6 +14,373 @@
     "version": "0.3.52"
   },
   "paths": {
+    "/.well-known/openid-configuration": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Returns static public issuer metadata without database budgets or header-derived identity.",
+        "operationId": "discovery",
+        "responses": {
+          "200": {
+            "description": "Preparatory discovery metadata; token_endpoint is deferred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authorize": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Persists validated requests before login; raw code plaintext exists only in a client redirect.",
+        "operationId": "authorize",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "response_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nonce",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "response_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "request",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "request_uri",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "claims",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "audience",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_age",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id_token_hint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "acr_values",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal consent page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Validated client redirect or existing Web login",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Exact registered redirect with code/state or protocol error, or configured login"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request without a trusted redirect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared authorization request rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authorize/consent": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Requires server-generated CSRF plus bound browser/full session; scope additions are rejected.",
+        "operationId": "consent",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "303": {
+            "description": "Validated redirect with code or access_denied"
+          },
+          "400": {
+            "description": "Invalid consent form or binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared OAuth rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authorize/resume": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Resumes stored authority after login/MFA on any replica, requiring the binding cookie.",
+        "operationId": "resume",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal consent page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Client or login redirect"
+          },
+          "400": {
+            "description": "Invalid, expired or browser-mismatched request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared OAuth rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -39,6 +406,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jwks.json": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Publishes cached public Vault key versions without using the authentication database.\nSingle-flight refresh and negative caching bound upstream reads; malformed keys fail closed.",
+        "operationId": "jwks",
+        "responses": {
+          "200": {
+            "description": "Retained Vault RSA public signing versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jwks"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth/key source unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -4700,6 +5098,28 @@
           "confidential"
         ]
       },
+      "ConsentInput": {
+        "type": "object",
+        "description": "Consent form accepts only a stored request, CSRF capability and binary decision.",
+        "required": [
+          "request_id",
+          "csrf",
+          "decision"
+        ],
+        "properties": {
+          "csrf": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateApplicationRequest": {
         "type": "object",
         "required": [
@@ -4847,6 +5267,87 @@
           }
         }
       },
+      "Discovery": {
+        "type": "object",
+        "description": "Staging metadata advertises only implemented authorization behavior and public key location.",
+        "required": [
+          "issuer",
+          "authorization_endpoint",
+          "jwks_uri",
+          "response_types_supported",
+          "response_modes_supported",
+          "subject_types_supported",
+          "id_token_signing_alg_values_supported",
+          "code_challenge_methods_supported",
+          "grant_types_supported",
+          "token_endpoint_auth_methods_supported",
+          "request_parameter_supported",
+          "request_uri_parameter_supported",
+          "claims_parameter_supported"
+        ],
+        "properties": {
+          "authorization_endpoint": {
+            "type": "string"
+          },
+          "claims_parameter_supported": {
+            "type": "boolean"
+          },
+          "code_challenge_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "grant_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id_token_signing_alg_values_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "jwks_uri": {
+            "type": "string"
+          },
+          "request_parameter_supported": {
+            "type": "boolean"
+          },
+          "request_uri_parameter_supported": {
+            "type": "boolean"
+          },
+          "response_modes_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "response_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subject_types_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "token_endpoint_auth_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "EnvironmentResponse": {
         "type": "object",
         "required": [
@@ -4937,6 +5438,53 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "Jwk": {
+        "type": "object",
+        "description": "RSA verification key encoded using unsigned big-endian base64url integers.",
+        "required": [
+          "kty",
+          "use",
+          "alg",
+          "kid",
+          "n",
+          "e"
+        ],
+        "properties": {
+          "alg": {
+            "type": "string"
+          },
+          "e": {
+            "type": "string"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "kty": {
+            "type": "string"
+          },
+          "n": {
+            "type": "string"
+          },
+          "use": {
+            "type": "string"
+          }
+        }
+      },
+      "Jwks": {
+        "type": "object",
+        "description": "Public-only JSON Web Key Set; every retained Vault version is independently identifiable.",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Jwk"
+            }
           }
         }
       },

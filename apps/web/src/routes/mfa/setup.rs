@@ -4,7 +4,8 @@
 //! 1. Fetch enrollment data (secret + QR code).
 //! 2. Display QR code to the user.
 //! 3. Verify the first TOTP token.
-//! 4. Display recovery codes.
+//! 4. Display recovery codes and wait for acknowledgement before OAuth resume or dashboard navigation.
+//! Enrollment updates the verified session immediately without unloading the one-time codes.
 
 use crate::{
     app_lib::AppError,
@@ -19,6 +20,8 @@ use crate::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
+/// Displays enrollment recovery codes only in this view and waits for acknowledgement.
+/// Session authority stays server-side; OAuth navigation never preempts the one-time display.
 #[component]
 pub fn MfaSetupPage() -> impl IntoView {
     let _auth = use_auth();
@@ -61,7 +64,7 @@ pub fn MfaSetupPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok((codes, session))) = enroll_finish_action.value().get() {
             set_recovery_codes.set(Some(codes));
-            _auth.set_session(session);
+            _auth.set_session_preserving_mfa(session);
         } else if let Some(Err(err)) = enroll_finish_action.value().get() {
             set_error.set(Some(err));
         }
@@ -89,8 +92,14 @@ pub fn MfaSetupPage() -> impl IntoView {
                                     {codes.codes.into_iter().map(|code| view! { <div class="p-2 bg-white dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm">{code}</div> }).collect::<Vec<_>>()}
                                 </div>
                             </div>
-                            <Button on:click=move |_| navigate_for_success(paths::DASHBOARD, Default::default())>
-                                "I've saved my codes - Go to Dashboard"
+                            <Button on:click=move |_| {
+                                if !_auth.is_full_session.get_untracked() || !crate::features::auth::authorization::resume_after_authentication(
+                                    &crate::app_lib::config::AppConfig::load().api_base_url,
+                                ) {
+                                    navigate_for_success(paths::DASHBOARD, Default::default());
+                                }
+                            }>
+                                "I've saved my codes - Continue"
                             </Button>
                         </div>
                     }.into_any()

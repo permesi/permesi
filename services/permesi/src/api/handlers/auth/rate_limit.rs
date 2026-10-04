@@ -24,6 +24,7 @@ pub enum RateLimitAction {
     VerifyEmail,
     ResendVerification,
     MfaRecovery,
+    Authorize,
 }
 
 impl RateLimitAction {
@@ -34,6 +35,7 @@ impl RateLimitAction {
             Self::VerifyEmail => "verify_email",
             Self::ResendVerification => "resend_verification",
             Self::MfaRecovery => "mfa_recovery",
+            Self::Authorize => "authorize",
         }
     }
 }

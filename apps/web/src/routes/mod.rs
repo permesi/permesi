@@ -73,6 +73,10 @@ pub mod paths {
 /// Declares the application route tree.
 #[component]
 pub fn AppRoutes() -> impl IntoView {
+    let location = leptos_router::hooks::use_location();
+    Effect::new(move |_| {
+        crate::features::auth::authorization::abandon_if_outside_flow(&location.pathname.get());
+    });
     view! {
         <Routes fallback=|| view! { <NotFoundPage /> }>
             // Public routes

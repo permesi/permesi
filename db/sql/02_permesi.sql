@@ -273,7 +273,7 @@ SELECT a.id, s.name, 'protocol' FROM applications a
 CROSS JOIN unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS s(name)
 ON CONFLICT (application_id, name) DO NOTHING;
 
--- No grant-writing API yet. Explicit organization and application context prevent
+-- Authorization consent writes grants. Explicit organization/application context prevent
 -- one user's consent from implicitly spanning all their organization memberships.
 CREATE TABLE IF NOT EXISTS oauth_grants (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
@@ -347,6 +347,136 @@ CREATE TABLE IF NOT EXISTS oauth_grant_scopes (
         REFERENCES oauth_client_scopes(client_id, application_id, scope_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS oauth_grant_scopes_client_scope_idx ON oauth_grant_scopes (client_id, scope_id);
+
+-- Snapshot arrays reject NULLs and duplicates even for direct SQL writes.
+CREATE OR REPLACE FUNCTION oauth_scope_ids_valid(ids UUID[]) RETURNS BOOLEAN
+    LANGUAGE SQL IMMUTABLE AS $$
+    SELECT cardinality(ids) BETWEEN 1 AND 64
+        AND cardinality(ids) = (SELECT count(DISTINCT id) FROM unnest(ids) id);
+$$;
+CREATE OR REPLACE FUNCTION oauth_scope_names_valid(names TEXT[]) RETURNS BOOLEAN
+    LANGUAGE SQL IMMUTABLE AS $$
+    SELECT cardinality(names) BETWEEN 1 AND 64
+        AND cardinality(names) = (SELECT count(DISTINCT name) FROM unnest(names) name)
+        AND NOT EXISTS (SELECT 1 FROM unnest(names) name WHERE name IS NULL
+            OR char_length(name) NOT BETWEEN 1 AND 128
+            OR name !~ '^[!-~]+$' OR position('"' in name) > 0 OR position(chr(92) in name) > 0);
+$$;
+
+-- Authorization requests survive login/MFA and replica changes. Browser and CSRF
+-- capabilities are hashes, while all authority-bearing values are server snapshots.
+CREATE TABLE IF NOT EXISTS oauth_authorization_requests (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    redirect_uri TEXT COLLATE "C" NOT NULL,
+    scope_ids UUID[] NOT NULL CHECK (oauth_scope_ids_valid(scope_ids)),
+    scope_names TEXT[] NOT NULL CHECK (oauth_scope_names_valid(scope_names) AND cardinality(scope_names) = cardinality(scope_ids)),
+    code_challenge TEXT COLLATE "C" NOT NULL CHECK (code_challenge ~ '^[A-Za-z0-9_-]{43}$'),
+    code_challenge_method TEXT NOT NULL DEFAULT 'S256' CHECK (code_challenge_method = 'S256'),
+    state TEXT CHECK (octet_length(state) <= 2048),
+    nonce TEXT CHECK (octet_length(nonce) BETWEEN 1 AND 2048),
+    prompt TEXT NOT NULL CHECK (prompt IN ('default', 'consent', 'none')),
+    issuer TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    browser_hash BYTEA NOT NULL CHECK (octet_length(browser_hash) = 32),
+    csrf_hash BYTEA CHECK (octet_length(csrf_hash) = 32),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    session_hash BYTEA CHECK (octet_length(session_hash) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp(),
+    expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at AND expires_at <= created_at + INTERVAL '30 minutes'),
+    completed_at TIMESTAMPTZ CHECK (completed_at >= created_at),
+    CHECK ((user_id IS NULL) = (session_hash IS NULL)),
+    CHECK (csrf_hash IS NULL OR user_id IS NOT NULL),
+    CHECK (('openid' = ANY(scope_names)) = (nonce IS NOT NULL)),
+    FOREIGN KEY (client_id, application_id) REFERENCES oauth_clients(id, application_id) ON DELETE CASCADE,
+    FOREIGN KEY (client_id, redirect_uri) REFERENCES oauth_client_redirect_uris(client_id, redirect_uri) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_authorization_requests_expiry_idx ON oauth_authorization_requests(expires_at);
+
+-- Bind the complete code context to its saved consent with a composite foreign key.
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_grants_code_context_key
+    ON oauth_grants(id, client_id, application_id, organization_id, user_id);
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+    code_hash BYTEA PRIMARY KEY CHECK (octet_length(code_hash) = 32),
+    request_id UUID NOT NULL UNIQUE REFERENCES oauth_authorization_requests(id) ON DELETE CASCADE,
+    grant_id UUID NOT NULL,
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    organization_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    redirect_uri TEXT COLLATE "C" NOT NULL,
+    scope_ids UUID[] NOT NULL CHECK (oauth_scope_ids_valid(scope_ids)),
+    scope_names TEXT[] NOT NULL CHECK (oauth_scope_names_valid(scope_names) AND cardinality(scope_names) = cardinality(scope_ids)),
+    code_challenge TEXT COLLATE "C" NOT NULL CHECK (code_challenge ~ '^[A-Za-z0-9_-]{43}$'),
+    code_challenge_method TEXT NOT NULL DEFAULT 'S256' CHECK (code_challenge_method = 'S256'),
+    nonce TEXT CHECK (octet_length(nonce) BETWEEN 1 AND 2048),
+    issuer TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    auth_time TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp(),
+    expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at AND expires_at <= created_at + INTERVAL '5 minutes'),
+    consumed_at TIMESTAMPTZ CHECK (consumed_at >= created_at AND consumed_at < expires_at),
+    CHECK (('openid' = ANY(scope_names)) = (nonce IS NOT NULL)),
+    FOREIGN KEY (grant_id, client_id, application_id, organization_id, user_id)
+        REFERENCES oauth_grants(id, client_id, application_id, organization_id, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (client_id, redirect_uri) REFERENCES oauth_client_redirect_uris(client_id, redirect_uri) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_authorization_codes_expiry_idx ON oauth_authorization_codes(expires_at);
+
+-- Browser handles cannot rewrite validated authority or switch the bound full session.
+CREATE OR REPLACE FUNCTION protect_oauth_authorization_request()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['csrf_hash','user_id','session_hash','completed_at'])
+        IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['csrf_hash','user_id','session_hash','completed_at'])
+        OR (OLD.user_id IS NOT NULL AND (NEW.user_id, NEW.session_hash) IS DISTINCT FROM (OLD.user_id, OLD.session_hash))
+        OR (OLD.completed_at IS NOT NULL AND NEW IS DISTINCT FROM OLD) THEN
+        RAISE EXCEPTION 'Authorization request binding is immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS protect_oauth_authorization_request ON oauth_authorization_requests;
+CREATE TRIGGER protect_oauth_authorization_request BEFORE UPDATE ON oauth_authorization_requests
+    FOR EACH ROW EXECUTE FUNCTION protect_oauth_authorization_request();
+
+-- Codes must preserve the exact validated request and its bound user.
+CREATE OR REPLACE FUNCTION validate_oauth_authorization_code()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM 1 FROM oauth_authorization_requests r
+        WHERE r.id = NEW.request_id AND r.completed_at IS NULL AND r.expires_at > clock_timestamp()
+        AND (r.client_id,r.application_id,r.organization_id,r.user_id,r.redirect_uri,
+             r.scope_ids,r.scope_names,r.code_challenge,r.code_challenge_method,r.nonce,r.issuer,r.audience)
+        IS NOT DISTINCT FROM (NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.redirect_uri,
+             NEW.scope_ids,NEW.scope_names,NEW.code_challenge,NEW.code_challenge_method,NEW.nonce,NEW.issuer,NEW.audience)
+        FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invalid authorization code binding' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS validate_oauth_authorization_code ON oauth_authorization_codes;
+CREATE TRIGGER validate_oauth_authorization_code BEFORE INSERT ON oauth_authorization_codes
+    FOR EACH ROW EXECUTE FUNCTION validate_oauth_authorization_code();
+
+-- Codes are immutable snapshots; consumption is an irreversible one-way transition.
+CREATE OR REPLACE FUNCTION protect_oauth_authorization_code()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (to_jsonb(NEW) - 'consumed_at') IS DISTINCT FROM (to_jsonb(OLD) - 'consumed_at')
+        OR (OLD.consumed_at IS NOT NULL AND NEW.consumed_at IS DISTINCT FROM OLD.consumed_at) THEN
+        RAISE EXCEPTION 'Authorization code is immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS protect_oauth_authorization_code ON oauth_authorization_codes;
+CREATE TRIGGER protect_oauth_authorization_code BEFORE UPDATE ON oauth_authorization_codes
+    FOR EACH ROW EXECUTE FUNCTION protect_oauth_authorization_code();
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -482,17 +612,22 @@ CREATE INDEX IF NOT EXISTS email_outbox_next_attempt_idx ON email_outbox (status
 CREATE INDEX IF NOT EXISTS email_outbox_created_at_idx ON email_outbox (created_at);
 
 -- Authentication rate limits are shared by every Permesi replica. Subjects are
--- SHA-256 digests of normalized IP or account identifiers, not raw identifiers.
+-- HMAC-SHA256 tags of normalized IP/account/request identifiers, never raw identifiers.
 CREATE TABLE IF NOT EXISTS auth_rate_limits (
     dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
     subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
     action TEXT NOT NULL CHECK (action IN (
-        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery'
+        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize'
     )),
     attempts BIGINT NOT NULL CHECK (attempts > 0),
     expires_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (dimension, subject_hash, action)
 );
+
+-- Add the independent OAuth authorization counter without changing existing actions.
+ALTER TABLE auth_rate_limits DROP CONSTRAINT IF EXISTS auth_rate_limits_action_check;
+ALTER TABLE auth_rate_limits ADD CONSTRAINT auth_rate_limits_action_check
+    CHECK (action IN ('signup','login','verify_email','resend_verification','mfa_recovery','authorize'));
 
 CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
 
@@ -519,6 +654,8 @@ BEGIN
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
     DELETE FROM auth_rate_limits WHERE expires_at < NOW();
+    DELETE FROM oauth_authorization_codes WHERE expires_at < NOW() - INTERVAL '7 days';
+    DELETE FROM oauth_authorization_requests WHERE expires_at < NOW() - INTERVAL '7 days';
 END;
 $$;
 
@@ -682,7 +819,8 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
             oauth_clients, oauth_client_secrets, oauth_client_redirect_uris, oauth_scopes,
-            oauth_client_scopes, oauth_grants, oauth_grant_scopes TO permesi_runtime;
+            oauth_client_scopes, oauth_grants, oauth_grant_scopes,
+            oauth_authorization_requests, oauth_authorization_codes TO permesi_runtime;
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;

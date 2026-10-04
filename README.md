@@ -125,9 +125,9 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 #### 2. `permesi` (The Core / "The Authority")
 * **Role:** The OIDC Authority.
-* **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, and OAuth client/scope management. OAuth/OIDC protocol flows are planned.
+* **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, OAuth client/scope management, and Authorization Code + S256 PKCE with tenant-bound consent. Token issuance remains planned.
 * **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Validates short-lived **Zero Tokens** offline using the PASERK keyset for auth POSTs.
-* **Output:** Authenticated sessions and tenant-scoped management APIs. Permesi does not yet issue OAuth access tokens, ID tokens, or refresh tokens.
+* **Output:** Authenticated sessions, tenant-scoped management APIs, and single-use authorization codes. Permesi does not yet issue OAuth access tokens, ID tokens, or refresh tokens.
 
 #### 3. Database
 * **Role:** System of Record.
@@ -199,7 +199,7 @@ Identity/authentication, organization authorization, and the OAuth client/scope 
 are implemented. Public and confidential clients have independent public identifiers,
 exact redirect registrations, and explicit delegated scope allow-lists. Saved-consent
 tables bind one user and client to one application and its owning organization; there
-is no consent-writing API yet. Internal `Principal.scopes` remain Permesi capabilities
+is a minimal server-rendered authorization consent flow. Internal `Principal.scopes` remain Permesi capabilities
 and never become OAuth delegation.
 
 The web console manages this configuration through Organizations → Project →
@@ -218,12 +218,21 @@ opaque application names without this format are no longer accepted. Protocol sc
 OAuth delegation remains separate from internal permissions such as `platform:admin`
 and `users:write`. The existing `platform:` and `users:` namespaces remain reserved.
 
-Authorization Code with PKCE, `/authorize`, `/token`, OIDC discovery/JWKS, access/ID
-tokens, refresh tokens, and consent UI are planned. Registering `openid` or
-`offline_access` in a client's allow-list does not enable these flows. Confidential
-credential issuance/authentication is also deferred; the schema anticipates hashed,
-revocable secrets. See [OAuth foundation](docs/oauth-foundation.md) for the management
-API, trust boundaries, schema rollout, and next-phase design.
+Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
+PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
+and hashed, single-use authorization codes (120-second default TTL). PKCE is required
+for public and confidential clients. An internal transactional redemption helper is
+ready for the token phase; there is no `/token` endpoint or access/ID/refresh-token
+issuance. `offline_access` is rejected until refresh policy exists.
+
+Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
+enable the protocol routes. `/jwks.json` exposes retained public RSA versions from a
+shared Vault transit key. `/.well-known/openid-configuration` provides preparatory
+metadata, deliberately omitting the unimplemented token endpoint. This is not yet
+a complete interoperable OpenID Provider: standard code-flow discovery requires
+`token_endpoint`. Signing, confidential client credentials/rotation, broader consent
+management and refresh tokens remain deferred. See [OAuth foundation](docs/oauth-foundation.md)
+for configuration, exact redirect/error rules, consent policy and rollout.
 
 ## Trust Boundaries
 

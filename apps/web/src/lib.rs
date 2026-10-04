@@ -9,3 +9,6 @@ pub mod oauth;
 
 #[path = "features/orgs/types.rs"]
 pub mod orgs_types;
+
+#[path = "features/auth/authorization.rs"]
+pub mod authorization;

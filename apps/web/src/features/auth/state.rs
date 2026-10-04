@@ -50,8 +50,29 @@ impl AuthContext {
         }
     }
 
-    /// Updates the in-memory session after login.
+    /// Updates the session and resumes a pending OAuth login before route navigation.
+    /// Only full sessions on login/challenge resume; MFA setup waits for recovery-code acknowledgement.
+    /// The backend validates every stored binding.
     pub fn set_session(&self, session: UserSession) {
+        let full = session.session_kind == crate::features::auth::types::SessionKind::Full;
+        self.set_session_preserving_mfa(session);
+        if full
+            && web_sys::window().is_some_and(|window| {
+                window
+                    .location()
+                    .pathname()
+                    .is_ok_and(|path| super::authorization::automatic_resume_path(&path))
+            })
+        {
+            let _ = super::authorization::resume_after_authentication(
+                &crate::app_lib::config::AppConfig::load().api_base_url,
+            );
+        }
+    }
+
+    /// Updates a verified server session without leaving an MFA recovery/enrollment flow.
+    /// This changes presentation only; the server still enforces session authentication.
+    pub fn set_session_preserving_mfa(&self, session: UserSession) {
         self.session.set(Some(session));
     }
 
@@ -85,6 +106,7 @@ impl AuthContext {
 /// Provides auth context and hydrates the session once on mount.
 #[component]
 pub fn AuthProvider(children: Children) -> impl IntoView {
+    super::authorization::capture_request();
     let session = RwSignal::new(None);
     let admin_token = RwSignal::new(None);
     let is_loading = RwSignal::new(true);

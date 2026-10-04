@@ -86,12 +86,39 @@ pub fn new() -> Command {
                 .required(true),
         );
 
+    let command = oauth_args(command);
     let command = admission::with_args(command);
     let command = tls::with_args(command);
     let command = vault::with_args(command);
     let command = auth::with_args(command);
     let command = database::with_args(command);
     logging::with_args(command)
+}
+
+/// Defines opt-in OAuth runtime policy; dispatch independently validates every value.
+fn oauth_args(command: Command) -> Command {
+    command
+        .arg(Arg::new("oidc-issuer").long("oidc-issuer").env("PERMESI_OIDC_ISSUER")
+            .requires("oauth-audience").value_parser(crate::oauth::config::parse_issuer)
+            .help("Explicit HTTPS issuer origin; enables OAuth authorization and OIDC metadata"))
+        .arg(Arg::new("oauth-audience").long("oauth-audience").env("PERMESI_OAUTH_AUDIENCE")
+            .requires("oidc-issuer").value_parser(crate::oauth::config::parse_audience)
+            .help("Explicit delegated access-token resource audience; ID token audience is the client"))
+        .arg(Arg::new("oidc-signing-key").long("oidc-signing-key").env("PERMESI_OIDC_SIGNING_KEY")
+            .default_value("oidc-signing").value_parser(crate::oauth::config::parse_key_name)
+            .help("Vault transit RSA-2048 key; rotation and retirement are operator-managed"))
+        .arg(Arg::new("oauth-code-ttl-seconds").long("oauth-code-ttl-seconds")
+            .env("PERMESI_OAUTH_CODE_TTL_SECONDS").default_value("120")
+            .value_parser(clap::value_parser!(i64).range(1..=300)))
+        .arg(Arg::new("oauth-request-ttl-seconds").long("oauth-request-ttl-seconds")
+            .env("PERMESI_OAUTH_REQUEST_TTL_SECONDS").default_value("600")
+            .value_parser(clap::value_parser!(i64).range(1..=1800)))
+        .arg(Arg::new("oauth-lock-timeout-ms").long("oauth-lock-timeout-ms")
+            .env("PERMESI_OAUTH_LOCK_TIMEOUT_MS").default_value("1000")
+            .value_parser(clap::value_parser!(i64).range(1..=10_000)))
+        .arg(Arg::new("oidc-jwks-cache-ttl-seconds").long("oidc-jwks-cache-ttl-seconds")
+            .env("PERMESI_OIDC_JWKS_CACHE_TTL_SECONDS").default_value("30")
+            .value_parser(clap::value_parser!(i64).range(1..=300)))
 }
 
 #[cfg(test)]

@@ -3,7 +3,9 @@
 //! Handles TOTP and recovery code verification during login:
 //! 1. Ask for TOTP code.
 //! 2. Option to use recovery code.
-//! 3. Verify and redirect to dashboard.
+//! 3. Verify and resume pending OAuth authorization or navigate to the dashboard.
+//! Recovery requires re-enrollment; its session update preserves the setup screen and
+//! one-time recovery-code acknowledgement before the pending OAuth flow can resume.
 
 use crate::{
     app_lib::AppError,
@@ -18,6 +20,8 @@ use crate::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
+/// Completes the existing server-verified MFA flow before resuming OAuth or the console.
+/// Recovery preserves re-enrollment and recovery-code acknowledgement before navigation.
 #[component]
 pub fn MfaChallengePage() -> impl IntoView {
     let _auth = use_auth();
@@ -120,12 +124,12 @@ pub fn MfaChallengePage() -> impl IntoView {
         if let Some(result) = verify_action.value().get() {
             match result {
                 Ok(session) => {
-                    // Update global state immediately
-                    _auth.set_session(session.clone());
-
                     if show_recovery.get() {
+                        // Recovery requires re-enrollment before resuming the OAuth presentation flow.
+                        _auth.set_session_preserving_mfa(session);
                         navigate_for_verify(paths::MFA_SETUP, Default::default());
                     } else {
+                        _auth.set_session(session);
                         // Success: The server issued a full session cookie.
                         if let Some(storage) = web_sys::window()
                             .and_then(|w| w.local_storage().ok())

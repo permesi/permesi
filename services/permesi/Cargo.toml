@@ -73,6 +73,8 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }
 regex = "1.13"
+rsa = "0.9.10"
+subtle = "2.6"
 reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }

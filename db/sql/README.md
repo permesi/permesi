@@ -19,7 +19,12 @@ a binary that exposes OAuth management. It creates the OAuth tables, seeds fixed
 protocol scope entries for existing applications, and adds a trigger to seed new
 applications. Reapplying preserves client configuration and grants. Runtime table
 grants are applied when `permesi_runtime` already exists; normal bootstrap also
-grants all tables after creating that role. There is no RLS change or token issuance.
+grants all tables after creating that role. There is no RLS change or token issuance. Authorization additionally creates
+`oauth_authorization_requests` and `oauth_authorization_codes`, with hash-only code/
+browser/CSRF storage, immutable snapshots, exact redirect/composite consent foreign
+keys, bounded TTLs and one-way consumption. Reapply as the existing table owner
+before enabling protocol routes. The existing cleanup function removes expired
+OAuth state after seven days.
 
 ## Runtime role & grant checks
 

@@ -92,6 +92,7 @@ web-test-browser:
   fi
   just web-build "$dist_dir"
   PERMESI_WEB_TEST_DIST="{{root}}/apps/web/${dist_dir}" node {{root}}/apps/web/tests/oauth_console.mjs
+  cargo test -p permesi authorize_browser_real_postgres_consent_and_redirect --lib -- --ignored
 
 web-setup:
   #!/usr/bin/env zsh

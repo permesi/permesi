@@ -12,6 +12,7 @@ pub struct Args {
     pub socket_path: Option<String>,
     pub dsn: String,
     pub db_pool: PoolConfig,
+    pub oauth: crate::oauth::config::OAuthConfig,
     pub vault_url: String,
     pub vault_target: vault_client::VaultTarget,
     pub vault_role_id: Option<String>,
@@ -173,6 +174,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         email: email_config,
         kv: kv_config,
         database: args.db_pool,
+        oauth: args.oauth.clone(),
     }
 }
 
@@ -404,6 +406,7 @@ mod tests {
             vault_secret_id: None,
             vault_wrapped_token: None,
             admission_paserk_url: "https://genesis.example.com/paserk.json".to_string(),
+            oauth: crate::oauth::config::OAuthConfig::disabled(),
             admission_issuer: None,
             admission_audience: None,
             tls_pem_bundle: None,

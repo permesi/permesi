@@ -81,12 +81,14 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     let db_pool = database::parse(matches)?;
+    let oauth = crate::oauth::config::OAuthConfig::from_matches(matches)?;
 
     Ok(Action::Server(Args {
         port,
         socket_path,
         dsn,
         db_pool,
+        oauth,
         vault_url: vault_opts.url,
         vault_target,
         vault_role_id: vault_opts.role_id,

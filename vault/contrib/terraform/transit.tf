@@ -1,10 +1,10 @@
 # ----------------------------------------------------------------------------
-# Transit - Permesi (TOTP secret protection)
+# Transit - Permesi (TOTP protection and OIDC signing-key foundation)
 # ----------------------------------------------------------------------------
 resource "vault_mount" "transit_permesi" {
   path        = "transit/permesi"
   type        = "transit"
-  description = "Permesi TOTP secret protection"
+  description = "Permesi TOTP protection and OIDC signing keys"
 }
 
 removed {
@@ -39,4 +39,15 @@ resource "vault_transit_secret_backend_key" "genesis_signing" {
   name               = "genesis-signing"
   type               = "ed25519"
   auto_rotate_period = 2592000 # 30 days
+}
+
+# OIDC signing is distinct from TOTP encryption and Genesis admission keys.
+resource "vault_transit_secret_backend_key" "permesi_oidc" {
+  backend                = vault_mount.transit_permesi.path
+  name                   = "oidc-signing"
+  type                   = "rsa-2048"
+  exportable             = false
+  allow_plaintext_backup = false
+  deletion_allowed       = false
+  auto_rotate_period     = 2592000 # Retain prior public versions for verification.
 }

@@ -91,6 +91,8 @@ pub struct AppConfig {
     pub kv: VaultKvConfig,
     /// PostgreSQL pool shape shared by handlers and the email outbox worker.
     pub database: PoolConfig,
+    /// Opt-in OAuth issuer, resource audience, and bounded transaction lifetimes.
+    pub oauth: crate::oauth::config::OAuthConfig,
 }
 
 /// Start the server
@@ -179,7 +181,19 @@ pub async fn new(
     // Initialize Passkeys (preview mode supported via env)
     let passkey_service = init_passkey_service(&config.auth)?;
 
+    let oauth_state = Arc::new(crate::oauth::oidc::OAuthState::new(
+        config.oauth.clone(),
+        globals,
+    ));
+    if oauth_state.config.issuer.is_some() {
+        oauth_state
+            .jwks()
+            .await
+            .context("OIDC signing key is unavailable or invalid")?;
+    }
+
     let app = build_router(AppState {
+        oauth: oauth_state,
         auth: auth_state,
         admin: admin_state,
         admission,

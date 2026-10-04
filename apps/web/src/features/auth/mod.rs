@@ -1,6 +1,7 @@
 //! Resend endpoints submit tokens with a zero-token header and return 204 on
 //! success.
 
+pub(crate) mod authorization;
 pub(crate) mod client;
 
 mod guards;

@@ -389,5 +389,14 @@ Applications now own OAuth clients and a delegated scope registry beneath the
 existing org/project/environment hierarchy. Management uses full sessions and
 existing org roles; owner/admin may mutate, active members may inspect, and
 inaccessible resources return 404. OAuth scopes are independent of internal
-`Principal.scopes`. Protocol endpoints and token issuance are not implemented.
+`Principal.scopes`. Authorization endpoints are implemented; token issuance remains planned.
 See [the foundation design](../../docs/oauth-foundation.md) for routes and invariants.
+
+## Authorization Code + PKCE
+
+The authorization phase implements `/authorize`, PostgreSQL-backed login resume and
+minimal consent, and hashed single-use codes with S256 required for all clients. It
+exposes no `/token` or signed access/ID/refresh-token issuance. Explicit issuer/resource
+audience and a shared Vault RSA key enable preparatory discovery and public JWKS.
+See [OAuth/OIDC flow and rollout](../../docs/oauth-foundation.md#authorization-code--pkce)
+for configuration, tenant/consent policy, transaction semantics and discovery limitations.

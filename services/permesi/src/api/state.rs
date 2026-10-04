@@ -30,6 +30,8 @@ use tokio::sync::mpsc;
 pub struct AppState {
     /// OPAQUE, session, MFA, and rate-limit state for the auth endpoints.
     pub auth: Arc<AuthState>,
+    /// Shared OAuth policy and Vault verification key source.
+    pub oauth: Arc<crate::oauth::oidc::OAuthState>,
     /// Platform-admin elevation state.
     pub admin: Arc<AdminState>,
     /// Admission (zero) token verifier backed by the Genesis PASERK keyset.
@@ -81,7 +83,12 @@ impl AppState {
         };
         let origins = vec!["https://permesi.dev".to_string()];
 
+        let globals = GlobalArgs::new(vault_url.clone(), transport.clone());
         Ok(Self {
+            oauth: Arc::new(crate::oauth::oidc::OAuthState::new(
+                crate::oauth::config::OAuthConfig::disabled(),
+                &globals,
+            )),
             auth: Arc::new(AuthState::new(
                 AuthConfig::new("https://permesi.dev".to_string()),
                 OpaqueState::from_seed(

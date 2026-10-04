@@ -1,4 +1,4 @@
-use super::handlers::{auth, health, me, me_webauthn, orgs, users};
+use super::handlers::{auth, authorize, health, me, me_webauthn, orgs, users};
 use super::state::AppState;
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -18,8 +18,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// and included in the generated `OpenAPI` spec.
 /// Routes added outside (like `/` or `OPTIONS /health`) are intentionally not documented.
 pub(crate) fn api_router() -> OpenApiRouter<AppState> {
-    // `routes!` reads #[utoipa::path] to bind HTTP method + path and add the route to OpenAPI.
     let mut router = OpenApiRouter::with_openapi(cargo_openapi())
+        .merge(oauth_router())
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(health::health))
@@ -128,6 +128,16 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
     ]);
 
     router
+}
+
+/// Registers only implemented OAuth protocol routes, leaving token issuance deferred.
+fn oauth_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(authorize::discovery))
+        .routes(routes!(authorize::jwks))
+        .routes(routes!(authorize::authorize))
+        .routes(routes!(authorize::resume))
+        .routes(routes!(authorize::consent))
 }
 
 fn cargo_openapi() -> utoipa::openapi::OpenApi {
@@ -313,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_openapi_registers_management_without_protocol_placeholders() -> Result<()> {
+    fn oauth_openapi_registers_implemented_endpoints_without_token_placeholders() -> Result<()> {
         let spec = openapi();
         let base =
             "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth";
@@ -327,14 +337,17 @@ mod tests {
         ] {
             assert!(spec.paths.paths.contains_key(&format!("{base}{suffix}")));
         }
+        for path in ["/token", "/jwks"] {
+            assert!(!spec.paths.paths.contains_key(path));
+        }
         for path in [
             "/authorize",
-            "/token",
+            "/authorize/resume",
+            "/authorize/consent",
             "/.well-known/openid-configuration",
-            "/jwks",
             "/jwks.json",
         ] {
-            assert!(!spec.paths.paths.contains_key(path));
+            assert!(spec.paths.paths.contains_key(path));
         }
         let tags = spec.tags.as_ref().context("OpenAPI tags missing")?;
         for name in ["oauth-clients", "oauth-scopes"] {

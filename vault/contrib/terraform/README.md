@@ -317,3 +317,16 @@ Terraform tests in `vault/contrib/terraform/tests` validate the PKI and cert-aut
 terraform init
 terraform test
 ```
+
+### OIDC public signing-key lifecycle
+
+The Permesi transit mount also owns a separate nonexportable RSA-2048 `oidc-signing`
+key, automatically rotated every 30 days with deletion disabled. The Permesi runtime
+policy grants only read access to public key metadata; no signing/export/rotation/
+retirement capability is granted in the authorization-code phase. Operators retain
+old versions for verification and must account for future token lifetimes, downstream
+caches and rollback before trimming. The binary uses explicit issuer/audience settings
+and reads retained public versions through a bounded single-flight JWKS response cache.
+Publish future signing versions across replica/HTTP cache windows before using them. A different runtime
+key/mount requires matching provisioning and policy changes. No infrastructure apply
+is required or performed by repository tests.

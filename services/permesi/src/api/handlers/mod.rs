@@ -4,6 +4,7 @@
 //! functions for validation, admission token verification, and PASERK caching.
 
 pub mod auth;
+pub(crate) mod authorize;
 pub mod health;
 pub mod me;
 pub mod me_webauthn;
