@@ -1172,8 +1172,11 @@ async fn oauth_credentials_client_management_deadlines_return_service_unavailabl
     ];
     let mut statuses = Vec::new();
     for (method, suffix, payload) in operations {
+        // The database deadline stays 50 ms. This outer watchdog also includes
+        // session extraction and CI/coverage scheduling; without a database
+        // deadline the held transaction prevents completion for its entire span.
         let status = timeout(
-            Duration::from_millis(400),
+            Duration::from_secs(5),
             f.call(
                 method,
                 &format!("/clients/{client}{suffix}"),

@@ -616,6 +616,14 @@ We welcome contributions of all kinds!
 
 ## CI Commands
 
+Container jobs verify the API endpoint used by tests before proceeding. Each
+self-hosted job starts a Podman service on its own private Unix socket; job setup
+does not migrate shared container state or remove another job's socket or service.
+Runner maintenance must handle Podman migrations while jobs are stopped.
+GitHub-hosted jobs use the existing system Docker API. The runtime action runs
+its isolation and readiness regressions before setup; run those locally with
+`python3 .github/actions/ensure-container-runtime/test_runtime.py`.
+
 - `cargo fmt --all -- --check`
 - `cargo clippy --all-targets --all-features`
 - `cargo test --workspace`

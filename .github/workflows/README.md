@@ -71,18 +71,23 @@ false`), the reusable workflows are read-only by default, and every Cargo comman
 
 ### `ensure-container-runtime`
 
-Some CI jobs need a working container runtime so they can run Postgres in Podman (for example, the
-DB schema verification job). GitHub-hosted runners already include Docker, but this repo uses
-Podman and also runs on self-hosted runners where Podman may not be installed or configured.
+Container jobs use `./.github/actions/ensure-container-runtime` to verify the API
+used by testcontainers before exporting `DOCKER_HOST` and `CONTAINER_TOOL`.
+GitHub-hosted runners use their existing system Docker API. Self-hosted runners
+use Podman, installing it when missing and configuring `XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` for rootless operation.
 
-The `./.github/actions/ensure-container-runtime` composite action centralizes that setup so we
-don’t duplicate it across multiple workflows and jobs. It:
+Each self-hosted job starts its own Podman service with no inactivity timeout on
+a private Unix socket under `RUNNER_TEMP`. Setup probes that exact API endpoint;
+local `podman info` alone cannot establish socket readiness. A failed startup
+cleans up only its own process and directory, while successful services remain
+available across steps until the runner's job cleanup. Setup never migrates
+shared Podman state or removes another job's service or socket; migrations are
+runner maintenance and must run while jobs are stopped.
 
-- Installs Podman and its dependencies when missing.
-- Sets `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` so rootless Podman can use netavark.
-- Starts the Podman system service if the socket is missing.
-- Exports `DOCKER_HOST` for compatibility with tools that expect a Docker socket.
-- Runs `podman info` to validate the runtime.
+Python 3 is required on runners for the action's readiness, concurrent isolation,
+and hosted-runtime regressions. Run them locally with
+`python3 .github/actions/ensure-container-runtime/test_runtime.py`.
 
 If a future workflow needs containers, add this action as a step instead of copying the setup
 script.

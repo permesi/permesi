@@ -1,116 +1,14 @@
 name: Ensure Container Runtime
-description: Install and configure Podman for CI jobs.
+description: Verify a container API and isolate self-hosted Podman sockets per job.
 runs:
   using: composite
   steps:
+    - name: Test runtime setup
+      shell: bash
+      run: python3 "${{ github.action_path }}/test_runtime.py"
+
     - name: Ensure container runtime
       shell: bash
-      run: |
-        set -euo pipefail
-
-        # 1. Detect environment
-        # On GitHub-hosted runners, we prefer the system Docker daemon as it is 
-        # pre-configured and reliable for port mapping.
-        USE_DOCKER=0
-        if [[ "${{ runner.environment }}" == "github-hosted" ]]; then
-          USE_DOCKER=1
-        elif [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
-          USE_DOCKER=1
-        elif [[ -S "/var/run/docker.sock" && "${RUNNER_NAME:-}" == *"GitHub Actions"* ]]; then
-          USE_DOCKER=1
-        fi
-
-        if [[ "$USE_DOCKER" -eq 1 ]]; then
-          echo "GitHub-hosted runner detected. Using system Docker daemon."
-          if [[ -S "/var/run/docker.sock" ]]; then
-            {
-              echo "DOCKER_HOST=unix:///var/run/docker.sock"
-              echo "CONTAINER_TOOL=docker"
-            } >> "${GITHUB_ENV}"
-            echo "Verifying Docker..."
-            docker info > /dev/null
-            echo "Pre-pulling Postgres and Vault images..."
-            docker pull postgres:18 || true
-            docker pull hashicorp/vault:1.17.3 || true
-            exit 0
-          fi
-          echo "Warning: GitHub-hosted environment detected but /var/run/docker.sock not found. Falling back to Podman."
-        fi
-
-        # 2. For self-hosted or if Docker is missing, ensure Podman is installed
-        if ! command -v podman >/dev/null 2>&1; then
-          echo "Installing Podman and dependencies..."
-          sudo apt-get update
-          sudo apt-get install -y podman dbus-user-session slirp4netns
-        fi
-
-        # 3. Determine the best runtime directory
-        USER_ID=$(id -u)
-        if [[ -d "/run/user/${USER_ID}" ]]; then
-          export XDG_RUNTIME_DIR="/run/user/${USER_ID}"
-        else
-          export XDG_RUNTIME_DIR="/tmp/podman-run-${USER_ID}"
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
-        fi
-
-        # 4. Configure D-Bus address for netavark/aardvark-dns
-        if [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
-        else
-          export DBUS_SESSION_BUS_ADDRESS=""
-        fi
-
-        # 4. Recover from potential corrupted state (match commit a1544514)
-        echo "Migrating Podman system state..."
-        podman system migrate || true
-
-        # 5. Start podman system service if socket is missing or unresponsive
-        SOCKET_PATH="${XDG_RUNTIME_DIR}/podman/podman.sock"
-        SERVICE_NEEDED=0
-        if [[ ! -S "$SOCKET_PATH" ]]; then
-          SERVICE_NEEDED=1
-        elif ! podman info >/dev/null 2>&1; then
-          echo "Podman socket exists but is unresponsive. Removing stale socket."
-          rm -f "$SOCKET_PATH"
-          SERVICE_NEEDED=1
-        fi
-
-        if [[ "$SERVICE_NEEDED" -eq 1 ]]; then
-          echo "Starting podman system service..."
-          mkdir -p "$(dirname "$SOCKET_PATH")"
-          # Kill any existing service using the same socket
-          pkill -f "podman system service.*${SOCKET_PATH}" || true
-          
-          # Start with explicit env and time=0 (stay up)
-          XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-          podman system service --time=0 "unix://${SOCKET_PATH}" > /dev/null 2>&1 &
-
-          # Wait for socket and response
-          for i in {1..60}; do
-            if [[ -S "$SOCKET_PATH" ]]; then
-              if DOCKER_HOST="unix://${SOCKET_PATH}" podman info >/dev/null 2>&1; then
-                break
-              fi
-            fi
-            echo "Waiting for podman socket and response... ($i)"
-            sleep 0.5
-          done
-        fi
-
-        # 6. Export variables for subsequent steps
-        {
-          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
-          echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}"
-          echo "DOCKER_HOST=unix://${SOCKET_PATH}"
-          echo "CONTAINER_TOOL=podman"
-        } >> "${GITHUB_ENV}"
-        
-        # 7. Final verification and pre-pull images
-        echo "Verifying Podman..."
-        export DOCKER_HOST="unix://${SOCKET_PATH}"
-        podman info > /dev/null || { echo "Podman info failed, trying system migrate..."; podman system migrate; podman info; }
-
-        echo "Pre-pulling Postgres and Vault images..."
-        podman --url "unix://${SOCKET_PATH}" pull postgres:18 || true
-        podman --url "unix://${SOCKET_PATH}" pull hashicorp/vault:1.17.3 || true
+      env:
+        RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      run: bash "${{ github.action_path }}/runtime.sh"
