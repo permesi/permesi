@@ -63,7 +63,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await?;
         let body_text = String::from_utf8(body.to_vec())?;
 
-        assert!(body_text.is_empty());
+        assert_eq!(body_text, "");
         Ok(())
     }
 }

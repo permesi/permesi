@@ -742,7 +742,7 @@ async fn soft_deleted_project_is_hidden_even_with_envs() -> Result<()> {
     assert_eq!(list_response.status(), StatusCode::OK);
     let body = to_bytes(list_response.into_body(), usize::MAX).await?;
     let list: Vec<serde_json::Value> = serde_json::from_slice(&body)?;
-    assert!(list.is_empty());
+    assert_eq!(list, Vec::<serde_json::Value>::new());
 
     let env_list_response = app
         .oneshot(
@@ -868,7 +868,7 @@ async fn soft_deleted_environment_is_hidden_even_with_apps() -> Result<()> {
     assert_eq!(env_list_response.status(), StatusCode::OK);
     let body = to_bytes(env_list_response.into_body(), usize::MAX).await?;
     let list: Vec<serde_json::Value> = serde_json::from_slice(&body)?;
-    assert!(list.is_empty());
+    assert_eq!(list, Vec::<serde_json::Value>::new());
 
     let app_list_response = app
         .oneshot(
@@ -1003,7 +1003,7 @@ async fn soft_deleted_app_is_hidden_by_default() -> Result<()> {
     assert_eq!(app_list_response.status(), StatusCode::OK);
     let body = to_bytes(app_list_response.into_body(), usize::MAX).await?;
     let list: Vec<serde_json::Value> = serde_json::from_slice(&body)?;
-    assert!(list.is_empty());
+    assert_eq!(list, Vec::<serde_json::Value>::new());
 
     Ok(())
 }

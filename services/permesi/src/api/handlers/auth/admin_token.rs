@@ -195,7 +195,7 @@ mod tests {
         let signer = AdminTokenSigner::new()?;
         let token = signer.issue(Uuid::new_v4(), 60)?;
         assert!(token.token.starts_with("v4.public."));
-        assert!(!token.expires_at.is_empty());
+        assert_ne!(token.expires_at, "");
         Ok(())
     }
 }
