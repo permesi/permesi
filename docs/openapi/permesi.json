@@ -2350,7 +2350,7 @@
         "tags": [
           "environments"
         ],
-        "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\n`storage::insert_environment` enforces a single `production` tier and gates `non_production`.\nThe response includes only environment DTO fields.",
+        "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\nEither tier may be created first; the database enforces at most one active production per project.\nThe response includes only environment DTO fields.",
         "operationId": "create_environment",
         "parameters": [
           {
@@ -4753,7 +4753,8 @@
             "type": "string"
           },
           "tier": {
-            "$ref": "#/components/schemas/EnvironmentTier"
+            "$ref": "#/components/schemas/EnvironmentTier",
+            "description": "Classification only: either tier may be created first. Defaults to non-production.\nA project allows at most one active production environment."
           }
         }
       },
@@ -4869,12 +4870,14 @@
             "type": "string"
           },
           "tier": {
-            "type": "string"
+            "type": "string",
+            "description": "Security/operational classification, independent of the environment's name or slug."
           }
         }
       },
       "EnvironmentTier": {
         "type": "string",
+        "description": "Classifies sibling environments directly owned by a project, without creation prerequisites.\nEach project permits zero or one active production environment and many non-production ones.",
         "enum": [
           "production",
           "non_production"

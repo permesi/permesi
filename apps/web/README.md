@@ -42,6 +42,19 @@ Note: running `trunk serve` directly will skip CSS generation unless you also ru
 - `/users/:id`: User detail
 - any other path: Not Found
 
+## Environment management
+
+Projects own independent sibling environments at
+`/console/orgs/:slug/projects/:project_slug`. The creation form offers both tiers
+even for an empty Project and defaults to `non_production`, matching the API.
+Names and slugs identify development, QA, staging, or other environments; tier
+classifies their security/operational use without imposing creation order.
+Each Project permits zero or one active production environment and any number of
+non-production environments. The active list disables Production when it is already
+configured, while the backend and PostgreSQL remain authoritative. Soft-deleted
+production environments do not occupy that slot. Creation uses the shared
+keyboard-accessible dialog and preserves input on API errors.
+
 ## OAuth configuration console
 
 Navigate through Organizations → Organization → Project → Environment → Application,

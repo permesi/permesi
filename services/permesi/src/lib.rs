@@ -11,8 +11,9 @@
 //!
 //! - **Slug Normalization:** All identifiers (orgs, projects, envs) are normalized to
 //!   lowercase, URL-safe strings (`[a-z0-9-]`).
-//! - **Environment Tiers:** Each project must have exactly one `production` environment.
-//!   Non-production environments are blocked until the production environment is created.
+//! - **Environment Tiers:** Independent sibling environments belong directly to a project.
+//!   Tiers classify resources, with zero or one active `production` environment and
+//!   any number of `non_production` environments, created in any order.
 //! - **Soft Deletes:** Deleting resources does not reserve their names or slugs; new
 //!   resources can reuse the identifiers of deleted ones.
 //!

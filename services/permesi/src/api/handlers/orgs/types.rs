@@ -27,6 +27,8 @@ pub struct CreateProjectRequest {
 pub struct CreateEnvironmentRequest {
     pub name: String,
     pub slug: String,
+    /// Classification only: either tier may be created first. Defaults to non-production.
+    /// A project allows at most one active production environment.
     #[serde(default)]
     pub tier: EnvironmentTier,
 }
@@ -57,6 +59,7 @@ pub struct EnvironmentResponse {
     pub id: String,
     pub slug: String,
     pub name: String,
+    /// Security/operational classification, independent of the environment's name or slug.
     pub tier: String,
     pub created_at: String,
 }
@@ -68,6 +71,8 @@ pub struct ApplicationResponse {
     pub created_at: String,
 }
 
+/// Classifies sibling environments directly owned by a project, without creation prerequisites.
+/// Each project permits zero or one active production environment and many non-production ones.
 #[derive(Debug, Deserialize, Serialize, ToSchema, Clone, Copy, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvironmentTier {

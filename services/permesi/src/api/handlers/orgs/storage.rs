@@ -81,7 +81,6 @@ impl EnvironmentRow {
 
 #[derive(Debug)]
 pub(super) enum OrgError {
-    BadRequest(&'static str),
     Conflict(&'static str),
     Database(sqlx::Error),
 }
@@ -91,7 +90,6 @@ impl IntoResponse for OrgError {
     /// Database errors are logged server-side and surfaced as `500` without leaking details.
     fn into_response(self) -> axum::response::Response {
         match self {
-            Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
             Self::Conflict(message) => (StatusCode::CONFLICT, message).into_response(),
             Self::Database(err) => {
                 error!("Database error: {err}");
@@ -455,9 +453,10 @@ pub(super) async fn resolve_project(
 }
 
 /// Inserts an environment for a project and returns an `EnvironmentResponse`.
-/// Enforces a single `production` tier per project and requires production before `non_production`.
+/// Both tiers can be created independently. The partial unique index remains the
+/// authoritative guard against multiple active production rows, including concurrent inserts.
 /// Caller must have already enforced org/project access; this function is scoped by ids only.
-/// Uniqueness violations on slug are mapped to `409`.
+/// Production and slug uniqueness violations are mapped to `409`.
 pub(super) async fn insert_environment(
     pool: &PgPool,
     project_id: Uuid,
@@ -465,29 +464,18 @@ pub(super) async fn insert_environment(
     slug: &str,
     tier: EnvironmentTier,
 ) -> Result<EnvironmentResponse, OrgError> {
-    let production_exists = sqlx::query(
-        "SELECT EXISTS(SELECT 1 FROM environments WHERE project_id = $1 AND tier = 'production' AND deleted_at IS NULL) AS exists",
-    )
-    .bind(project_id)
-    .fetch_one(pool)
-    .await
-    .map_err(OrgError::Database)?
-    .get::<bool, _>("exists");
-
-    match tier {
-        EnvironmentTier::Production => {
-            if production_exists {
-                return Err(OrgError::Conflict(
-                    "A production environment already exists for this project.",
-                ));
-            }
-        }
-        EnvironmentTier::NonProduction => {
-            if !production_exists {
-                return Err(OrgError::BadRequest(
-                    "Create a production environment before adding non-production environments.",
-                ));
-            }
+    if matches!(tier, EnvironmentTier::Production) {
+        let production_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM environments WHERE project_id = $1 AND tier = 'production' AND deleted_at IS NULL)",
+        )
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .map_err(OrgError::Database)?;
+        if production_exists {
+            return Err(OrgError::Conflict(
+                "A production environment already exists for this project.",
+            ));
         }
     }
 
@@ -520,7 +508,14 @@ pub(super) async fn insert_environment(
         }),
         Err(err) => {
             if is_unique_violation(&err) {
-                Err(OrgError::Conflict("Environment slug already exists."))
+                let message = if err.as_database_error().and_then(|err| err.constraint())
+                    == Some("environments_project_primary_production_idx")
+                {
+                    "A production environment already exists for this project."
+                } else {
+                    "Environment slug already exists."
+                };
+                Err(OrgError::Conflict(message))
             } else {
                 Err(OrgError::Database(err))
             }

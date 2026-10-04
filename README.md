@@ -182,8 +182,13 @@ Missing / planned:
 
 Organizations are the tenant boundary in permesi. Each organization owns projects, projects own
 environments, environments own applications, and applications own multiple OAuth clients. Applications remain logical tenant resources, rather than becoming OAuth clients. Org-scoped membership and roles are the source
-of authorization for tenant resources, and environment tiers enforce a single production
-environment per project with non-production blocked until production exists.
+of authorization for tenant resources. Environments are independent sibling resources
+owned directly by a Project. Their names and slugs identify development, QA, staging,
+production, or other environments; `production` and `non_production` classify them.
+A Project may have zero or one active production environment and any number of
+non-production environments, created in any order. Non-production never requires
+production to exist first. The database's partial unique index protects the production
+limit even during concurrent creation, and soft-deleting production releases that slot.
 
 More details and the creation flow live in `services/permesi/README.md` under “Organization
 endpoints and authorization”.

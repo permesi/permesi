@@ -24,6 +24,8 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
     "/../../db/sql/02_permesi.sql"
 ));
 
+mod environments;
+
 pub(super) struct TestDb {
     _postgres: PostgresContainer,
     pub(super) pool: PgPool,
@@ -266,8 +268,8 @@ async fn project_creation_requires_owner_or_admin() -> Result<()> {
 }
 
 #[tokio::test]
-/// Confirms environment creation enforces the production-tier rules (prod first, only one prod).
-/// This matches the invariants enforced in `storage::insert_environment`.
+/// Creates non-production first and production later, while rejecting a second production.
+/// Environment tiers classify independent siblings rather than imposing creation order.
 async fn environment_creation_enforces_single_production() -> Result<()> {
     let Some(db) = TestDb::new().await? else {
         return Ok(());
@@ -332,7 +334,7 @@ async fn environment_creation_enforces_single_production() -> Result<()> {
                 .body(Body::from(non_prod_payload.to_string()))?,
         )
         .await?;
-    assert_eq!(non_prod_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(non_prod_response.status(), StatusCode::CREATED);
 
     let prod_payload = json!({
         "name": "Production",

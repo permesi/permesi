@@ -186,9 +186,14 @@ active membership. Org roles (`owner`, `admin`, `member`, `readonly`) are enforc
 owner/admin can mutate org resources; member/readonly are read-only. Unauthorized access is
 returned as 404 to avoid resource enumeration.
 
-Environments include a tier (`production` or `non_production`). Each project may have only one
-production environment, and non-production environments are blocked until a production
-environment exists, so callers must create production first.
+Environments are independent siblings owned directly by a Project. Their tier
+(`production` or `non_production`) is a security/operational classification, not an
+identity or creation prerequisite. Names and slugs identify development, QA, staging,
+or other environments. Each Project may have zero or one active production environment
+and any number of non-production environments, created in either order. The PostgreSQL
+partial unique index on `environments(project_id)` where `tier = 'production'` and
+`deleted_at IS NULL` enforces the production limit, including concurrent inserts.
+Soft-deleting production releases the slot; non-production never depends on it.
 
 Organization slugs are normalized to lowercase, URL-safe identifiers and must be 3–63
 characters (`[a-z0-9-]`, no leading/trailing hyphen). If omitted, the slug is derived from the
@@ -208,12 +213,20 @@ Tenant model overview:
 flowchart TD
   Org["Organization (tenant boundary)"]
   Project["Project"]
-  Env["Environment (tier: production | non_production)"]
-  App["Application (placeholder)"]
+  Dev["Development (dev, non_production)"]
+  Stage["Staging (staging, non_production)"]
+  Prod["Production (production, production)"]
+  DevApp["Application"]
+  StageApp["Application"]
+  ProdApp["Application"]
 
   Org --> Project
-  Project --> Env
-  Env --> App
+  Project --> Dev
+  Project --> Stage
+  Project --> Prod
+  Dev --> DevApp
+  Stage --> StageApp
+  Prod --> ProdApp
 ```
 
 Database hierarchy (core tables + membership):
@@ -241,19 +254,25 @@ erDiagram
 
    `POST /v1/orgs/acme/projects` with `{ "name": "Payments", "slug": "payments" }`
 
-4) Create the first environment and mark it as production (required before non-production):
+4) Create a development environment; production does not need to exist:
 
    `POST /v1/orgs/acme/projects/payments/envs` with
-   `{ "name": "Production", "slug": "prod", "tier": "production" }`
+   `{ "name": "Development", "slug": "dev", "tier": "non_production" }`
 
-5) Create non-production environments as needed:
+5) Add sibling environments in any order. For example, staging and then production:
 
    `POST /v1/orgs/acme/projects/payments/envs` with
    `{ "name": "Staging", "slug": "stage", "tier": "non_production" }`
 
+   `POST /v1/orgs/acme/projects/payments/envs` with
+   `{ "name": "Production", "slug": "prod", "tier": "production" }`
+
+   Creating production first is equally valid; only a second active production
+   environment conflicts.
+
 6) Create an application under an environment:
 
-   `POST /v1/orgs/acme/projects/payments/envs/prod/apps` with `{ "name": "payments-api" }`
+   `POST /v1/orgs/acme/projects/payments/envs/dev/apps` with `{ "name": "payments-api" }`
 
 Always use opaque user IDs in paths. Avoid putting emails in URLs because they leak PII into logs
 and proxies, complicate normalization (case/encoding), and make enumeration easier. If a flow

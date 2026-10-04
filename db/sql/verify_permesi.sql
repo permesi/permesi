@@ -15,6 +15,9 @@ DECLARE
     org_slug text := 'org-' || substr(replace(uuidv4()::text, '-', ''), 1, 12);
     project_id uuid := uuidv4();
     project_id_reuse uuid := uuidv4();
+    sibling_project_id uuid := uuidv4();
+    other_org_id uuid := uuidv4();
+    other_project_id uuid := uuidv4();
     project_slug text := 'proj-' || substr(replace(uuidv4()::text, '-', ''), 1, 12);
     env_id uuid := uuidv4();
     env_id_reuse uuid := uuidv4();
@@ -178,9 +181,36 @@ BEGIN
     INSERT INTO projects (id, org_id, slug, name)
     VALUES (project_id_reuse, org_id_reuse, project_slug, 'Payments Reuse');
 
-    -- Environments: single production tier + slug uniqueness + soft-delete reuse.
+    -- Independent sibling environments: non-production can exist without production.
+    INSERT INTO environments (project_id, slug, name, tier)
+    VALUES (project_id_reuse, 'dev', 'Development', 'non_production'),
+           (project_id_reuse, 'staging', 'Staging', 'non_production');
+
+    PERFORM 1 FROM environments e
+    WHERE e.project_id = project_id_reuse AND e.tier = 'production' AND e.deleted_at IS NULL;
+    IF FOUND THEN
+        RAISE EXCEPTION 'expected non-production siblings without production';
+    END IF;
+
+    -- Production may be added later; the partial unique index limits active rows.
     INSERT INTO environments (id, project_id, slug, name, tier)
     VALUES (env_id, project_id_reuse, env_slug, 'Production', 'production');
+
+    INSERT INTO environments (project_id, slug, name, tier)
+    VALUES (project_id_reuse, 'qa', 'QA', 'non_production');
+
+    -- The production slot belongs to a project, not its organization or another tenant.
+    INSERT INTO projects (id, org_id, slug, name)
+    VALUES (sibling_project_id, org_id_reuse, project_slug || '-other', 'Other Project');
+    INSERT INTO environments (project_id, slug, name, tier)
+    VALUES (sibling_project_id, 'production', 'Production', 'production');
+
+    INSERT INTO organizations (id, slug, name, created_by)
+    VALUES (other_org_id, org_slug || '-env-other', 'Other Organization', v_user_id);
+    INSERT INTO projects (id, org_id, slug, name)
+    VALUES (other_project_id, other_org_id, project_slug, 'Other Tenant Project');
+    INSERT INTO environments (project_id, slug, name, tier)
+    VALUES (other_project_id, 'production', 'Production', 'production');
 
     -- Reject blank environment name.
     BEGIN

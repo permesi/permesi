@@ -1,12 +1,15 @@
-//! Project detail route. Shows environments and applications.
+//! Project detail route for independent sibling environments and their applications.
+//!
+//! The session-backed list supplies tier-selection hints only. Creation order is
+//! unrestricted; org management authorization and the production limit remain server-side.
 
 use crate::features::oauth::paths::EnvironmentPaths;
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{Alert, AlertKind, Button, Spinner, ui::Dialog},
     features::orgs::{
         client,
-        types::{CreateEnvironmentRequest, EnvironmentResponse},
+        types::{CreateEnvironmentRequest, EnvironmentResponse, production_tier_present},
     },
 };
 use leptos::prelude::*;
@@ -41,7 +44,7 @@ pub fn ProjectDetailPage() -> impl IntoView {
 
     view! {
         <div class="space-y-6">
-            <div class="flex items-center justify-between">
+            <div class="flex flex-wrap items-center justify-between gap-3">
                 <div class="space-y-1">
                     <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
                         {move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_else(|| "Project".to_string())}
@@ -51,11 +54,13 @@ pub fn ProjectDetailPage() -> impl IntoView {
                     </p>
                 </div>
 
-                                    <CreateEnvModal
-                                        org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
-                                        project_slug=move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_default()
-                                        on_success=Callback::new(move |_| envs.refetch())
-                                    />                </div>
+                <CreateEnvModal
+                    org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
+                    project_slug=move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_default()
+                    production_exists=Signal::derive(move || envs.get().is_some_and(|result| result.is_ok_and(|list| production_tier_present(&list))))
+                    on_success=Callback::new(move |_| envs.refetch())
+                />
+            </div>
 
             <Suspense fallback=move || view! { <Spinner /> }>
                 {move || match envs.get() {
@@ -64,7 +69,7 @@ pub fn ProjectDetailPage() -> impl IntoView {
                             <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
                                 <span class="material-symbols-outlined text-4xl text-gray-400">"lan"</span>
                                 <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No environments"</h3>
-                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Create a production environment to get started."</p>
+                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Create an environment to get started. Either tier can be created first."</p>
                             </div>
                         }.into_any()
                     }
@@ -113,21 +118,30 @@ pub fn ProjectDetailPage() -> impl IntoView {
     }
 }
 
+/// Creates either tier without prerequisites, using the current list only to avoid
+/// offering a second production tier. Server authorization and validation remain authoritative.
 #[component]
 fn CreateEnvModal<O, P>(
     org_slug: O,
     project_slug: P,
+    #[prop(into)] production_exists: Signal<bool>,
     on_success: Callback<EnvironmentResponse>,
 ) -> impl IntoView
 where
     O: Fn() -> String + Send + Sync + 'static,
     P: Fn() -> String + Send + Sync + 'static,
 {
-    let (is_open, set_is_open) = signal(false);
+    let is_open = RwSignal::new(false);
     let (name, set_name) = signal(String::new());
     let (slug, set_slug) = signal(String::new());
-    let (tier, set_tier) = signal("production".to_string());
+    let (tier, set_tier) = signal("non_production".to_string());
     let (error, set_error) = signal::<Option<AppError>>(None);
+
+    Effect::new(move |_| {
+        if production_exists.get() && tier.get_untracked() == "production" {
+            set_tier.set("non_production".to_owned());
+        }
+    });
 
     let create_action = Action::new_local(
         move |(o, p, req): &(String, String, CreateEnvironmentRequest)| {
@@ -142,7 +156,7 @@ where
         if let Some(result) = create_action.value().get() {
             match result {
                 Ok(env) => {
-                    set_is_open.set(false);
+                    is_open.set(false);
                     set_name.set(String::new());
                     set_slug.set(String::new());
                     set_error.set(None);
@@ -155,6 +169,15 @@ where
 
     let on_submit = StoredValue::new(move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
+        if create_action.pending().get_untracked() {
+            return;
+        }
+        if production_exists.get_untracked() && tier.get_untracked() == "production" {
+            set_error.set(Some(AppError::Config(
+                "This project already has an active production environment.".to_owned(),
+            )));
+            return;
+        }
         let name_val = name.get_untracked().trim().to_string();
         let slug_val = slug.get_untracked().trim().to_string();
 
@@ -178,72 +201,68 @@ where
 
     view! {
         <div>
-            <Button on_click=move |_| set_is_open.set(true)>
+            <Button on_click=move |_| { set_error.set(None); is_open.set(true); }>
                 <div class="flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base">"add"</span>
+                    <span class="material-symbols-outlined text-base" aria-hidden="true">"add"</span>
                     "New Environment"
                 </div>
             </Button>
 
-            <Show when=move || is_open.get()>
-                <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-                    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
-                            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">"Create Environment"</h2>
-                            <button
-                                on:click=move |_| set_is_open.set(false)
-                                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                            >
-                                <span class="material-symbols-outlined">"close"</span>
-                            </button>
-                        </div>
-
-                        <form on:submit=move |ev| on_submit.with_value(|f| f(ev)) class="p-6 space-y-4">
+            <Dialog id="create-environment" title="Create Environment" open=is_open busy=create_action.pending()>
+                        <form on:submit=move |ev| on_submit.with_value(|f| f(ev)) class="space-y-4" aria-describedby="environment-error">
+                            <fieldset disabled=move || create_action.pending().get() class="space-y-4"><legend class="sr-only">"Environment configuration"</legend>
                             <div>
-                                <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">"Environment Name"</label>
+                                <label for="environment-name" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">"Environment Name"</label>
                                 <input
+                                    id="environment-name"
                                     type="text"
                                     required
                                     class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                                    placeholder="Production"
+                                    placeholder="Development"
                                     on:input=move |ev| set_name.set(event_target_value(&ev))
-                                    value=move || name.get()
+                                    prop:value=move || name.get()
                                 />
                             </div>
 
                             <div>
-                                <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">"Slug"</label>
+                                <label for="environment-slug" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">"Slug"</label>
                                 <input
+                                    id="environment-slug"
                                     type="text"
                                     required
+                                    minlength="2"
+                                    maxlength="32"
                                     class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 font-mono"
-                                    placeholder="prod"
+                                    placeholder="dev"
                                     on:input=move |ev| set_slug.set(event_target_value(&ev))
-                                    value=move || slug.get()
+                                    prop:value=move || slug.get()
                                 />
                             </div>
 
                             <div>
-                                <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">"Tier"</label>
+                                <label for="environment-tier" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">"Tier"</label>
                                 <select
+                                    id="environment-tier"
+                                    aria-describedby="environment-tier-help"
                                     class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white"
                                     on:change=move |ev| set_tier.set(event_target_value(&ev))
                                 >
-                                    <option value="production">"Production"</option>
-                                    <option value="non_production">"Non-Production"</option>
+                                    <option value="production" disabled=move || production_exists.get() prop:selected=move || tier.get() == "production">"Production"</option>
+                                    <option value="non_production" prop:selected=move || tier.get() == "non_production">"Non-Production"</option>
                                 </select>
-                                <p class="mt-1 text-xs text-gray-500">"Production tier must be created first."</p>
+                                <p id="environment-tier-help" class="mt-2 text-xs text-gray-500 dark:text-gray-400">"Tier is a classification. Production: one active environment per project. Non-Production: development, testing, QA or staging."</p>
+                                <Show when=move || production_exists.get()><p class="mt-1 text-xs text-gray-500 dark:text-gray-400">"This project already has an active production environment."</p></Show>
                             </div>
+                            </fieldset>
 
-                            <Show when=move || error.get().is_some()>
-                                <Alert kind=AlertKind::Error message=error.get().unwrap().to_string() />
-                            </Show>
+                            <div id="environment-error" role="alert">{move || error.get().map(|error| view! { <Alert kind=AlertKind::Error message=error.to_string() /> })}</div>
 
                             <div class="pt-4 flex flex-col-reverse sm:flex-row gap-3 sm:justify-end">
                                 <button
                                     type="button"
-                                    on:click=move |_| set_is_open.set(false)
-                                    class="px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
+                                    disabled=move || create_action.pending().get()
+                                    on:click=move |_| is_open.set(false)
+                                    class="cursor-pointer px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
                                 >
                                     "Cancel"
                                 </button>
@@ -252,9 +271,7 @@ where
                                 </Button>
                             </div>
                         </form>
-                    </div>
-                </div>
-            </Show>
+            </Dialog>
         </div>
     }
 }

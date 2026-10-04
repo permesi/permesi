@@ -4,8 +4,9 @@
 //! and derives authorization from org membership roles. We return 404 for
 //! unauthorized access (including inactive memberships) to avoid exposing
 //! resource existence, and we normalize slugs to stable URL-safe identifiers.
-//! Environment creation enforces a single production tier per project, with
-//! non-production environments gated until a production environment exists.
+//! Environments are independent siblings directly owned by projects. Their tiers
+//! classify resources without imposing creation order; each project may have zero
+//! or one active production environment and any number of non-production environments.
 //!
 //! This module is split into small route-focused files plus a shared storage
 //! layer so the HTTP surface stays easy to read and the SQL logic stays easy to

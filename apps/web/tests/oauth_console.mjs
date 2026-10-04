@@ -19,6 +19,7 @@ const base=`/v1/orgs/crono/projects/jobs/envs/production/apps/${app}/oauth`;
 const route=`/console/orgs/crono/projects/jobs/envs/production/apps/${app}`;
 const time='2026-10-04T06:00:00Z';
 let clients=[];
+let environments=[];
 let registry=['openid','profile','email','address','phone','offline_access'].map((name,i)=>({id:`system-${i}`,application_id:app,name,description:`OIDC ${name} scope`,kind:'protocol',created_at:time,updated_at:time}));
 let redirects=[], allowed=[];
 let mutationForbidden=false;
@@ -38,7 +39,15 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/session')return send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:'full',totp_enabled:true,webauthn_enabled:false});
   if(p==='/v1/orgs')return send(200,[{id:'org',slug:'crono',name:'Crono',created_at:time}]);
   if(p==='/v1/orgs/crono/projects')return send(200,[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]);
-  if(p==='/v1/orgs/crono/projects/jobs/envs')return send(200,[{id:'env',slug:'production',name:'Production',tier:'production',created_at:time}]);
+  if(p==='/v1/orgs/crono/projects/jobs/envs') {
+   if(req.method==='GET')return send(200,environments);
+   assert.equal(req.method,'POST');
+   assert.deepEqual(Object.keys(input).sort(),['name','slug','tier']);
+   assert(['production','non_production'].includes(input.tier));
+   if(input.tier==='production'&&environments.some(value=>value.tier==='production'))return send(409,'A production environment already exists for this project.');
+   if(environments.some(value=>value.slug===input.slug))return send(409,'Environment slug already exists.');
+   const value={id:`env-${input.slug}`,...input,created_at:time};environments.push(value);return send(201,value);
+  }
   if(p===`/v1/orgs/crono/projects/jobs/envs/production/apps`)return send(200,[{id:app,name:'Crono',created_at:time}]);
   if(p===`${base}/clients`) {
    if(req.method==='GET')return send(200,clients);
@@ -100,7 +109,7 @@ try {
  const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
  const evaluate=async(expression)=>{const result=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
  const wait=async(expression)=>{for(let i=0;i<100;i++){if(await evaluate(`(()=>{try{return Boolean(${expression});}catch{return false;}})()`))return;await delay(150);}throw Error(`Timeout: ${expression}\n${await evaluate('document.body.innerText')}`);};
- const control=text=>`(()=>{const scope=document.querySelector('dialog[open]')||document;return [...scope.querySelectorAll('a,button,summary')].find(e=>e.getClientRects().length&&!e.disabled&&(e.getAttribute('aria-label')===${JSON.stringify(text)}||e.textContent.trim()===${JSON.stringify(text)}));})()`;
+ const control=text=>`(()=>{const scope=document.querySelector('dialog[open]')||document;return [...scope.querySelectorAll('a,button,summary')].find(e=>{const label=e.cloneNode(true);label.querySelectorAll('[aria-hidden=true]').forEach(node=>node.remove());return e.getClientRects().length&&!e.disabled&&(e.getAttribute('aria-label')===${JSON.stringify(text)}||label.textContent.trim()===${JSON.stringify(text)});});})()`;
  const click=async(text)=>{await wait(control(text));return evaluate(`(()=>{const e=${control(text)};if(!e)throw Error('Missing enabled control '+${JSON.stringify(text)});e.click();})()`);};
  const fill=async(id,value)=>evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});if(!e)throw Error('Missing input');const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
  const goto=async(p)=>{await call('Page.navigate',{url:origin+p});};
@@ -109,7 +118,29 @@ try {
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
  await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/console/orgs/crono')).click()");await wait("document.body.innerText.includes('Jobs')");
- await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/projects/jobs')).click()");await wait("document.body.innerText.includes('Manage applications')");
+ await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/projects/jobs')).click()");await wait("document.body.innerText.includes('Either tier can be created first.')");
+ await click('New Environment');await wait("document.querySelector('#create-environment').open");
+ assert.equal(await evaluate("document.querySelector('#environment-tier').value"),'non_production');
+ assert(!await evaluate("document.querySelector('#environment-tier option[value=production]').disabled"),'Both tiers must be available for an empty project');
+ await fill('environment-name','Development');await fill('environment-slug','dev');await click('Create Environment');await wait("!document.querySelector('#create-environment').open && document.body.innerText.includes('Development')");
+ await click('New Environment');await wait("document.querySelector('#create-environment').open");
+ assert(!await evaluate("document.querySelector('#environment-tier option[value=production]').disabled"));
+ await fill('environment-name','Staging');await fill('environment-slug','staging');await click('Create Environment');await wait("!document.querySelector('#create-environment').open && document.body.innerText.includes('Staging')");
+ assert.deepEqual(environments.map(value=>value.tier),['non_production','non_production']);
+ await click('New Environment');await wait("document.querySelector('#create-environment').open");
+ await evaluate("(()=>{const select=document.querySelector('#environment-tier');select.value='production';select.dispatchEvent(new Event('change',{bubbles:true}));})()");
+ await fill('environment-name','Production');await fill('environment-slug','production');await click('Create Environment');await wait("!document.querySelector('#create-environment').open && document.body.innerText.includes('Production')");
+ assert.deepEqual(environments.map(value=>value.tier),['non_production','non_production','production']);
+ await click('New Environment');await wait("document.querySelector('#create-environment').open && document.querySelector('#environment-tier option[value=production]').disabled");
+ assert.equal(await evaluate("document.querySelector('#environment-tier').value"),'non_production');
+ await fill('environment-name','QA');await fill('environment-slug','qa');mutationForbidden=true;await click('Create Environment');await wait("document.querySelector('#environment-error').textContent.trim().length > 0");
+ assert.equal(await evaluate("document.querySelector('#environment-name').value"),'QA');assert.equal(await evaluate("document.querySelector('#environment-slug').value"),'qa');assert.equal(environments.length,3);mutationForbidden=false;
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
+ assert(await evaluate('document.documentElement.scrollWidth <= 390'),'Environment form must fit narrow screens');
+ const environmentForm=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('/tmp/permesi-environment-create-mobile.png',Buffer.from(environmentForm.data,'base64'));
+ await click('Create Environment');await wait("!document.querySelector('#create-environment').open && document.body.innerText.includes('QA')");
+ assert.equal(environments.length,4);assert.equal(environments.filter(value=>value.tier==='production').length,1);
+ await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/envs/production')).click()");
  await wait("document.body.innerText.includes('Applications in this environment')");
  await evaluate(`[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/apps/${app}')).click()`);
@@ -202,6 +233,6 @@ try {
  assert(!requests.some(value=>value.path.includes('internal-row-id')));
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, no JS exceptions.');
+ console.log('Browser smoke passed: independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, no JS exceptions.');
  fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

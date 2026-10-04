@@ -1,8 +1,9 @@
 //! Environment endpoints scoped to an org project.
 //!
-//! The API enforces a single production environment per project and blocks
-//! non-production environments until a production environment exists. This file
-//! wires the HTTP flow and leaves database logic to `storage`.
+//! Environments belong directly to a project and can be created in either tier,
+//! in any order. At most one active production environment is allowed per project.
+//! Session membership and management roles guard writes; `storage` owns database
+//! constraints, and inaccessible org/project resources remain hidden behind 404s.
 
 use axum::{
     Json,
@@ -40,7 +41,7 @@ use super::{
 )]
 /// Creates an environment within a project and returns an `EnvironmentResponse`.
 /// Requires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.
-/// `storage::insert_environment` enforces a single `production` tier and gates `non_production`.
+/// Either tier may be created first; the database enforces at most one active production per project.
 /// The response includes only environment DTO fields.
 pub async fn create_environment(
     Path((org_slug, project_slug)): Path<(String, String)>,
