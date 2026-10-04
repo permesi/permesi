@@ -77,16 +77,31 @@ false`), the reusable workflows are read-only by default, and every Cargo comman
 Container jobs use `./.github/actions/ensure-container-runtime` to verify the API
 used by testcontainers before exporting `DOCKER_HOST` and `CONTAINER_TOOL`.
 GitHub-hosted runners use their existing system Docker API. Self-hosted runners
-use Podman, installing it when missing and configuring `XDG_RUNTIME_DIR` and
-`DBUS_SESSION_BUS_ADDRESS` for rootless operation.
+use Podman, installing it when missing and configuring a private `XDG_RUNTIME_DIR`.
 
 Each self-hosted job starts its own Podman service with no inactivity timeout on
-a private Unix socket under `RUNNER_TEMP`. Setup probes that exact API endpoint;
-local `podman info` alone cannot establish socket readiness. A failed startup
-cleans up only its own process and directory, while successful services remain
-available across steps until the runner's job cleanup. Setup never migrates
-shared Podman state or removes another job's service or socket; migrations are
-runner maintenance and must run while jobs are stopped.
+a private Unix socket under `/run/user/<uid>` (or the `/tmp` fallback). Runtime,
+runroot, and libpod temporary state stay there so rootless networking can access
+them under the host's AppArmor policy. Image storage and network configuration
+live in a separate private directory under `RUNNER_TEMP`. Each job owns its pause
+process, so stale host state and another job's cleanup cannot affect it.
+`CONTAINER_HOST` routes Podman CLI steps to the same engine tests use through
+`DOCKER_HOST`. Required images use fully qualified names, with bounded pull retries
+before setup exports a usable runtime.
+
+Setup probes the exact API endpoint; local `podman info` alone cannot establish
+socket readiness. Hard links to the runner user's existing bus and systemd socket
+keep DNS available when Netavark remounts `/run` inside its network namespace.
+The host bus address is also exported for clients that use it.
+
+The Node 24 action registers a post hook that removes its containers, networks,
+volumes, and images through explicitly scoped engine commands, stops its recorded
+API process, and deletes its directories from the job's user namespace. This
+removes files owned by subordinate UIDs that ordinary runner cleanup cannot delete.
+Setup never migrates shared Podman state or removes another job's service or
+socket, and cleanup never runs `podman system reset`. Runner maintenance handles
+shared migrations while jobs are stopped and orphaned resources after a runner
+crash or host reboot, when action post hooks cannot execute.
 
 Python 3 is required on runners for the action's readiness, concurrent isolation,
 and hosted-runtime regressions. Run them locally with

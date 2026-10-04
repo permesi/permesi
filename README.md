@@ -617,9 +617,15 @@ We welcome contributions of all kinds!
 ## CI Commands
 
 Container jobs verify the API endpoint used by tests before proceeding. Each
-self-hosted job starts a Podman service on its own private Unix socket; job setup
+self-hosted job starts a Podman service with its own runtime and Unix socket under
+the user runtime directory, plus private image storage under `RUNNER_TEMP`.
+`DOCKER_HOST` and `CONTAINER_HOST` route tests and CLI commands to that job's engine,
+including when shared host Podman state is stale. Same-user systemd socket hard
+links keep container DNS available, and an action post hook removes the job's
+resources and subordinate-UID files through its own namespace. Job setup
 does not migrate shared container state or remove another job's socket or service.
-Runner maintenance must handle Podman migrations while jobs are stopped.
+Runner maintenance handles Podman migrations while jobs are stopped, plus orphaned
+resources after runner crashes when post hooks cannot execute.
 GitHub-hosted jobs use the existing system Docker API. The runtime action runs
 its isolation and readiness regressions before setup; run those locally with
 `python3 .github/actions/ensure-container-runtime/test_runtime.py`.

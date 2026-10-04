@@ -1,14 +1,7 @@
 name: Ensure Container Runtime
-description: Verify a container API and isolate self-hosted Podman sockets per job.
+description: Verify a container API and isolate self-hosted Podman engines per job.
 runs:
-  using: composite
-  steps:
-    - name: Test runtime setup
-      shell: bash
-      run: python3 "${{ github.action_path }}/test_runtime.py"
-
-    - name: Ensure container runtime
-      shell: bash
-      env:
-        RUNNER_ENVIRONMENT: ${{ runner.environment }}
-      run: bash "${{ github.action_path }}/runtime.sh"
+  using: node24
+  main: main.js
+  post: post.js
+  post-if: always()

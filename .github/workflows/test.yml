@@ -169,7 +169,7 @@ jobs:
               -e POSTGRES_HOST_AUTH_METHOD=trust \
               -v "${GITHUB_WORKSPACE}/db/sql:/db/sql:ro" \
               -v "${VOLUME_NAME}:/var/lib/postgresql" \
-              postgres:18 \
+              docker.io/library/postgres:18 \
               postgres
 
             if ! ${CONTAINER_TOOL} ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
