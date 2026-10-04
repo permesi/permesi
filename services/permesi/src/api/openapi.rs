@@ -130,9 +130,16 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
     router
 }
 
-/// Registers only implemented OAuth protocol routes, leaving token issuance deferred.
+/// Registers credential management and implemented protocol routes; token issuance is deferred.
 fn oauth_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(orgs::oauth::credentials::list_secrets))
+        .routes(routes!(orgs::oauth::credentials::create_secret))
+        .routes(routes!(orgs::oauth::credentials::rotate_secret))
+        .routes(routes!(orgs::oauth::credentials::revoke_secret))
+        .layer(axum::middleware::map_response(
+            orgs::oauth::credentials::prevent_cache,
+        ))
         .routes(routes!(authorize::discovery))
         .routes(routes!(authorize::jwks))
         .routes(routes!(authorize::authorize))
@@ -355,7 +362,40 @@ mod tests {
         }
         let document = serde_json::to_string(&spec)?;
         assert!(!document.contains("secret_hash"));
-        assert!(!document.contains("client_secret"));
+        let json = serde_json::to_value(&spec)?;
+        let schemas = json
+            .get("components")
+            .and_then(|v| v.get("schemas"))
+            .context("missing components")?
+            .as_object()
+            .context("missing schemas")?;
+        for (name, schema) in schemas {
+            assert_eq!(
+                schema
+                    .get("properties")
+                    .and_then(|v| v.get("client_secret"))
+                    .is_some(),
+                name == "IssuedSecretResponse",
+                "{name}"
+            );
+        }
+        let issuance = "#/components/schemas/IssuedSecretResponse";
+        let exposed: Vec<_> = json
+            .get("paths")
+            .context("missing paths")?
+            .as_object()
+            .context("missing paths")?
+            .iter()
+            .filter(|(_, value)| value.to_string().contains(issuance))
+            .map(|(path, _)| path.as_str())
+            .collect();
+        assert_eq!(
+            exposed,
+            vec![
+                format!("{base}/clients/{{client_id}}/secrets"),
+                format!("{base}/clients/{{client_id}}/secrets/rotate")
+            ]
+        );
         let json = serde_json::to_value(&spec)?;
         let paths = json
             .get("paths")

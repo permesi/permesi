@@ -121,6 +121,18 @@ impl ApplicationPaths {
         format!("{}/scopes", self.client_api(client_id))
     }
 
+    /// Returns the confidential credential metadata/creation endpoint.
+    #[must_use]
+    pub fn secrets_api(&self, client_id: &str) -> String {
+        format!("{}/secrets", self.client_api(client_id))
+    }
+
+    /// Returns a credential revocation endpoint without allowing path traversal.
+    #[must_use]
+    pub fn secret_api(&self, client_id: &str, secret_id: &str) -> String {
+        format!("{}/{}", self.secrets_api(client_id), segment(secret_id))
+    }
+
     /// Returns the application scope registry endpoint.
     #[must_use]
     pub fn scopes_api(&self) -> String {

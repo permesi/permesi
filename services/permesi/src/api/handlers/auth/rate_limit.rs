@@ -25,6 +25,8 @@ pub enum RateLimitAction {
     ResendVerification,
     MfaRecovery,
     Authorize,
+    ClientCredentials,
+    ClientCredentialRevocation,
 }
 
 impl RateLimitAction {
@@ -36,6 +38,8 @@ impl RateLimitAction {
             Self::ResendVerification => "resend_verification",
             Self::MfaRecovery => "mfa_recovery",
             Self::Authorize => "authorize",
+            Self::ClientCredentials => "client_credentials_management",
+            Self::ClientCredentialRevocation => "client_credentials_revocation",
         }
     }
 }

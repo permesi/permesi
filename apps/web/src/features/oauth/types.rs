@@ -1,4 +1,4 @@
-//! DTOs for existing OAuth management APIs, with no credential fields.
+//! OAuth management DTOs; only issuance responses carry a one-time credential.
 
 use serde::{Deserialize, Serialize};
 
@@ -140,4 +140,30 @@ pub struct CreateScopeRequest {
 #[derive(Clone, Debug, Serialize)]
 pub struct PatchScopeRequest {
     pub description: String,
+}
+
+/// Usable credential metadata; revoked/expired values are omitted server-side.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SecretMetadata {
+    pub id: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
+/// One-time secret response, deliberately without Debug or browser persistence.
+#[derive(Clone, Deserialize)]
+pub struct IssuedSecret {
+    pub credential: SecretMetadata,
+    pub client_secret: String,
+    pub previous: Option<SecretMetadata>,
+}
+
+/// Empty strict creation request; hashing/overlap policy is operator controlled.
+#[derive(Serialize)]
+pub struct CreateSecretRequest {}
+
+/// Rotation must identify the current credential reviewed by the manager.
+#[derive(Serialize)]
+pub struct RotateSecretRequest {
+    pub current_secret_id: String,
 }

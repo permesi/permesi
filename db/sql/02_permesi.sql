@@ -197,8 +197,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS oauth_clients_application_name_active_idx
     ON oauth_clients (application_id, name) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS oauth_clients_application_idx ON oauth_clients (application_id);
 
--- Credential issuance/rotation is deferred. No plaintext storage is permitted; a future
--- service must generate high-entropy secrets and verify PHC Argon2id hashes securely.
+-- Confidential credentials contain high-entropy material; only salted Argon2id PHC
+-- hashes persist. Client row locks serialize creation, overlap rotation and revocation.
 CREATE TABLE IF NOT EXISTS oauth_client_secrets (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
     client_id UUID NOT NULL,
@@ -208,8 +208,63 @@ CREATE TABLE IF NOT EXISTS oauth_client_secrets (
     revoked_at TIMESTAMPTZ,
     FOREIGN KEY (client_id, client_type) REFERENCES oauth_clients(id, client_type) ON DELETE CASCADE
 );
+ALTER TABLE oauth_client_secrets ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_client_secrets_current_idx
+    ON oauth_client_secrets(client_id) WHERE revoked_at IS NULL AND expires_at IS NULL;
+
+-- Identity/hash creation is immutable; revocation is irreversible and retirement can only shorten.
+CREATE OR REPLACE FUNCTION protect_oauth_client_secret() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id OR NEW.client_id IS DISTINCT FROM OLD.client_id
+       OR NEW.client_type IS DISTINCT FROM OLD.client_type OR NEW.secret_hash IS DISTINCT FROM OLD.secret_hash
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at)
+       OR (OLD.expires_at IS NOT NULL AND (NEW.expires_at IS NULL OR NEW.expires_at > OLD.expires_at))
+       OR (OLD.expires_at IS NULL AND NEW.expires_at > clock_timestamp() + INTERVAL '3600 seconds') THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Invalid credential transition';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS protect_oauth_client_secret ON oauth_client_secrets;
+CREATE TRIGGER protect_oauth_client_secret BEFORE UPDATE ON oauth_client_secrets
+    FOR EACH ROW EXECUTE FUNCTION protect_oauth_client_secret();
+
+-- Credentials start live; callers cannot pre-retire them or forge creation times.
+CREATE OR REPLACE FUNCTION initialize_oauth_client_secret() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.revoked_at IS NOT NULL OR NEW.expires_at IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Invalid initial credential state';
+    END IF;
+    NEW.created_at := clock_timestamp();
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS initialize_oauth_client_secret ON oauth_client_secrets;
+CREATE TRIGGER initialize_oauth_client_secret BEFORE INSERT ON oauth_client_secrets
+    FOR EACH ROW EXECUTE FUNCTION initialize_oauth_client_secret();
+
 CREATE INDEX IF NOT EXISTS oauth_client_secrets_active_idx
     ON oauth_client_secrets (client_id) WHERE revoked_at IS NULL;
+
+-- A client may have only one live retiring credential. Serialize direct writes too;
+-- the partial unique index separately enforces one non-revoked current credential.
+CREATE OR REPLACE FUNCTION limit_oauth_client_secret_overlap() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1 FROM oauth_clients WHERE id=NEW.client_id FOR UPDATE;
+    IF (SELECT count(*) FROM oauth_client_secrets WHERE client_id=NEW.client_id
+        AND revoked_at IS NULL AND expires_at>clock_timestamp()) > 1 THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Credential overlap already active';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS limit_oauth_client_secret_overlap ON oauth_client_secrets;
+CREATE TRIGGER limit_oauth_client_secret_overlap AFTER INSERT OR UPDATE ON oauth_client_secrets
+    FOR EACH ROW EXECUTE FUNCTION limit_oauth_client_secret_overlap();
 
 CREATE TABLE IF NOT EXISTS oauth_client_redirect_uris (
     client_id UUID NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
@@ -617,7 +672,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
     dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
     subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
     action TEXT NOT NULL CHECK (action IN (
-        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize'
+        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'client_credentials_management','client_credentials_revocation'
     )),
     attempts BIGINT NOT NULL CHECK (attempts > 0),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -627,7 +682,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
 -- Add the independent OAuth authorization counter without changing existing actions.
 ALTER TABLE auth_rate_limits DROP CONSTRAINT IF EXISTS auth_rate_limits_action_check;
 ALTER TABLE auth_rate_limits ADD CONSTRAINT auth_rate_limits_action_check
-    CHECK (action IN ('signup','login','verify_email','resend_verification','mfa_recovery','authorize'));
+    CHECK (action IN ('signup','login','verify_email','resend_verification','mfa_recovery','authorize','client_credentials_management','client_credentials_revocation'));
 
 CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
 
@@ -818,9 +873,11 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
-            oauth_clients, oauth_client_secrets, oauth_client_redirect_uris, oauth_scopes,
+            oauth_clients, oauth_client_redirect_uris, oauth_scopes,
             oauth_client_scopes, oauth_grants, oauth_grant_scopes,
             oauth_authorization_requests, oauth_authorization_codes TO permesi_runtime;
+        GRANT SELECT, INSERT, UPDATE ON TABLE oauth_client_secrets TO permesi_runtime;
+        REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;

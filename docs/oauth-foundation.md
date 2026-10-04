@@ -36,14 +36,13 @@ registry using composite foreign keys. These prevent cross-application assignmen
 even through direct SQL. API scope deletion removes dependent allow-list and grant
 edges; recreating the name creates a new ID and does not restore client authority.
 
-`oauth_client_secrets` anticipates rotation with revocable Argon2id PHC hashes and
-a composite foreign key restricting secrets to confidential clients. No code writes
-secrets in this phase, and the format constraint is not a password-hash verifier.
-Future issuance must generate high-entropy random values, return plaintext only once
-at creation/rotation, validate hashes and parameters, and never log or include secrets
-or hashes in registration DTOs. Client authentication method and grant-type policy
-will be configured explicitly in the token phase; public clients must never be
-silently upgraded to confidential by possession of a supplied value.
+`oauth_client_secrets` stores salted Argon2id PHC hashes for confidential clients only.
+The composite foreign key enforces that classification; plaintext is never persisted.
+The service issues 256 random bits in canonical `pcs.<credential-uuid>.<base64url>` form,
+returns plaintext once, and validates Argon2id v19, supported costs, salt and output
+before verification. Registration/metadata DTOs never include hashes or secrets.
+A supplied value cannot upgrade a public client to confidential. Client authentication
+method and grant-type policy still belong to the upcoming token phase.
 
 `oauth_grants` binds one user, client, application, and explicit owning organization.
 A membership foreign key and ancestry/lifecycle trigger reject an unrelated tenant
@@ -286,7 +285,7 @@ Existing trusted-proxy IP extraction policy is unchanged; without sanitized forw
 headers all traffic shares the existing sentinel bucket. Shared client/ancestor locks
 permit independent users to proceed concurrently while excluding management writes.
 Race-safe grant insertion and row locks serialize consent only for the relevant grant;
-a configured transaction-local lock timeout bounds blocked database connections. The
+configured transaction-local lock and statement timeouts bound PostgreSQL waits. The
 future token HTTP adapter must apply its own request/client throttling before redemption.
 
 Unknown/inactive clients and unregistered redirects receive direct errors with no Location.
@@ -310,7 +309,11 @@ remains available. Clap validates values and dispatch validates them again. TTL 
 are `PERMESI_OAUTH_CODE_TTL_SECONDS` / `--oauth-code-ttl-seconds` and
 `PERMESI_OAUTH_REQUEST_TTL_SECONDS` / `--oauth-request-ttl-seconds`.
 `PERMESI_OAUTH_LOCK_TIMEOUT_MS` / `--oauth-lock-timeout-ms` defaults to 1000 ms and
-accepts 1–10000 ms; it applies to every authorization/redemption transaction.
+accepts 1–10000 ms; transaction-local lock and statement deadlines apply to every
+authorization/redemption transaction and credential operation. Existing client writers
+apply the statement deadline to ownership/lock coordination and restore the database's
+previous statement policy afterwards so bulk consent revocation can finish. Their
+individual lock waits retain the configured limit.
 
 `PERMESI_OIDC_SIGNING_KEY` / `--oidc-signing-key` selects a single transit key name,
 default `oidc-signing`, under the existing configured Vault transit mount. Terraform
@@ -347,17 +350,153 @@ not a complete interoperable OpenID Provider: [OIDC Discovery §3](https://openi
 requires a token endpoint for code flow. This limitation must be removed when the real
 safe token endpoint exists; no fake endpoint or invented token capability is exposed.
 
-## Next phase
+## Confidential-client credentials
 
-Implement `/token` with authenticated confidential clients and secret rotation, transaction-
-owned authorization-code redemption, signed access-token claims for the configured resource
-audience, and OIDC ID tokens bound to client audience/nonce/auth_time. Complete interoperable
-OIDC discovery at that milestone. Add refresh rotation separately with hashed storage,
-reuse detection, grant-family revocation and tenant/consent revalidation. Broader grants/
-consent management, device flow, introspection, revocation and client credentials/M2M remain
-future work. M2M needs its own service-principal/resource policy, not a manufactured user grant.
+Let `C` denote the existing application-scoped client path ending in
+`/oauth/clients/{client_id}`. `GET C/secrets` lists current and unexpired retiring
+metadata (`id`, `created_at`, `expires_at`). `POST C/secrets` accepts strictly `{}`
+and creates an initial credential. `POST C/secrets/rotate` accepts only
+`{"current_secret_id":"<uuid>"}`; both issuance routes return 201 with `credential`,
+one-time `client_secret`, and optional `previous` metadata. `DELETE C/secrets/{secret_id}`
+soft-revokes an owned credential at transaction commit and returns 204, including repeated
+revocation. Wrong tenant/client IDs return 404. All credential responses use `no-store`.
+
+Reads require the existing full session and active organization membership; writes
+require owner/admin. The service rechecks active user/membership, organization roles
+and complete client ancestry inside its transaction. Platform permissions provide no
+bypass. Public clients cannot receive credentials; disabled clients cannot create or
+rotate, but owned records remain revocable. Existing disable/delete operations revoke
+all credentials; re-enabling restores none. Mutations reject untrusted browser Origins
+and use shared PostgreSQL per-user/client counters with HMAC subjects and the existing
+configured account-attempt/window limits. Revocation has an independent counter, so
+exhausting issuance/rotation attempts does not block emergency revocation. Client
+existence and tenant authorization are checked before consuming counters. These budgets
+do not substitute for future token-endpoint authentication throttling.
+
+Transaction-scoped PostgreSQL advisory locks coordinate each public client across
+replicas: authorization/authentication readers take shared locks and mutations take
+exclusive locks before authority row locks. Mutations first resolve immutable ownership
+inside the selected application, so a foreign client ID cannot join another tenant's
+exclusive queue. They reload authority after acquiring the lock. Queued writers prevent new readers from
+bypassing revocation. Row locks still protect current authority and ancestry. Metadata
+reads do not lock client or credential rows. A partial unique index permits
+one non-revoked current credential; an overlap trigger permits one unexpired retiring
+credential. Rotation atomically sets the old deadline and inserts the replacement.
+A stale expected ID or another live overlap returns 409 without changing credentials.
+Revoke the retiring credential to rotate immediately, or wait for its deadline.
+PostgreSQL time determines expiration, not the browser clock. Identity/hash/creation
+fields are immutable under updates, revocation cannot be undone by updates, and an
+existing deadline may only shorten. New records start live with database-assigned creation
+time; the first retirement cannot exceed the 3600-second policy ceiling. Runtime roles
+cannot directly delete or truncate credential history; parent-row FK cascades still remove
+it, including through the role's broader existing privileges.
+This is defense in depth, not protection against a compromised schema owner or the
+runtime role's broader existing write privileges; least-privilege/RLS work remains pending.
+
+The overlap default is 900 seconds, configurable from 1 to 3600 with
+`--oauth-client-secret-grace-seconds` / `PERMESI_OAUTH_CLIENT_SECRET_GRACE_SECONDS`.
+Argon2id defaults are 19456 KiB, two iterations and parallelism one, with two hashing
+workers. Configure `--oauth-client-secret-memory-kib` (19456–65536),
+`--oauth-client-secret-iterations` (2–6), `--oauth-client-secret-parallelism` (1–4),
+and `--oauth-client-secret-hash-workers` (1–8); corresponding environment names use
+`PERMESI_OAUTH_CLIENT_SECRET_` followed by `MEMORY_KIB`, `ITERATIONS`, `PARALLELISM`,
+and `HASH_WORKERS`. Clap and dispatch revalidate bounds even when OIDC is disabled.
+Transaction-local lock and whole-statement deadlines reuse `--oauth-lock-timeout-ms`;
+SQLSTATE 55P03/57014 return 503 for credential operations and the existing client
+patch/delete/redirect/scope writers during coordination. Those writers restore the
+database's prior statement policy after taking client authority locks, allowing bulk
+consent revocation to finish while individual lock attempts remain bounded. Pool acquisition
+is separately bounded by the existing SQLx pool policy. A short transaction rejects inaccessible/stale
+states before hashing, releases its locks, and the final mutation reloads authority.
+Hashing uses bounded blocking workers;
+permits are acquired after database preflight/candidate lookup, immediately before
+blocking work, and remain held through cancellation until that worker finishes.
+Saturation returns 503 instead of queuing unbounded work. Capacity is local to a replica,
+while credential validity and rotation state are exclusively PostgreSQL-backed.
+
+The console shows current/retiring IDs and deadlines, confirms mutations, and provides
+one-time copy/disclosure. Dismissal/navigation clears plaintext; browser storage and
+URLs contain none. An ambiguous issuance failure refreshes metadata without retrying.
+If an unreceived current credential exists, revoke it and create another; the previous
+retiring credential retains its original deadline. This explicit recovery does not
+recover or silently reissue the lost plaintext.
+
+The internal verification helper returns client/application/organization authentication
+proof only. It hashes before taking authority locks, then reloads and share-locks the
+active client, ancestors and credential and checks expiration after acquiring locks.
+The proof currently carries no transaction lifetime: the future `/token` integration
+must enforce a transaction-owning guard or an equivalent matching-proof requirement.
+Callers must retain the same transaction through future authorization-code redemption
+and token issuance, and apply endpoint throttling first. Credentials confer no user
+consent or delegated scopes. No `/token` or client authentication method is advertised yet.
+Random credential IDs allow early rejection before hashing; timing may distinguish a live
+locator from an unknown one, but does not prove possession of its random secret. The
+future token endpoint must apply shared authentication throttling before verification.
+
+## Roadmap
+
+[TODO.md](../TODO.md) is the authoritative completion checklist. This document explains
+boundaries and dependencies; README and the frontend documentation link back to it.
+A milestone is complete only after its implementation, required checks and independent
+review pass. Presently token issuance and interoperable OpenID Provider discovery remain pending.
+
+After credential management, implement real `/token` exchange with confidential-client
+authentication and mandatory S256 for public clients. Keep code consumption and token
+persistence in one transaction, enforce confidential authentication with a matching
+proof tied to that transaction, and throttle client authentication before hashing. Sign
+access tokens through Vault with explicit issuer, resource audience and tenant/resource claims. Add rollback, replay, concurrent redemption
+and cross-replica coverage before claiming access-token support.
+
+Next add OIDC ID tokens bound to client audience, nonce and auth_time, issuer/mix-up
+protections and complete accurate discovery/auth-method metadata. Validate that milestone
+against actual token behavior; the preparatory document cannot claim interoperability.
+Refresh tokens follow separately with hashed storage, rotation/reuse detection,
+grant-family revocation and current tenant/consent revalidation. `offline_access` stays
+rejected until refresh policy and issuance are implemented.
+
+Authorization UX should show the signed-in account and callback host and provide a safe
+restart path for expired requests, with account-switching policy and browser regressions.
+Operational work includes Firefox/Safari coverage, multi-replica load tests for shared
+locks/MultiXact behavior, and sanitized metrics/alerts. Ancestor rows still use ordinary
+share locks: overlapping readers across clients in a subtree can starve organization,
+project, environment or application updates/deletions. Existing ancestor writers lack
+the client-level advisory coordination and consistent deadlines. The operations milestone
+must add hierarchical coordination or bounded deadline/retry before claiming sustained-load
+lifecycle guarantees. Those row locks continue to protect current ancestry during authorization.
+Record coverage actually exercised;
+local Chromium tests do not establish cross-browser or production load behavior.
+
+Broader tenant-bound grants/consent management, UserInfo, introspection, token revocation,
+device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
+and resource policy; possession of a confidential credential must not manufacture a user
+grant. Audit UI and database least-privilege/RLS remain tracked separately in TODO.md.
 
 ## Review boundaries and deferred policy
+
+The confidential-credential milestone passed four independent Claude security reviews
+through Herdr. Confirmed medium findings in reader/writer starvation, foreign-tenant
+coordination and bulk revocation deadlines were fixed with PostgreSQL regressions.
+Lower-severity findings in CPU-permit ordering, revocation quotas, lifecycle constraints
+and missing negative coverage were also resolved. No critical or high findings remain.
+The latent transaction-owning authentication proof belongs to `/token`; inherited
+ancestor-row starvation belongs to the operations milestone as described above.
+
+Final primary validation passed `just test` (484 tests), all-feature workspace tests
+(514), default/all-feature workspace builds, required formatting/Clippy, Web native and
+release WASM builds, Chromium console tests, the separately exercised real-PostgreSQL
+browser consent test, schema bootstrap/verification and OpenAPI byte consistency.
+There are 21 PostgreSQL credential test groups plus crypto/config/native Web coverage.
+Claude independently reran 60 OAuth tests, 24 authorization tests, formatting, Clippy
+and OpenAPI consistency. The existing browser-target Clippy backlog is reproduced at
+HEAD and tracked separately; Chromium coverage does not imply Firefox/Safari or load coverage.
+
+A lost COMMIT acknowledgement can remain ambiguous if PostgreSQL committed before the
+caller observed success; the review's earlier claim that cancellation always rolls back
+was rejected for that reason. Metadata refresh and explicit revoke/create recovery handle
+this case without automatically retrying issuance or recovering plaintext. Informational
+trade-offs retained deliberately include early rejection of random credential locators,
+brief membership locks for reads, and plaintext destruction on disclosure dismissal.
+
 
 Independent Claude review through Herdr reproduced the cross-origin consent CSP defect
 and identified client-lock/throttling and uncached Vault-read availability issues. The

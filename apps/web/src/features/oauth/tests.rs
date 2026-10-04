@@ -520,3 +520,34 @@ fn navigation_active_preserves_application_and_subsection_hierarchy() {
     ));
     assert!(navigation_active(&format!("{oauth}/"), &oauth, false));
 }
+
+#[test]
+fn confidential_credential_paths_encode_ids_and_rotation_binds_expected_current()
+-> Result<(), serde_json::Error> {
+    let paths = EnvironmentPaths {
+        org: "org".into(),
+        project: "project".into(),
+        environment: "prod".into(),
+    }
+    .application("app");
+    assert!(
+        paths
+            .secret_api("client", "../other")
+            .ends_with("/clients/client/secrets/..%2Fother")
+    );
+    assert_eq!(
+        serde_json::to_value(super::types::CreateSecretRequest {})?,
+        json!({})
+    );
+    assert_eq!(
+        serde_json::to_value(super::types::RotateSecretRequest {
+            current_secret_id: "reviewed-id".into()
+        })?,
+        json!({"current_secret_id":"reviewed-id"})
+    );
+    let metadata: Vec<super::types::SecretMetadata> = serde_json::from_value(
+        json!([{ "id":"credential", "created_at":"time", "expires_at":null }]),
+    )?;
+    assert_eq!(metadata.len(), 1);
+    Ok(())
+}

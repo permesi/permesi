@@ -1,4 +1,4 @@
-//! Explicit request/response DTOs with no credential or internal permission fields.
+//! Explicit request/response DTOs; only issuance responses include one-time plaintext.
 //!
 //! Unknown request fields are rejected so IDs, client classification changes, and
 //! client-supplied roles cannot be silently accepted as configuration.
@@ -134,6 +134,66 @@ impl From<ScopeRecord> for ScopeResponse {
             kind: scope.kind,
             created_at: scope.created_at.to_rfc3339(),
             updated_at: scope.updated_at.to_rfc3339(),
+        }
+    }
+}
+
+/// Path-bound credential ID; browser values never select a different application.
+#[derive(Deserialize)]
+pub(crate) struct SecretPath {
+    #[serde(flatten)]
+    pub client: ClientPath,
+    pub secret_id: Uuid,
+}
+
+/// Explicit empty creation body; unknown fields cannot alter hashing/lifecycle policy.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CreateSecretRequest {}
+
+/// Optimistic concurrency binding to the credential the manager actually reviewed.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RotateSecretRequest {
+    #[schema(value_type = String)]
+    pub current_secret_id: Uuid,
+}
+
+/// Current or retiring metadata, never a credential hash or recoverable secret.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct SecretResponse {
+    pub id: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
+impl From<crate::oauth::credentials::SecretMetadata> for SecretResponse {
+    /// Copies reviewed metadata only, preserving PostgreSQL retirement deadlines.
+    fn from(value: crate::oauth::credentials::SecretMetadata) -> Self {
+        Self {
+            id: value.id.to_string(),
+            created_at: value.created_at.to_rfc3339(),
+            expires_at: value.expires_at.map(|time| time.to_rfc3339()),
+        }
+    }
+}
+
+/// Sole plaintext-bearing DTO; returned once by successful create/rotate with no-store.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct IssuedSecretResponse {
+    pub credential: SecretResponse,
+    pub client_secret: String,
+    pub previous: Option<SecretResponse>,
+}
+
+impl From<crate::oauth::credentials::IssuedSecret> for IssuedSecretResponse {
+    /// Intentionally reveals the fresh secret only at the reviewed issuance boundary.
+    fn from(value: crate::oauth::credentials::IssuedSecret) -> Self {
+        use secrecy::ExposeSecret;
+        Self {
+            credential: value.credential.into(),
+            client_secret: value.client_secret.expose_secret().to_owned(),
+            previous: value.previous.map(Into::into),
         }
     }
 }

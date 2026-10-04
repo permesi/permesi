@@ -5,9 +5,11 @@
 //! mutations, resolve active project/environment/application, then call the OAuth
 //! service with that trusted context. Inaccessible resources return 404. Global
 //! Principal capabilities never bypass org membership or become delegated scopes.
-//! DTOs expose registration fields only; credentials and grant metadata are excluded.
+//! Registration DTOs exclude credentials/grants. Separate credential issuance reveals
+//! freshly generated plaintext once; reads return metadata only.
 
 pub(crate) mod clients;
+pub(crate) mod credentials;
 pub(crate) mod scopes;
 mod types;
 
@@ -33,6 +35,7 @@ impl IntoResponse for Error {
             Self::Conflict => {
                 (StatusCode::CONFLICT, "OAuth configuration already exists.").into_response()
             }
+            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             Self::Database(error) => persistence_status(&error).into_response(),
         }
     }
@@ -81,7 +84,10 @@ async fn resolve_application(
     .await
     .map_err(|error| persistence_status(&error))?
     .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(ApplicationContext::resolved(application_id))
+    Ok(ApplicationContext::resolved(
+        application_id,
+        principal.user_id,
+    ))
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! Public client identifiers are independent random UUIDs, never credentials. Client
 //! classification is immutable: converting between public and confidential requires
-//! a new registration. Confidential credential issuance and authentication are deferred.
+//! a new registration. Credential management/verification is separate from token issuance.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

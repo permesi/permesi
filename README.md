@@ -204,7 +204,7 @@ and never become OAuth delegation.
 
 The web console manages this configuration through Organizations → Project →
 Environment → Application → OAuth Configuration. Client pages manage registration,
-redirect URI and scope allow-lists, and lifecycle state; the application scope registry
+redirect URI and scope allow-lists, lifecycle state, and confidential-client secrets; the application scope registry
 distinguishes editable API scopes from immutable OIDC system entries. See the
 [frontend documentation](apps/web/README.md#oauth-configuration-console) for routes
 and management behavior.
@@ -230,8 +230,13 @@ enable the protocol routes. `/jwks.json` exposes retained public RSA versions fr
 shared Vault transit key. `/.well-known/openid-configuration` provides preparatory
 metadata, deliberately omitting the unimplemented token endpoint. This is not yet
 a complete interoperable OpenID Provider: standard code-flow discovery requires
-`token_endpoint`. Signing, confidential client credentials/rotation, broader consent
-management and refresh tokens remain deferred. See [OAuth foundation](docs/oauth-foundation.md)
+`token_endpoint`. Confidential clients now have tenant-authorized one-time secret creation,
+rotation with a configurable 15-minute overlap, revocation at commit, and internal
+Argon2id verification. Those credentials prepare future client authentication; the
+OAuth `client_credentials` machine grant remains planned. Signing, access/ID/refresh
+tokens and broader grants management remain deferred. Follow [TODO](TODO.md) for the
+milestone checklist and [OAuth roadmap](docs/oauth-foundation.md#roadmap) for dependencies.
+See [OAuth foundation](docs/oauth-foundation.md)
 for configuration, exact redirect/error rules, consent policy and rollout.
 
 ## Trust Boundaries

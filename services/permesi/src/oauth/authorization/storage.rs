@@ -327,6 +327,7 @@ pub(super) async fn lock_client(
     tx: &mut Transaction<'_, Postgres>,
     public_id: Uuid,
 ) -> Result<ClientContext, Error> {
+    crate::oauth::locking::client(tx, public_id, false).await?;
     let row = sqlx::query("SELECT c.id,c.application_id,c.client_type,c.name AS client_name,a.name AS application_name,o.name AS organization_name,o.id AS organization_id FROM oauth_clients c JOIN applications a ON a.id=c.application_id JOIN environments e ON e.id=a.environment_id JOIN projects p ON p.id=e.project_id JOIN organizations o ON o.id=p.org_id WHERE c.client_id=$1 AND c.disabled_at IS NULL AND c.deleted_at IS NULL AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND p.deleted_at IS NULL AND o.deleted_at IS NULL FOR SHARE OF c,a,e,p,o")
         .bind(public_id).fetch_optional(&mut **tx).await?.ok_or_else(|| Error::protocol(ProtocolError::InvalidRequest))?;
     let client_type = match row.try_get::<&str, _>("client_type")? {
@@ -452,16 +453,13 @@ async fn save_grant(
     Ok(grant)
 }
 
-/// Bounds row-lock waits independently of pool acquisition; applies only to this
+/// Bounds lock attempts and complete statements independently of pool acquisition; applies only to this
 /// transaction and never changes authorization predicates or transaction isolation.
 pub(super) async fn set_lock_timeout(
     tx: &mut Transaction<'_, Postgres>,
     config: &OAuthConfig,
 ) -> Result<(), Error> {
-    sqlx::query("SELECT set_config('lock_timeout',$1,true)")
-        .bind(format!("{}ms", config.lock_timeout_ms))
-        .execute(&mut **tx)
-        .await?;
+    crate::oauth::locking::deadline(tx, config.lock_timeout_ms).await?;
     Ok(())
 }
 

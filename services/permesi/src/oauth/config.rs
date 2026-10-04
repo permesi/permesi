@@ -18,6 +18,7 @@ pub struct OAuthConfig {
     pub request_ttl: i64,
     pub lock_timeout_ms: i64,
     pub jwks_cache_ttl: i64,
+    pub credentials: super::credentials::CredentialConfig,
 }
 
 impl OAuthConfig {
@@ -73,6 +74,7 @@ impl OAuthConfig {
             request_ttl,
             lock_timeout_ms,
             jwks_cache_ttl,
+            credentials: super::credentials::CredentialConfig::from_matches(matches)?,
         })
     }
 
@@ -87,6 +89,7 @@ impl OAuthConfig {
             request_ttl: 600,
             lock_timeout_ms: 1000,
             jwks_cache_ttl: 30,
+            credentials: super::credentials::CredentialConfig::for_tests(),
         }
     }
 }
@@ -211,6 +214,16 @@ mod cli_tests {
                 assert_eq!(config.code_ttl, 300);
                 assert_eq!(config.request_ttl, 1800);
                 for (option, value) in [
+                    ("--oauth-client-secret-grace-seconds", "0"),
+                    ("--oauth-client-secret-grace-seconds", "3601"),
+                    ("--oauth-client-secret-memory-kib", "19455"),
+                    ("--oauth-client-secret-memory-kib", "65537"),
+                    ("--oauth-client-secret-iterations", "1"),
+                    ("--oauth-client-secret-iterations", "7"),
+                    ("--oauth-client-secret-parallelism", "0"),
+                    ("--oauth-client-secret-parallelism", "5"),
+                    ("--oauth-client-secret-hash-workers", "0"),
+                    ("--oauth-client-secret-hash-workers", "9"),
                     ("--oauth-code-ttl-seconds", "0"),
                     ("--oauth-code-ttl-seconds", "301"),
                     ("--oauth-request-ttl-seconds", "1801"),

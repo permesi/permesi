@@ -26,6 +26,21 @@ keys, bounded TTLs and one-way consumption. Reapply as the existing table owner
 before enabling protocol routes. The existing cleanup function removes expired
 OAuth state after seven days.
 
+Confidential credential management adds nullable `oauth_client_secrets.expires_at`,
+a unique index for the non-revoked current credential, and triggers that make identity/
+hash fields immutable under updates, revocation irreversible under updates, initial
+retirement bounded to 3600 seconds, existing deadlines nonextendable, and live retiring
+overlap singular. Inserts require live initial state and assign creation time in PostgreSQL. Reapply as the existing schema owner before starting the
+credential APIs. Existing client/grant data is preserved; older manual credential
+imports must already satisfy the one-current invariant to create the new index.
+No automatic credential deletion or token issuance is added. The schema also adds
+independent credential-management and revocation actions to the existing shared rate-limit table.
+Both schema reapplication and bootstrap revoke DELETE/TRUNCATE on credential history
+from the runtime role; schema-owner FK cleanup still cascades. This does not harden the
+role's broader existing identity-table privileges against database compromise.
+Integration tests reapply the canonical script with an issued credential present,
+run `verify_permesi.sql`, and verify that authentication still works afterward.
+
 ## Runtime role & grant checks
 
 Use these psql commands to verify runtime roles and grants after bootstrap:

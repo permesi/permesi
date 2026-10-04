@@ -27,6 +27,8 @@ use super::config::OAuthConfig;
 #[derive(Clone)]
 pub struct OAuthState {
     pub config: OAuthConfig,
+    /// Bounded credential hashing; all credential authority lives in PostgreSQL.
+    pub credentials: super::credentials::CredentialService,
     transport: VaultTransport,
     token: SecretString,
     transit_mount: String,
@@ -43,6 +45,7 @@ impl OAuthState {
     /// Connects to an operator-provisioned key; authentication/renewal reuse existing Vault state.
     pub(crate) fn new(config: OAuthConfig, globals: &crate::cli::globals::GlobalArgs) -> Self {
         Self {
+            credentials: super::credentials::CredentialService::new(config.credentials.clone()),
             config,
             transport: globals.vault_transport.clone(),
             token: globals.vault_token.clone(),

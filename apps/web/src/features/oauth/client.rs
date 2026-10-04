@@ -1,7 +1,7 @@
 //! Thin wrappers over the committed OAuth management endpoints.
 //!
 //! All requests use the existing API base, session cookies, abort timeout, and
-//! error decoder. No secrets or grants API is assumed or synthesized.
+//! error decoder. Credential plaintext is returned only by explicit issuance calls.
 
 use super::{
     paths::ApplicationPaths,
@@ -114,4 +114,50 @@ pub async fn patch_scope(
 /// Deletes an application scope; protocol entries cannot be removed server-side.
 pub async fn delete_scope(context: &ApplicationPaths, id: &str) -> Result<(), AppError> {
     delete_json_with_headers_with_credentials(&context.scope_api(id), &[]).await
+}
+
+/// Lists current and unexpired retiring metadata; plaintext is never recoverable.
+pub async fn list_secrets(
+    context: &ApplicationPaths,
+    id: &str,
+) -> Result<Vec<super::types::SecretMetadata>, AppError> {
+    get_json_with_credentials(&context.secrets_api(id)).await
+}
+
+/// Creates a secret once; callers must never retry automatically after an ambiguous failure.
+pub async fn create_secret(
+    context: &ApplicationPaths,
+    id: &str,
+) -> Result<super::types::IssuedSecret, AppError> {
+    post_json_with_headers_with_credentials_response(
+        &context.secrets_api(id),
+        &super::types::CreateSecretRequest {},
+        &[],
+    )
+    .await
+}
+
+/// Rotates the exact reviewed credential, returning the replacement only once.
+pub async fn rotate_secret(
+    context: &ApplicationPaths,
+    id: &str,
+    current: String,
+) -> Result<super::types::IssuedSecret, AppError> {
+    post_json_with_headers_with_credentials_response(
+        &format!("{}/rotate", context.secrets_api(id)),
+        &super::types::RotateSecretRequest {
+            current_secret_id: current,
+        },
+        &[],
+    )
+    .await
+}
+
+/// Immediately revokes an owned credential; identifiers come from server metadata.
+pub async fn revoke_secret(
+    context: &ApplicationPaths,
+    id: &str,
+    secret: &str,
+) -> Result<(), AppError> {
+    delete_json_with_headers_with_credentials(&context.secret_api(id, secret), &[]).await
 }

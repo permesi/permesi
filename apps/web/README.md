@@ -90,8 +90,18 @@ Organization owners/admins may mutate configuration. The current API omits organ
 roles from response DTOs, so the console does not infer them from platform roles or
 internal permissions. Management controls explain the required role; the server remains
 authoritative and inaccessible-resource errors keep the backend's 404 convention.
-There are no secret, grant, consent, or OAuth protocol screens: those APIs are not
-implemented. This console manages configuration only.
+Confidential-client detail pages manage secrets through metadata, create, rotate and
+revoke APIs. Secrets are shown once with copy/acknowledgement; closing or navigating
+clears disclosure. A retiring secret shows its server deadline, and another rotation
+waits for expiry or explicit revocation. Public clients have no credential controls.
+Pending actions prevent duplicate submission/dismissal. After an ambiguous issuance
+failure, metadata refresh and explicit revoke/create recovery preserve the old overlap
+deadline; the UI never retries issuance automatically or stores plaintext in browser storage.
+
+Minimal authorization consent is rendered by the backend and login/MFA resume is supported.
+Broader grants management and token issuance remain planned. [TODO](../../TODO.md) tracks
+completion; the [OAuth roadmap](../../docs/oauth-foundation.md#roadmap) describes dependencies.
+Confidential secret management does not implement the OAuth `client_credentials` M2M grant.
 
 `src/features/oauth/client.rs` uses the existing cookie-authenticated HTTP helpers;
 PATCH and PUT use the same API base, request timeout and error decoder. Pure DTOs,
@@ -103,7 +113,8 @@ tooling check, and `just web-build` builds the production WASM and CSS.
 `just web-test-browser` builds the console and runs the dependency-free Node/Chromium
 smoke test against isolated local API fixtures. It exercises navigation, public IDs,
 copy feedback, retained validation drafts, scope assignment, system scope controls,
-lifecycle confirmations, forced closure during pending mutations, disabled buttons,
+lifecycle and credential confirmations, one-time secret clearing/copy, rotation overlap,
+response-loss recovery, forced closure during pending mutations, disabled buttons,
 and a fixed 390px layout. It also captures desktop/mobile/dark screenshots under
 `/tmp/permesi-oauth-ui-client-*.png`. It uses no dev session or database data; real
 tenant enforcement and database invariants stay covered by the backend integration

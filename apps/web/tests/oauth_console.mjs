@@ -22,6 +22,7 @@ let clients=[];
 let environments=[];
 let registry=['openid','profile','email','address','phone','offline_access'].map((name,i)=>({id:`system-${i}`,application_id:app,name,description:`OIDC ${name} scope`,kind:'protocol',created_at:time,updated_at:time}));
 let redirects=[], allowed=[];
+let secrets=[], secretSequence=0, delaySecretIssue=false, loseNextSecretResponse=false;
 let sessionKind='full';
 let mutationForbidden=false;
 let denyNextLifecycle=false;
@@ -66,6 +67,26 @@ const server=http.createServer(async(req,res)=>{
    if(input.name)clients[0].name=input.name;
    if('disabled' in input)clients[0].disabled_at=input.disabled?time:null;
    return send(200,clients[0]);
+  }
+  const secretBase=`${base}/clients/${clientId}/secrets`;
+  if(p===secretBase || p===`${secretBase}/rotate`) {
+   if(req.method==='GET')return send(200,secrets);
+   assert.equal(req.method,'POST');assert.equal(clients[0].client_type,'confidential');
+   const current=secrets.find(value=>!value.expires_at);
+   if(p.endsWith('/rotate')) {
+    assert.deepEqual(Object.keys(input),['current_secret_id']);
+    if(!current || input.current_secret_id!==current.id || secrets.some(value=>value.expires_at))return send(409,'');
+    current.expires_at=new Date(Date.now()+900000).toISOString();
+   } else {assert.deepEqual(input,{});if(current)return send(409,'');}
+   const credential={id:`99999999-9999-4999-8999-${String(++secretSequence).padStart(12,'0')}`,created_at:time,expires_at:null};
+   secrets.push(credential);
+   if(delaySecretIssue){delaySecretIssue=false;await new Promise(resolve=>setTimeout(resolve,1500));}
+   if(loseNextSecretResponse){loseNextSecretResponse=false;return send(503,'');}
+   return send(201,{credential,client_secret:`pcs.${credential.id}.${'A'.repeat(43)}`,previous:p.endsWith('/rotate')?current:null});
+  }
+  if(p.startsWith(secretBase+'/')&&req.method==='DELETE') {
+   const id=p.slice(secretBase.length+1);assert(secrets.some(value=>value.id===id));
+   secrets=secrets.filter(value=>value.id!==id);return send(204);
   }
   if(p===`${base}/clients/${clientId}/redirect-uris`) {
    if(req.method==='GET')return send(200,redirects);
@@ -174,6 +195,7 @@ try {
  await fill('oauth-client-name','crono-web');await click('Create Client');
  await wait("document.body.innerText.includes('Allowed Scopes')");
  await assertNavigation('Clients');
+ assert(!await evaluate("document.querySelector('#credential-heading')"),'Public clients must have no secret controls');
  assert(!await evaluate("document.body.innerText.includes('internal-row-id')"));
  await click('Copy');await wait("document.body.innerText.includes('Copied.')");
  await fill('redirect-uri-input','https://EXAMPLE:443/a/../callback?x=%2f#fragment');await click('Add URI');await click('Save Redirect URIs');
@@ -240,6 +262,48 @@ try {
  assert(await evaluate("[...document.querySelectorAll('#client-delete button')].find(e=>e.textContent==='Delete Client').disabled"));await fill('delete-client-confirmation',clientId);await click('Delete Client');await wait("document.body.innerText.includes('No OAuth clients')");
  assert(requests.filter(value=>value.method==='POST'&&value.path===`${base}/clients`).length===1);
  assert(!requests.some(value=>value.path.includes('internal-row-id')));
+ // Confidential credential disclosure, rotation, response loss and server permission failures.
+ await click('+ Create OAuth Client');await wait("document.querySelector('#create-oauth-client').open");
+ await fill('oauth-client-name','confidential-worker');
+ await evaluate("document.querySelector('input[name=client-type][value=confidential]').click()");await click('Create Client');
+ await wait("document.body.innerText.includes('No usable client secrets.')");
+ delaySecretIssue=true;await click('Create Secret');await click('Confirm Issuance');
+ await evaluate("[...document.querySelectorAll('#client-secret-issue button')].find(e=>e.textContent==='Issuing…').click()");
+ await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+ await evaluate("document.querySelector('#client-secret-issue').close()");await delay(100);
+ assert(await evaluate("document.querySelector('#client-secret-issue').open"),'Busy secret issuance must remain visible');
+ await wait("document.querySelector('#one-time-client-secret')");
+ const firstSecret=await evaluate("document.querySelector('#one-time-client-secret').textContent");
+ await click('Copy Secret');await wait("document.querySelector('#client-secret-issue').innerText.includes('Copied.')");
+ assert(!await evaluate(`location.href.includes(${JSON.stringify(firstSecret)}) || Object.values(localStorage).concat(Object.values(sessionStorage)).some(value=>value.includes(${JSON.stringify(firstSecret)}))`),'Secret must never reach browser storage or URL');
+ assert.equal(requests.filter(value=>value.method==='POST'&&value.path===`${base}/clients/${clientId}/secrets`).length,1);
+ await click('I saved the secret');await wait("!document.querySelector('#client-secret-issue').open && !document.querySelector('#one-time-client-secret')");
+ await click('Rotate Secret');await click('Confirm Issuance');await wait("document.querySelector('#one-time-client-secret')");
+ assert.notEqual(await evaluate("document.querySelector('#one-time-client-secret').textContent"),firstSecret);
+ await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+ await wait("!document.querySelector('#client-secret-issue').open && !document.querySelector('#one-time-client-secret')");
+ assert.equal(secrets.length,2);assert(secrets[0].expires_at);
+ assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent==='Rotate Secret').disabled"),'Overlap must disable another rotation');
+ await click('Revoke Secret');await click('Confirm Revocation');await wait("!document.querySelector('#client-secret-revoke').open && !document.body.innerText.includes('Retiring')");
+ assert.equal(secrets.length,1);
+ loseNextSecretResponse=true;await click('Rotate Secret');await click('Confirm Issuance');
+ await wait("document.querySelector('#credential-error').innerText.includes('created but not received')");
+ const afterLost=requests.filter(value=>value.method==='POST'&&value.path.endsWith('/secrets/rotate')).length;
+ await delay(300);assert.equal(requests.filter(value=>value.method==='POST'&&value.path.endsWith('/secrets/rotate')).length,afterLost,'Ambiguous failures must not automatically retry');
+ await click('Close dialog');await wait("!document.querySelector('#client-secret-issue').open");
+ const retiringDeadline=secrets.find(value=>value.expires_at).expires_at;
+ await evaluate("[...document.querySelectorAll('#credential-heading ~ div li')].find(e=>e.querySelector('p').textContent==='Current').querySelector('button').click()");
+ await click('Confirm Revocation');await wait("!document.querySelector('#client-secret-revoke').open && [...document.querySelectorAll('button')].some(e=>e.textContent==='Create Secret')");
+ await click('Create Secret');await click('Confirm Issuance');await wait("document.querySelector('#one-time-client-secret')");
+ assert.equal(secrets.find(value=>value.expires_at).expires_at,retiringDeadline,'Recovery must preserve the original overlap deadline');
+ const recoveredSecret=await evaluate("document.querySelector('#one-time-client-secret').textContent");
+ await goto(`${route}/oauth`);await wait("document.body.innerText.includes('Manage clients →')");
+ assert(!await evaluate(`document.body.innerText.includes(${JSON.stringify(recoveredSecret)})`),'Navigation must destroy plaintext disclosure');
+ await goto(`${route}/oauth/clients/${clientId}`);await wait("document.body.innerText.includes('Client secrets')");
+ assert(!await evaluate("document.querySelector('#one-time-client-secret')"),'Metadata reload must never reveal a secret');
+ await click('Revoke Secret');await click('Confirm Revocation');await wait("!document.querySelector('#client-secret-revoke').open && !document.body.innerText.includes('Retiring')");
+ mutationForbidden=true;await click('Rotate Secret');await click('Confirm Issuance');await wait("document.querySelector('#credential-error').innerText.includes('organization role')");
+ assert.equal(secrets.length,1);mutationForbidden=false;await click('Close dialog');
  // Enrollment must preserve one-time recovery codes until the user acknowledges them.
  sessionKind='mfa_bootstrap';
  await goto('/login?oauth_request=55555555-5555-4555-8555-555555555555&oauth_expires='+(Date.now()+600000));
@@ -304,6 +368,6 @@ try {
  assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeInvalid);
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, and malicious return-handle rejection, no JS exceptions.');
+ console.log('Browser smoke passed: independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
  fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

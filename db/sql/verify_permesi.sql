@@ -3,6 +3,29 @@
 
 BEGIN;
 
+-- Credential lifecycle backstops must survive schema reapplication and bootstrap grants.
+DO $$
+DECLARE
+    protection text;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid=to_regclass('oauth_client_secrets_current_idx')
+        AND indisunique AND indisvalid AND indpred IS NOT NULL) THEN
+        RAISE EXCEPTION 'missing unique current credential index';
+    END IF;
+    FOREACH protection IN ARRAY ARRAY['protect_oauth_client_secret','initialize_oauth_client_secret','limit_oauth_client_secret_overlap'] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='oauth_client_secrets'::regclass
+            AND tgname=protection AND tgenabled='O' AND NOT tgisinternal) THEN
+            RAISE EXCEPTION 'missing credential protection: %',protection;
+        END IF;
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') THEN
+        IF has_table_privilege('permesi_runtime','oauth_client_secrets','DELETE')
+            OR has_table_privilege('permesi_runtime','oauth_client_secrets','TRUNCATE') THEN
+            RAISE EXCEPTION 'runtime role may erase credential revocation history';
+        END IF;
+    END IF;
+END $$;
+
 -- Constraint checks live inside a DO block so we can assert failures explicitly.
 DO $$
 DECLARE

@@ -77,6 +77,7 @@ fn ClientConfiguration(
 ) -> impl IntoView {
     let id = registration.client_id.clone();
     let client = RwSignal::new(registration);
+    let credential_paths = paths.clone();
     view! { <div class="space-y-6">
         <div class=CARD><h2 class="mb-4 break-words text-xl font-semibold">{move || client.get().name}</h2>
             <dl class="grid gap-4 sm:grid-cols-2"><div class="min-w-0 sm:col-span-2"><dt class=LABEL>"Client ID"</dt><dd><CopyValue value=id.clone() /></dd></div>
@@ -86,6 +87,9 @@ fn ClientConfiguration(
             </dl>
         </div>
         <ClientSettings paths=paths.clone() client=client />
+        <Show when=move || client.get().client_type == crate::features::oauth::types::ClientType::Confidential>
+            <super::credentials::CredentialSection paths=credential_paths.clone() registration=client />
+        </Show>
         <RedirectEditor paths=paths.clone() id=id.clone() initial=redirects />
         <ScopeAssignment paths=paths.clone() id=id initial=allowed registry=registry />
         <ClientLifecycle paths=paths client=client />

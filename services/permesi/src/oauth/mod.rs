@@ -9,14 +9,17 @@
 //! Flow Overview:
 //! Session-authenticated management resolves active organization membership and the
 //! complete application ancestry before calling the service. The service validates
-//! configuration, commits allow-lists atomically, and returns domain records without
-//! credentials. Authorization independently reloads active client ancestry, exact
+//! configuration, commits allow-lists atomically, and returns registration records without
+//! credentials. Separate credential issuance returns plaintext once after owner/admin
+//! authorization; PostgreSQL serializes rotation and revocation across replicas. Authorization independently reloads active client ancestry, exact
 //! redirects, tenant membership, registry allow-lists and saved/explicit consent.
 
 pub mod authorization;
 pub mod client;
 pub mod config;
+pub mod credentials;
 pub mod grant;
+pub(crate) mod locking;
 pub mod oidc;
 pub mod redirect_uri;
 pub mod scope;

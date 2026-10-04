@@ -19,14 +19,18 @@ use super::{
 
 /// Trusted application boundary resolved from session membership and active ancestry.
 pub(crate) struct ApplicationContext {
-    application_id: Uuid,
+    pub(super) application_id: Uuid,
+    pub(crate) user_id: Uuid,
 }
 
 impl ApplicationContext {
     /// Constructs a context ONLY after verifying session, org roles, and full ancestry.
     /// This is not proof of an OAuth resource owner's delegated authority.
-    pub(crate) fn resolved(application_id: Uuid) -> Self {
-        Self { application_id }
+    pub(crate) fn resolved(application_id: Uuid, user_id: Uuid) -> Self {
+        Self {
+            application_id,
+            user_id,
+        }
     }
 }
 
@@ -35,6 +39,7 @@ pub(crate) enum Error {
     NotFound,
     Invalid(ValidationError),
     Conflict,
+    Unavailable,
     Database(sqlx::Error),
 }
 
@@ -53,6 +58,10 @@ impl From<sqlx::Error> for Error {
             .as_deref()
         {
             Some("23505") => Self::Conflict,
+            Some(code @ ("55P03" | "57014")) => {
+                tracing::warn!(code, "OAuth client database deadline exceeded");
+                Self::Unavailable
+            }
             Some("23503" | "23514") => {
                 Self::Invalid(ValidationError("Invalid OAuth configuration."))
             }
@@ -100,23 +109,41 @@ pub(crate) async fn get_client(
         .ok_or(Error::NotFound)
 }
 
-/// Locks a registration in its resolved application; disabled rows remain manageable.
+/// Checks immutable tenant ownership before advisory coordination, then reloads under row lock.
+/// Operator deadlines bound advisory/row coordination. Afterwards the database's previous
+/// statement policy is restored for bulk consent work; individual lock waits stay bounded.
 async fn lock_client(
     tx: &mut Transaction<'_, Postgres>,
     context: &ApplicationContext,
     client_id: Uuid,
+    lock_timeout_ms: i64,
 ) -> Result<Client, Error> {
-    sqlx::query_as("SELECT * FROM oauth_clients WHERE application_id = $1 AND client_id = $2 AND deleted_at IS NULL FOR UPDATE")
+    let statement_policy: String =
+        sqlx::query_scalar("SELECT current_setting('statement_timeout')")
+            .fetch_one(&mut **tx)
+            .await?;
+    super::locking::deadline(tx, lock_timeout_ms).await?;
+    if !super::locking::lock_owned_client(tx, context.application_id, client_id).await? {
+        return Err(Error::NotFound);
+    }
+    let client = sqlx::query_as("SELECT * FROM oauth_clients WHERE application_id = $1 AND client_id = $2 AND deleted_at IS NULL FOR UPDATE")
         .bind(context.application_id).bind(client_id).fetch_optional(&mut **tx).await?
-        .ok_or(Error::NotFound)
+        .ok_or(Error::NotFound)?;
+    sqlx::query("SELECT set_config('statement_timeout',$1,true)")
+        .bind(statement_policy)
+        .execute(&mut **tx)
+        .await?;
+    Ok(client)
 }
 
-/// Updates display/lifecycle fields; client type and identifiers cannot be changed.
+/// Updates display/lifecycle fields after tenant lookup and bounded exclusive coordination.
+/// Client type and identifiers cannot be changed.
 /// Disabling irreversibly revokes credentials and saved grants; re-enabling does not restore them.
 pub(crate) async fn patch_client(
     pool: &PgPool,
     context: &ApplicationContext,
     client_id: Uuid,
+    lock_timeout_ms: i64,
     name: Option<String>,
     disabled: Option<bool>,
 ) -> Result<Client, Error> {
@@ -128,7 +155,7 @@ pub(crate) async fn patch_client(
         .map(super::client::validate_name)
         .transpose()?;
     let mut tx = pool.begin().await?;
-    let client = lock_client(&mut tx, context, client_id).await?;
+    let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     if disabled == Some(true) {
         revoke_grants(&mut tx, client.id).await?;
         sqlx::query("UPDATE oauth_client_secrets SET revoked_at = NOW() WHERE client_id = $1 AND revoked_at IS NULL")
@@ -143,14 +170,16 @@ pub(crate) async fn patch_client(
     Ok(updated)
 }
 
-/// Soft-deletes a client, retaining its globally reserved public ID and revoking authority.
+/// Soft-deletes after tenant lookup and bounded coordination, retaining its reserved public ID.
+/// Revokes consent and credentials in the same transaction.
 pub(crate) async fn delete_client(
     pool: &PgPool,
     context: &ApplicationContext,
     client_id: Uuid,
+    lock_timeout_ms: i64,
 ) -> Result<(), Error> {
     let mut tx = pool.begin().await?;
-    let client = lock_client(&mut tx, context, client_id).await?;
+    let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     revoke_grants(&mut tx, client.id).await?;
     sqlx::query("UPDATE oauth_client_secrets SET revoked_at = NOW() WHERE client_id = $1 AND revoked_at IS NULL")
         .bind(client.id).execute(&mut *tx).await?;
@@ -171,15 +200,16 @@ pub(crate) async fn get_redirects(
         .bind(client.id).fetch_all(pool).await?)
 }
 
-/// Replaces redirects atomically under a client lock; no partial registration survives validation.
+/// Replaces redirects under bounded tenant/client locks; validation failures roll back all changes.
 pub(crate) async fn replace_redirects(
     pool: &PgPool,
     context: &ApplicationContext,
     client_id: Uuid,
+    lock_timeout_ms: i64,
     values: Vec<String>,
 ) -> Result<Vec<String>, Error> {
     let mut tx = pool.begin().await?;
-    let client = lock_client(&mut tx, context, client_id).await?;
+    let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     let redirects = RedirectUri::validate_list(values, client.client_type)?;
     revoke_grants(&mut tx, client.id).await?;
     sqlx::query("DELETE FROM oauth_client_redirect_uris WHERE client_id = $1")
@@ -230,17 +260,18 @@ pub(crate) async fn get_client_scopes(
     .await?)
 }
 
-/// Replaces the allow-list atomically, rejecting unknown/cross-application names.
+/// Replaces the allow-list under bounded tenant/client locks, rejecting unknown/cross-application names.
 /// Removing scope edges cascades to saved grant scopes and all saved consent is revoked.
 pub(crate) async fn replace_client_scopes(
     pool: &PgPool,
     context: &ApplicationContext,
     client_id: Uuid,
+    lock_timeout_ms: i64,
     values: Vec<String>,
 ) -> Result<Vec<String>, Error> {
     let scopes = OAuthScope::validate_list(values)?;
     let mut tx = pool.begin().await?;
-    let client = lock_client(&mut tx, context, client_id).await?;
+    let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     let scope_ids = resolve_scope_ids(&mut tx, context, &scopes).await?;
     revoke_grants(&mut tx, client.id).await?;
     sqlx::query("DELETE FROM oauth_client_scopes WHERE client_id = $1")

@@ -6,6 +6,7 @@
 
 mod clients;
 pub(crate) mod common;
+mod credentials;
 mod detail;
 mod scopes;
 
@@ -40,7 +41,7 @@ pub fn OAuthOverviewPage() -> impl IntoView {
     view! { <div class="space-y-6">
         <OAuthNav paths=paths.clone() />
         <h2 class="text-xl font-semibold">"OAuth Configuration"</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">"Manage client registrations, redirect URIs and delegated scopes. Authorization and token flows are not available yet."</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">"Manage client registrations, credentials, redirect URIs and delegated scopes. Authorization Code + PKCE is available; token issuance is planned."</p>
         <Suspense fallback=|| view! { <Loading message="Loading OAuth configuration…" /> }>
             {move || match summary.get() {
                 Some(Ok((clients, scopes))) => view! { <div class="grid gap-4 sm:grid-cols-2"><div class=CARD><h3 class="font-medium">"Clients"</h3><p class="my-3 text-3xl">{clients}</p><A href=paths.clients() attr:class=LINK>"Manage clients →"</A></div><div class=CARD><h3 class="font-medium">"Scopes"</h3><p class="my-3 text-3xl">{scopes}</p><A href=paths.scopes() attr:class=LINK>"Manage scopes →"</A></div></div> }.into_any(),
