@@ -363,3 +363,12 @@ Endpoints under `/v1/auth/admin/*` (bootstrap and elevation) are strictly rate-l
 - **Attempt Limit**: 3 attempts per user and 10 attempts per IP within a rolling 10-minute window.
 - **Failure Cooldown**: 3 consecutive failed attempts (invalid Vault tokens) trigger a **15-minute cooldown** for the user.
 - **Response**: `429 Too Many Requests` is returned when limits are exceeded. The `/v1/auth/admin/status` endpoint includes a `cooldown_seconds` field to help the UI surface the remaining time.
+
+## OAuth foundation
+
+Applications now own OAuth clients and a delegated scope registry beneath the
+existing org/project/environment hierarchy. Management uses full sessions and
+existing org roles; owner/admin may mutate, active members may inspect, and
+inaccessible resources return 404. OAuth scopes are independent of internal
+`Principal.scopes`. Protocol endpoints and token issuance are not implemented.
+See [the foundation design](../../docs/oauth-foundation.md) for routes and invariants.

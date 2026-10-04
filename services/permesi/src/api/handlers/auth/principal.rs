@@ -30,6 +30,7 @@ const SCOPE_USERS_ASSIGN_ROLE: &str = "users:assign-role";
 pub struct Principal {
     pub user_id: uuid::Uuid,
     pub email: String,
+    /// Permesi-internal capabilities from trusted server roles; never OAuth delegated scopes.
     pub scopes: Vec<String>,
     pub session_issued_at_unix: i64,
     pub session_auth_time_unix: Option<i64>,
@@ -246,5 +247,19 @@ mod tests {
         assert!(principal.allows(Permission::Write));
         assert!(principal.allows(Permission::Delete));
         assert!(principal.allows(Permission::AssignRole));
+    }
+
+    #[test]
+    fn oauth_scope_names_grant_no_internal_permissions() {
+        let principal =
+            principal_with_scopes(&["openid", "profile", "email", "jobs:read", "runs:execute"]);
+        for permission in [
+            Permission::Read,
+            Permission::Write,
+            Permission::Delete,
+            Permission::AssignRole,
+        ] {
+            assert!(!principal.allows(permission));
+        }
     }
 }

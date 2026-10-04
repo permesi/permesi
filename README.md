@@ -125,13 +125,13 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 #### 2. `permesi` (The Core / "The Authority")
 * **Role:** The OIDC Authority.
-* **Responsibility:** OPAQUE signup/login, email verification, and OIDC flows.
+* **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, and OAuth client/scope management. OAuth/OIDC protocol flows are planned.
 * **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Validates short-lived **Zero Tokens** offline using the PASERK keyset for auth POSTs.
-* **Output:** Issues standard OIDC Access/ID Tokens (JWTs).
+* **Output:** Authenticated sessions and tenant-scoped management APIs. Permesi does not yet issue OAuth access tokens, ID tokens, or refresh tokens.
 
 #### 3. Database
 * **Role:** System of Record.
-* **Usage:** Stores user records (OPAQUE registration records), authentication rate-limit counters, email verification tokens/outbox, plus **Audit Logs** and **Revocation Lists**. It is **not** required for the hot-path verification of Admission Tokens, ensuring high availability even during DB latency spikes.
+* **Usage:** Stores identity/session records, tenant membership/resources, authentication rate limits, email verification/outbox, audit records, and OAuth registration/grant data. Admission token verification is offline and does not query the database.
 
 ---
 
@@ -181,12 +181,28 @@ Missing / planned:
 ## Tenant model (prototype)
 
 Organizations are the tenant boundary in permesi. Each organization owns projects, projects own
-environments, and environments own applications. Org-scoped membership and roles are the source
+environments, environments own applications, and applications own multiple OAuth clients. Applications remain logical tenant resources, rather than becoming OAuth clients. Org-scoped membership and roles are the source
 of authorization for tenant resources, and environment tiers enforce a single production
 environment per project with non-production blocked until production exists.
 
 More details and the creation flow live in `services/permesi/README.md` under “Organization
 endpoints and authorization”.
+
+## OAuth/OIDC implementation status
+
+Identity/authentication, organization authorization, and the OAuth client/scope foundation
+are implemented. Public and confidential clients have independent public identifiers,
+exact redirect registrations, and explicit delegated scope allow-lists. Saved-consent
+tables bind one user and client to one application and its owning organization; there
+is no consent-writing API yet. Internal `Principal.scopes` remain Permesi capabilities
+and never become OAuth delegation.
+
+Authorization Code with PKCE, `/authorize`, `/token`, OIDC discovery/JWKS, access/ID
+tokens, refresh tokens, and consent UI are planned. Registering `openid` or
+`offline_access` in a client's allow-list does not enable these flows. Confidential
+credential issuance/authentication is also deferred; the schema anticipates hashed,
+revocable secrets. See [OAuth foundation](docs/oauth-foundation.md) for the management
+API, trust boundaries, schema rollout, and next-phase design.
 
 ## Trust Boundaries
 
@@ -368,6 +384,8 @@ SecretID before each `cargo watch` run using the Vault CLI. Make sure `vault` is
 `VAULT_ADDR`/`VAULT_TOKEN` or your Vault token helper).
 
 If you want infra only: `just infra` (the infra containers plus `.envrc`; it also runs `direnv allow` if available), then `just genesis`, `just permesi` and `just web` in terminals of your choice.
+
+To connect to the local development database from the project root, run `PGSERVICEFILE="$PWD/.pg_service.conf" psql service=permesi-dev`. The project connection profile uses the default localhost port and the development `postgres` role; it contains no password. PostgreSQL does not automatically load service files from the current directory, so `PGSERVICEFILE` selects this profile explicitly.
 If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
 to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
 

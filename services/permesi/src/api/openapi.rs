@@ -75,7 +75,20 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(orgs::environments::create_environment))
         .routes(routes!(orgs::environments::list_environments))
         .routes(routes!(orgs::applications::create_application))
-        .routes(routes!(orgs::applications::list_applications));
+        .routes(routes!(orgs::applications::list_applications))
+        .routes(routes!(orgs::oauth::clients::create_client))
+        .routes(routes!(orgs::oauth::clients::list_clients))
+        .routes(routes!(orgs::oauth::clients::get_client))
+        .routes(routes!(orgs::oauth::clients::patch_client))
+        .routes(routes!(orgs::oauth::clients::delete_client))
+        .routes(routes!(orgs::oauth::clients::get_redirects))
+        .routes(routes!(orgs::oauth::clients::replace_redirects))
+        .routes(routes!(orgs::oauth::clients::get_client_scopes))
+        .routes(routes!(orgs::oauth::clients::replace_client_scopes))
+        .routes(routes!(orgs::oauth::scopes::create_scope))
+        .routes(routes!(orgs::oauth::scopes::list_scopes))
+        .routes(routes!(orgs::oauth::scopes::patch_scope))
+        .routes(routes!(orgs::oauth::scopes::delete_scope));
 
     let mut permesi_tag = Tag::new("permesi");
     permesi_tag.description = Some("Identity and access management API".to_string());
@@ -110,6 +123,8 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         projects_tag,
         environments_tag,
         applications_tag,
+        Tag::new("oauth-clients"),
+        Tag::new("oauth-scopes"),
     ]);
 
     router
@@ -180,7 +195,7 @@ fn parse_author(author: &str) -> (Option<&str>, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -294,6 +309,61 @@ mod tests {
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn oauth_openapi_registers_management_without_protocol_placeholders() -> Result<()> {
+        let spec = openapi();
+        let base =
+            "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth";
+        for suffix in [
+            "/clients",
+            "/clients/{client_id}",
+            "/clients/{client_id}/redirect-uris",
+            "/clients/{client_id}/scopes",
+            "/scopes",
+            "/scopes/{scope_id}",
+        ] {
+            assert!(spec.paths.paths.contains_key(&format!("{base}{suffix}")));
+        }
+        for path in [
+            "/authorize",
+            "/token",
+            "/.well-known/openid-configuration",
+            "/jwks",
+            "/jwks.json",
+        ] {
+            assert!(!spec.paths.paths.contains_key(path));
+        }
+        let tags = spec.tags.as_ref().context("OpenAPI tags missing")?;
+        for name in ["oauth-clients", "oauth-scopes"] {
+            assert!(tags.iter().any(|tag| tag.name == name));
+        }
+        let document = serde_json::to_string(&spec)?;
+        assert!(!document.contains("secret_hash"));
+        assert!(!document.contains("client_secret"));
+        let json = serde_json::to_value(&spec)?;
+        let paths = json
+            .get("paths")
+            .and_then(serde_json::Value::as_object)
+            .context("missing paths")?;
+        for (path, methods) in paths.iter().filter(|(path, _)| path.starts_with(base)) {
+            for (method, operation) in methods.as_object().context("missing methods")? {
+                let responses = operation.get("responses").context("missing responses")?;
+                if operation.get("requestBody").is_some() {
+                    assert!(responses.get("415").is_some(), "{path} {method}");
+                    assert!(responses.get("422").is_some(), "{path} {method}");
+                } else {
+                    assert!(responses.get("415").is_none(), "{path} {method}");
+                    assert!(responses.get("422").is_none(), "{path} {method}");
+                }
+                if method == "get" || method == "delete" {
+                    assert!(responses.get("409").is_none(), "{path} {method}");
+                }
+            }
+        }
+        assert_eq!(document, serde_json::to_string(&openapi())?);
         Ok(())
     }
 }

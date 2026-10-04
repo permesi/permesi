@@ -12,6 +12,15 @@
 - `check.sql` — post-bootstrap verification (run against `postgres`).
 - `reset_all.sql` — destructive reset for dev/test (run against `postgres`).
 
+The OAuth foundation is additive in `02_permesi.sql`. Reapply that script to the
+existing Permesi database with the role that owns the existing Permesi tables and
+`ON_ERROR_STOP=1` before starting
+a binary that exposes OAuth management. It creates the OAuth tables, seeds fixed
+protocol scope entries for existing applications, and adds a trigger to seed new
+applications. Reapplying preserves client configuration and grants. Runtime table
+grants are applied when `permesi_runtime` already exists; normal bootstrap also
+grants all tables after creating that role. There is no RLS change or token issuance.
+
 ## Runtime role & grant checks
 
 Use these psql commands to verify runtime roles and grants after bootstrap:

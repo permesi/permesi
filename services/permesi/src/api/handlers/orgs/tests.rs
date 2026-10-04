@@ -24,16 +24,16 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
     "/../../db/sql/02_permesi.sql"
 ));
 
-struct TestDb {
+pub(super) struct TestDb {
     _postgres: PostgresContainer,
-    pool: PgPool,
+    pub(super) pool: PgPool,
 }
 
 impl TestDb {
     /// Creates a fresh ephemeral database by starting a `PostgresContainer` and applying the schema.
     /// Returns `None` only when no container runtime is available so callers can skip; any
     /// other setup failure (container start, schema) is an error and fails the test.
-    async fn new() -> Result<Option<Self>> {
+    pub(super) async fn new() -> Result<Option<Self>> {
         if let Err(err) = runtime::ensure_container_runtime() {
             eprintln!("Skipping integration test: {err}");
             return Ok(None);
@@ -70,7 +70,7 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
 
 /// Inserts an `active` user row with a random id for use in handler tests.
 /// It relies on the schema accepting a placeholder `opaque_registration_record` blob for test users.
-async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
+pub(super) async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
     let user_id = Uuid::new_v4();
     let query = r"
             INSERT INTO users (id, email, opaque_registration_record, status)
@@ -88,7 +88,7 @@ async fn insert_active_user(pool: &PgPool, email: &str) -> Result<Uuid> {
 
 /// Creates a session token for `user_id` and inserts its hash into `user_sessions`.
 /// Only the hashed token is stored; the raw token is returned for request cookies/headers.
-async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
+pub(super) async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
     let token = super::super::auth::generate_session_token()?;
     let hash = super::super::auth::hash_session_token(&token);
     let query = r"
@@ -106,7 +106,12 @@ async fn insert_session(pool: &PgPool, user_id: Uuid) -> Result<String> {
 
 /// Ensures the user is an active org member and assigns the specified org role.
 /// This is test-only ACL setup mirroring what org creation does for owners.
-async fn insert_member_role(pool: &PgPool, org_id: Uuid, user_id: Uuid, role: &str) -> Result<()> {
+pub(super) async fn insert_member_role(
+    pool: &PgPool,
+    org_id: Uuid,
+    user_id: Uuid,
+    role: &str,
+) -> Result<()> {
     sqlx::query(
         r"
             INSERT INTO org_memberships (org_id, user_id, status)

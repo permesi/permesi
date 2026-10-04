@@ -176,6 +176,178 @@ CREATE UNIQUE INDEX IF NOT EXISTS applications_environment_name_active_idx
     ON applications (environment_id, name)
     WHERE deleted_at IS NULL;
 
+-- OAuth registration foundation. Applications remain logical tenant resources.
+-- Public client identifiers are independent UUIDs, unique forever (including deleted rows).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    client_id UUID NOT NULL UNIQUE DEFAULT uuidv4(),
+    name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 255)
+        CHECK (name = TRIM(name) AND name !~ '[[:cntrl:]]'),
+    client_type TEXT NOT NULL CHECK (client_type IN ('public', 'confidential')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    disabled_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    UNIQUE (id, application_id),
+    UNIQUE (id, client_type),
+    CHECK (deleted_at IS NULL OR disabled_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_clients_application_name_active_idx
+    ON oauth_clients (application_id, name) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS oauth_clients_application_idx ON oauth_clients (application_id);
+
+-- Credential issuance/rotation is deferred. No plaintext storage is permitted; a future
+-- service must generate high-entropy secrets and verify PHC Argon2id hashes securely.
+CREATE TABLE IF NOT EXISTS oauth_client_secrets (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    client_id UUID NOT NULL,
+    client_type TEXT NOT NULL DEFAULT 'confidential' CHECK (client_type = 'confidential'),
+    secret_hash TEXT NOT NULL CHECK (secret_hash LIKE '$argon2id$%'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ,
+    FOREIGN KEY (client_id, client_type) REFERENCES oauth_clients(id, client_type) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_client_secrets_active_idx
+    ON oauth_client_secrets (client_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS oauth_client_redirect_uris (
+    client_id UUID NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    redirect_uri TEXT COLLATE "C" NOT NULL
+        CHECK (char_length(redirect_uri) BETWEEN 1 AND 2048)
+        CHECK (redirect_uri ~ '^https?://[^/]+')
+        CHECK (redirect_uri !~ '[[:space:][:cntrl:]*#]')
+        CHECK (position(chr(92) in redirect_uri) = 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (client_id, redirect_uri)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_scopes (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    name TEXT COLLATE "C" NOT NULL CHECK (char_length(name) BETWEEN 1 AND 128)
+        CHECK (name ~ '^[!-~]+$' AND position('"' in name) = 0 AND position(chr(92) in name) = 0),
+    description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 2048),
+    kind TEXT NOT NULL CHECK (kind IN ('application', 'protocol')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (application_id, name),
+    UNIQUE (id, application_id),
+    CHECK (
+        (kind = 'protocol' AND name IN ('openid', 'profile', 'email', 'address', 'phone', 'offline_access'))
+        OR
+        (kind = 'application'
+            AND LOWER(name) NOT IN ('openid', 'profile', 'email', 'address', 'phone', 'offline_access')
+            AND LOWER(name) !~ '^(platform|users):')
+    )
+);
+
+CREATE TABLE IF NOT EXISTS oauth_client_scopes (
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    scope_id UUID NOT NULL,
+    PRIMARY KEY (client_id, scope_id),
+    UNIQUE (client_id, application_id, scope_id),
+    FOREIGN KEY (client_id, application_id) REFERENCES oauth_clients(id, application_id) ON DELETE CASCADE,
+    FOREIGN KEY (scope_id, application_id) REFERENCES oauth_scopes(id, application_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_client_scopes_scope_idx ON oauth_client_scopes (scope_id);
+
+-- Fixed protocol entries are per-application so the same composite FKs protect
+-- every allow-list and grant, while kind keeps protocol semantics distinct.
+CREATE OR REPLACE FUNCTION seed_oauth_protocol_scopes()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO oauth_scopes (application_id, name, kind)
+    SELECT NEW.id, name, 'protocol'
+    FROM unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS name
+    ON CONFLICT (application_id, name) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS seed_application_oauth_scopes ON applications;
+CREATE TRIGGER seed_application_oauth_scopes AFTER INSERT ON applications
+    FOR EACH ROW EXECUTE FUNCTION seed_oauth_protocol_scopes();
+INSERT INTO oauth_scopes (application_id, name, kind)
+SELECT a.id, s.name, 'protocol' FROM applications a
+CROSS JOIN unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS s(name)
+ON CONFLICT (application_id, name) DO NOTHING;
+
+-- No grant-writing API yet. Explicit organization and application context prevent
+-- one user's consent from implicitly spanning all their organization memberships.
+CREATE TABLE IF NOT EXISTS oauth_grants (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    organization_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ,
+    UNIQUE (id, client_id, application_id),
+    FOREIGN KEY (client_id, application_id) REFERENCES oauth_clients(id, application_id) ON DELETE CASCADE,
+    FOREIGN KEY (organization_id, user_id) REFERENCES org_memberships(org_id, user_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_grants_active_idx
+    ON oauth_grants (user_id, client_id, organization_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS oauth_grants_client_idx ON oauth_grants (client_id);
+
+CREATE OR REPLACE FUNCTION validate_oauth_grant_context()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Share locks conflict with lifecycle/membership UPDATEs and the service's
+    -- client FOR UPDATE, while allowing independent consent writers. PostgreSQL
+    -- rechecks current row versions after waiting; stale context cannot pass.
+    PERFORM 1 FROM applications a
+        JOIN environments e ON e.id = a.environment_id
+        JOIN projects p ON p.id = e.project_id
+        JOIN organizations o ON o.id = p.org_id
+        JOIN oauth_clients c ON c.application_id = a.id AND c.id = NEW.client_id
+        JOIN org_memberships m ON m.org_id = o.id AND m.user_id = NEW.user_id
+        WHERE a.id = NEW.application_id AND o.id = NEW.organization_id
+            AND a.deleted_at IS NULL AND e.deleted_at IS NULL
+            AND p.deleted_at IS NULL AND o.deleted_at IS NULL
+            AND c.disabled_at IS NULL AND c.deleted_at IS NULL AND m.status = 'active'
+        FOR SHARE OF a, e, p, o, c, m;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invalid OAuth grant context' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS validate_oauth_grant_context ON oauth_grants;
+CREATE TRIGGER validate_oauth_grant_context
+    BEFORE INSERT OR UPDATE OF user_id, client_id, application_id, organization_id ON oauth_grants
+    FOR EACH ROW EXECUTE FUNCTION validate_oauth_grant_context();
+
+-- Reauthorization creates a new grant; revoked records cannot be reactivated.
+-- Keep this separate from context validation so revocation always works even
+-- after membership suspension or ancestor/client deletion.
+CREATE OR REPLACE FUNCTION forbid_oauth_grant_reactivation()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+        RAISE EXCEPTION 'Revoked OAuth grants are immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS forbid_oauth_grant_reactivation ON oauth_grants;
+CREATE TRIGGER forbid_oauth_grant_reactivation BEFORE UPDATE OF revoked_at ON oauth_grants
+    FOR EACH ROW EXECUTE FUNCTION forbid_oauth_grant_reactivation();
+
+CREATE TABLE IF NOT EXISTS oauth_grant_scopes (
+    grant_id UUID NOT NULL,
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    scope_id UUID NOT NULL,
+    PRIMARY KEY (grant_id, scope_id),
+    FOREIGN KEY (grant_id, client_id, application_id)
+        REFERENCES oauth_grants(id, client_id, application_id) ON DELETE CASCADE,
+    FOREIGN KEY (client_id, application_id, scope_id)
+        REFERENCES oauth_client_scopes(client_id, application_id, scope_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_grant_scopes_client_scope_idx ON oauth_grant_scopes (client_id, scope_id);
+
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -245,6 +417,13 @@ CREATE TRIGGER update_org_memberships_updated_at
     BEFORE UPDATE ON org_memberships
     FOR EACH ROW
     EXECUTE FUNCTION touch_updated_at();
+
+DROP TRIGGER IF EXISTS update_oauth_clients_updated_at ON oauth_clients;
+CREATE TRIGGER update_oauth_clients_updated_at BEFORE UPDATE ON oauth_clients
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+DROP TRIGGER IF EXISTS update_oauth_scopes_updated_at ON oauth_scopes;
+CREATE TRIGGER update_oauth_scopes_updated_at BEFORE UPDATE ON oauth_scopes
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
 
 CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
@@ -501,6 +680,9 @@ CREATE INDEX IF NOT EXISTS idx_passkey_audit_user_time ON passkey_audit_log (use
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+            oauth_clients, oauth_client_secrets, oauth_client_redirect_uris, oauth_scopes,
+            oauth_client_scopes, oauth_grants, oauth_grant_scopes TO permesi_runtime;
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;

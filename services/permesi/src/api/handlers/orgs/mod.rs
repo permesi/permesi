@@ -20,6 +20,7 @@
 
 pub(crate) mod applications;
 pub(crate) mod environments;
+pub(crate) mod oauth;
 pub(crate) mod organizations;
 pub(crate) mod projects;
 mod slug;
