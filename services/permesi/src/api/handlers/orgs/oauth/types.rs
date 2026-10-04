@@ -96,6 +96,9 @@ impl From<Client> for ClientResponse {
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateScopeRequest {
+    /// Case-sensitive OAuth token in resource:action format (for example jobs:read).
+    /// Exactly one colon and two nonempty parts are required; protocol/internal names are reserved.
+    #[schema(example = "jobs:read", min_length = 1, max_length = 128)]
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -111,6 +114,7 @@ pub(crate) struct PatchScopeRequest {
 pub(crate) struct ScopeResponse {
     pub id: String,
     pub application_id: String,
+    /// Original OAuth token; application resource/action semantics are derived, never duplicated.
     pub name: String,
     pub description: String,
     /// "protocol" entries have server-defined semantics and are read-only.

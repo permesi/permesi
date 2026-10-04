@@ -241,6 +241,7 @@ fn build_router(state: AppState) -> Result<Router> {
         .allow_methods([
             Method::GET,
             Method::POST,
+            Method::PUT,
             Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
@@ -600,6 +601,50 @@ mod tests {
                 "https://www.permesi.dev",
             ]
         );
+        Ok(())
+    }
+
+    /// Real browser preflights must permit the existing OAuth replacement APIs
+    /// only for configured origins, preserving credentialed-session boundaries.
+    #[tokio::test]
+    async fn served_router_allows_oauth_put_preflight_only_for_trusted_origins() -> Result<()> {
+        use tower::ServiceExt;
+        for origin in ["https://permesi.dev", "https://untrusted.example"] {
+            let response = served_app()?
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("OPTIONS")
+                        .uri("/v1/orgs/org/projects/project/envs/env/apps/11111111-1111-4111-8111-111111111111/oauth/clients/22222222-2222-4222-8222-222222222222/redirect-uris")
+                        .header("origin", origin)
+                        .header("access-control-request-method", "PUT")
+                        .header("access-control-request-headers", "content-type")
+                        .body(axum::body::Body::empty())?,
+                )
+                .await?;
+            let headers = response.headers();
+            if origin == "https://permesi.dev" {
+                assert!(response.status().is_success());
+                assert_eq!(
+                    headers
+                        .get("access-control-allow-origin")
+                        .and_then(|value| value.to_str().ok()),
+                    Some(origin)
+                );
+                assert_eq!(
+                    headers
+                        .get("access-control-allow-credentials")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("true")
+                );
+                let methods = headers
+                    .get("access-control-allow-methods")
+                    .context("missing allowed methods")?
+                    .to_str()?;
+                assert!(methods.split(',').any(|method| method.trim() == "PUT"));
+            } else {
+                assert!(!headers.contains_key("access-control-allow-origin"));
+            }
+        }
         Ok(())
     }
 

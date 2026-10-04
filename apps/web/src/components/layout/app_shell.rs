@@ -101,11 +101,11 @@ pub fn AppShell(children: Children) -> impl IntoView {
                         view! {
                             <A
                                 href=target.to_string()
-                                attr:class="flex items-center space-x-2 rtl:space-x-reverse"
+                                attr:class="group flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 cursor-pointer"
                                 on:click=move |_| set_menu_open.set(false)
                             >
                                 <img src="/logo.svg" class="h-8 dark:invert" alt="permesi" />
-                                <span class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">
+                                <span class="font-semibold whitespace-nowrap text-gray-900 group-hover:text-blue-600 dark:text-white dark:group-hover:text-blue-400">
                                     "Permesi"
                                 </span>
                                 <Show when=move || is_full_session.get()>
@@ -115,7 +115,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                         children=move |(_, segment)| {
                                             view! {
                                                 <span class="text-sm text-gray-400 dark:text-gray-500">"/"</span>
-                                                <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                                                <span class="break-all text-sm font-medium text-gray-700 dark:text-gray-200">
                                                     {segment}
                                                 </span>
                                             }

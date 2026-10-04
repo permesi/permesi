@@ -1,5 +1,6 @@
 //! Project detail route. Shows environments and applications.
 
+use crate::features::oauth::paths::EnvironmentPaths;
 use crate::{
     app_lib::AppError,
     components::{Alert, AlertKind, Button, Spinner},
@@ -9,7 +10,7 @@ use crate::{
     },
 };
 use leptos::prelude::*;
-use leptos_router::{hooks::use_params, params::Params};
+use leptos_router::{components::A, hooks::use_params, params::Params};
 
 #[derive(Params, PartialEq, Clone)]
 struct ProjectParams {
@@ -80,7 +81,11 @@ pub fn ProjectDetailPage() -> impl IntoView {
                                             "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
                                         };
                                         view! {
-                                            <div class="p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                                            <A href=EnvironmentPaths {
+                                                org: params.get().ok().and_then(|p| p.slug).unwrap_or_default(),
+                                                project: params.get().ok().and_then(|p| p.project_slug).unwrap_or_default(),
+                                                environment: env.slug.clone(),
+                                            }.console() attr:class="block cursor-pointer p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm hover:border-blue-500 dark:hover:border-blue-500 focus:ring-2 focus:ring-blue-500 transition-colors">
                                                 <div class="flex items-center justify-between mb-4">
                                                     <span class=format!("text-xs font-semibold px-2.5 py-0.5 rounded-full {}", tier_class)>
                                                         {env.tier.to_uppercase()}
@@ -89,9 +94,9 @@ pub fn ProjectDetailPage() -> impl IntoView {
                                                 </div>
                                                 <h2 class="text-lg font-medium text-gray-900 dark:text-white">{env.name}</h2>
                                                 <div class="mt-4 pt-4 border-t border-gray-50 dark:border-gray-700">
-                                                    <p class="text-xs text-gray-500">"ID: " {env.id}</p>
+                                                    <p class="text-sm text-blue-600 dark:text-blue-400">"Manage applications →"</p>
                                                 </div>
-                                            </div>
+                                            </A>
                                         }
                                     }
                                 />

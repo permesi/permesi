@@ -4801,7 +4801,11 @@
             "type": "string"
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Case-sensitive OAuth token in resource:action format (for example jobs:read).\nExactly one colon and two nonempty parts are required; protocol/internal names are reserved.",
+            "example": "jobs:read",
+            "maxLength": 128,
+            "minLength": 1
           }
         },
         "additionalProperties": false
@@ -5512,7 +5516,8 @@
             "description": "\"protocol\" entries have server-defined semantics and are read-only."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Original OAuth token; application resource/action semantics are derived, never duplicated."
           },
           "updated_at": {
             "type": "string"

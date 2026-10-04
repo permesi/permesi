@@ -1,12 +1,11 @@
 //! Client wrappers for organization-related API endpoints.
 
 use crate::app_lib::{
-    AppError, get_json_with_credentials, post_json_with_headers_with_credentials,
-    post_json_with_headers_with_credentials_response,
+    AppError, get_json_with_credentials, post_json_with_headers_with_credentials_response,
 };
 use crate::features::orgs::types::{
-    CreateApplicationRequest, CreateEnvironmentRequest, CreateOrgRequest, CreateProjectRequest,
-    EnvironmentResponse, OrgResponse, ProjectResponse,
+    ApplicationResponse, CreateApplicationRequest, CreateEnvironmentRequest, CreateOrgRequest,
+    CreateProjectRequest, EnvironmentResponse, OrgResponse, ProjectResponse,
 };
 
 /// Fetches all organizations the current user belongs to.
@@ -53,17 +52,23 @@ pub async fn create_environment(
     post_json_with_headers_with_credentials_response(&path, request, &[]).await
 }
 
-/// Creates a new application placeholder under an environment.
-#[allow(dead_code)]
+/// Creates an application under the environment; backend org policy is authoritative.
 pub async fn create_application(
     org_slug: &str,
     project_slug: &str,
     env_slug: &str,
     request: &CreateApplicationRequest,
-) -> Result<(), AppError> {
+) -> Result<ApplicationResponse, AppError> {
     let path = format!(
         "/v1/orgs/{}/projects/{}/envs/{}/apps",
         org_slug, project_slug, env_slug
     );
-    post_json_with_headers_with_credentials(&path, request, &[]).await
+    post_json_with_headers_with_credentials_response(&path, request, &[]).await
+}
+
+/// Lists applications through the existing collection API; no detail GET is assumed.
+pub async fn list_applications(
+    context: &crate::features::oauth::paths::EnvironmentPaths,
+) -> Result<Vec<ApplicationResponse>, AppError> {
+    get_json_with_credentials(&context.applications_api()).await
 }

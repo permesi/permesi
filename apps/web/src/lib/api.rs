@@ -185,6 +185,46 @@ pub async fn post_json_with_headers_with_credentials_response<B: Serialize, T: D
     handle_json_response(response).await
 }
 
+/// Patches JSON with session cookies and the shared timeout/error policy.
+pub async fn patch_json_with_credentials<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, AppError> {
+    let url = build_url(path);
+    let payload = to_string(body)
+        .map_err(|err| AppError::Serialization(format!("Failed to encode request: {err}")))?;
+    let response = send_with_timeout(move |signal| {
+        Request::patch(&url)
+            .header("Content-Type", "application/json")
+            .credentials(RequestCredentials::Include)
+            .abort_signal(Some(signal))
+            .body(payload)
+            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
+    })
+    .await?;
+    handle_json_response(response).await
+}
+
+/// Replaces JSON configuration with session cookies and shared request safeguards.
+pub async fn put_json_with_credentials<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, AppError> {
+    let url = build_url(path);
+    let payload = to_string(body)
+        .map_err(|err| AppError::Serialization(format!("Failed to encode request: {err}")))?;
+    let response = send_with_timeout(move |signal| {
+        Request::put(&url)
+            .header("Content-Type", "application/json")
+            .credentials(RequestCredentials::Include)
+            .abort_signal(Some(signal))
+            .body(payload)
+            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
+    })
+    .await?;
+    handle_json_response(response).await
+}
+
 /// Posts an empty body with cookies, used to clear a session.
 pub async fn post_empty_with_credentials(path: &str) -> Result<(), AppError> {
     let url = build_url(path);

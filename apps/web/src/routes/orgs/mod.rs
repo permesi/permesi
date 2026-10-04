@@ -1,3 +1,4 @@
+pub(crate) mod application;
 mod detail;
 mod list;
 mod project;

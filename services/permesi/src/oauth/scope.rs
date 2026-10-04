@@ -5,6 +5,9 @@
 //! Each application registry includes immutable protocol entries and API entries.
 //! Registration alone never grants authority: request validation requires both the
 //! configured client allow-list and independently verified tenant/user authorization.
+//! Application scopes conventionally name a resource and an arbitrary action with
+//! one colon. This convention is required for application tokens; protocol tokens never acquire
+//! resource/action semantics. Only the original token is persisted or authorized.
 
 use chrono::{DateTime, Utc};
 use sqlx::{Row, postgres::PgRow};
@@ -47,17 +50,10 @@ impl OAuthScope {
     /// Permesi internal capability namespace to prevent misleading configurations.
     ///
     /// # Errors
-    /// Rejects reserved names (including case variants) and invalid scope-token syntax.
+    /// Rejects reserved names, invalid token syntax, and anything outside resource:action.
+    /// No semantic action vocabulary is imposed.
     pub fn application(value: String) -> Result<Self, ValidationError> {
-        let scope = Self::parse(value)?;
-        let lower = scope.0.to_ascii_lowercase();
-        if PROTOCOL_SCOPES.contains(&lower.as_str())
-            || lower.starts_with("platform:")
-            || lower.starts_with("users:")
-        {
-            return Err(ValidationError("Scope name is reserved."));
-        }
-        Ok(scope)
+        ApplicationScope::parse(value).map(|scope| scope.0)
     }
 
     /// Returns the exact token for registry lookups and protocol serialization.
@@ -78,6 +74,71 @@ impl OAuthScope {
             result.push(scope);
         }
         Ok(result)
+    }
+}
+
+/// Application-defined authority requiring exactly one resource and one action.
+/// The exact OAuth token is canonical; derived parts are never separate DB fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationScope(OAuthScope);
+
+/// Borrowed semantics of a conventional application scope, never a protocol scope.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApplicationScopeParts<'a> {
+    pub resource: &'a str,
+    pub action: &'a str,
+}
+
+impl ApplicationScope {
+    /// Validates OAuth syntax and namespaces without rewriting delegated authority.
+    /// Requires exactly one colon and two nonempty parts; actions are application-defined.
+    ///
+    /// # Errors
+    /// Rejects unsafe tokens, reserved protocol/internal names, and malformed resource:action.
+    pub fn parse(value: String) -> Result<Self, ValidationError> {
+        let scope = OAuthScope::parse(value)?;
+        let lower = scope.0.to_ascii_lowercase();
+        if PROTOCOL_SCOPES.contains(&lower.as_str())
+            || lower.starts_with("platform:")
+            || lower.starts_with("users:")
+        {
+            return Err(ValidationError("Scope name is reserved."));
+        }
+        if scope.0.matches(':').count() != 1 || scope.0.split(':').any(str::is_empty) {
+            return Err(ValidationError(
+                "Application scopes must use resource:action with one nonempty resource and action.",
+            ));
+        }
+        Ok(Self(scope))
+    }
+
+    /// Constructs the recommended single-colon token with an application-specific action.
+    /// Neither part is trimmed, normalized, or interpreted as an internal permission.
+    ///
+    /// # Errors
+    /// Rejects empty/colon-containing parts and unsafe or reserved resulting tokens.
+    pub fn from_parts(resource: &str, action: &str) -> Result<Self, ValidationError> {
+        if resource.is_empty()
+            || action.is_empty()
+            || resource.contains(':')
+            || action.contains(':')
+        {
+            return Err(ValidationError("Use one resource and one action."));
+        }
+        Self::parse(format!("{resource}:{action}"))
+    }
+
+    /// Returns the validated resource/action parts, preserving exact token case.
+    #[must_use]
+    pub fn parts(&self) -> Option<ApplicationScopeParts<'_>> {
+        let (resource, action) = self.as_str().split_once(':')?;
+        Some(ApplicationScopeParts { resource, action })
+    }
+
+    /// Returns the sole persisted and wire-format value, unchanged from the request.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 }
 
@@ -165,7 +226,7 @@ mod tests {
             assert!(OAuthScope::application(name.into()).is_err(), "{name}");
         }
         assert!(OAuthScope::application("jobs:read".into()).is_ok());
-        assert!(OAuthScope::application("custom.scope+value".into()).is_ok());
+        assert!(OAuthScope::application("custom.scope+value".into()).is_err());
     }
 
     #[test]
@@ -175,6 +236,59 @@ mod tests {
             OAuthScope::parse("Jobs:read".into())?
         );
         assert!(OAuthScope::validate_list(vec!["jobs:read".into(), "jobs:read".into()]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn oauth_application_scope_rejects_empty_resource_or_action() {
+        for name in [":read", "jobs:", "jobs::read", "urn:example:"] {
+            assert!(OAuthScope::application(name.into()).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn application_scope_parts_preserve_tokens_and_arbitrary_actions() -> Result<(), ValidationError>
+    {
+        for (resource, action) in [
+            ("jobs", "read"),
+            ("jobs", "write"),
+            ("runs", "execute"),
+            ("runs", "cancel"),
+            ("deployments", "approve"),
+            ("members", "invite"),
+            ("Jobs", "Custom+Action"),
+        ] {
+            let scope = ApplicationScope::from_parts(resource, action)?;
+            assert_eq!(scope.as_str(), format!("{resource}:{action}"));
+            assert_eq!(
+                scope.parts(),
+                Some(ApplicationScopeParts { resource, action })
+            );
+        }
+        for name in ["jobs", "custom.scope+value", "urn:example:scope"] {
+            assert!(ApplicationScope::parse(name.into()).is_err(), "{name}");
+        }
+        for (resource, action) in [
+            ("", "read"),
+            ("jobs", ""),
+            ("jobs:sub", "read"),
+            ("jobs", "read:all"),
+            ("jobs", " read"),
+        ] {
+            assert!(ApplicationScope::from_parts(resource, action).is_err());
+        }
+        assert!(ApplicationScope::from_parts("x", &"r".repeat(126)).is_ok());
+        assert!(ApplicationScope::from_parts("x", &"r".repeat(127)).is_err());
+        for name in [
+            "users:invite",
+            "USERS:invite",
+            "platform:manage",
+            "OpenID",
+            "profile",
+            "offline_access",
+        ] {
+            assert!(ApplicationScope::parse(name.into()).is_err(), "{name}");
+        }
         Ok(())
     }
 

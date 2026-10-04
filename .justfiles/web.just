@@ -28,7 +28,7 @@ web: web-clean
     PERMESI_CLIENT_ID="${PERMESI_CLIENT_ID}" \
   env -u NO_COLOR trunk serve --verbose --address 0.0.0.0 --port 8081 --dist dist-dev
 
-web-build: web-node-setup
+web-build dist_dir="": web-node-setup
   #!/usr/bin/env zsh
   set -euo pipefail
   if ! command -v trunk >/dev/null 2>&1; then
@@ -36,10 +36,13 @@ web-build: web-node-setup
   fi
   mkdir -p {{root}}/.tmp/xdg-cache
   cd {{root}}/apps/web
-  dist_dir="dist"
-  if pgrep -f "trunk serve" >/dev/null 2>&1; then
-    dist_dir="dist-build"
-    echo "Detected running trunk serve; building into ${dist_dir} to avoid staging conflicts."
+  dist_dir="{{dist_dir}}"
+  if [[ -z "$dist_dir" ]]; then
+    dist_dir="dist"
+    if pgrep -f "trunk serve" >/dev/null 2>&1; then
+      dist_dir="dist-build"
+      echo "Detected running trunk serve; building into ${dist_dir} to avoid staging conflicts."
+    fi
   fi
   mkdir -p "${dist_dir}"
   rm -rf "${dist_dir}/.stage"
@@ -78,6 +81,17 @@ web-clean: web-node-setup
 
 web-check:
   cargo check -p permesi_web
+
+[doc("Build and smoke-test the OAuth console in Chromium against isolated API fixtures")]
+web-test-browser:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  dist_dir="dist"
+  if pgrep -f "trunk serve" >/dev/null 2>&1; then
+    dist_dir="dist-build"
+  fi
+  just web-build "$dist_dir"
+  PERMESI_WEB_TEST_DIST="{{root}}/apps/web/${dist_dir}" node {{root}}/apps/web/tests/oauth_console.mjs
 
 web-setup:
   #!/usr/bin/env zsh

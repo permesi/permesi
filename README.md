@@ -197,6 +197,22 @@ tables bind one user and client to one application and its owning organization; 
 is no consent-writing API yet. Internal `Principal.scopes` remain Permesi capabilities
 and never become OAuth delegation.
 
+The web console manages this configuration through Organizations → Project →
+Environment → Application → OAuth Configuration. Client pages manage registration,
+redirect URI and scope allow-lists, and lifecycle state; the application scope registry
+distinguishes editable API scopes from immutable OIDC system entries. See the
+[frontend documentation](apps/web/README.md#oauth-configuration-console) for routes
+and management behavior.
+
+Application scopes must use `<resource>:<action>`: the resource names the
+thing being protected and the action names the delegated operation. `jobs:read`
+means permission to read jobs; applications may define actions such as `cancel`,
+`approve`, or `invite`. The console composes and previews one OAuth name from these
+two fields and groups client choices by resource. Only that name is persisted;
+opaque application names without this format are no longer accepted. Protocol scopes are system-managed, and
+OAuth delegation remains separate from internal permissions such as `platform:admin`
+and `users:write`. The existing `platform:` and `users:` namespaces remain reserved.
+
 Authorization Code with PKCE, `/authorize`, `/token`, OIDC discovery/JWKS, access/ID
 tokens, refresh tokens, and consent UI are planned. Registering `openid` or
 `offline_access` in a client's allow-list does not enable these flows. Confidential

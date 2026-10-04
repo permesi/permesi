@@ -130,12 +130,46 @@ or a public client's canonical loopback IP registration.
 
 Scope names follow the case-sensitive printable ASCII scope-token syntax from
 [RFC 6749 §3.3](https://www.rfc-editor.org/rfc/rfc6749.html#section-3.3), capped at
-128 bytes. Tokens are not trimmed or lowercased. `resource:action` is encouraged but
-not required. Whitespace, controls, quotes, backslashes, empty tokens, and duplicates
+128 bytes. Tokens are not trimmed or lowercased. Permesi's application convention is
+`<resource>:<action>`: the resource is the thing being protected and the action is
+the operation being delegated. For example, `jobs:read` means delegated permission
+to read jobs, and `runs:cancel` delegates cancellation of runs. Actions are defined
+by the application; `approve`, `invite`, and `manage` are as valid as `read` or `write`.
+The canonical persisted/wire value is still just `name`, not separate resource/action
+columns. `ApplicationScope` validates the convention without interpreting action semantics.
+Whitespace, controls, quotes, backslashes, empty tokens, and duplicates
 are rejected. `openid`, `profile`, `email`, `address`, `phone`, and `offline_access`
 are server-defined protocol entries; case variants cannot be defined as API scopes.
 The internal `platform:` and `users:` namespaces are also reserved to prevent
 misleading overlap with Permesi capabilities.
+
+Application registrations must now contain exactly one colon and two nonempty parts.
+Colon-free names (`jobs`, `custom.scope+value`), multi-part names (`urn:example:scope`),
+and empty parts (`:read`, `jobs:`, `jobs::read`) are rejected. This is a deliberate
+Permesi convention, not an OAuth requirement. OAuth scope tokens themselves remain
+opaque, and protocol scopes are system-managed exceptions. Any valid single-colon
+application name is interpreted according to this convention; actions are free-form
+OAuth-safe strings, not a vocabulary inferred by the server.
+
+This tightens the previous API, which allowed opaque application names. Before
+upgrading another installation, audit existing application names for this format.
+No rows, assignments, or grants are automatically renamed or deleted. Nonconforming
+rows remain visible for explicit cleanup but cannot be newly assigned to clients.
+Existing assignments remain until explicitly removed; the console shows unsupported
+configured names with removal-only controls and requires removing them before Save.
+Create replacement scopes and update client configuration deliberately. The database
+schema remains unchanged, retaining its OAuth-token constraints and one name column.
+
+The console creates conventional names from Resource and Action fields, previews
+the composed token, and still submits `{name, description}`. Lists show derived
+resource/action labels; client allow-lists group conventional names by exact resource,
+with immutable OIDC entries in a separate group. No action list is
+hard-coded. `users:invite` remains reserved under the existing internal namespace
+policy; an application-specific resource such as `members:invite` is allowed.
+These are OAuth delegated scopes, completely separate from Permesi internal
+permissions such as `platform:admin` and `users:write`. Client assignment establishes
+only the maximum scopes a client may request; it does not grant those permissions
+to a user or prove tenant authorization.
 
 `Principal.scopes` remains the existing internal permission field. OAuth tokens
 are distinct `OAuthScope` values with no Principal conversion. The pure requested-scope

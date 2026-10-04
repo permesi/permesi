@@ -37,6 +37,133 @@ struct Fixture {
     application: Uuid,
 }
 
+/// Uses the real scope API and database to verify convention validation and compatibility.
+#[tokio::test]
+async fn oauth_application_scopes_require_resource_action_and_preserve_namespace_rules()
+-> Result<()> {
+    let Some(f) = Fixture::new().await? else {
+        return Ok(());
+    };
+    for name in [
+        "jobs:read",
+        "runs:execute",
+        "runs:cancel",
+        "deployments:approve",
+        "members:invite",
+    ] {
+        let (status, scope) = f
+            .call(
+                "POST",
+                "/scopes",
+                &f.token,
+                Some(json!({"name":name,"description":"Delegated operation"})),
+            )
+            .await?;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {scope}");
+        assert_eq!(scope.get("name").and_then(Value::as_str), Some(name));
+        assert_eq!(
+            scope.get("kind").and_then(Value::as_str),
+            Some("application")
+        );
+        assert!(scope.get("resource").is_none());
+        assert!(scope.get("action").is_none());
+        let saved: String = sqlx::query_scalar("SELECT name FROM oauth_scopes WHERE id=$1")
+            .bind(id(&scope, "id")?)
+            .fetch_one(&f.db.pool)
+            .await?;
+        assert_eq!(saved, name);
+    }
+    for name in [
+        "jobs",
+        "custom.scope+value",
+        "urn:example:scope",
+        ":read",
+        "jobs:",
+        "jobs::read",
+        "openid",
+        "PROFILE",
+        "email",
+        "address",
+        "phone",
+        "offline_access",
+        "users:invite",
+        "Users:write",
+        "PLATFORM:manage",
+        "jobs:read all",
+        "jobs:\\read",
+    ] {
+        let (status, _) = f
+            .call("POST", "/scopes", &f.token, Some(json!({"name":name})))
+            .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+    }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM oauth_scopes WHERE application_id=$1 AND kind='application'",
+    )
+    .bind(f.application)
+    .fetch_one(&f.db.pool)
+    .await?;
+    assert_eq!(count, 5, "Rejected names must not be persisted");
+    Ok(())
+}
+
+/// Previously configured names stay visible but must be explicitly removed on replacement.
+#[tokio::test]
+async fn oauth_scope_assignment_rejects_unsupported_names_until_explicitly_removed() -> Result<()> {
+    let Some(f) = Fixture::new().await? else {
+        return Ok(());
+    };
+    // An older installation may still have opaque rows. New assignment must fail
+    // before replacing the allow-list or revoking any authority.
+    sqlx::query("INSERT INTO oauth_scopes (application_id,name,kind) VALUES ($1,'old.opaque','application')")
+        .bind(f.application).execute(&f.db.pool).await?;
+    let client = f.client("format-check").await?;
+    let suffix = format!("/clients/{}/scopes", id(&client, "client_id")?);
+    assert_eq!(
+        f.call(
+            "PUT",
+            &suffix,
+            &f.token,
+            Some(json!({"scopes":["old.opaque"]}))
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        f.call("GET", &suffix, &f.token, None).await?.1,
+        json!(["openid"])
+    );
+    sqlx::query("INSERT INTO oauth_client_scopes (client_id,application_id,scope_id) SELECT $1,application_id,id FROM oauth_scopes WHERE application_id=$2 AND name='old.opaque'")
+        .bind(id(&client,"id")?).bind(f.application).execute(&f.db.pool).await?;
+    assert_eq!(
+        f.call(
+            "PUT",
+            &suffix,
+            &f.token,
+            Some(json!({"scopes":["openid","old.opaque"]}))
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        f.call("GET", &suffix, &f.token, None).await?.1,
+        json!(["old.opaque", "openid"])
+    );
+    assert_eq!(
+        f.call("PUT", &suffix, &f.token, Some(json!({"scopes":["openid"]})))
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.call("GET", &suffix, &f.token, None).await?.1,
+        json!(["openid"])
+    );
+    Ok(())
+}
+
 impl Fixture {
     /// Creates active ancestry and a real full session; routes are the production routes.
     async fn new() -> Result<Option<Self>> {

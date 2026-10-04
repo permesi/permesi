@@ -42,6 +42,72 @@ Note: running `trunk serve` directly will skip CSS generation unless you also ru
 - `/users/:id`: User detail
 - any other path: Not Found
 
+## OAuth configuration console
+
+Navigate through Organizations → Organization → Project → Environment → Application,
+then open **OAuth Configuration**. Environment cards now open their application list;
+an application has an Overview and OAuth Configuration navigation. The OAuth summary
+links to Clients and Scopes and shows their configured counts.
+
+The nested routes below `/console/orgs/:slug/projects/:project_slug/envs/:env_slug/apps/:app_id`
+are the application overview, `/oauth`, `/oauth/clients`, `/oauth/clients/:client_id`,
+and `/oauth/scopes`. The parent environment route lists applications and can create
+them. Application metadata comes from the existing collection endpoint; no new
+backend contract or detail GET is assumed.
+
+Client pages support creation, name changes, exact redirect URI allow-lists, delegated
+scope allow-lists, enable/disable, and deletion. Redirect edits are staged until Save;
+the API performs URI validation and failed saves retain the draft. Client deletion
+requires typing the public client ID. Scope names are immutable; application scope
+descriptions can be edited, and deletion requires typing the scope name. Server-defined
+OIDC scopes are shown as read-only system entries but can be assigned to client
+allow-lists. Assignment limits what a client may request and never grants user authority.
+
+Create Scope uses Resource (the thing protected) and Action (the delegated operation)
+with a live `resource:action` preview. Correcting either field clears obsolete validation errors. Actions are free text, so `runs:cancel` and
+`deployments:approve` are supported alongside `jobs:read`. The API still receives only
+`name` and `description`; derived labels are not additional persisted fields. Scope
+cards expose resource/action labels, and client choices group by exact resource while
+retaining full OAuth names. Application scope creation and client assignment require exactly one resource and action.
+Protocol scopes stay system-managed and are never parsed as resource/action. Already-configured
+unsupported names remain visible with removal-only controls; changes require explicit Save.
+The reserved `users:`/`platform:` namespaces cannot be used, including `users:invite`.
+
+Organization owners/admins may mutate configuration. The current API omits organization
+roles from response DTOs, so the console does not infer them from platform roles or
+internal permissions. Management controls explain the required role; the server remains
+authoritative and inaccessible-resource errors keep the backend's 404 convention.
+There are no secret, grant, consent, or OAuth protocol screens: those APIs are not
+implemented. This console manages configuration only.
+
+`src/features/oauth/client.rs` uses the existing cookie-authenticated HTTP helpers;
+PATCH and PUT use the same API base, request timeout and error decoder. Pure DTOs,
+paths and edit transitions are exported by `src/lib.rs` so `cargo test -p permesi_web`
+runs their regressions natively. `cargo check -p permesi_web --target wasm32-unknown-unknown`
+checks the actual browser components; `just web-check` retains its existing native
+tooling check, and `just web-build` builds the production WASM and CSS.
+
+`just web-test-browser` builds the console and runs the dependency-free Node/Chromium
+smoke test against isolated local API fixtures. It exercises navigation, public IDs,
+copy feedback, retained validation drafts, scope assignment, system scope controls,
+lifecycle confirmations, forced closure during pending mutations, disabled buttons,
+and a fixed 390px layout. It also captures desktop/mobile/dark screenshots under
+`/tmp/permesi-oauth-ui-client-*.png`. It uses no dev session or database data; real
+tenant enforcement and database invariants stay covered by the backend integration
+tests. Node 22 or later and `chromium` in PATH are required. Set
+`PERMESI_WEB_TEST_DIST` to select an already built distribution explicitly when
+running `node apps/web/tests/oauth_console.mjs` from the repository root.
+The test recipe passes its selected build directory explicitly so an older
+`dist-build` cannot shadow a fresh `dist`; direct Node runs default to `dist`.
+Dark-mode verification emulates `prefers-color-scheme` and checks actual card and
+heading colors rather than toggling a class the stylesheet does not use.
+
+Application sections use primary tabs with Material Symbols and an underline for the current section. Inside OAuth Configuration, Summary, Clients and Scopes use a smaller segmented navigation; client details keep Clients selected. Both levels retain text labels, keyboard focus styles and independent active states in light and dark themes.
+
+The API permits credentialed PUT preflights from its existing configured frontend origins so the redirect and scope replacement editors work across origins. This preserves the origin allow-list and server authorization checks.
+
+Confirmation dialogs ignore queued close events from an earlier opening if the browser has already reopened the dialog. Pending requests remain visible until they settle; browser regressions cover immediate reopening as well as repeated Escape.
+
 ## Signup + Email Verification Flow
 
 ```mermaid

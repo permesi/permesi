@@ -14,7 +14,7 @@ use super::{
     ValidationError,
     client::{Client, ClientConfiguration},
     redirect_uri::RedirectUri,
-    scope::{OAuthScope, ScopeRecord},
+    scope::{ApplicationScope, OAuthScope, PROTOCOL_SCOPES, ScopeRecord},
 };
 
 /// Trusted application boundary resolved from session membership and active ancestry.
@@ -264,6 +264,11 @@ async fn resolve_scope_ids(
     context: &ApplicationContext,
     scopes: &[OAuthScope],
 ) -> Result<Vec<Uuid>, Error> {
+    for scope in scopes {
+        if !PROTOCOL_SCOPES.contains(&scope.as_str()) {
+            ApplicationScope::parse(scope.as_str().to_owned())?;
+        }
+    }
     let names: Vec<&str> = scopes.iter().map(OAuthScope::as_str).collect();
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM oauth_scopes WHERE application_id = $1 AND name = ANY($2)
@@ -341,7 +346,7 @@ pub(crate) async fn create_scope(
     name: String,
     description: String,
 ) -> Result<ScopeRecord, Error> {
-    let name = OAuthScope::application(name)?;
+    let name = ApplicationScope::parse(name)?;
     validate_description(&description)?;
     Ok(sqlx::query_as("INSERT INTO oauth_scopes (application_id, name, description, kind) VALUES ($1, $2, $3, 'application') RETURNING *")
         .bind(context.application_id).bind(name.as_str()).bind(description).fetch_one(pool).await?)

@@ -22,7 +22,6 @@ pub struct CreateEnvironmentRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[allow(dead_code)]
 pub struct CreateApplicationRequest {
     pub name: String,
 }
@@ -49,5 +48,13 @@ pub struct EnvironmentResponse {
     pub slug: String,
     pub name: String,
     pub tier: String,
+    pub created_at: String,
+}
+
+/// Tenant application metadata; OAuth clients remain separate child resources.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct ApplicationResponse {
+    pub id: String,
+    pub name: String,
     pub created_at: String,
 }

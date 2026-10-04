@@ -9,6 +9,7 @@ mod login;
 mod me;
 mod mfa;
 mod not_found;
+mod oauth;
 mod orgs;
 mod signup;
 mod users;
@@ -22,6 +23,8 @@ pub(crate) use login::LoginPage;
 pub(crate) use me::{MePage, MeSecurityPage};
 pub(crate) use mfa::{MfaChallengePage, MfaSetupPage};
 pub(crate) use not_found::{NotFoundContent, NotFoundPage};
+use oauth::{ClientDetailPage, ClientsPage, OAuthOverviewPage, ScopesPage};
+use orgs::application::{ApplicationLayout, ApplicationOverviewPage, EnvironmentDetailPage};
 pub(crate) use orgs::{OrgDetailPage, OrgsListPage, ProjectDetailPage};
 pub(crate) use signup::SignUpPage;
 pub(crate) use users::{UserDetailPage, UsersListPage};
@@ -99,6 +102,14 @@ pub fn AppRoutes() -> impl IntoView {
                 <Route path=path!("orgs") view=OrgsListPage />
                 <Route path=path!("orgs/:slug") view=OrgDetailPage />
                 <Route path=path!("orgs/:slug/projects/:project_slug") view=ProjectDetailPage />
+                <Route path=path!("orgs/:slug/projects/:project_slug/envs/:env_slug") view=EnvironmentDetailPage />
+                <ParentRoute path=path!("orgs/:slug/projects/:project_slug/envs/:env_slug/apps/:app_id") view=ApplicationLayout>
+                    <Route path=path!("") view=ApplicationOverviewPage />
+                    <Route path=path!("oauth") view=OAuthOverviewPage />
+                    <Route path=path!("oauth/clients") view=ClientsPage />
+                    <Route path=path!("oauth/clients/:client_id") view=ClientDetailPage />
+                    <Route path=path!("oauth/scopes") view=ScopesPage />
+                </ParentRoute>
                 <Route path=path!("users") view=UsersListPage />
                 <Route path=path!("users/:id") view=UserDetailPage />
             </ParentRoute>
