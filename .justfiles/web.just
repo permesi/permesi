@@ -115,12 +115,15 @@ web-css-build: web-node-setup
   cd {{root}}/apps/web
   npm run css:build
 
+[doc("Install or update the user-local Firefox Developer Edition")]
+firefox-install:
+  "{{root}}/scripts/install-firefox-developer-edition"
+
+[doc("Launch an isolated Firefox profile for development")]
 firefox:
   #!/usr/bin/env zsh
   set -euo pipefail
   script="{{root}}/firefox-dev.sh"
-  : "${HOME_URLS:=https://permesi.localhost{{https_suffix}}|https://api.permesi.localhost{{https_suffix}}/health|https://genesis.permesi.localhost{{https_suffix}}/health}"
-  export HOME_URLS
   if [[ ! -x "$script" ]]; then
     echo "Missing executable: ${script}" >&2
     exit 1

@@ -7,11 +7,13 @@ set -euo pipefail
 #   PROFILE_NAME=dev
 #   WM_CLASS=firefox-dev
 #   FIREFOX_BIN=firefox-developer-edition
-#   START_URL=https://permesi.localhost
-#   START_URLS=https://permesi.localhost,https://api.permesi.localhost/health,https://genesis.permesi.localhost/health
-#   HOME_URLS=https://permesi.localhost|https://api.permesi.localhost/health|https://genesis.permesi.localhost/health
+#   PERMESI_HTTPS_PORT=8443
+#   START_URL=https://permesi.localhost:8443
+#   START_URLS=https://permesi.localhost:8443,https://api.permesi.localhost:8443/health,https://genesis.permesi.localhost:8443/health,http://localhost:16686,http://localhost:8200
+#   HOME_URLS=https://permesi.localhost:8443|https://api.permesi.localhost:8443/health|https://genesis.permesi.localhost:8443/health|http://localhost:16686|http://localhost:8200
 #   FORCE_LIGHT_THEME=1 (default: force Light theme)
 #   FIREFOX_THEME_ID=firefox-compact-light@mozilla.org
+#   TRUST_MKCERT_CA=1 (trust the local mkcert CA in this profile only)
 #
 # Optional env toggles:
 #   PROFILE_NAME=permesi-dev
@@ -20,14 +22,31 @@ set -euo pipefail
 #   DISABLE_SERVICE_WORKERS=1   (more deterministic, less realistic)
 #   DISABLE_CACHES=1            (more deterministic, less realistic)
 
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
 PROFILE_NAME="${PROFILE_NAME:-dev}"
 WM_CLASS="${WM_CLASS:-firefox-dev}"
 FIREFOX_BIN="${FIREFOX_BIN:-firefox-developer-edition}"
+PERMESI_HTTPS_PORT="${PERMESI_HTTPS_PORT:-8443}"
 START_URL="${START_URL:-}"
 START_URLS="${START_URLS:-}"
-HOME_URLS="${HOME_URLS:-https://permesi.localhost|https://api.permesi.localhost/health|https://genesis.permesi.localhost/health}"
+case "$PERMESI_HTTPS_PORT" in
+    '' | *[!0-9]*) die "PERMESI_HTTPS_PORT must be an integer from 1 to 65535" ;;
+esac
+if ((PERMESI_HTTPS_PORT < 1 || PERMESI_HTTPS_PORT > 65535)); then
+    die "PERMESI_HTTPS_PORT must be an integer from 1 to 65535"
+fi
+https_suffix=":${PERMESI_HTTPS_PORT}"
+if [[ "$PERMESI_HTTPS_PORT" == "443" ]]; then
+    https_suffix=""
+fi
+HOME_URLS="${HOME_URLS:-https://permesi.localhost${https_suffix}|https://api.permesi.localhost${https_suffix}/health|https://genesis.permesi.localhost${https_suffix}/health|http://localhost:16686|http://localhost:8200}"
 FORCE_LIGHT_THEME="${FORCE_LIGHT_THEME:-1}"
 FIREFOX_THEME_ID="${FIREFOX_THEME_ID:-firefox-compact-light@mozilla.org}"
+TRUST_MKCERT_CA="${TRUST_MKCERT_CA:-1}"
 
 DISABLE_SERVICE_WORKERS="${DISABLE_SERVICE_WORKERS:-0}"
 DISABLE_CACHES="${DISABLE_CACHES:-0}"
@@ -35,11 +54,6 @@ DISABLE_PASSWORD_PROMPTS="${DISABLE_PASSWORD_PROMPTS:-1}"
 
 FF_DIR="${HOME}/.mozilla/firefox"
 INI="${FF_DIR}/profiles.ini"
-
-die() {
-    echo "error: $*" >&2
-    exit 1
-}
 
 if ! command -v "$FIREFOX_BIN" >/dev/null 2>&1; then
     if [[ "$FIREFOX_BIN" == "firefox-developer-edition" ]] && command -v firefox >/dev/null 2>&1; then
@@ -63,6 +77,7 @@ get_profile_path() {
     in_profile && /^$/ {
       if (path!="") {
         if (path ~ /^\//) { print path; } else { print ff_dir "/" path; }
+        in_profile=0;
         exit
       }
     }
@@ -85,7 +100,26 @@ fi
 
 # Resolve profile directory (handles both relative and direct path cases)
 profile_dir="${profile_path:-${FF_DIR}/${PROFILE_NAME}}"
+if [[ "$profile_dir" == *$'\n'* ]]; then
+    die "profile path contains a newline"
+fi
 mkdir -p "$profile_dir"
+
+# Trust only the laptop's mkcert public CA in this dedicated NSS profile. This
+# keeps permesi.localhost usable without adding development trust to every
+# Firefox profile or relying on distribution-specific system-store integration.
+if [[ "$TRUST_MKCERT_CA" == "1" ]]; then
+    command -v mkcert >/dev/null 2>&1 || die "mkcert is required to locate the local development CA"
+    command -v certutil >/dev/null 2>&1 || die "certutil is required to trust the local CA (Fedora package: nss-tools)"
+    mkcert_ca="$(mkcert -CAROOT)/rootCA.pem"
+    [[ -f "$mkcert_ca" ]] || die "mkcert root CA not found at ${mkcert_ca}; run mkcert -install on this laptop"
+    nss_db="sql:${profile_dir}"
+    if [[ ! -f "${profile_dir}/cert9.db" ]]; then
+        certutil -N -d "$nss_db" --empty-password >/dev/null || die "failed to initialize the Firefox certificate database"
+    fi
+    certutil -A -d "$nss_db" -n "permesi mkcert development CA" -t "C,," -i "$mkcert_ca" >/dev/null ||
+        die "failed to trust the mkcert CA in profile ${PROFILE_NAME}"
+fi
 
 userjs="${profile_dir}/user.js"
 home_urls_escaped="${HOME_URLS//\"/\\\"}"

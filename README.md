@@ -35,6 +35,16 @@ just start
 just firefox
 ```
 
+`just firefox-install` installs or updates the latest official Firefox Developer
+Edition under `~/.local/opt` without changing the host image. The `just firefox`
+recipe launches it with the isolated `dev` profile, falling back to the system
+Firefox when Developer Edition is absent. It imports the laptop's mkcert public
+CA into that profile's NSS database only; `TRUST_MKCERT_CA=0 just firefox` disables
+the import without changing any system or other Firefox trust store. The profile
+opens the web console, both API health pages, Jaeger, and the Vault UI as separate
+tabs. Its HTTPS pages default to port 8443; set `PERMESI_HTTPS_PORT=443` when the
+stack uses the standard HTTPS port.
+
 [![asciicast](https://asciinema.org/a/782038.svg)](https://asciinema.org/a/782038)
 
 *`just start` launches the full infrastructure (Postgres, Vault, Jaeger,
@@ -53,6 +63,7 @@ hosts/pods).*
 - **API (Permesi):** [https://api.permesi.localhost/health](https://api.permesi.localhost/health)
 - **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
 - **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
+- **Secrets (Vault):** [http://localhost:8200](http://localhost:8200)
 
 ### 🛰️ Remote VM (one per developer)
 
@@ -76,9 +87,17 @@ scripts/dev-remote --start <vm>    # push the cert, forward the ports, start and
 scripts/dev-remote --stop <vm>     # close the tunnel; the session keeps running on the VM
 ```
 
+The equivalent `just remote-start <vm> [remote-repo-path]` recipe defaults to port
+8443. Pass the checkout path when it is not `~/permesi`, for example
+`just remote-start pulque projects/permesi/permesi`.
+
+For a dedicated laptop browser, install it once with `just firefox-install`, then
+launch the isolated profile with `just firefox`; its home pages use the forwarded
+port 8443 by default.
+
 Then open `https://permesi.localhost:8443`. Without `--start`, SSH in your own way and run `just start` (or `just infra` plus the services) on the VM; `scripts/dev-remote <vm>` then only refreshes the certificate and the tunnel. Detaching from the session, Herdr or tmux, leaves both the services and the tunnel running. When your laptop terminal is itself inside Herdr, `--start` builds the session but does not attach it there (Herdr does not nest); open it from a plain terminal or with `herdr --remote <vm>`.
 
-The laptop's mkcert CA issues the HAProxy certificate, limited to the `permesi.localhost` names, and only that leaf plus the CA's public certificate are copied to the VM. The CA private key never leaves the laptop, and the laptop never trusts a CA that lives on a server. If `just start` on the VM stops at a missing TLS certificate, run `scripts/dev-remote` from the laptop first. CORS and passkeys compare origins including the port, so `PERMESI_HTTPS_PORT` must be the same on both ends, and the script refuses to forward when the remote HAProxy listens on another port. Editors that forward ports automatically (VS Code Remote-SSH, JetBrains Gateway) switch to a different local port when the one they want is busy, which breaks those origins: turn automatic forwarding off (`"remote.autoForwardPorts": false` in VS Code) and let `scripts/dev-remote` own the tunnel. On the VM, keep the firewall closed to everything but SSH, because the backend ports listen on all interfaces (see Local Development below). If the stack runs for days, refresh the 24-hour backend certificates with `just dev-tls-certs`; the services pick them up without a restart.
+The laptop's mkcert CA issues the HAProxy certificate, limited to the `permesi.localhost` names, and only that leaf plus the CA's public certificate are copied to the VM. The CA private key never leaves the laptop, and the laptop never trusts a CA that lives on a server. Remote helpers such as `just genesis-token` pin the copied public CA directly instead of adding it to the VM's system trust store. If `just start` on the VM stops at a missing TLS certificate, run `scripts/dev-remote` from the laptop first. CORS and passkeys compare origins including the port, so `PERMESI_HTTPS_PORT` must be the same on both ends, and the script refuses to forward when the remote HAProxy listens on another port. Editors that forward ports automatically (VS Code Remote-SSH, JetBrains Gateway) switch to a different local port when the one they want is busy, which breaks those origins: turn automatic forwarding off (`"remote.autoForwardPorts": false` in VS Code) and let `scripts/dev-remote` own the tunnel. On the VM, keep the firewall closed to everything but SSH, because the backend ports listen on all interfaces (see Local Development below). If the stack runs for days, refresh the 24-hour backend certificates with `just dev-tls-certs`; the services pick them up without a restart.
 
 ## Workspace Layout
 

@@ -5,14 +5,21 @@
 genesis-token:
   #!/usr/bin/env zsh
   set -euo pipefail
-  # Defaults to the HAProxy frontend, which the system trust store accepts after
-  # mkcert -install. To hit genesis directly, set GENESIS_API_BASE_URL to
-  # https://genesis.permesi.localhost:8000 and GENESIS_CA_PATH to the Vault PKI CA
-  # (certs/genesis/ca.pem); GENESIS_CA_PATH also pins a pushed mkcert root on a VM.
+  # The HAProxy frontend uses the generated or laptop-pushed mkcert root without
+  # broadening the host trust store. To hit genesis directly, set
+  # GENESIS_API_BASE_URL to https://genesis.permesi.localhost:8000 and
+  # GENESIS_CA_PATH to the Vault PKI CA (certs/genesis/ca.pem).
   base="${GENESIS_API_BASE_URL:-https://genesis.permesi.localhost{{https_suffix}}}"
+  ca_path="${GENESIS_CA_PATH:-}"
+  if [[ -z "$ca_path" && "$base" == https://genesis.permesi.localhost* && "$base" != *:8000* ]]; then
+    mkcert_ca="{{root}}/certs/mkcert-root.pem"
+    if [[ -f "$mkcert_ca" ]]; then
+      ca_path="$mkcert_ca"
+    fi
+  fi
   verify=()
-  if [[ -n "${GENESIS_CA_PATH:-}" ]]; then
-    verify=(--verify "${GENESIS_CA_PATH}")
+  if [[ -n "$ca_path" ]]; then
+    verify=(--verify "$ca_path")
   fi
   token="$(
     xh --ignore-stdin "${verify[@]}" GET "${base}/token?client_id=00000000-0000-0000-0000-000000000000" \

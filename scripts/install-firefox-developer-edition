@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Install the latest official Firefox Developer Edition in the current user's
+# account. Keeping the browser outside the immutable host image avoids an
+# rpm-ostree layer and lets firefox-dev.sh run it alongside the system Firefox.
+
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
+for tool in curl tar awk; do
+    command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
+done
+
+case "$(uname -s):$(uname -m)" in
+Linux:x86_64)
+    os="linux64"
+    platform="linux-x86_64"
+    ;;
+Linux:aarch64 | Linux:arm64)
+    os="linux64-aarch64"
+    platform="linux-aarch64"
+    ;;
+*)
+    die "unsupported platform: $(uname -s) $(uname -m)"
+    ;;
+esac
+
+locale="${FIREFOX_DEV_LOCALE:-en-US}"
+case "${locale}" in
+"" | *[!A-Za-z0-9@._-]*) die "FIREFOX_DEV_LOCALE contains unsupported characters" ;;
+esac
+
+install_root="${FIREFOX_DEV_INSTALL_ROOT:-${HOME}/.local/opt}"
+bin_dir="${FIREFOX_DEV_BIN_DIR:-${HOME}/.local/bin}"
+[[ "${install_root}" == /* && "${install_root}" != "/" ]] ||
+    die "FIREFOX_DEV_INSTALL_ROOT must be an absolute directory other than /"
+[[ "${bin_dir}" == /* && "${bin_dir}" != "/" ]] ||
+    die "FIREFOX_DEV_BIN_DIR must be an absolute directory other than /"
+
+target="${install_root%/}/firefox-developer-edition"
+binary_link="${bin_dir%/}/firefox-developer-edition"
+download_url="https://download.mozilla.org/?product=firefox-devedition-latest-ssl&os=${os}&lang=${locale}"
+
+mkdir -p "${install_root}" "${bin_dir}"
+if [[ (-e "${target}" || -L "${target}") && ! -d "${target}" ]]; then
+    die "refusing to replace non-directory ${target}"
+fi
+if [[ -e "${binary_link}" && ! -L "${binary_link}" ]]; then
+    die "refusing to replace non-symlink ${binary_link}"
+fi
+
+# Resolve "latest" first so an up-to-date install avoids downloading the archive.
+effective_url="$(
+    curl --fail --location --silent --show-error --head --retry 3 \
+        --proto '=https' --proto-redir '=https' \
+        --output /dev/null --write-out '%{url_effective}' "${download_url}"
+)"
+archive="${effective_url##*/}"
+case "${archive}" in
+firefox-*.tar.xz) ;;
+*) die "Mozilla returned an unexpected archive URL: ${effective_url}" ;;
+esac
+latest_version="${archive#firefox-}"
+latest_version="${latest_version%.tar.xz}"
+case "${latest_version}" in
+"" | *[!A-Za-z0-9._-]*) die "Mozilla returned an invalid version: ${latest_version}" ;;
+esac
+
+current_version=""
+if [[ -f "${target}/.permesi-version" ]]; then
+    current_version="$(<"${target}/.permesi-version")"
+fi
+
+link_binary() {
+    ln -sfn "${target}/firefox" "${binary_link}"
+}
+
+if [[ "${current_version}" == "${latest_version}" ]]; then
+    link_binary
+    echo "Firefox Developer Edition ${current_version} is already current."
+    exit 0
+fi
+
+tmp_dir="$(mktemp -d "${install_root%/}/.firefox-developer-edition.XXXXXX")"
+trap 'rm -rf -- "${tmp_dir}"' EXIT
+archive_path="${tmp_dir}/${archive}"
+
+echo "Downloading Firefox Developer Edition ${latest_version} (${platform}, ${locale})..."
+curl --fail --location --silent --show-error --retry 3 \
+    --proto '=https' --proto-redir '=https' \
+    --output "${archive_path}" "${effective_url}"
+
+release_suffix="/${platform}/${locale}/${archive}"
+[[ "${effective_url}" == *"${release_suffix}" ]] ||
+    die "Mozilla archive URL has an unexpected layout: ${effective_url}"
+release_root="${effective_url%${release_suffix}}"
+checksums="${tmp_dir}/SHA512SUMS"
+curl --fail --location --silent --show-error --retry 3 \
+    --proto '=https' --proto-redir '=https' \
+    --output "${checksums}" "${release_root}/SHA512SUMS"
+relative_archive="${platform}/${locale}/${archive}"
+expected_sha512="$(awk -v path="${relative_archive}" '$2 == path { print $1; exit }' "${checksums}")"
+[[ -n "${expected_sha512}" ]] || die "archive is absent from Mozilla's SHA512SUMS"
+
+if command -v sha512sum >/dev/null 2>&1; then
+    actual_sha512="$(sha512sum "${archive_path}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+    actual_sha512="$(shasum -a 512 "${archive_path}" | awk '{print $1}')"
+else
+    die "sha512sum or shasum is required to verify the Mozilla archive"
+fi
+[[ "${actual_sha512}" == "${expected_sha512}" ]] || die "Mozilla archive checksum verification failed"
+
+tar -xJf "${archive_path}" -C "${tmp_dir}"
+staged="${tmp_dir}/firefox"
+[[ -x "${staged}/firefox" && -f "${staged}/application.ini" ]] ||
+    die "Mozilla archive did not contain the expected Firefox installation"
+# application.ini omits the beta suffix (for example, 158.0 for 158.0b3), so
+# retain the release identifier from the checksum-verified Mozilla URL.
+printf '%s\n' "${latest_version}" >"${staged}/.permesi-version"
+
+backup="${install_root%/}/.firefox-developer-edition.previous.$$"
+had_previous=0
+if [[ -e "${target}" || -L "${target}" ]]; then
+    mv -- "${target}" "${backup}"
+    had_previous=1
+fi
+if ! mv -- "${staged}" "${target}"; then
+    if [[ "${had_previous}" == 1 ]]; then
+        mv -- "${backup}" "${target}"
+    fi
+    die "could not activate the new Firefox installation"
+fi
+if [[ "${had_previous}" == 1 ]]; then
+    rm -rf -- "${backup}"
+fi
+link_binary
+
+echo "Installed Firefox Developer Edition ${latest_version} at ${target}."
+echo "Run it for this project with: just firefox"

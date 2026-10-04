@@ -475,6 +475,13 @@ haproxy-sysctl:
 # Restart everything: stop infra and the dev session, then start again
 restart: stop start
 
+# Start and attach the full stack on a remote VM through the laptop-side helper.
+# Port 8443 avoids privileged-port setup on both hosts; callers can override the
+# remote checkout (relative to the remote home) and port when needed.
+[doc("Start the dev stack on a remote VM over HTTPS (port 8443 by default)")]
+remote-start host repo="permesi" port="8443":
+  PERMESI_HTTPS_PORT="{{port}}" "{{root}}/scripts/dev-remote" --start "{{host}}" "{{repo}}"
+
 # Backward-compatible aliases for the renamed start recipes
 alias start-http := start
 
