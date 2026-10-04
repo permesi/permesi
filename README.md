@@ -542,14 +542,13 @@ Regenerate them from code:
 
 ## Local Tracing (Jaeger)
 
-Send OTLP traces directly to the local Jaeger collector (the service must be built with
-`--features telemetry`, which `just genesis` / `just permesi` already do):
-
-```sh
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-```
-
-Open the Jaeger UI at http://localhost:16686 to inspect traces.
+The development environment sends OTLP traces to the local Jaeger collector at
+`http://localhost:4317`. The `just genesis` and `just permesi` recipes build both
+services with `--features telemetry`, and `just dev-envrc` records the endpoint in
+`.envrc`; an existing `OTEL_EXPORTER_OTLP_ENDPOINT` overrides that default. Open the
+Jaeger UI at http://localhost:16686 to inspect traces. With remote development, the
+services and collector run on the VM while `scripts/dev-remote` forwards the UI to
+the laptop.
 
 ## 🤝 Contributing
 

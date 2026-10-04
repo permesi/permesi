@@ -372,6 +372,7 @@ dev-env:
   printf '%s\n' \
     "export PERMESI_BIND_ADDR=\"\${PERMESI_BIND_ADDR:-{{bind_addr}}}\"" \
     "export PERMESI_HTTPS_PORT=\"\${PERMESI_HTTPS_PORT:-{{https_port}}}\"" \
+    "export OTEL_EXPORTER_OTLP_ENDPOINT=\"\${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}\"" \
     "" \
     "$vault_block" \
     "$operator_block" \
