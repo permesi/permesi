@@ -95,7 +95,7 @@ ulid = "3.0"
 url = "2.5"
 utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-axum = "0.3.0"
-uuid = { version = "1.26", features = ["v1", "v4", "v7", "serde"] }
+uuid = { version = "1.27", features = ["v1", "v4", "v7", "serde"] }
 built = { version = "0.8", features = ["git2"] }
 
 [profile.release]
