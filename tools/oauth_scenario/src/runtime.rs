@@ -152,6 +152,8 @@ impl Runtime {
                     admin_dsn: &infra.admin_dsn,
                     policy: &policy.oauth,
                     credential_grace_seconds: policy.credential_grace_seconds,
+                    infrastructure: infra,
+                    manifest: inputs.manifest,
                 };
                 cases::execute(case.id, &mut context, &fixture).await
             }

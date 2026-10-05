@@ -23,7 +23,7 @@
         "operationId": "discovery",
         "responses": {
           "200": {
-            "description": "Preparatory discovery metadata; token_endpoint is deferred",
+            "description": "Implemented authorization-code, token and signing metadata",
             "content": {
               "application/json": {
                 "schema": {
@@ -431,6 +431,16 @@
               }
             }
           },
+          "429": {
+            "description": "Shared JWKS refresh budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "OAuth/key source unavailable",
             "content": {
@@ -477,6 +487,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/token": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Exchanges only authorization codes with S256; failures before commit roll back the owned transaction.",
+        "operationId": "token",
+        "requestBody": {
+          "description": "grant_type=authorization_code, code, redirect_uri, code_verifier; public clients supply client_id, confidential clients use HTTP Basic",
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Committed RS256 access token and optional OIDC ID token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, client, grant or unsupported grant type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid HTTP Basic client authentication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared token exchange budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Issuer or exchange dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
                 }
               }
             }
@@ -6295,85 +6377,89 @@
         }
       },
       "Discovery": {
-        "type": "object",
-        "description": "Staging metadata advertises only implemented authorization behavior and public key location.",
-        "required": [
-          "issuer",
-          "authorization_endpoint",
-          "jwks_uri",
-          "response_types_supported",
-          "response_modes_supported",
-          "subject_types_supported",
-          "id_token_signing_alg_values_supported",
-          "code_challenge_methods_supported",
-          "grant_types_supported",
-          "token_endpoint_auth_methods_supported",
-          "request_parameter_supported",
-          "request_uri_parameter_supported",
-          "claims_parameter_supported"
-        ],
-        "properties": {
-          "authorization_endpoint": {
-            "type": "string"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TokenSecurityMetadata"
           },
-          "claims_parameter_supported": {
-            "type": "boolean"
-          },
-          "code_challenge_methods_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "grant_types_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "id_token_signing_alg_values_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "issuer": {
-            "type": "string"
-          },
-          "jwks_uri": {
-            "type": "string"
-          },
-          "request_parameter_supported": {
-            "type": "boolean"
-          },
-          "request_uri_parameter_supported": {
-            "type": "boolean"
-          },
-          "response_modes_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "response_types_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "subject_types_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "token_endpoint_auth_methods_supported": {
-            "type": "array",
-            "items": {
-              "type": "string"
+          {
+            "type": "object",
+            "required": [
+              "issuer",
+              "authorization_endpoint",
+              "token_endpoint",
+              "jwks_uri",
+              "response_types_supported",
+              "response_modes_supported",
+              "subject_types_supported",
+              "id_token_signing_alg_values_supported",
+              "code_challenge_methods_supported",
+              "grant_types_supported",
+              "request_parameter_supported",
+              "request_uri_parameter_supported",
+              "claims_parameter_supported"
+            ],
+            "properties": {
+              "authorization_endpoint": {
+                "type": "string"
+              },
+              "claims_parameter_supported": {
+                "type": "boolean"
+              },
+              "code_challenge_methods_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "grant_types_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "id_token_signing_alg_values_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "jwks_uri": {
+                "type": "string"
+              },
+              "request_parameter_supported": {
+                "type": "boolean"
+              },
+              "request_uri_parameter_supported": {
+                "type": "boolean"
+              },
+              "response_modes_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "response_types_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "subject_types_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "token_endpoint": {
+                "type": "string"
+              }
             }
           }
-        }
+        ],
+        "description": "Metadata advertises only implemented code/token behavior and public key location."
       },
       "EnvironmentResponse": {
         "type": "object",
@@ -7270,6 +7356,68 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "TokenFailure": {
+        "type": "object",
+        "description": "OAuth error envelope deliberately excludes submitted values and diagnostic text.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "description": "Successful protocol response. Secrets have no Debug and serialize only at the wire boundary.",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "scope"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenSecurityMetadata": {
+        "type": "object",
+        "description": "Implemented client authentication and issuer identification capabilities.",
+        "required": [
+          "token_endpoint_auth_methods_supported",
+          "authorization_response_iss_parameter_supported"
+        ],
+        "properties": {
+          "authorization_response_iss_parameter_supported": {
+            "type": "boolean"
+          },
+          "token_endpoint_auth_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

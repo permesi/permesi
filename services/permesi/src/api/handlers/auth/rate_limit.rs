@@ -25,6 +25,8 @@ pub enum RateLimitAction {
     ResendVerification,
     MfaRecovery,
     Authorize,
+    TokenExchange,
+    JwksRefresh,
     ClientCredentials,
     ClientCredentialRevocation,
 }
@@ -38,6 +40,8 @@ impl RateLimitAction {
             Self::ResendVerification => "resend_verification",
             Self::MfaRecovery => "mfa_recovery",
             Self::Authorize => "authorize",
+            Self::TokenExchange => "token_exchange",
+            Self::JwksRefresh => "jwks_refresh",
             Self::ClientCredentials => "client_credentials_management",
             Self::ClientCredentialRevocation => "client_credentials_revocation",
         }
@@ -129,6 +133,20 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Reuses the verified subject key/shared storage with an independent protocol policy.
+    /// This grants no authority and does not alter login or other action budgets.
+    pub(crate) fn configured(&self, policy: RateLimitConfig) -> Self {
+        let backend = match &self.backend {
+            #[cfg(test)]
+            Backend::Noop => Backend::Noop,
+            Backend::Postgres { pool, key, .. } => Backend::Postgres {
+                pool: pool.clone(),
+                key: key.clone(),
+                config: policy,
+            },
+        };
+        Self { backend }
+    }
     #[cfg(test)]
     #[must_use]
     pub const fn noop() -> Self {

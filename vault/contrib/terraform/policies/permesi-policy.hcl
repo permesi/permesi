@@ -13,5 +13,6 @@ path "database/creds/permesi" { capabilities = ["read"] }
 path "auth/token/renew-self" { capabilities = ["update"] }
 path "sys/leases/renew"      { capabilities = ["update"] }
 
-# Public verification material only. Runtime cannot rotate, retire, export, or sign yet.
+# Runtime reads verification material and signs; rotation, retirement and export remain operator-only.
 path "transit/permesi/keys/oidc-signing" { capabilities = ["read"] }
+path "transit/permesi/sign/oidc-signing" { capabilities = ["update"] }

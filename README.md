@@ -122,11 +122,11 @@ production endpoints are never used.
 Use `just oauth-scenario-list` for stable case IDs or `just oauth-scenario --suite smoke`
 for the shorter browser suite. The built `target/debug/permesi-oauth-scenario` also
 runs independently with local artifact paths. See [OAuth scenarios](docs/oauth-scenarios.md)
-for manifests, coverage, reports and cleanup recovery. Internal redemption tests prepare
-the next milestone. Lifecycle cases exercise configuration changes during consent and
+for manifests, coverage, reports and cleanup recovery. The suite tests internal redemption
+and runtime-role HTTP exchange with independent access/ID-token signature and claim checks.
+Lifecycle cases exercise configuration changes during consent and
 after issuance, including fresh-consent recovery without reviving an old grant/code;
-there is still no OAuth `/token`, access/ID-token or refresh-token
-issuance.
+refresh-token issuance remains planned.
 
 ## Architecture
 
@@ -143,9 +143,9 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 
 #### 2. `permesi` (The Core / "The Authority")
 * **Role:** The OIDC Authority.
-* **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, OAuth client/scope management, and Authorization Code + S256 PKCE with tenant-bound consent. Token issuance remains planned.
+* **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, OAuth client/scope management, and Authorization Code + S256 PKCE with tenant-bound consent and signed access/ID-token issuance.
 * **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Validates short-lived **Zero Tokens** offline using the PASERK keyset for auth POSTs.
-* **Output:** Authenticated sessions, tenant-scoped management APIs, and single-use authorization codes. Permesi does not yet issue OAuth access tokens, ID tokens, or refresh tokens.
+* **Output:** Authenticated sessions, tenant-scoped management APIs, single-use authorization codes, RS256 access tokens and OIDC ID tokens. Refresh tokens remain planned.
 
 #### 3. Database
 * **Role:** System of Record.
@@ -252,21 +252,23 @@ exchange persistence is a tracked follow-up, separate from durable OAuth request
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
 and hashed, single-use authorization codes (120-second default TTL). PKCE is required
-for public and confidential clients. An internal transactional redemption helper is
-ready for the token phase; there is no `/token` endpoint or access/ID/refresh-token
-issuance. `offline_access` is rejected until refresh policy exists.
+for public and confidential clients. `POST /token` owns client authentication, S256 redemption, Vault signing and hash-only
+issuance receipts in one PostgreSQL transaction. Public clients supply their ID;
+confidential clients use HTTP Basic with bounded Argon2id current/retiring credentials.
+Access tokens bind the explicit resource audience and tenant/application/grant; OIDC
+ID tokens bind client audience, nonce and original authentication time. Both default
+to a five-minute TTL. `offline_access` stays rejected until refresh policy exists.
 
 Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
-enable the protocol routes. `/jwks.json` exposes retained public RSA versions from a
-shared Vault transit key. `/.well-known/openid-configuration` provides preparatory
-metadata, deliberately omitting the unimplemented token endpoint. This is not yet
-a complete interoperable OpenID Provider: standard code-flow discovery requires
-`token_endpoint`. Confidential clients now have tenant-authorized one-time secret creation,
-rotation with a configurable 15-minute overlap, revocation at commit, and internal
-Argon2id verification. Those credentials prepare future client authentication; the
-OAuth `client_credentials` machine grant remains planned. Signing, access/ID/refresh
-tokens and broader grants management remain deferred. Follow [TODO](TODO.md) for the
-milestone checklist and [OAuth roadmap](docs/oauth-foundation.md#roadmap) for dependencies.
+enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA versions;
+discovery advertises the implemented code/token endpoints, S256, Basic/public-none
+methods and issuer response identification. Runtime signs but cannot rotate/export/retire
+keys. Confidential secret management includes one-time creation, overlap rotation and
+revocation at commit. Refresh rotation/reuse detection, UserInfo/introspection/revocation,
+the `client_credentials` machine grant and OIDC conformance testing remain planned.
+See [token exchange](docs/oauth-token-exchange.md) for claims, configuration, rollout,
+cache/rotation behavior and finite-lifetime JWT revocation limits. Follow [TODO](TODO.md)
+and the [OAuth roadmap](docs/oauth-foundation.md#roadmap) for remaining milestones.
 See [OAuth foundation](docs/oauth-foundation.md)
 for configuration, exact redirect/error rules, consent policy and rollout.
 

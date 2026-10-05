@@ -1,12 +1,11 @@
-//! Pre-token discovery metadata and Vault-owned RSA signing-key lifecycle.
+//! Explicit OIDC discovery, public verification keys and Vault-owned RS256 signing.
 //!
-//! Flow Overview: explicit deployment configuration enables metadata; JWKS reads the
-//! shared transit key through a bounded, single-flight public-response cache and converts retained public versions to RSA
-//! JWKs. Vault owns private material and rotation, so replicas never generate keys or
-//! cache a process-local active version. Retirement is an operator action after token
-//! lifetimes and downstream caches expire. No signing or token endpoint exists yet.
-//! The discovery document deliberately omits `token_endpoint` until token issuance exists;
-//! it is preparatory metadata, not a complete interoperable `OpenID` Provider declaration.
+//! Flow Overview: deployment configuration enables code/token metadata; JWKS converts
+//! retained shared transit versions through a bounded public-response cache. Token exchanges
+//! select a fresh shared version and locally verify Vault signatures before database commit.
+//! Vault owns private material and rotation. No process-local key/version confers authority.
+//! Unknown-kid refresh is explicitly rate limited; retirement is operator-only after all
+//! token lifetimes and downstream caches expire. `UserInfo` and refresh remain separate.
 
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -22,6 +21,7 @@ use utoipa::ToSchema;
 use vault_client::VaultTransport;
 
 use super::config::OAuthConfig;
+mod signing;
 
 /// Immutable policy plus shared Vault connectivity; contains no locally generated keys.
 #[derive(Clone)]
@@ -73,6 +73,18 @@ impl OAuthState {
         result
     }
 
+    /// Refreshes public metadata after an unknown kid, serializing with ordinary cache writes.
+    pub(crate) async fn refresh_jwks(&self) -> Result<Jwks> {
+        let mut cache = self.cache.lock().await;
+        let result = self.fetch_jwks().await;
+        *cache = Some(CachedJwks {
+            expires: Instant::now()
+                + Duration::from_secs(u64::try_from(self.config.jwks_cache_ttl)?),
+            keys: result.as_ref().ok().cloned(),
+        });
+        result
+    }
+
     /// Refreshes shared public versions. Failures are briefly cached and never serve stale keys.
     async fn fetch_jwks(&self) -> Result<Jwks> {
         let path = format!(
@@ -107,11 +119,12 @@ pub(crate) struct Jwk {
     e: String,
 }
 
-/// Staging metadata advertises only implemented authorization behavior and public key location.
+/// Metadata advertises only implemented code/token behavior and public key location.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct Discovery {
     pub issuer: String,
     pub authorization_endpoint: String,
+    pub token_endpoint: String,
     pub jwks_uri: String,
     pub response_types_supported: Vec<&'static str>,
     pub response_modes_supported: Vec<&'static str>,
@@ -119,10 +132,18 @@ pub(crate) struct Discovery {
     pub id_token_signing_alg_values_supported: Vec<&'static str>,
     pub code_challenge_methods_supported: Vec<&'static str>,
     pub grant_types_supported: Vec<&'static str>,
-    pub token_endpoint_auth_methods_supported: Vec<&'static str>,
+    #[serde(flatten)]
+    pub token_security: TokenSecurityMetadata,
     pub request_parameter_supported: bool,
     pub request_uri_parameter_supported: bool,
     pub claims_parameter_supported: bool,
+}
+
+/// Implemented client authentication and issuer identification capabilities.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct TokenSecurityMetadata {
+    pub token_endpoint_auth_methods_supported: Vec<&'static str>,
+    pub authorization_response_iss_parameter_supported: bool,
 }
 
 /// Validates the transit key type and converts all available public versions without

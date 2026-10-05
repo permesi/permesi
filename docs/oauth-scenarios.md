@@ -15,6 +15,7 @@ On Linux with working local Podman, run `just oauth-scenario-build`, then:
 target/debug/permesi-oauth-scenario --list
 target/debug/permesi-oauth-scenario --suite smoke
 target/debug/permesi-oauth-scenario --suite full
+target/debug/permesi-oauth-scenario --suite token
 target/debug/permesi-oauth-scenario --case redemption.bindings
 target/debug/permesi-oauth-scenario --case authorization.consent --repeat 2 --seed 7
 ```
@@ -30,6 +31,8 @@ scope, proving the allow-list does not become consent. Every case creates a fres
 tenant; logged-in owner and non-member actors are shared within a repetition.
 Repetitions start fresh stacks. No case depends on another case's grants or tenant mutations. Traffic resets to A
 for every case; the topology-changing failover case always runs last in a repetition.
+Token verification refreshes this issuer's fixed JWKS URL once when a cached set lacks
+the returned kid; it never retries exchange or relaxes signature/claim/replay assertions.
 
 Manifests accept resource names, environment slugs/tiers, applications and custom
 scope names/descriptions. They reject unknown fields/versions, internal/protocol scope
@@ -90,7 +93,7 @@ repetitions and parallel isolation with
 
 | Stable case | Actual coverage |
 | --- | --- |
-| `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, preparatory discovery and public JWKS |
+| `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, accurate code/token discovery and public JWKS |
 | `authorization.consent` | Real browser S256 consent, exact scopes/state/nonce/redirect/TTL, high-entropy code and hash-only row |
 | `authorization.login_resume` | Anonymous durable request on A, actual Web login, resume/consent on B |
 | `authorization.cancel_saved` | Cancellation without code, fresh saved-consent code/nonce/bindings, exact saved scopes, forced consent and added browser scope-field rejection |
@@ -108,13 +111,19 @@ repetitions and parallel isolation with
 | `redemption.scope_remove_restore` | Scope removal/restoration cannot revive old code; fresh grant/code has exact bindings, commits once and rejects replay |
 | `redemption.redirect_remove_restore` | Callback removal/restoration cannot revive old code; fresh consent creates a different grant/code |
 
+| `token.public_claims` | Browser code on A, runtime-role HTTP exchange on B, ignored extensions cannot replace saved nonce, independently verified signatures/issuer/audiences/nonce/auth_time/at_hash/tenant/scopes, committed hashes and internal-session rejection |
+| `token.confidential_credentials` | HTTP Basic current/retiring credentials, missing/wrong/revoked secrets, mandatory S256 and valid retry controls |
+| `token.validation` | Wrong verifier/redirect/client, duplicate and browser authority fields, valid retry, no ID token without openid |
+| `token.replica_replay_race` | Real A/B process HTTP race on pinned private sockets, exactly one committed receipt, replay rejection and independently verified winner |
+| `token.signing_rollback_rotation` | Deny signing in owned Vault policy, code remains unconsumed/unexpired, restore and exchange; rotate actual shared key, forced B JWKS refresh verifies old/new tokens |
+
 `smoke` selects the first three cases, `security` selects authorization/redemption
 negatives and failover, `lifecycle` selects credentials/deletion and the six lifecycle
-revalidation cases, and `full` selects all seventeen cases.
+revalidation cases, `token` selects the five HTTP issuance cases, and `full` selects all twenty-two cases.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
 Redemption is explicitly the existing transaction-owned internal domain API in the
 runner process, using an isolated administrator pool. It tests domain bindings and
-transactions, rather than runtime-role SQL permissions. It does not test HTTP `/token` or confidential-client authentication.
+transactions, rather than runtime-role SQL permissions. The separate `token.*` cases test real `/token` with Vault-minted runtime database roles and confidential authentication.
 Expiration waits the normal 120-second code TTL instead of modifying immutable code
 fields or weakening product configuration.
 
@@ -125,7 +134,7 @@ A after the change. Direct failures are actual terminal browser responses with H
 or missing browser event cannot satisfy those assertions. The mounted service's shared
 error middleware converts direct handler errors to its JSON envelope. Scope failure
 may redirect only through the still-registered
-callback, preserving state and excluding code/tenant/scope metadata.
+callback, preserving state and excluding code/tenant/scope metadata and checking the configured RFC 9207 issuer parameter.
 
 Issued-code cases first prove successful domain redemption in a rolled-back independent
 transaction. They then require rejection during mutation, after restoration and after
@@ -136,7 +145,9 @@ replacement deletes registered URI rows, whose existing foreign keys cascade to 
 requests and codes; that case requires the original code hash to remain absent after
 restoration and fresh consent. The new code has fresh state/nonce, exact
 scope/user/client/application/organization/redirect bindings and normal TTL; it commits
-once and rejects replay. SQL does not seed or mutate authority in these cases.
+once and rejects replay. Lifecycle rejection is also checked through `/token`; restored consent
+first passes a rolled-back domain control, then actually issues signed tokens through the
+runtime HTTP service. Invalid/expired/foreign codes never consume the original authority. SQL does not seed or mutate authority in these cases.
 
 The CI `OAuth scenarios` job uses the same workflow's compiled Web artifact and native
 services/runner from the checked-out SHA, runs the full suite and harness checks,
@@ -151,14 +162,14 @@ Extend both report formats and this coverage table. Negative requests must reach
 actual API rather than merely exercise manifest validation. Keep runtime ownership,
 bounded waits and secret-free reporting intact as scenarios grow.
 
-Next implement real `/token`, atomic redemption/token persistence, confidential-client
-authentication with current/retiring secrets, signed access tokens with explicit
-issuer/resource audience, then OIDC ID tokens with client audience/nonce/auth_time and
-complete discovery/mix-up protection. Add actual HTTP rollback, replay and concurrency
-scenarios as those capabilities land. Refresh rotation/reuse detection follows separately.
+[Token exchange](oauth-token-exchange.md) now has real runtime-role HTTP scenarios,
+independent RS256/claim verification, current/retiring credentials, rollback, replay,
+concurrency and shared rotation. Next add refresh-family rotation/reuse/concurrency
+coverage alongside its implementation. Standard OIDC client interoperability/conformance
+and resource-server validation/revocation policy remain separately tracked.
 
 Durable OPAQUE exchanges, MFA-required variants, richer consent/grants UX,
-Firefox/Safari, multi-host/load/fault tests, key-rotation interoperability, UserInfo,
+Firefox/Safari, multi-host/load/fault tests, third-party OIDC interoperability, UserInfo,
 introspection/revocation, device flow and M2M remain in `TODO.md`. Current scenarios
 preserve default MFA policy and require a genuine full session; they do not establish
 the full MFA matrix or token/OIDC interoperability.
@@ -166,9 +177,9 @@ the full MFA matrix or token/OIDC interoperability.
 ## Validation and independent review
 
 Local checks cover formatting, workspace Clippy, default/all-feature tests and builds,
-PostgreSQL bootstrap/schema verification, unchanged regenerated OpenAPI, native Web and
+PostgreSQL bootstrap/schema verification, regenerated OpenAPI consistency, native Web and
 WASM builds, the broader Chromium console suite and both real PostgreSQL browser tests.
-The current runner passes all seventeen cases; its seven process checks cover startup/deadline
+The runner now includes twenty-two cases; its seven process checks cover startup/deadline
 failure, repeated SIGTERM during cleanup, an injected removal failure, repetitions and
 simultaneous runs. The eight-case lifecycle suite also passes two fresh-stack repetitions
 from another working directory with explicit artifacts and an alternate manifest of
@@ -196,9 +207,9 @@ when a receiver is dropped, and the real repeated-SIGTERM test completes cleanup
 The second independent review used the same exact provider/model and verified all seven
 fixes and the signal finding's rejection, with no remaining confirmed defects. The
 reviewer inspected the code and protocol contracts; the execution results above come
-from the primary implementation run. Runtime-role token exchange, MFA variants, network
-sandboxing/multi-host tests, and pinned browser interoperability remain explicit
-follow-ups rather than claims made by this foundation.
+from the primary implementation run. Runtime-role token exchange was deferred in that
+initial foundation and is implemented by the token milestone below. MFA variants, network
+sandboxing/multi-host tests and pinned browser interoperability remain explicit follow-ups.
 
 A separate independent Herdr/OMP review of the lifecycle extension used
 `xai-oauth/grok-4.7` with xhigh thinking and found no confirmed actionable defects.
@@ -208,3 +219,13 @@ recovery and replay, browser response receipts, private IPC and the documented t
 deferrals. The reviewer traced the mounted error middleware to verify the JSON direct
 error contract. The execution evidence above comes from the primary run; this review
 required no code corrections or second review.
+
+The token milestone received two further independent Herdr/OMP reviews using
+`xai-oauth/grok-4.7`. All four confirmed findings were fixed with regressions proven
+to fail on the original implementation: callback parameter collisions, unknown token
+extensions/empty optional identifiers, delayed signing-cache overwrites and case-sensitive
+JWKS refresh. The corrected verifier refreshes the fixed issuer JWKS once on an unknown
+kid without retrying exchange or relaxing assertions. The second review found no
+confirmed defects. Primary execution passed all 22 cases, seven harness checks,
+534 default/564 all-feature workspace tests and the browser/schema/OpenAPI gates.
+See [token exchange](oauth-token-exchange.md) for the fixes and remaining trust boundaries.

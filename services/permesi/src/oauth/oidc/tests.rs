@@ -10,6 +10,115 @@ use rsa::{
 };
 use serde_json::json;
 
+/// A delayed signing metadata read must not replace a newer public JWKS snapshot.
+#[tokio::test]
+async fn oidc_review_regression_signing_read_cannot_downgrade_refreshed_jwks() -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::sync::Notify;
+    let first_key = RsaPrivateKey::new(&mut OsRng, 2048)?
+        .to_public_key()
+        .to_public_key_pem(LineEnding::LF)?;
+    let next_key = RsaPrivateKey::new(&mut OsRng, 2048)?
+        .to_public_key()
+        .to_public_key_pem(LineEnding::LF)?;
+    let first = json!({"data":{"type":"rsa-2048","latest_version":1,"keys":{"1":{"public_key":first_key}}}});
+    let rotated = json!({"data":{"type":"rsa-2048","latest_version":2,"keys":{"1":{"public_key":first_key},"2":{"public_key":next_key}}}});
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let router = axum::Router::new().route(
+        "/v1/transit/permesi/keys/oidc-signing",
+        axum::routing::get({
+            let started = started.clone();
+            let release = release.clone();
+            move || {
+                let started = started.clone();
+                let release = release.clone();
+                let first = first.clone();
+                let rotated = rotated.clone();
+                let counter = counter.clone();
+                async move {
+                    if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                        started.notify_one();
+                        release.notified().await;
+                        axum::Json(first)
+                    } else {
+                        axum::Json(rotated)
+                    }
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let mut server = tokio::task::JoinSet::new();
+    server.spawn(async move { axum::serve(listener, router).await });
+    let uri = format!("http://{address}");
+    let transport = VaultTransport::from_target("test", vault_client::VaultTarget::parse(&uri)?)?;
+    let mut globals = crate::cli::globals::GlobalArgs::new(uri, transport);
+    globals.vault_transit_mount = "transit/permesi".into();
+    let state = OAuthState::new(OAuthConfig::disabled(), &globals);
+    let reader = state.clone();
+    let mut readers = tokio::task::JoinSet::new();
+    readers.spawn(async move { reader.signing_key().await });
+    tokio::time::timeout(Duration::from_secs(5), started.notified()).await?;
+    let fresh = serde_json::to_value(state.refresh_jwks().await?)?;
+    assert_eq!(fresh["keys"].as_array().context("keys")?.len(), 2);
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), readers.join_next())
+        .await?
+        .context("missing signing read")???;
+    assert_eq!(serde_json::to_value(state.jwks().await?)?, fresh);
+    Ok(())
+}
+
+#[tokio::test]
+async fn oidc_signer_rejects_wrong_version_missing_and_invalid_signatures() -> Result<()> {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+    let server = MockServer::start().await;
+    let key = RsaPrivateKey::new(&mut OsRng, 2048)?;
+    let pem = key.to_public_key().to_public_key_pem(LineEnding::LF)?;
+    Mock::given(method("GET"))
+        .and(path("/v1/transit/permesi/keys/oidc-signing"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"data":{"type":"rsa-2048","latest_version":1,"keys":{"1":{"public_key":pem}}}}),
+        ))
+        .mount(&server)
+        .await;
+    let transport =
+        VaultTransport::from_target("test", vault_client::VaultTarget::parse(&server.uri())?)?;
+    let mut globals = crate::cli::globals::GlobalArgs::new(server.uri(), transport);
+    globals.vault_transit_mount = "transit/permesi".into();
+    let state = OAuthState::new(OAuthConfig::disabled(), &globals);
+    let key = state.signing_key().await?;
+    server.reset().await;
+    for body in [
+        json!({}),
+        json!({"data":{"signature":"vault:v2:AAAA"}}),
+        json!({"data":{"signature":"vault:v1:AAAA"}}),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/v1/transit/permesi/sign/oidc-signing"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        assert!(
+            state
+                .sign_jwt(&key, "at+jwt", &json!({"iss":"https://issuer.test"}))
+                .await
+                .is_err()
+        );
+        server.reset().await;
+    }
+    Ok(())
+}
+
 #[test]
 fn oidc_jwks_rejects_incompatible_or_incomplete_keysets() {
     for body in [

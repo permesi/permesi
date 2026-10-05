@@ -20,7 +20,7 @@ use super::{
 use crate::oauth::{client::ClientType, config::OAuthConfig, redirect_uri::RedirectUri};
 
 /// Exact active ancestry resolved from PostgreSQL, never a browser-selected resource.
-pub(super) struct ClientContext {
+pub(crate) struct ClientContext {
     pub id: Uuid,
     pub application_id: Uuid,
     pub organization_id: Uuid,
@@ -323,7 +323,7 @@ impl AuthorizationService<'_> {
 
 /// Locks active client and all ancestors against management/lifecycle mutations.
 /// These locks prove registration status, not membership or delegated scope authority.
-pub(super) async fn lock_client(
+pub(crate) async fn lock_client(
     tx: &mut Transaction<'_, Postgres>,
     public_id: Uuid,
 ) -> Result<ClientContext, Error> {

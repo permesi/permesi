@@ -10,6 +10,7 @@ pub mod me;
 pub mod me_webauthn;
 pub mod orgs;
 pub mod root;
+pub(crate) mod token;
 pub mod users;
 
 use admission_token::{

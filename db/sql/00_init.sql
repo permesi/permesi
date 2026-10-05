@@ -132,6 +132,8 @@ GRANT USAGE ON TYPE org_membership_status TO permesi_runtime;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO permesi_runtime;
 -- Deny direct runtime deletion/truncation of credential history. Owner FK cascades still work.
 REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
+-- Token receipt history is immutable for runtime roles, including bootstrap-wide grants.
+REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO permesi_runtime;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public

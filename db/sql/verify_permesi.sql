@@ -19,6 +19,15 @@ BEGIN
         END IF;
     END LOOP;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') THEN
+        IF has_table_privilege('permesi_runtime','oauth_token_issuances','UPDATE')
+            OR has_table_privilege('permesi_runtime','oauth_token_issuances','DELETE')
+            OR has_table_privilege('permesi_runtime','oauth_token_issuances','TRUNCATE')
+            OR has_table_privilege('permesi_runtime','oauth_token_issuances','REFERENCES')
+            OR has_table_privilege('permesi_runtime','oauth_token_issuances','TRIGGER')
+            OR NOT has_table_privilege('permesi_runtime','oauth_token_issuances','SELECT')
+            OR NOT has_table_privilege('permesi_runtime','oauth_token_issuances','INSERT') THEN
+            RAISE EXCEPTION 'invalid runtime token receipt privileges';
+        END IF;
         IF has_table_privilege('permesi_runtime','oauth_client_secrets','DELETE')
             OR has_table_privilege('permesi_runtime','oauth_client_secrets','TRUNCATE') THEN
             RAISE EXCEPTION 'runtime role may erase credential revocation history';

@@ -35,6 +35,27 @@ pub struct Api {
 }
 
 impl Api {
+    /// Back-channel token exchange without session cookies, redirects or authority-bearing queries.
+    pub async fn token(
+        &self,
+        fields: &[(&str, &str)],
+        basic: Option<&str>,
+    ) -> Result<reqwest::Response> {
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.extend_pairs(fields.iter().copied());
+        let mut request = self
+            .client
+            .post(format!("{}/token", self.origin))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(form.finish());
+        if let Some(basic) = basic {
+            request = request.header(reqwest::header::AUTHORIZATION, basic);
+        }
+        request.send().await.safe("Token HTTP request failed.")
+    }
     /// Constructs an anonymous client before registration; callers cannot supply an external origin.
     pub fn anonymous(origin: String, client: reqwest::Client) -> Self {
         Self {

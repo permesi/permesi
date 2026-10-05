@@ -1,4 +1,4 @@
-//! Explicit consent persistence context, shared by authorization and future token services.
+//! Explicit consent persistence context, shared by authorization and token services.
 //!
 //! A grant binds one identity to one client, application, and owning organization.
 //! Composite foreign keys constrain grant scopes to that client's configured scopes

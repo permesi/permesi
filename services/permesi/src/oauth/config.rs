@@ -2,7 +2,7 @@
 //!
 //! OAuth stays disabled until both issuer and audience are supplied. Clap and dispatch
 //! validate the same policy so deployment identity cannot be inferred from Host headers.
-//! Access-token audiences represent resources; future ID tokens use the public client ID.
+//! Access-token audiences represent resources; ID tokens use the public client ID.
 
 use anyhow::{Context, Result, ensure};
 use clap::ArgMatches;
@@ -19,6 +19,7 @@ pub struct OAuthConfig {
     pub lock_timeout_ms: i64,
     pub jwks_cache_ttl: i64,
     pub credentials: super::credentials::CredentialConfig,
+    pub tokens: super::tokens::TokenConfig,
 }
 
 impl OAuthConfig {
@@ -75,6 +76,7 @@ impl OAuthConfig {
             lock_timeout_ms,
             jwks_cache_ttl,
             credentials: super::credentials::CredentialConfig::from_matches(matches)?,
+            tokens: super::tokens::TokenConfig::from_matches(matches)?,
         })
     }
 
@@ -90,6 +92,7 @@ impl OAuthConfig {
             lock_timeout_ms: 1000,
             jwks_cache_ttl: 30,
             credentials: super::credentials::CredentialConfig::for_tests(),
+            tokens: super::tokens::TokenConfig::for_tests(),
         }
     }
 }
@@ -188,6 +191,13 @@ mod cli_tests {
                 ("PERMESI_OAUTH_REQUEST_TTL_SECONDS", None),
                 ("PERMESI_OAUTH_LOCK_TIMEOUT_MS", None),
                 ("PERMESI_OIDC_JWKS_CACHE_TTL_SECONDS", None),
+                ("PERMESI_OAUTH_ACCESS_TOKEN_TTL_SECONDS", None),
+                ("PERMESI_OIDC_ID_TOKEN_TTL_SECONDS", None),
+                ("PERMESI_OAUTH_TOKEN_TIMEOUT_MS", None),
+                ("PERMESI_OAUTH_TOKEN_MAX_BODY_BYTES", None),
+                ("PERMESI_OAUTH_TOKEN_RATE_WINDOW_SECONDS", None),
+                ("PERMESI_OAUTH_TOKEN_RATE_IP_ATTEMPTS", None),
+                ("PERMESI_OAUTH_TOKEN_RATE_CLIENT_IP_ATTEMPTS", None),
                 ("PERMESI_FRONTEND_BASE_URL", Some("https://permesi.dev")),
             ],
             || -> Result<()> {
@@ -224,6 +234,20 @@ mod cli_tests {
                     ("--oauth-client-secret-parallelism", "5"),
                     ("--oauth-client-secret-hash-workers", "0"),
                     ("--oauth-client-secret-hash-workers", "9"),
+                    ("--oauth-token-rate-window-seconds", "0"),
+                    ("--oauth-token-rate-window-seconds", "3601"),
+                    ("--oauth-token-rate-ip-attempts", "0"),
+                    ("--oauth-token-rate-ip-attempts", "100001"),
+                    ("--oauth-token-rate-client-ip-attempts", "0"),
+                    ("--oauth-token-rate-client-ip-attempts", "100001"),
+                    ("--oauth-access-token-ttl-seconds", "0"),
+                    ("--oauth-access-token-ttl-seconds", "3601"),
+                    ("--oidc-id-token-ttl-seconds", "0"),
+                    ("--oidc-id-token-ttl-seconds", "3601"),
+                    ("--oauth-token-timeout-ms", "0"),
+                    ("--oauth-token-timeout-ms", "30001"),
+                    ("--oauth-token-max-body-bytes", "1023"),
+                    ("--oauth-token-max-body-bytes", "65537"),
                     ("--oauth-code-ttl-seconds", "0"),
                     ("--oauth-code-ttl-seconds", "301"),
                     ("--oauth-request-ttl-seconds", "1801"),

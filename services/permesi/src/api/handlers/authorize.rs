@@ -18,7 +18,7 @@ use crate::oauth::{
         crypto::SecretValue,
         request::{AuthorizationInput, RequestedScope},
     },
-    oidc::{Discovery, OAuthState},
+    oidc::{Discovery, OAuthState, TokenSecurityMetadata},
     redirect_uri::RedirectUri,
 };
 use axum::{
@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 const BROWSER_COOKIE: &str = "__Host-permesi_oauth";
 
-#[utoipa::path(get, path="/.well-known/openid-configuration", responses((status=200, description="Preparatory discovery metadata; token_endpoint is deferred", body=Discovery),(status=503,description="OAuth issuer is not configured")), tag="oauth")]
+#[utoipa::path(get, path="/.well-known/openid-configuration", responses((status=200, description="Implemented authorization-code, token and signing metadata", body=Discovery),(status=503,description="OAuth issuer is not configured")), tag="oauth")]
 /// Returns static public issuer metadata without database budgets or header-derived identity.
 pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response {
     let Some(issuer) = &oauth.config.issuer else {
@@ -50,6 +50,7 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
         Json(Discovery {
             issuer: issuer.clone(),
             authorization_endpoint: format!("{issuer}/authorize"),
+            token_endpoint: format!("{issuer}/token"),
             jwks_uri: format!("{issuer}/jwks.json"),
             response_types_supported: vec!["code"],
             response_modes_supported: vec!["query"],
@@ -57,7 +58,10 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
             id_token_signing_alg_values_supported: vec!["RS256"],
             code_challenge_methods_supported: vec!["S256"],
             grant_types_supported: vec!["authorization_code"],
-            token_endpoint_auth_methods_supported: vec![],
+            token_security: TokenSecurityMetadata {
+                token_endpoint_auth_methods_supported: vec!["client_secret_basic", "none"],
+                authorization_response_iss_parameter_supported: true,
+            },
             request_parameter_supported: false,
             request_uri_parameter_supported: false,
             claims_parameter_supported: false,
@@ -67,17 +71,47 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
     )
 }
 
-#[utoipa::path(get,path="/jwks.json",responses((status=200,description="Retained Vault RSA public signing versions",body=crate::oauth::oidc::Jwks),(status=503,description="OAuth/key source unavailable")),tag="oauth")]
+#[utoipa::path(get,path="/jwks.json",responses((status=200,description="Retained Vault RSA public signing versions",body=crate::oauth::oidc::Jwks),(status=429,description="Shared JWKS refresh budget exhausted"),(status=503,description="OAuth/key source unavailable")),tag="oauth")]
 /// Publishes cached public Vault key versions without using the authentication database.
 /// Single-flight refresh and negative caching bound upstream reads; malformed keys fail closed.
-pub(crate) async fn jwks(State(oauth): State<Arc<OAuthState>>) -> Response {
+pub(crate) async fn jwks(
+    State(oauth): State<Arc<OAuthState>>,
+    State(auth): State<Arc<AuthState>>,
+    headers: HeaderMap,
+) -> Response {
     if oauth.config.issuer.is_none() {
         return secured(StatusCode::SERVICE_UNAVAILABLE.into_response());
     }
-    match oauth.jwks().await {
+    let refresh = requests_jwks_refresh(&headers);
+    if refresh && oauth_rate_limited(&auth, &headers, RateLimitAction::JwksRefresh).await {
+        return secured(StatusCode::TOO_MANY_REQUESTS.into_response());
+    }
+    let keys = if refresh {
+        oauth.refresh_jwks().await
+    } else {
+        oauth.jwks().await
+    };
+    match keys {
         Ok(keys) => public_metadata(Json(keys).into_response(), oauth.config.jwks_cache_ttl),
         Err(_) => secured(StatusCode::SERVICE_UNAVAILABLE.into_response()),
     }
+}
+
+/// Parses case-insensitive HTTP cache directives across repeated header fields.
+/// Quoted zero is accepted; this selects a refresh, never bypasses its shared budget.
+fn requests_jwks_refresh(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(CACHE_CONTROL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|directive| {
+            let directive = directive.trim();
+            let (name, value) = directive.split_once('=').unwrap_or((directive, ""));
+            name.trim().eq_ignore_ascii_case("no-cache")
+                || (name.trim().eq_ignore_ascii_case("max-age")
+                    && matches!(value.trim(), "0" | "\"0\""))
+        })
 }
 
 #[utoipa::path(get,path="/authorize",params(AuthorizationInput),responses((status=200,description="Minimal consent page",body=String,content_type="text/html"),(status=303,description="Validated client redirect or existing Web login",headers(("Location"=String,description="Exact registered redirect with code/state or protocol error, or configured login"))),(status=400,description="Invalid request without a trusted redirect"),(status=429,description="Shared authorization request rate limit exceeded"),(status=503,description="OAuth issuer is not configured")),tag="oauth")]
@@ -107,7 +141,7 @@ pub(crate) async fn authorize(
     };
     let id = match service.start(input, &browser).await {
         Ok(id) => id,
-        Err(error) => return error_response(error),
+        Err(error) => return error_response(error, oauth.config.issuer.as_deref()),
     };
     let mut response = advance(&service, id, &browser, &headers, Decision::Resume, &auth).await;
     let cookie = format!(
@@ -262,6 +296,9 @@ async fn advance(
     decision: Decision,
     auth: &AuthState,
 ) -> Response {
+    let Some(issuer) = service.config.issuer.as_deref() else {
+        return secured(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
     if auth
         .rate_limiter()
         .check_email(
@@ -308,11 +345,15 @@ async fn advance(
             redirect,
             code,
             state,
-        }) => protocol_redirect(&redirect, "code", code.expose(), state.as_deref()),
-        Ok(Outcome::Denied { redirect, state }) => {
-            protocol_redirect(&redirect, "error", "access_denied", state.as_deref())
-        }
-        Err(error) => error_response(error),
+        }) => protocol_redirect(&redirect, "code", code.expose(), state.as_deref(), issuer),
+        Ok(Outcome::Denied { redirect, state }) => protocol_redirect(
+            &redirect,
+            "error",
+            "access_denied",
+            state.as_deref(),
+            issuer,
+        ),
+        Err(error) => error_response(error, Some(issuer)),
     }
 }
 
@@ -331,31 +372,34 @@ fn browser_token(headers: &HeaderMap) -> Option<SecretValue> {
 }
 
 /// Returns errors directly unless a validated exact redirect was explicitly attached.
-fn error_response(error: Error) -> Response {
+fn error_response(error: Error, issuer: Option<&str>) -> Response {
     if error.database {
         return secured(StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
-    match error.redirect {
-        Some(redirect) => protocol_redirect(
+    match (error.redirect, issuer) {
+        (Some(redirect), Some(issuer)) => protocol_redirect(
             &redirect,
             "error",
             error.protocol.as_str(),
             error.state.as_deref(),
+            issuer,
         ),
-        None => direct_invalid(),
+        _ => direct_invalid(),
     }
 }
 
 /// Builds response parameters without parsing/reserializing the original redirect URI.
-/// Original path/query bytes remain exact; only code/error and unchanged state are added.
+/// Original path/query bytes remain exact; code/error, unchanged state and RFC 9207 iss are added.
 fn protocol_redirect(
     redirect: &RedirectUri,
     key: &str,
     value: &str,
     state: Option<&str>,
+    issuer: &str,
 ) -> Response {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair(key, value);
+    query.append_pair("iss", issuer);
     if let Some(state) = state {
         query.append_pair("state", state);
     }

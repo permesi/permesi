@@ -30,6 +30,7 @@ pub struct AppRole {
 
 /// Only the owned stack's endpoint/credentials can be constructed by this bootstrap.
 pub struct Infrastructure {
+    vault: Vault,
     pub permesi_dsn: String,
     pub genesis_dsn: String,
     pub admin_dsn: String,
@@ -134,6 +135,7 @@ impl Infrastructure {
             .bootstrap(&postgres_name, &password, &vault_password)
             .await?;
         Ok(Self {
+            vault,
             permesi_dsn: format!("postgres://127.0.0.1:{pg_port}/permesi?sslmode=disable"),
             genesis_dsn: format!("postgres://127.0.0.1:{pg_port}/postgres?sslmode=disable"),
             admin_dsn,
@@ -142,6 +144,46 @@ impl Infrastructure {
             permesi_role,
             genesis_role,
         })
+    }
+
+    /// Rotates only this run's newly provisioned key; production endpoints cannot be supplied.
+    pub async fn rotate_oidc_key(&self) -> Result<()> {
+        self.vault
+            .post("transit/permesi/keys/oidc-signing/rotate", json!({}))
+            .await?;
+        Ok(())
+    }
+
+    /// Fault injection changes only the owned runtime policy's signing path, preserving renewals.
+    pub async fn signing_allowed(&self, allowed: bool) -> Result<()> {
+        let path = "sys/policies/acl/permesi";
+        let existing = self.vault.request(reqwest::Method::GET, path, None).await?;
+        let policy = existing
+            .pointer("/data/policy")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Failure::harness("Missing isolated policy."))?;
+        let from = if allowed {
+            "path \"transit/permesi/sign/oidc-signing\" { capabilities=[\"deny\"] }"
+        } else {
+            "path \"transit/permesi/sign/oidc-signing\" { capabilities=[\"update\"] }"
+        };
+        let to = if allowed {
+            "path \"transit/permesi/sign/oidc-signing\" { capabilities=[\"update\"] }"
+        } else {
+            "path \"transit/permesi/sign/oidc-signing\" { capabilities=[\"deny\"] }"
+        };
+        check(
+            policy.matches(from).count() == 1,
+            "Unexpected isolated signing policy.",
+        )?;
+        self.vault
+            .request(
+                reqwest::Method::PUT,
+                path,
+                Some(json!({"policy":policy.replace(from,to)})),
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -218,7 +260,7 @@ impl Vault {
             "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';", "GRANT permesi_runtime TO \"{{name}}\";"
         ])).await?;
         let genesis_role = self.role("genesis", "path \"transit/genesis/keys/genesis-signing\" { capabilities=[\"read\"] }\npath \"transit/genesis/sign/genesis-signing\" { capabilities=[\"update\"] }").await?;
-        let permesi_role = self.role("permesi", "path \"secret/permesi/data/config\" { capabilities=[\"read\"] }\npath \"transit/permesi/keys/oidc-signing\" { capabilities=[\"read\"] }\npath \"transit/permesi/datakey/plaintext/totp\" { capabilities=[\"update\"] }\npath \"transit/permesi/decrypt/totp\" { capabilities=[\"update\"] }").await?;
+        let permesi_role = self.role("permesi", "path \"secret/permesi/data/config\" { capabilities=[\"read\"] }\npath \"transit/permesi/keys/oidc-signing\" { capabilities=[\"read\"] }\npath \"transit/permesi/sign/oidc-signing\" { capabilities=[\"update\"] }\npath \"transit/permesi/datakey/plaintext/totp\" { capabilities=[\"update\"] }\npath \"transit/permesi/decrypt/totp\" { capabilities=[\"update\"] }").await?;
         Ok((genesis_role, permesi_role))
     }
 

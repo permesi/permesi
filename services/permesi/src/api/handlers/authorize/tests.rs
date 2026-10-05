@@ -28,12 +28,61 @@ use crate::{
 
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 mod lifecycle;
+mod token;
 const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 const REDIRECT: &str = "https://client.test/callback?existing=%2f";
 const SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/02_permesi.sql"
 ));
+
+/// Legacy registrations with reserved query keys fail directly, never through an ambiguous redirect.
+#[tokio::test]
+async fn authorize_review_regression_reserved_callback_parameters_never_redirect() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    for query in [
+        "iss=https%3A%2F%2Fevil.test",
+        "%69ss=attacker",
+        "code=attacker",
+        "state=attacker",
+        "error=attacker",
+    ] {
+        let redirect = format!("https://client.test/callback?{query}");
+        sqlx::query(
+            "INSERT INTO oauth_client_redirect_uris (client_id,redirect_uri) VALUES ($1,$2)",
+        )
+        .bind(fixture.client_internal)
+        .bind(&redirect)
+        .execute(&fixture.pool)
+        .await?;
+        let reply = fixture
+            .start(&[
+                ("redirect_uri", Some(redirect)),
+                ("response_type", Some("token".into())),
+            ])
+            .await?;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert!(reply.location.is_none());
+    }
+    let normal = fixture
+        .start(&[("response_type", Some("token".into()))])
+        .await?;
+    assert_eq!(normal.status, StatusCode::SEE_OTHER);
+    let redirect = url::Url::parse(
+        normal
+            .location
+            .as_deref()
+            .context("trusted error redirect")?,
+    )?;
+    assert_eq!(
+        redirect
+            .query_pairs()
+            .filter(|(key, _)| key == "iss")
+            .count(),
+        1
+    );
+    Ok(())
+}
 
 struct Fixture {
     postgres: PostgresContainer,
@@ -502,13 +551,17 @@ async fn authorize_scope_pkce_and_oidc_policy_fail_closed() -> Result<()> {
         .await?
         .context("redemption")?;
     assert_eq!(redeemed.nonce.as_deref(), Some("exact-nonce"));
+    assert_eq!(
+        parameter(done.location.as_deref().context("redirect")?, "iss")?,
+        "https://issuer.test"
+    );
     let query = url::Url::parse(done.location.as_deref().context("redirect")?)?;
     assert_eq!(
         query
             .query_pairs()
             .map(|(k, _)| k.into_owned())
             .collect::<Vec<_>>(),
-        vec!["existing", "code", "state"]
+        vec!["existing", "code", "iss", "state"]
     );
     Ok(())
 }
@@ -1087,7 +1140,7 @@ async fn authorization_database_constraints_prevent_binding_mutation_and_replay(
 }
 
 #[tokio::test]
-async fn authorization_discovery_is_explicit_and_never_invents_a_token_endpoint() -> Result<()> {
+async fn authorization_discovery_advertises_only_implemented_token_methods() -> Result<()> {
     let f = Fixture::new().await?;
     let reply = f
         .call(
@@ -1110,12 +1163,19 @@ async fn authorization_discovery_is_explicit_and_never_invents_a_token_endpoint(
         metadata["code_challenge_methods_supported"],
         json!(["S256"])
     );
-    assert!(metadata.get("token_endpoint").is_none());
+    assert_eq!(metadata["token_endpoint"], "https://issuer.test/token");
+    assert_eq!(
+        metadata["authorization_response_iss_parameter_supported"],
+        true
+    );
     assert_eq!(
         metadata["grant_types_supported"],
         json!(["authorization_code"])
     );
-    assert_eq!(metadata["token_endpoint_auth_methods_supported"], json!([]));
+    assert_eq!(
+        metadata["token_endpoint_auth_methods_supported"],
+        json!(["client_secret_basic", "none"])
+    );
     assert_eq!(
         reply
             .headers
@@ -1345,6 +1405,7 @@ async fn browser_consent_flow(callback_bind: &str) -> Result<()> {
     let output = tokio::process::Command::new("node")
         .arg(task_root.join("apps/web/tests/authorize.mjs"))
         .env("PERMESI_AUTHORIZE_TEST_ORIGIN", &origin)
+        .env("PERMESI_AUTHORIZE_TEST_ISSUER", &origin)
         .env("PERMESI_AUTHORIZE_TEST_CALLBACK_ORIGIN", &callback_origin)
         .env(
             "PERMESI_AUTHORIZE_TEST_URL",

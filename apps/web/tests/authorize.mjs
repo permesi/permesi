@@ -6,10 +6,11 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
 const origin=process.env.PERMESI_AUTHORIZE_TEST_ORIGIN;
+const issuer=process.env.PERMESI_AUTHORIZE_TEST_ISSUER;
 const callbackOrigin=process.env.PERMESI_AUTHORIZE_TEST_CALLBACK_ORIGIN;
 const authorizationUrl=process.env.PERMESI_AUTHORIZE_TEST_URL;
 const session=process.env.PERMESI_AUTHORIZE_TEST_SESSION;
-assert(origin&&callbackOrigin&&authorizationUrl&&session,'Run through just web-test-browser');
+assert(origin&&issuer&&callbackOrigin&&authorizationUrl&&session,'Run through just web-test-browser');
 assert.notEqual(origin,callbackOrigin,'The registered client must use a distinct origin');
 const profile=path.resolve(import.meta.dirname,'../../../.tmp',`authorize-browser-${process.pid}`);
 fs.mkdirSync(profile,{recursive:true});
@@ -51,7 +52,8 @@ try {
  await evaluate("document.querySelector('button[value=allow]').click()");await callback();
  assert.equal(await evaluate("new URLSearchParams(location.search).get('state')"),'opaque + / & = % ü');
  assert(await evaluate("/^[A-Za-z0-9_-]{43}$/.test(new URLSearchParams(location.search).get('code'))"));
- assert.deepEqual(await evaluate("[...new URLSearchParams(location.search).keys()]"),['existing','code','state']);
+ assert.deepEqual(await evaluate("[...new URLSearchParams(location.search).keys()]"),['existing','code','iss','state']);
+ assert.equal(await evaluate("new URLSearchParams(location.search).get('iss')"), issuer);
  // Replaying the exact allowed browser form cannot issue a second code.
  await navigate(origin+'/callback');await wait(`location.origin===${JSON.stringify(origin)} && location.pathname==='/callback'`);
  const replay=await evaluate(`(async()=>{const response=await fetch('/authorize/consent',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:${JSON.stringify(form)},redirect:'manual'});return response.status;})()`);

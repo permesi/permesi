@@ -134,8 +134,13 @@ pub(super) async fn pending_consent(
         .await?;
     match mutation {
         Mutation::Scopes => check(
-            callback(&denied, &context.gateway.callback, &request.state, "error")?
-                == "invalid_scope",
+            callback(
+                &denied,
+                &context.gateway.callback,
+                &request.state,
+                "error",
+                &context.api.origin,
+            )? == "invalid_scope",
             "Removed scope was not rejected through the validated callback.",
         )?,
         Mutation::Client | Mutation::Redirects => direct_error(context, &denied)?,
@@ -339,11 +344,12 @@ pub(super) async fn restore_code(
             &fresh,
             &fresh_code,
             &context.gateway.callback,
-            true,
+            false,
         )
         .await?,
         "Fresh consented lifecycle code could not commit.",
     )?;
+    super::token::commit_lifecycle(context, fixture, &fresh, &fresh_code).await?;
     check(
         !redeem(
             &independent,
@@ -372,6 +378,7 @@ async fn rejected(
     mutation: Mutation,
 ) -> Result<()> {
     original.invalidated(context.pool, code, mutation).await?;
+    super::token::reject_lifecycle(context, fixture, request, code).await?;
     check(
         !redeem(
             pool,

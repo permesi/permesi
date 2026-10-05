@@ -3,16 +3,16 @@
 The standalone [OAuth scenario runner](oauth-scenarios.md) exercises real services,
 Web login/consent, shared PostgreSQL code state and tenant/credential lifecycles on a
 disposable stack. Its coverage matrix distinguishes browser/HTTP checks from internal
-redemption and explicitly excludes deferred token issuance.
+redemption and runtime-role HTTP token issuance; refresh and broader token services remain deferred.
 
 Permesi implements identity/authentication, sessions, organization authorization,
-OAuth registration management, and Authorization Code + S256 PKCE. Token issuance
-is still deferred; the authorization phase exposes no `/token`. Applications retain their existing logical-tenant meaning and
+OAuth registration management, Authorization Code + S256 PKCE, and [transactional
+token exchange](oauth-token-exchange.md) with signed access/OIDC ID tokens. Applications retain their existing logical-tenant meaning and
 own multiple clients, each with an immutable public/confidential classification.
 For example one production Crono application can own crono-web, crono-cli, and
 crono-worker with independent configuration. Classification alone enables no flow;
-a confidential worker needs future client authentication and client-credentials
-policy before it can obtain tokens.
+a confidential worker still needs a separately defined client-credentials policy
+before it can obtain machine-grant tokens.
 
 The Rust `oauth` module owns client types, scope tokens, redirect validation, grant
 context, and transactional persistence. HTTP adapters require a full session,
@@ -34,6 +34,8 @@ to managers for remediation; deleted clients are hidden. The reusable active-cli
 loader rejects disabled/deleted clients and any deleted ancestor.
 
 `oauth_client_redirect_uris` stores exact URI strings with per-client uniqueness.
+Reserved OAuth/OIDC response query keys, including encoded equivalents, are rejected
+at registration and before establishing authorization redirect trust, including for legacy rows.
 `oauth_scopes` stores case-sensitive tokens, descriptions, and a protocol/application
 kind in each application. Fixed protocol records are seeded for existing/new
 applications. `oauth_client_scopes` connects registrations to that application's
@@ -47,7 +49,8 @@ The service issues 256 random bits in canonical `pcs.<credential-uuid>.<base64ur
 returns plaintext once, and validates Argon2id v19, supported costs, salt and output
 before verification. Registration/metadata DTOs never include hashes or secrets.
 A supplied value cannot upgrade a public client to confidential. Client authentication
-method and grant-type policy still belong to the upcoming token phase.
+method policy is enforced by `/token`: Basic for confidential clients and public `none`,
+both with S256 and an existing user authorization code. The machine grant is separate.
 
 `oauth_grants` binds one user, client, application, and explicit owning organization.
 A membership foreign key and ancestry/lifecycle trigger reject an unrelated tenant
@@ -68,8 +71,7 @@ membership in several organizations never expands one grant to all of them. The
 chosen resource context is the exact client application within its owning organization;
 cross-organization/resource delegation is intentionally unsupported by this phase.
 Authorization and transactional code redemption recheck active membership,
-resource ancestry, all lifecycle states, and consent. Future token issuance and
-refresh must preserve those checks. Parent resources have no move API;
+resource ancestry, all lifecycle states, and consent. Token issuance preserves those checks; future refresh must do so too. Parent resources have no move API;
 any future hierarchy move must invalidate grants and enforce their tenant context.
 Persisted membership or consent alone never proves current authorization.
 
@@ -93,7 +95,7 @@ shared-state migration; durable OAuth request/code state does not remove that li
 Creation and deletion coordinate through transaction-owned PostgreSQL parent locks.
 Deleted ancestry cannot authorize outstanding requests or redeem old codes.
 Future token revocation and cache policy must account for these configuration changes;
-no access or refresh token behavior is implied by this foundation.
+signed-token revocation limits are documented in [token exchange](oauth-token-exchange.md); refresh remains deferred.
 
 Apply the additive canonical `db/sql/02_permesi.sql` script to an existing database
 as the role that owns its existing tables with `ON_ERROR_STOP=1` before deploying the
@@ -288,13 +290,11 @@ and codes are removed by the existing cleanup job after seven days.
 It requires the caller's exact public client, redirect, organization and typed verifier,
 locks current client/ancestry and code state, verifies issuer/audience, expiry, unused state,
 S256, active user/membership and current consent/scope edges, then performs a guarded
-consumption UPDATE. A caller-owned transaction lets the next token service commit
+consumption UPDATE. The token service owns the transaction and commits
 consumption and token persistence/issuance together; rollback restores the code after
 failed issuance. Two service instances with separate pools can issue/resume/redeem against
-the same database. Concurrent committed redemptions have one winner. Future confidential
-client authentication must happen before invoking this helper; it does not authenticate
-clients or issue tokens. Wrong bindings do not consume a valid code. A future token
-service must also handle replay-associated token revocation as required by its token policy.
+the same database. Concurrent committed redemptions have one winner. Confidential client authentication happens before this helper in the transaction-owning token guard; it does not authenticate
+clients or issue tokens. Wrong bindings do not consume a valid code. Already-issued JWT revocation on replay remains deferred with the resource-server/introspection policy; tokens have bounded lifetimes.
 
 Start, resume and consent share the PostgreSQL-backed IP limiter's independent
 `authorize` action and existing auth IP/window settings. Each stored request also uses
@@ -305,12 +305,12 @@ headers all traffic shares the existing sentinel bucket. Shared client/ancestor 
 permit independent users to proceed concurrently while excluding management writes.
 Race-safe grant insertion and row locks serialize consent only for the relevant grant;
 configured transaction-local lock and statement timeouts bound PostgreSQL waits. The
-future token HTTP adapter must apply its own request/client throttling before redemption.
+token HTTP adapter applies independent shared IP/client throttling before hashing or redemption.
 
 Unknown/inactive clients and unregistered redirects receive direct errors with no Location.
 After redirect trust is established, supported protocol errors return through that exact
-registered URI with `error` and unchanged `state`. Successful redirects add only `code`
-and unchanged `state`, preserving the original URI/query bytes. No scopes, user IDs,
+registered URI with `error`, unchanged `state` and configured `iss`. Successful redirects add `code`,
+unchanged `state` and RFC 9207 `iss`, preserving the original URI/query bytes. No scopes, user IDs,
 organization IDs, nonce or raw metadata are returned. SQL failures return generic direct
 500 responses. Diagnostics log only SQLSTATE class under the existing request route/span,
 never SQL/error text, parameters, raw codes, verifiers, cookies or submitted authorization
@@ -321,7 +321,7 @@ their own referrers/logs. Proxy/access logs must also exclude sensitive query/Lo
 
 `PERMESI_OIDC_ISSUER` / `--oidc-issuer` accepts one explicit canonical HTTPS origin,
 without path, trailing slash, userinfo, query or fragment. `PERMESI_OAUTH_AUDIENCE` /
-`--oauth-audience` is the explicit delegated access-token resource audience; future ID
+`--oauth-audience` is the explicit delegated access-token resource audience; ID
 tokens use the requesting public client ID as `aud`, not this resource audience. Both
 must be configured together; without them protocol routes return 503 while management
 remains available. Clap validates values and dispatch validates them again. TTL settings
@@ -337,7 +337,7 @@ individual lock waits retain the configured limit.
 `PERMESI_OIDC_SIGNING_KEY` / `--oidc-signing-key` selects a single transit key name,
 default `oidc-signing`, under the existing configured Vault transit mount. Terraform
 provisions a distinct nonexportable, nondeletable RSA-2048 key with 30-day automatic
-rotation. Runtime has read-only key access and cannot rotate, retire, export or sign.
+rotation. Runtime reads public key metadata and signs through transit, but cannot rotate, retire or export.
 Private key material stays in Vault. Startup fails if enabled OAuth cannot load a usable
 key. `/jwks.json` converts all retained shared Vault public versions to RS256 JWKs and
 uses RFC 7638 thumbprints as stable `kid` values. A per-replica single-flight cache absorbs
@@ -345,7 +345,7 @@ concurrent reads; it contains only public response data, never authoritative sig
 authorization state. `PERMESI_OIDC_JWKS_CACHE_TTL_SECONDS` / `--oidc-jwks-cache-ttl-seconds`
 defaults to 30 seconds, bounded to 1–300. Refresh failures are briefly cached and fail
 closed after expiry, never returning stale keys. Positive discovery/JWKS HTTP responses
-use the same public max-age; failures remain no-store. Public metadata never consumes
+use the same public max-age; failures remain no-store. Ordinary public metadata does not consume
 login or database rate-limit budgets: discovery is static, and the single-flight cache
 bounds Vault reads to at most one per cache interval on each replica, including failures.
 There are no local
@@ -354,20 +354,18 @@ key/mount requires the corresponding operator-provisioned read policy.
 
 Operators can rotate the transit key using the existing Vault management workflow;
 old public versions remain published for verification. Do not trim/retire previous
-versions until all future signed-token lifetimes and downstream cache windows expire,
-including rollback requirements. Runtime cannot perform these operations. The token
-phase must publish new versions across replica/HTTP cache windows before signing,
-pin the signing version and derive the matching published kid; signing permissions and token claim/lifetime configuration will be added then. Admission-token
-PASERK keys and internal admin signing keys are separate trust domains.
+versions until all signed-token lifetimes and downstream cache windows expire,
+including rollback requirements. Runtime cannot perform these operations. Each exchange resolves a fresh shared signing
+version and derives its matching published kid, then verifies Vault's signature locally.
+Unknown-kid clients can force a rate-limited fresh JWKS read using `Cache-Control: no-cache`.
+See [token exchange](oauth-token-exchange.md) for cache/rotation policy and bounded lifetimes.
+Admission-token PASERK keys and internal admin signing keys remain separate trust domains.
 
-`/.well-known/openid-configuration` advertises the configured issuer, working authorization
-endpoint, JWKS URI, code/query/S256 support and prepared RS256/public-subject policy.
-It explicitly lists only the authorization-code grant and no implemented token endpoint
-authentication methods, avoiding Discovery defaults that imply implicit/client-secret
-support. It intentionally omits `/token`, UserInfo and refresh features. This is pre-token metadata,
-not a complete interoperable OpenID Provider: [OIDC Discovery §3](https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata)
-requires a token endpoint for code flow. This limitation must be removed when the real
-safe token endpoint exists; no fake endpoint or invented token capability is exposed.
+`/.well-known/openid-configuration` advertises explicit issuer, working authorization/token
+endpoints, JWKS, code/query/S256/RS256/public-subject support, `client_secret_basic` and
+public `none`, plus RFC 9207 issuer response identification. It does not advertise UserInfo,
+refresh, implicit or machine grants. OIDC conformance and additional claim disclosure
+remain separately tracked; protocol metadata does not claim certification.
 
 ## Confidential-client credentials
 
@@ -390,7 +388,7 @@ and use shared PostgreSQL per-user/client counters with HMAC subjects and the ex
 configured account-attempt/window limits. Revocation has an independent counter, so
 exhausting issuance/rotation attempts does not block emergency revocation. Client
 existence and tenant authorization are checked before consuming counters. These budgets
-do not substitute for future token-endpoint authentication throttling.
+do not substitute for the independent token-endpoint authentication budgets.
 
 Transaction-scoped PostgreSQL advisory locks coordinate each public client across
 replicas: authorization/authentication readers take shared locks and mutations take
@@ -443,21 +441,17 @@ recover or silently reissue the lost plaintext.
 The internal verification helper returns client/application/organization authentication
 proof only. It hashes before taking authority locks, then reloads and share-locks the
 active client, ancestors and credential and checks expiration after acquiring locks.
-The proof currently carries no transaction lifetime: the future `/token` integration
-must enforce a transaction-owning guard or an equivalent matching-proof requirement.
-Callers must retain the same transaction through future authorization-code redemption
-and token issuance, and apply endpoint throttling first. Credentials confer no user
-consent or delegated scopes. No `/token` or client authentication method is advertised yet.
-Random credential IDs allow early rejection before hashing; timing may distinguish a live
-locator from an unknown one, but does not prove possession of its random secret. The
-future token endpoint must apply shared authentication throttling before verification.
+The low-level proof itself carries no transaction lifetime; `/token` wraps authentication
+and redemption in a private transaction-owning guard and verifies matching client/application/
+organization fields before signing and commit. Direct helper callers must still retain their
+transaction until their operation completes. Credentials establish no user consent or scopes.
 
 ## Roadmap
 
 [TODO.md](../TODO.md) is the authoritative completion checklist. This document explains
 boundaries and dependencies; README and the frontend documentation link back to it.
 A milestone is complete only after its implementation, required checks and independent
-review pass. Presently token issuance and interoperable OpenID Provider discovery remain pending.
+review pass. Token exchange, signed access/ID tokens and accurate code-flow discovery are implemented; refresh, UserInfo and conformance remain pending.
 
 Tenant deletion polish adds permission-aware controls and inline password reauthentication
 with an explicit final confirmation. Durable OPAQUE login/reauthentication exchanges are
@@ -465,16 +459,12 @@ a separate authentication milestone: replace current bounded process-local stora
 shared single-use transactional state and test cross-replica expiry/replay races. No sticky
 sessions or multi-replica OPAQUE reliability are claimed by the current implementation.
 
-After credential management, implement real `/token` exchange with confidential-client
-authentication and mandatory S256 for public clients. Keep code consumption and token
-persistence in one transaction, enforce confidential authentication with a matching
-proof tied to that transaction, and throttle client authentication before hashing. Sign
-access tokens through Vault with explicit issuer, resource audience and tenant/resource claims. Add rollback, replay, concurrent redemption
-and cross-replica coverage before claiming access-token support.
-
-Next add OIDC ID tokens bound to client audience, nonce and auth_time, issuer/mix-up
-protections and complete accurate discovery/auth-method metadata. Validate that milestone
-against actual token behavior; the preparatory document cannot claim interoperability.
+The implemented [token exchange](oauth-token-exchange.md) owns authentication/redemption/
+signing/persistence through commit and is tested through the isolated runtime-role HTTP
+stack. It includes current/retiring credentials, failure rollback, claim/signature checks,
+replay/concurrency, issuer identification and shared signing-key rotation. The next token
+milestone is refresh families with strict scope/tenant revalidation; standard OIDC client
+interoperability/conformance and resource-server validation policy remain separate work.
 Refresh tokens follow separately with hashed storage, rotation/reuse detection,
 grant-family revocation and current tenant/consent revalidation. `offline_access` stays
 rejected until refresh policy and issuance are implemented.
@@ -504,7 +494,7 @@ through Herdr. Confirmed medium findings in reader/writer starvation, foreign-te
 coordination and bulk revocation deadlines were fixed with PostgreSQL regressions.
 Lower-severity findings in CPU-permit ordering, revocation quotas, lifecycle constraints
 and missing negative coverage were also resolved. No critical or high findings remain.
-The latent transaction-owning authentication proof belongs to `/token`; inherited
+The token adapter now enforces a transaction-owning authentication guard; inherited
 ancestor-row starvation belongs to the operations milestone as described above.
 
 Final primary validation passed `just test` (484 tests), all-feature workspace tests
@@ -537,9 +527,9 @@ primary default/all-feature workspace suites and Claude's targeted Rust/browser 
 pass. No confirmed finding was rejected as a false positive.
 
 The code phase deliberately requires an OIDC nonce even though Core makes it optional
-for code flow, trading compatibility for explicit future ID-token replay binding. RFC 9207
-issuer response parameters are not advertised or implemented yet; the token milestone
-must complete provider metadata and mix-up defenses before claiming interoperability.
+for code flow, trading compatibility for explicit ID-token replay binding. RFC 9207
+issuer response parameters and accurate token metadata are now implemented by the token
+milestone; third-party interoperability/conformance remains separately tracked.
 Account switching, consent account/callback-host presentation and broader grants UX remain
 separate work; inactive tenant membership fails closed now. Existing broad database runtime
 privileges are outside this change: SQL constraints defend normal writes and browser input,

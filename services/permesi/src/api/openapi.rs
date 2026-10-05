@@ -1,4 +1,4 @@
-use super::handlers::{auth, authorize, health, me, me_webauthn, orgs, users};
+use super::handlers::{auth, authorize, health, me, me_webauthn, orgs, token, users};
 use super::state::AppState;
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -121,9 +121,14 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
     router
 }
 
-/// Registers credential management and implemented protocol routes; token issuance is deferred.
+/// Registers credential management and the implemented code/token protocol routes.
 fn oauth_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .merge(
+            OpenApiRouter::new()
+                .routes(routes!(token::token))
+                .layer(axum::middleware::map_response(token::prevent_cache)),
+        )
         .routes(routes!(orgs::oauth::credentials::list_secrets))
         .routes(routes!(orgs::oauth::credentials::create_secret))
         .routes(routes!(orgs::oauth::credentials::rotate_secret))
@@ -369,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_openapi_registers_implemented_endpoints_without_token_placeholders() -> Result<()> {
+    fn oauth_openapi_registers_only_implemented_protocol_endpoints() -> Result<()> {
         let spec = openapi();
         let base =
             "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth";
@@ -383,10 +388,11 @@ mod tests {
         ] {
             assert!(spec.paths.paths.contains_key(&format!("{base}{suffix}")));
         }
-        for path in ["/token", "/jwks"] {
+        for path in ["/userinfo", "/revoke", "/introspect", "/jwks"] {
             assert!(!spec.paths.paths.contains_key(path));
         }
         for path in [
+            "/token",
             "/authorize",
             "/authorize/resume",
             "/authorize/consent",

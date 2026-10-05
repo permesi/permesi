@@ -322,11 +322,10 @@ terraform test
 
 The Permesi transit mount also owns a separate nonexportable RSA-2048 `oidc-signing`
 key, automatically rotated every 30 days with deletion disabled. The Permesi runtime
-policy grants only read access to public key metadata; no signing/export/rotation/
-retirement capability is granted in the authorization-code phase. Operators retain
-old versions for verification and must account for future token lifetimes, downstream
+policy reads public key metadata and signs through the specific transit signing path;
+export/rotation/retirement remain operator-only. Operators retain
+old versions for verification and must account for configured token lifetimes, downstream
 caches and rollback before trimming. The binary uses explicit issuer/audience settings
 and reads retained public versions through a bounded single-flight JWKS response cache.
-Publish future signing versions across replica/HTTP cache windows before using them. A different runtime
-key/mount requires matching provisioning and policy changes. No infrastructure apply
-is required or performed by repository tests.
+Exchanges select the current shared version explicitly and verify its signature; unknown-kid clients can force a rate-limited JWKS refresh. A different runtime
+key/mount requires matching provisioning and policy changes. Deploying token exchange requires applying the signing policy update through the normal operator workflow. Repository tests provision fresh stacks and never apply infrastructure changes.

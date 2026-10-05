@@ -533,6 +533,49 @@ DROP TRIGGER IF EXISTS protect_oauth_authorization_code ON oauth_authorization_c
 CREATE TRIGGER protect_oauth_authorization_code BEFORE UPDATE ON oauth_authorization_codes
     FOR EACH ROW EXECUTE FUNCTION protect_oauth_authorization_code();
 
+-- Hash-only issuance receipts commit atomically with code consumption. Redirect retirement
+-- may remove a code, but must not silently erase its issuance history.
+CREATE TABLE IF NOT EXISTS oauth_token_issuances (
+    access_jti UUID PRIMARY KEY,
+    code_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(code_hash)=32),
+    access_token_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(access_token_hash)=32),
+    id_token_hash BYTEA UNIQUE CHECK (octet_length(id_token_hash)=32),
+    grant_id UUID NOT NULL,
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    organization_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    issuer TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL,
+    access_expires_at TIMESTAMPTZ NOT NULL CHECK
+        (access_expires_at>issued_at AND access_expires_at<=issued_at+INTERVAL '1 hour'),
+    id_expires_at TIMESTAMPTZ CHECK
+        (id_expires_at>issued_at AND id_expires_at<=issued_at+INTERVAL '1 hour'),
+    CHECK ((id_token_hash IS NULL)=(id_expires_at IS NULL)),
+    FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
+        REFERENCES oauth_grants(id,client_id,application_id,organization_id,user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_token_issuances_expiry_idx ON oauth_token_issuances(access_expires_at);
+
+CREATE OR REPLACE FUNCTION validate_oauth_token_issuance()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM 1 FROM oauth_authorization_codes c
+        WHERE c.code_hash=NEW.code_hash AND c.consumed_at IS NOT NULL
+        AND (c.grant_id,c.client_id,c.application_id,c.organization_id,c.user_id,c.issuer,c.audience)
+        IS NOT DISTINCT FROM (NEW.grant_id,NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.issuer,NEW.audience)
+        AND (c.nonce IS NOT NULL)=(NEW.id_token_hash IS NOT NULL) FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invalid token issuance binding' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS validate_oauth_token_issuance ON oauth_token_issuances;
+CREATE TRIGGER validate_oauth_token_issuance BEFORE INSERT ON oauth_token_issuances
+    FOR EACH ROW EXECUTE FUNCTION validate_oauth_token_issuance();
+
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -672,7 +715,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
     dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
     subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
     action TEXT NOT NULL CHECK (action IN (
-        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'client_credentials_management','client_credentials_revocation'
+        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
     )),
     attempts BIGINT NOT NULL CHECK (attempts > 0),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -682,7 +725,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
 -- Add the independent OAuth authorization counter without changing existing actions.
 ALTER TABLE auth_rate_limits DROP CONSTRAINT IF EXISTS auth_rate_limits_action_check;
 ALTER TABLE auth_rate_limits ADD CONSTRAINT auth_rate_limits_action_check
-    CHECK (action IN ('signup','login','verify_email','resend_verification','mfa_recovery','authorize','client_credentials_management','client_credentials_revocation'));
+    CHECK (action IN ('signup','login','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','jwks_refresh','client_credentials_management','client_credentials_revocation'));
 
 CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
 
@@ -709,6 +752,7 @@ BEGIN
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
     DELETE FROM auth_rate_limits WHERE expires_at < NOW();
+    DELETE FROM oauth_token_issuances WHERE GREATEST(access_expires_at,id_expires_at) < NOW() - INTERVAL '7 days';
     DELETE FROM oauth_authorization_codes WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM oauth_authorization_requests WHERE expires_at < NOW() - INTERVAL '7 days';
 END;
@@ -877,6 +921,8 @@ BEGIN
             oauth_client_scopes, oauth_grants, oauth_grant_scopes,
             oauth_authorization_requests, oauth_authorization_codes TO permesi_runtime;
         GRANT SELECT, INSERT, UPDATE ON TABLE oauth_client_secrets TO permesi_runtime;
+        GRANT SELECT, INSERT ON TABLE oauth_token_issuances TO permesi_runtime;
+        REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
         REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;

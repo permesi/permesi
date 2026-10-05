@@ -52,7 +52,7 @@ pub struct Report {
     pub cases: Vec<CaseReport>,
     pub infrastructure_failure: Option<Failure>,
     pub cleanup_failures: Vec<Failure>,
-    pub planned: [&'static str; 4],
+    pub planned: [&'static str; 3],
     pub limitations: [&'static str; 3],
 }
 
@@ -71,15 +71,14 @@ impl Report {
             infrastructure_failure: None,
             cleanup_failures: Vec::new(),
             planned: [
-                "HTTP token exchange",
-                "Signed access tokens",
-                "OIDC ID tokens",
                 "Refresh-token rotation/reuse detection",
+                "UserInfo/introspection/revocation",
+                "Client credentials/M2M grant",
             ],
             limitations: [
                 "OPAQUE start/finish remains on one replica; its exchange state is process-local.",
-                "Code redemption is a transaction-owned internal domain check; no HTTP token endpoint is tested.",
-                "Internal redemption assertions use an isolated administrator pool; runtime-role token exchange is deferred.",
+                "Lifecycle diagnostics include internal rollback controls; token cases exercise real runtime-role HTTP issuance.",
+                "JWT authority expires at its bounded TTL; immediate resource-server revocation/UserInfo/refresh tokens are not implemented.",
             ],
         }
     }

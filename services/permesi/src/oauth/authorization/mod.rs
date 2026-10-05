@@ -12,7 +12,7 @@
 pub(crate) mod crypto;
 pub mod redemption;
 pub(crate) mod request;
-mod storage;
+pub(crate) mod storage;
 
 use crate::oauth::redirect_uri::RedirectUri;
 

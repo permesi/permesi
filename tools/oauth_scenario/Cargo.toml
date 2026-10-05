@@ -22,7 +22,8 @@ getrandom.workspace = true
 opaque-ke.workspace = true
 opaque_argon2.workspace = true
 opaque_rand_core.workspace = true
-opaque_sha2.workspace = true
+opaque_sha2 = { workspace = true, features = ["oid"] }
+rsa = "0.9.10"
 rcgen.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

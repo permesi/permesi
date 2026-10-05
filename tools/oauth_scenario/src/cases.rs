@@ -2,8 +2,8 @@
 //!
 //! Each case provisions its own tenant hierarchy. Positive requests use fresh OS
 //! entropy, and negative requests intentionally bypass manifest validation. Code
-//! redemption cases call the existing transaction-owned domain interface on
-//! separate pools; they do not claim an HTTP token exchange or confidential auth.
+//! redemption cases call the transaction-owned domain interface on separate pools.
+//! Token cases exercise real runtime-role HTTP exchange and independently verify JWTs.
 
 use crate::{
     browser::Browser,
@@ -26,6 +26,7 @@ use url::Url;
 use uuid::Uuid;
 
 mod lifecycle;
+mod token;
 
 /// Already authenticated actors and owned infrastructure; no case shares another case's tenant.
 pub struct Context<'a> {
@@ -39,6 +40,8 @@ pub struct Context<'a> {
     pub admin_dsn: &'a str,
     pub policy: &'a OAuthConfig,
     pub credential_grace_seconds: i64,
+    pub infrastructure: &'a crate::infrastructure::Infrastructure,
+    pub manifest: &'a crate::manifest::Manifest,
 }
 
 /// Security-sensitive request material stays in memory and has no Debug/Serialize implementation.
@@ -117,6 +120,11 @@ impl Request {
 /// Dispatches stable case IDs; missing implementations are errors, not silently successful skips.
 pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     match id {
+        "token.public_claims" => token::public_claims(context, fixture).await,
+        "token.confidential_credentials" => token::confidential(context, fixture).await,
+        "token.validation" => token::validation(context, fixture).await,
+        "token.replica_replay_race" => token::race(context, fixture).await,
+        "token.signing_rollback_rotation" => token::signing(context, fixture).await,
         "foundation.provisioning" => foundation(context, fixture).await,
         "authorization.consent" => {
             let request = Request::new(context, fixture)?;
@@ -154,7 +162,7 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
     }
 }
 
-/// Checks real configuration reads and preparatory discovery without overstating token support.
+/// Checks real configuration reads and implemented discovery without overstating token support.
 async fn foundation(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let orgs: Vec<Resource> = context
         .api
@@ -283,7 +291,7 @@ async fn immutable_protocol_scopes(api: &Api, app_path: &str, registry: &[Value]
     Ok(())
 }
 
-/// Checks preparatory metadata against the real Vault public-key source, without inventing a token endpoint.
+/// Checks implemented discovery against explicit issuer/token capabilities and real public keys.
 async fn oidc_metadata(api: &Api) -> Result<()> {
     let discovery: Value = api
         .json(
@@ -295,7 +303,12 @@ async fn oidc_metadata(api: &Api) -> Result<()> {
         .await?;
     check(
         discovery.get("issuer").and_then(Value::as_str) == Some(api.origin.as_str())
-            && discovery.get("token_endpoint").is_none(),
+            && discovery.get("token_endpoint").and_then(Value::as_str)
+                == Some(format!("{}/token", api.origin).as_str())
+            && discovery
+                .get("authorization_response_iss_parameter_supported")
+                .and_then(Value::as_bool)
+                == Some(true),
         "Discovery overstates implementation or changes issuer.",
     )?;
     let jwks: Value = api
@@ -328,6 +341,16 @@ async fn begin(context: &mut Context<'_>, request: &Request, actor: &str) -> Res
 
 /// Approves a validated browser form and receives the raw code only through private IPC.
 async fn issue(context: &mut Context<'_>, request: &Request) -> Result<String> {
+    let registered = context.gateway.callback.clone();
+    issue_for(context, request, &registered).await
+}
+
+/// Approves stored consent for a registered public or confidential callback.
+async fn issue_for(
+    context: &mut Context<'_>,
+    request: &Request,
+    registered: &str,
+) -> Result<String> {
     let page = begin(context, request, "owner").await?;
     check(
         page.get("stage").and_then(Value::as_str) == Some("consent"),
@@ -364,11 +387,23 @@ async fn issue(context: &mut Context<'_>, request: &Request) -> Result<String> {
             _ => "Consent navigation failed before a callback response.",
         },
     )?;
-    callback(&result, &context.gateway.callback, &request.state, "code")
+    callback(
+        &result,
+        registered,
+        &request.state,
+        "code",
+        &context.api.origin,
+    )
 }
 
 /// Verifies exact callback destination and only protocol-required parameters; state is compared unchanged.
-fn callback(result: &Value, registered: &str, state: &str, field: &str) -> Result<String> {
+fn callback(
+    result: &Value,
+    registered: &str,
+    state: &str,
+    field: &str,
+    issuer: &str,
+) -> Result<String> {
     let url = Url::parse(&text_field(result, "url")?).safe("Invalid browser callback URL.")?;
     let expected = Url::parse(registered).safe("Invalid generated callback.")?;
     check(
@@ -379,7 +414,12 @@ fn callback(result: &Value, registered: &str, state: &str, field: &str) -> Resul
     )?;
     let pairs = url.query_pairs().collect::<Vec<_>>();
     check(
-        pairs.len() == 2
+        pairs.len() == 3
+            && pairs
+                .iter()
+                .filter(|(key, value)| key == "iss" && value == issuer)
+                .count()
+                == 1
             && pairs.iter().filter(|(key, _)| key == "state").count() == 1
             && pairs
                 .iter()
@@ -499,6 +539,7 @@ async fn login_resume(context: &mut Context<'_>, fixture: &Fixture) -> Result<()
         &context.gateway.callback,
         &request.state,
         "code",
+        &context.api.origin,
     )?;
     snapshot(context, fixture, &request, &code).await
 }
@@ -512,7 +553,13 @@ async fn cancel_saved(context: &mut Context<'_>, fixture: &Fixture) -> Result<()
         .call(json!({"action":"decision","actor":"owner","decision":"cancel"}))
         .await?;
     check(
-        callback(&result, &context.gateway.callback, &request.state, "error")? == "access_denied",
+        callback(
+            &result,
+            &context.gateway.callback,
+            &request.state,
+            "error",
+            &context.api.origin,
+        )? == "access_denied",
         "Cancellation did not return access_denied.",
     )?;
     let count: i64 =
@@ -534,6 +581,7 @@ async fn cancel_saved(context: &mut Context<'_>, fixture: &Fixture) -> Result<()
         &context.gateway.callback,
         &saved_request.state,
         "code",
+        &context.api.origin,
     )?;
     check(
         saved_code != first_code,
@@ -570,6 +618,7 @@ async fn cancel_saved(context: &mut Context<'_>, fixture: &Fixture) -> Result<()
             &context.gateway.callback,
             &prompted.state,
             "error",
+            &context.api.origin,
         )? == "access_denied",
         "Explicit consent cancellation failed.",
     )
@@ -603,7 +652,13 @@ async fn protocol_error(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| Failure::assertion("Protocol error omitted validated redirect."))?;
     check(
-        callback(&json!({"url":location}), callback_uri, state, "error")? == expected,
+        callback(
+            &json!({"url":location}),
+            callback_uri,
+            state,
+            "error",
+            &api.origin,
+        )? == expected,
         "Incorrect OAuth protocol error.",
     )
 }
@@ -1154,7 +1209,13 @@ async fn failover(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
         .browser
         .call(json!({"action":"decision","actor":"owner","decision":"allow"}))
         .await?;
-    let code = callback(&result, &context.gateway.callback, &request.state, "code")?;
+    let code = callback(
+        &result,
+        &context.gateway.callback,
+        &request.state,
+        "code",
+        &context.api.origin,
+    )?;
     snapshot(context, fixture, &request, &code).await?;
     check(
         redeem(
@@ -1312,7 +1373,8 @@ mod tests {
                     &json!({"url":uri}),
                     "http://127.0.0.1:99/callback",
                     "expected",
-                    "code"
+                    "code",
+                    "https://issuer.test"
                 )
                 .is_err()
             );

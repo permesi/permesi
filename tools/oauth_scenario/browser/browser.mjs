@@ -87,6 +87,7 @@ async function newPage(input) {
 async function stage(page) {
   return evaluate(page, `(() => {
     if (location.origin === ${JSON.stringify(new URL(page.callback).origin)} && location.pathname === '/callback') return {stage:'callback',url:location.href};
+    if (location.origin === ${JSON.stringify(page.origin)} && location.pathname === '/client-callback') return {stage:'callback',url:location.href};
     if (location.origin !== ${JSON.stringify(page.origin)}) return {stage:'unexpected_origin'};
     if (document.querySelector('form[action="/authorize/consent"]')) return {stage:'consent', items:[...document.querySelectorAll('li')].map(li=>li.textContent)};
     if (location.pathname === '/login' && document.querySelector('#email')) return {stage:'login'};

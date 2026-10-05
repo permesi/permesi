@@ -42,6 +42,7 @@ struct Proxy {
 
 /// Owned gateway and callback listeners, with explicit shutdown after every outcome.
 pub struct Gateway {
+    token_clients: [reqwest::Client; 2],
     pub origin: String,
     pub callback: String,
     pub use_b: Arc<AtomicBool>,
@@ -86,6 +87,7 @@ impl Gateway {
             "window.PERMESI_CONFIG = {};",
             json!({"api_base_url":origin,"token_base_url":format!("{origin}/admission"),"client_id":UuidString::ZERO,"opaque_server_id":"api.permesi.dev"})
         );
+        let token_clients = [client(a)?, client(b)?];
         let proxy = Proxy {
             a: client(a)?,
             b: client(b)?,
@@ -116,6 +118,7 @@ impl Gateway {
             .await
         });
         Ok(Self {
+            token_clients,
             origin,
             callback,
             use_b,
@@ -133,6 +136,28 @@ impl Gateway {
     /// Switches OAuth/management traffic; no browser-controlled input can select a replica.
     pub fn replica_b(&self) {
         self.use_b.store(true, Ordering::SeqCst);
+    }
+
+    /// Pins one native token request to an owned private service socket for a real A/B race.
+    /// Browser traffic has no replica selector; issuer and delegated state remain shared.
+    pub async fn token_replica(
+        &self,
+        second: bool,
+        fields: &[(&str, &str)],
+    ) -> Result<reqwest::Response> {
+        let client = self
+            .token_clients
+            .get(usize::from(second))
+            .ok_or_else(|| crate::error::Failure::harness("Missing replica client."))?;
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.extend_pairs(fields.iter().copied());
+        client
+            .post("http://localhost/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(form.finish())
+            .send()
+            .await
+            .safe("Owned replica token request failed.")
     }
 
     /// Shuts down both listeners and waits for owned tasks; cancellation cannot leave detached servers.
@@ -176,6 +201,9 @@ async fn callback_response() -> Response {
 /// Forwards controlled route prefixes without following Location or emitting access logs.
 async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
     let path = request.uri().path();
+    if path == "/client-callback" {
+        return callback_response().await;
+    }
     if path == "/config.js" {
         return (
             [
@@ -192,7 +220,7 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
         && !path.starts_with("/authorize")
         && !matches!(
             path,
-            "/.well-known/openid-configuration" | "/jwks.json" | "/health"
+            "/.well-known/openid-configuration" | "/jwks.json" | "/health" | "/token"
         )
     {
         return proxy.assets.oneshot(request).await.map_or_else(

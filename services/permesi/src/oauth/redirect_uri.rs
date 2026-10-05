@@ -17,7 +17,8 @@ pub struct RedirectUri(String);
 impl RedirectUri {
     /// Accepts absolute HTTPS URLs or public-client HTTP loopback IP URLs.
     /// Rejects fragments, wildcards, userinfo, parser-repaired authority syntax,
-    /// whitespace, backslashes, non-ASCII input, and malformed percent escapes.
+    /// whitespace, backslashes, non-ASCII input, malformed percent escapes and
+    /// reserved response query keys, including their percent-encoded equivalents.
     ///
     /// # Errors
     /// Returns a value-free validation error for unsupported or ambiguous URIs.
@@ -41,6 +42,16 @@ impl RedirectUri {
         }
         let url =
             Url::parse(&value).map_err(|_| ValidationError("Invalid absolute redirect URI."))?;
+        if url.query_pairs().any(|(key, _)| {
+            matches!(
+                key.as_ref(),
+                "code" | "state" | "error" | "error_description" | "error_uri" | "iss"
+            )
+        }) {
+            return Err(ValidationError(
+                "Redirect URI contains a reserved OAuth response parameter.",
+            ));
+        }
         let Some((scheme, rest)) = value.split_once("://") else {
             return Err(ValidationError(
                 "Redirect URI requires an explicit authority.",
@@ -173,5 +184,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Registration must not create ambiguous OAuth/OIDC response parameters.
+    #[test]
+    fn redirect_uri_rejects_reserved_callback_parameters() {
+        for query in [
+            "code=attacker",
+            "state=attacker",
+            "error=attacker",
+            "error_description=attacker",
+            "error_uri=https%3A%2F%2Fevil.test",
+            "iss=https%3A%2F%2Fevil.test",
+            "%69ss=attacker",
+            "iss",
+        ] {
+            assert!(
+                RedirectUri::parse(
+                    format!("https://client.test/cb?{query}"),
+                    ClientType::Public
+                )
+                .is_err()
+            );
+        }
     }
 }

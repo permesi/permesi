@@ -1,4 +1,4 @@
-//! Transaction-owned code redemption for the future token service and security tests.
+//! Transaction-owned code redemption for the token service and security tests.
 //!
 //! Flow Overview: hash external code, lock active client/ancestry, lock the matching
 //! unused code, verify exact context/redirect/S256, recheck membership and consent,
@@ -17,7 +17,7 @@ use super::{
 };
 use crate::oauth::{config::OAuthConfig, scope::OAuthScope};
 
-/// Client/resource binding supplied by the future authenticated token adapter.
+/// Client/resource binding supplied by the authenticated token adapter.
 /// The organization must be resolved from this client's server-side application ancestry.
 pub struct RedemptionInput<'a> {
     pub code: &'a str,
@@ -52,7 +52,7 @@ pub struct RedemptionError;
 /// Wrong bindings and failed PKCE never consume a valid code. Client authentication
 /// remains the caller's responsibility, and no tokens are issued by this helper.
 /// The configured lock timeout applies to the caller's entire remaining transaction;
-/// future token persistence must account for it or explicitly choose a stricter bound.
+/// token adapters must preserve it or choose a stricter bound through issuance.
 ///
 /// # Errors
 /// Returns the same value-free error for all invalid codes or database failures.

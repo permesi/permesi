@@ -65,7 +65,7 @@ opaque-ke = { workspace = true }
 opaque_argon2 = { workspace = true }
 opaque_rand_chacha = { workspace = true }
 opaque_rand_core = { workspace = true }
-opaque_sha2 = { workspace = true }
+opaque_sha2 = { workspace = true, features = ["oid"] }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls-ring"], optional = true }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"], optional = true }

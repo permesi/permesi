@@ -9,6 +9,7 @@ pub enum Suite {
     Smoke,
     Security,
     Lifecycle,
+    Token,
     #[default]
     Full,
 }
@@ -22,6 +23,31 @@ pub struct Case {
 }
 
 pub const CASES: &[Case] = &[
+    Case {
+        id: "token.signing_rollback_rotation",
+        description: "Real Vault signing denial rolls back consumption; shared rotation verifies old/new tokens",
+        group: "token",
+    },
+    Case {
+        id: "token.public_claims",
+        description: "Runtime-role exchange, independently verified access/ID claims and hash-only receipt",
+        group: "token",
+    },
+    Case {
+        id: "token.confidential_credentials",
+        description: "HTTP Basic current/retiring/revoked secrets; no public-client downgrade",
+        group: "token",
+    },
+    Case {
+        id: "token.validation",
+        description: "Strict form, PKCE/client/redirect/tenant/scope negatives and no ID without openid",
+        group: "token",
+    },
+    Case {
+        id: "token.replica_replay_race",
+        description: "Authorization on A, exchange on B, exactly one concurrent committed winner and replay rejection",
+        group: "token",
+    },
     Case {
         id: "foundation.provisioning",
         description: "Real account login, hierarchy and scope configuration",
@@ -127,6 +153,7 @@ pub fn select(suite: Suite, ids: &[String]) -> Result<Vec<Case>> {
                 Suite::Smoke => c.group == "smoke",
                 Suite::Security => c.group == "security",
                 Suite::Lifecycle => c.group == "lifecycle",
+                Suite::Token => c.group == "token",
             }
         })
         .collect::<Vec<_>>();
