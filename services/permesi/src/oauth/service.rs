@@ -77,6 +77,7 @@ pub(crate) async fn create_client(
     config: ClientConfiguration,
 ) -> Result<Client, Error> {
     let mut tx = pool.begin().await?;
+    lock_application(&mut tx, context).await?;
     let scope_ids = resolve_scope_ids(&mut tx, context, &config.scopes).await?;
     let client = sqlx::query_as::<_, Client>(
         "INSERT INTO oauth_clients (application_id, name, client_type) VALUES ($1, $2, $3) RETURNING *",
@@ -87,6 +88,18 @@ pub(crate) async fn create_client(
     write_scopes(&mut tx, context, client.id, &scope_ids).await?;
     tx.commit().await?;
     Ok(client)
+}
+
+/// Rechecks active application ancestry while blocking a concurrent application deletion.
+/// Resolved HTTP context grants no permission after its resource has been deleted.
+async fn lock_application(
+    tx: &mut Transaction<'_, Postgres>,
+    context: &ApplicationContext,
+) -> Result<(), Error> {
+    let application: Option<Uuid> = sqlx::query_scalar("SELECT a.id FROM applications a JOIN environments e ON e.id=a.environment_id JOIN projects p ON p.id=e.project_id JOIN organizations o ON o.id=p.org_id WHERE a.id=$1 AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND p.deleted_at IS NULL AND o.deleted_at IS NULL FOR SHARE OF a,e,p,o")
+        .bind(context.application_id).fetch_optional(&mut **tx).await?;
+    application.ok_or(Error::NotFound)?;
+    Ok(())
 }
 
 /// Lists registrations including disabled clients, excluding soft-deleted rows.
@@ -379,8 +392,12 @@ pub(crate) async fn create_scope(
 ) -> Result<ScopeRecord, Error> {
     let name = ApplicationScope::parse(name)?;
     validate_description(&description)?;
-    Ok(sqlx::query_as("INSERT INTO oauth_scopes (application_id, name, description, kind) VALUES ($1, $2, $3, 'application') RETURNING *")
-        .bind(context.application_id).bind(name.as_str()).bind(description).fetch_one(pool).await?)
+    let mut tx = pool.begin().await?;
+    lock_application(&mut tx, context).await?;
+    let scope = sqlx::query_as("INSERT INTO oauth_scopes (application_id, name, description, kind) VALUES ($1, $2, $3, 'application') RETURNING *")
+        .bind(context.application_id).bind(name.as_str()).bind(description).fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(scope)
 }
 
 /// Updates descriptive text only; renaming delegated authority requires a new scope.

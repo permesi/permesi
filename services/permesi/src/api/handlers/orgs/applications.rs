@@ -159,3 +159,44 @@ pub async fn list_applications(
         }
     }
 }
+
+#[utoipa::path(
+    delete,
+    path = "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}",
+    params(("org_slug" = String, Path, description = "org slug"),
+        ("project_slug" = String, Path, description = "project slug"),
+        ("env_slug" = String, Path, description = "env slug"),
+        ("app_id" = String, Path, description = "Application UUID")),
+    responses(
+        (status = 204, description = "Application soft-deleted."),
+        (status = 400, description = "Invalid application UUID."),
+        (status = 401, description = "Full authenticated session required."),
+        (status = 404, description = "Resource inaccessible or not found."),
+        (status = 409, description = "Application contains undeleted OAuth clients.", body = String),
+    ),
+    tag = "applications"
+)]
+/// Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.
+/// Immediate OAuth clients must be explicitly deleted; no recursive deletion occurs.
+/// Inaccessible and repeated targets return 404 without disclosing tenant information.
+pub async fn delete_application(
+    Path((org_slug, project_slug, env_slug, app_id)): Path<(String, String, String, uuid::Uuid)>,
+    headers: HeaderMap,
+    pool: State<PgPool>,
+) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+    match super::storage::delete_resource(
+        &pool,
+        principal.user_id,
+        &org_slug,
+        super::storage::Deletion::Application(&project_slug, &env_slug, app_id),
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error.into_response(),
+    }
+}

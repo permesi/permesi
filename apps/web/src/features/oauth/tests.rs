@@ -209,6 +209,28 @@ fn oauth_paths_encode_each_segment() {
     );
 }
 
+/// Resource deletion must retain the entire ancestry, including collection-like slugs.
+#[test]
+fn tenant_resource_paths_preserve_apps_environment_slug_and_encode_segments() {
+    let environment = EnvironmentPaths {
+        org: "org/foreign".to_owned(),
+        project: "jobs?admin=true".to_owned(),
+        environment: "apps".to_owned(),
+    };
+    assert_eq!(
+        environment.api(),
+        "/v1/orgs/org%2Fforeign/projects/jobs%3Fadmin%3Dtrue/envs/apps"
+    );
+    assert_eq!(
+        environment.applications_api(),
+        format!("{}/apps", environment.api())
+    );
+    assert_eq!(
+        environment.application("app/other").api(),
+        format!("{}/app%2Fother", environment.applications_api())
+    );
+}
+
 #[test]
 fn oauth_creation_and_patch_match_openapi_fields() -> Result<(), Box<dyn std::error::Error>> {
     let create = serde_json::to_value(CreateClientRequest {

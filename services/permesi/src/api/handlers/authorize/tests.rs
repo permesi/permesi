@@ -27,6 +27,7 @@ use crate::{
 };
 
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+mod lifecycle;
 const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 const REDIRECT: &str = "https://client.test/callback?existing=%2f";
 const SCHEMA: &str = include_str!(concat!(

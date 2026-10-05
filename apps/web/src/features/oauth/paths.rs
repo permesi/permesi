@@ -37,8 +37,14 @@ impl EnvironmentPaths {
     /// Returns the application's collection API; detail GET does not exist.
     #[must_use]
     pub fn applications_api(&self) -> String {
+        format!("{}/apps", self.api())
+    }
+
+    /// Returns the exact environment resource endpoint, even for an environment named apps.
+    #[must_use]
+    pub fn api(&self) -> String {
         format!(
-            "/v1/orgs/{}/projects/{}/envs/{}/apps",
+            "/v1/orgs/{}/projects/{}/envs/{}",
             segment(&self.org),
             segment(&self.project),
             segment(&self.environment)
@@ -145,8 +151,9 @@ impl ApplicationPaths {
         format!("{}/{}", self.scopes_api(), segment(scope_id))
     }
 
-    /// Builds an API path independently of console routing.
-    fn api(&self) -> String {
+    /// Returns the application resource endpoint within its encoded tenant ancestry.
+    #[must_use]
+    pub fn api(&self) -> String {
         format!(
             "{}/{}",
             self.environment.applications_api(),
@@ -156,7 +163,8 @@ impl ApplicationPaths {
 }
 
 /// Encodes separators and non-ASCII bytes so input cannot escape a single segment.
-fn segment(value: &str) -> String {
+#[must_use]
+pub fn segment(value: &str) -> String {
     let mut result = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {

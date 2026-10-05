@@ -1217,3 +1217,4 @@ async fn oauth_management_json_rejections_match_documented_status_codes() -> Res
 }
 
 mod credentials;
+mod lifecycle;

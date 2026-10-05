@@ -1,4 +1,5 @@
 pub(crate) mod application;
+mod deletion;
 mod detail;
 mod list;
 mod project;

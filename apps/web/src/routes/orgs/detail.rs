@@ -1,5 +1,7 @@
 //! Organization detail route. Shows projects and allows management of the tenant.
 
+use super::deletion::{DeleteResource, DeleteTarget};
+
 use crate::{
     app_lib::AppError,
     components::{Alert, AlertKind, Button, Spinner},
@@ -105,6 +107,15 @@ pub fn OrgDetailPage() -> impl IntoView {
                     None => view! { <Spinner /> }.into_any(),
                 }}
             </Suspense>
+            {move || params.get().ok().and_then(|p| p.slug).map(|slug| {
+
+                view! { <DeleteResource refresh=Callback::new(move |()| projects.refetch()) target=DeleteTarget::Organization(slug.clone()) confirmation_name=slug blocked=Signal::derive(move || match projects.get() {
+                    Some(Ok(items)) if items.is_empty() => None,
+                    Some(Ok(_)) => Some("Delete all projects before deleting this organization.".to_owned()),
+                    Some(Err(_)) => Some("Unable to verify active children. Reload this page before deleting.".to_owned()),
+                    None => Some("Checking active children…".to_owned()),
+                }) /> }
+            })}
         </div>
     }
 }

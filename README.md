@@ -218,6 +218,15 @@ opaque application names without this format are no longer accepted. Protocol sc
 OAuth delegation remains separate from internal permissions such as `platform:admin`
 and `users:write`. The existing `platform:` and `users:` namespaces remain reserved.
 
+Tenant resources follow Organization → Project → Environment → Application and are
+soft-deleted explicitly from the bottom up. Delete OAuth clients before their application;
+client deletion revokes credentials and consent. Environments require no active applications,
+projects require no active environments, and organizations require no active projects.
+Owners/admins manage resource deletion; deleting the organization itself requires its
+owner and recent authentication. The console uses typed confirmation dialogs and shows
+immediate-child blockers. See [resource lifecycle](docs/resource-lifecycle.md) for API,
+transactional race protection and OAuth effects; populated parents never silently cascade.
+
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
 and hashed, single-use authorization codes (120-second default TTL). PKCE is required

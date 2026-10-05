@@ -8,6 +8,7 @@ use leptos::prelude::*;
 pub fn Dialog(
     #[prop(into)] id: String,
     title: &'static str,
+    #[prop(optional)] icon: Option<&'static str>,
     open: RwSignal<bool>,
     #[prop(into)] busy: Signal<bool>,
     children: Children,
@@ -38,7 +39,10 @@ pub fn Dialog(
             }
             class="inset-0 m-auto w-[calc(100%-2rem)] max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-200 bg-white p-6 text-gray-900 shadow-xl backdrop:bg-black/50 dark:border-gray-700 dark:bg-gray-800 dark:text-white">
             <div class="mb-4 flex items-center justify-between gap-4">
-                <h2 id=title_id.clone() class="text-lg font-semibold">{title}</h2>
+                <h2 id=title_id.clone() class="flex items-center gap-2 text-lg font-semibold">
+                    {icon.map(|icon| view! { <span class="material-symbols-outlined shrink-0" aria-hidden="true">{icon}</span> })}
+                    {title}
+                </h2>
                 <button type="button" aria-label="Close dialog" disabled=move || busy.get()
                     class="cursor-pointer rounded p-1 text-gray-500 hover:bg-gray-100 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:hover:bg-gray-700"
                     on:click=move |_| open.set(false)>"✕"</button>

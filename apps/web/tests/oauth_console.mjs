@@ -19,6 +19,9 @@ const base=`/v1/orgs/crono/projects/jobs/envs/production/apps/${app}/oauth`;
 const route=`/console/orgs/crono/projects/jobs/envs/production/apps/${app}`;
 const time='2026-10-04T06:00:00Z';
 let clients=[];
+let organizationActive=true, projectActive=true, applicationActive=true;
+let denyNextResourceDelete=false;
+let requireRecentOrgAuthentication=false;
 let environments=[];
 let registry=['openid','profile','email','address','phone','offline_access'].map((name,i)=>({id:`system-${i}`,application_id:app,name,description:`OIDC ${name} scope`,kind:'protocol',created_at:time,updated_at:time}));
 let redirects=[], allowed=[];
@@ -43,8 +46,8 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/mfa/totp/enroll/start'){return send(200,{secret:'JBSWY3DPEHPK3PXP',qr_code_url:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E',credential_id:'test-enrollment'});}
   if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
   if(p==='/v1/auth/session')return send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
-  if(p==='/v1/orgs')return send(200,[{id:'org',slug:'crono',name:'Crono',created_at:time}]);
-  if(p==='/v1/orgs/crono/projects')return send(200,[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]);
+  if(p==='/v1/orgs')return send(200,organizationActive?[{id:'org',slug:'crono',name:'Crono',created_at:time}]:[]);
+  if(p==='/v1/orgs/crono/projects')return send(200,projectActive?[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects/jobs/envs') {
    if(req.method==='GET')return send(200,environments);
    assert.equal(req.method,'POST');
@@ -54,7 +57,15 @@ const server=http.createServer(async(req,res)=>{
    if(environments.some(value=>value.slug===input.slug))return send(409,'Environment slug already exists.');
    const value={id:`env-${input.slug}`,...input,created_at:time};environments.push(value);return send(201,value);
   }
-  if(p===`/v1/orgs/crono/projects/jobs/envs/production/apps`)return send(200,[{id:app,name:'Crono',created_at:time}]);
+  if(/^\/v1\/orgs\/crono\/projects\/jobs\/envs\/[^/]+\/apps$/.test(p))return send(200,p.includes('/production/')&&applicationActive?[{id:app,name:'Crono',created_at:time}]:[]);
+  if(req.method==='DELETE' && [route.replace('/console','/v1'),'/v1/orgs/crono','/v1/orgs/crono/projects/jobs'].includes(p) || req.method==='DELETE' && /^\/v1\/orgs\/crono\/projects\/jobs\/envs\/[^/]+$/.test(p)) {
+   if(denyNextResourceDelete){denyNextResourceDelete=false;await new Promise(resolve=>setTimeout(resolve,1000));return send(409,'Active children appeared. Reload the resource before deleting.');}
+   assert.equal(input,null,'Resource deletion must not accept recursive options');
+   if(p===route.replace('/console','/v1')){if(clients.length)return send(409,'Application contains undeleted OAuth clients.');applicationActive=false;return send(204);}
+   if(p==='/v1/orgs/crono'){if(requireRecentOrgAuthentication)return send(401,{error:{code:'reauthentication_required',message:'Sign in again before deleting the organization.'}});if(projectActive)return send(409,'Organization contains active projects.');organizationActive=false;return send(204);}
+   if(p==='/v1/orgs/crono/projects/jobs'){if(environments.length)return send(409,'Project contains active environments.');projectActive=false;return send(204);}
+   const slug=p.split('/').at(-1);if(slug==='production'&&applicationActive)return send(409,'Environment contains active applications.');environments=environments.filter(value=>value.slug!==slug);return send(204);
+  }
   if(p===`${base}/clients`) {
    if(req.method==='GET')return send(200,clients);
    assert.deepEqual(Object.keys(input).sort(),['client_type','name']);
@@ -232,7 +243,8 @@ try {
  const dark=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-oauth-ui-client-dark.png',Buffer.from(dark.data,'base64'));
  await call('Emulation.setEmulatedMedia',{features:[]});
  await click('Scopes');await wait("document.body.innerText.includes('No application scopes')");await assertNavigation('Scopes');
- assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(e=>e.getClientRects().length&&e.textContent==='Edit').length"),0);
+ assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(e=>e.getClientRects().length&&e.querySelector('.material-symbols-outlined')?.textContent==='edit').length"),0);
+ assert(await evaluate("[...document.querySelectorAll('h3')].filter(e=>['openid','profile','email','address','phone','offline_access'].includes(e.textContent)).every(e=>!e.closest('div.rounded-lg').querySelector('button'))"),'System OIDC scopes must remain immutable');
  await click('+ Create Scope');await wait("document.querySelector('#create-oauth-scope').open");
  await fill('scope-resource','users');await fill('scope-action','invite');await click('Create Scope');await wait("document.querySelector('#create-scope-error').innerText.includes('reserved')");assert.equal(await evaluate("document.getElementById('scope-resource').value"),'users');
  await fill('scope-resource','jobs');await fill('scope-action','read:all');await click('Create Scope');await wait("document.querySelector('#create-scope-error').innerText.includes('without colons')");
@@ -244,6 +256,22 @@ try {
  assert.deepEqual(requests.find(value=>value.method==='POST'&&value.path===`${base}/scopes`).input,{name:'jobs:read',description:'Read scheduled jobs'});
  assert(await evaluate("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Resource' && e.nextElementSibling.textContent==='jobs') && [...document.querySelectorAll('dt')].some(e=>e.textContent==='Action' && e.nextElementSibling.textContent==='read')"),'Scope registry must show derived resource and action');
  const scopeList=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-resource-action-scopes.png',Buffer.from(scopeList.data,'base64'));
+ const scopeActions=()=>`(()=>{const row=[...document.querySelectorAll('h3')].find(e=>e.textContent==='jobs:read').closest('div.rounded-lg');return [...row.querySelectorAll('button')].filter(e=>!e.closest('dialog'));})()`;
+ assert.deepEqual(await evaluate(`${scopeActions()}.map(e=>{const label=e.cloneNode(true);label.querySelectorAll('[aria-hidden=true]').forEach(n=>n.remove());return {label:label.textContent.trim(),icon:e.querySelector('.material-symbols-outlined[aria-hidden=true]')?.textContent};})`),[{label:'Edit',icon:'edit'},{label:'Delete',icon:'delete'}]);
+ const scopeColors=await evaluate(`${scopeActions()}.map(e=>getComputedStyle(e).color)`);assert.notEqual(scopeColors[0],scopeColors[1],'Delete must visibly communicate destructive intent');
+ await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});await delay(100);
+ assert.notEqual(await evaluate(`${scopeActions()}[1] && getComputedStyle(${scopeActions()}[1]).color`),scopeColors[1],'Destructive action must adapt to dark mode');
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});assert(await evaluate('document.documentElement.scrollWidth <= 390'),'Scope actions must fit mobile');
+ const destructiveContrast=await evaluate(`(()=>{const action=${scopeActions()}[1];const luminance=color=>{const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const context=canvas.getContext('2d',{colorSpace:'srgb'});context.fillStyle=color;context.fillRect(0,0,1,1);const channels=[...context.getImageData(0,0,1,1).data].slice(0,3).map(value=>value/255).map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4);return 0.2126*channels[0]+0.7152*channels[1]+0.0722*channels[2];};const fg=luminance(getComputedStyle(action).color),bg=luminance(getComputedStyle(action.closest('div.rounded-lg')).backgroundColor);return (Math.max(fg,bg)+0.05)/(Math.min(fg,bg)+0.05);})()`);
+ console.log('Dark destructive scope contrast:',destructiveContrast);
+ assert(destructiveContrast>=4.5,'Destructive scope labels must have readable dark-mode contrast');
+ const scopeDarkMobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-scope-actions-dark-mobile.png',Buffer.from(scopeDarkMobile.data,'base64'));
+
+ await evaluate(`${scopeActions()}[0].focus()`);assert(await evaluate(`document.activeElement===${scopeActions()}[0]`),'Edit action must accept keyboard focus');await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+ await wait("document.querySelector('#edit-scope-scope-api').open");assert.equal(await evaluate("document.querySelector('#edit-scope-scope-api h2 .material-symbols-outlined[aria-hidden=true]').textContent"),'edit');
+ await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await wait("!document.querySelector('#edit-scope-scope-api').open");
+ assert.equal(await evaluate('document.activeElement.textContent.replace("edit","").trim()'),'Edit','Escape must restore focus to scope action');
+ await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});await call('Emulation.setEmulatedMedia',{features:[]});
  await click('Edit');await wait("document.querySelector('#edit-scope-scope-api').open");await fill('scope-description-scope-api','Read jobs and execution history');await click('Save Description');await wait("document.body.innerText.includes('Read jobs and execution history')");
  await goto(`${route}/oauth/clients/${clientId}`);await wait("document.body.innerText.includes('Allowed Scopes')");
  assert(await evaluate("[...document.querySelectorAll('#allowed-scopes-heading + p + form fieldset legend')].some(e=>e.textContent==='jobs') && document.querySelector('input[value=\"jobs:read\"]').closest('label').textContent.startsWith('read')"),'Client scopes must group by resource and display their action');
@@ -256,7 +284,7 @@ try {
  await click('Save Allowed Scopes');await wait("document.body.innerText.includes('Allowed scopes saved.')");assert(!allowed.includes('old.opaque'));registry=registry.filter(scope=>scope.name!=='old.opaque');
  const assignment=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-resource-action-assignment.png',Buffer.from(assignment.data,'base64'));
  mutationForbidden=true;await fill('client-edit-name','must-stay-draft');await click('Save Name');await wait("document.querySelector('#client-settings-error').innerText.includes('organization role')");assert.equal(await evaluate("document.getElementById('client-edit-name').value"),'must-stay-draft');mutationForbidden=false;
- await click('Scopes');await wait("document.body.innerText.includes('Read jobs and execution history')");await assertNavigation('Scopes');await click('Delete');await wait("document.querySelector('#delete-scope-scope-api').open");
+ await click('Scopes');await wait("document.body.innerText.includes('Read jobs and execution history')");await assertNavigation('Scopes');await evaluate(`${scopeActions()}[1].focus()`);await call('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',text:' ',windowsVirtualKeyCode:32});await call('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});await wait("document.querySelector('#delete-scope-scope-api').open");assert.equal(await evaluate("document.querySelector('#delete-scope-scope-api h2 .material-symbols-outlined[aria-hidden=true]').textContent"),'delete');
  assert(await evaluate("[...document.querySelectorAll('#delete-scope-scope-api button')].find(e=>e.textContent==='Delete Scope').disabled"));await fill('scope-confirmation-scope-api','jobs:read');await click('Delete Scope');await wait("document.body.innerText.includes('No application scopes')");assert(!allowed.includes('jobs:read'));
  await goto(`${route}/oauth/clients/${clientId}`);await wait("document.body.innerText.includes('Allowed Scopes')");await click('Delete Client');await wait("document.querySelector('#client-delete').open");
  assert(await evaluate("[...document.querySelectorAll('#client-delete button')].find(e=>e.textContent==='Delete Client').disabled"));await fill('delete-client-confirmation',clientId);await click('Delete Client');await wait("document.body.innerText.includes('No OAuth clients')");
@@ -366,8 +394,43 @@ try {
  await wait("document.body.innerText.includes('Already Signed In')");
  assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null);
  assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeInvalid);
+ // Bottom-up deletion requires explicit typed confirmation at every level.
+ sessionKind='full';
+ await goto('/console/orgs/crono');await wait("document.body.innerText.includes('Danger Zone')");assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Delete Organization')).disabled"));assert(await evaluate("document.body.innerText.includes('Delete all projects before deleting this organization.')"));
+ await goto('/console/orgs/crono/projects/jobs');await wait("document.body.innerText.includes('Danger Zone')");assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Delete Project')).disabled"));
+ await goto('/console/orgs/crono/projects/jobs/envs/production');await wait("document.body.innerText.includes('Danger Zone')");assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Delete Environment')).disabled"));
+ await goto(route);await wait("document.body.innerText.includes('Checking OAuth clients')===false && document.body.innerText.includes('Danger Zone')");assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Delete Application')).disabled"));
+ await goto(`${route}/oauth/clients/${clientId}`);await wait("document.body.innerText.includes('Client secrets')");await click('Delete Client');await fill('delete-client-confirmation',clientId);await click('Delete Client');await wait("document.body.innerText.includes('No OAuth clients')");
+ const confirmDeletion=async(title,name,parent)=>{
+  await click(title);await wait("document.querySelector('#delete-resource').open");
+  assert(await evaluate("document.querySelector('#delete-resource button[type=submit]').disabled"));
+  await fill('resource-delete-confirmation',name+'-wrong');assert(await evaluate("document.querySelector('#delete-resource button[type=submit]').disabled"));
+  await fill('resource-delete-confirmation',name);await click(title);await wait(`location.pathname===${JSON.stringify(parent)} && !document.querySelector('#delete-resource')?.open`);
+ };
+ await goto(route);await wait("document.body.innerText.includes('Danger Zone') && !document.body.innerText.includes('Checking OAuth clients')");
+ await click('Delete Application');await fill('resource-delete-confirmation','Crono');denyNextResourceDelete=true;await click('Delete Application');
+ await evaluate("document.querySelector('#delete-resource').close()");await delay(100);assert(await evaluate("document.querySelector('#delete-resource').open"),'Pending deletion must resist dismissal');
+ await wait("document.querySelector('#resource-delete-error').innerText.includes('Active children appeared')");assert(applicationActive,'Conflict must leave application active');assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'Crono');await click('Cancel');
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});
+ await click('Delete Application');assert(await evaluate('document.documentElement.scrollWidth <= 390'));await fill('resource-delete-confirmation','Crono');await click('Delete Application');await wait("location.pathname==='/console/orgs/crono/projects/jobs/envs/production' && document.body.innerText.includes('No applications')");
+ await confirmDeletion('Delete Environment','production','/console/orgs/crono/projects/jobs');
+ environments.push({id:'env-apps',name:'Application testing',slug:'apps',tier:'non_production',created_at:time});
+ for(const environment of [...environments]) {
+  await goto(`/console/orgs/crono/projects/jobs/envs/${environment.slug}`);await wait("document.body.innerText.includes('No applications')");await confirmDeletion('Delete Environment',environment.slug,'/console/orgs/crono/projects/jobs');
+ }
+ await wait("document.body.innerText.includes('No environments')");await confirmDeletion('Delete Project','jobs','/console/orgs/crono');await wait("document.body.innerText.includes('No projects')");
+ // A concurrent project blocks deletion and refreshes the empty-list hint without losing confirmation.
+ await click('Delete Organization');await fill('resource-delete-confirmation','crono');projectActive=true;await click('Delete Organization');
+ await wait("document.querySelector('#resource-delete-error').innerText.includes('Organization contains active projects.') && document.querySelector('#resource-delete-blocker').innerText.includes('Delete all projects') && document.querySelector('#delete-resource button[type=submit]').disabled");
+ assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'crono');await click('Cancel');
+ await goto('/console/orgs/crono/projects/jobs');await wait("document.body.innerText.includes('No environments')");await confirmDeletion('Delete Project','jobs','/console/orgs/crono');await wait("document.body.innerText.includes('No projects')");
+ requireRecentOrgAuthentication=true;await click('Delete Organization');await fill('resource-delete-confirmation','crono');await click('Delete Organization');
+ await wait("document.querySelector('#resource-delete-error').innerText.includes('Sign in again before deleting the organization.')");assert(organizationActive);assert(!await evaluate("document.querySelector('#resource-delete-error').innerText.includes('session has expired')"));
+ assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'crono');requireRecentOrgAuthentication=false;await click('Delete Organization');await wait("location.pathname==='/console/orgs' && document.body.innerText.includes('No organizations')");
+ assert(!organizationActive&&!projectActive&&!applicationActive&&environments.length===0);
+ for(const endpoint of [route.replace('/console','/v1'),'/v1/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs','/v1/orgs/crono'])assert(requests.some(value=>value.method==='DELETE'&&value.path===endpoint&&value.input===null));
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
+ console.log('Browser smoke passed: Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
  fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

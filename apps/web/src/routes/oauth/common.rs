@@ -23,6 +23,8 @@ pub const LABEL: &str = "mb-2 block text-sm font-medium text-gray-900 dark:text-
 pub const LINK: &str = "cursor-pointer rounded text-blue-600 hover:text-blue-800 hover:underline focus:ring-2 focus:ring-blue-500 dark:text-blue-400 dark:hover:text-blue-300";
 pub const SECONDARY: &str = "cursor-pointer rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700";
 
+pub const DESTRUCTIVE: &str = "inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus:ring-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30";
+
 #[derive(Params, Clone, PartialEq)]
 pub struct ResourceParams {
     pub slug: Option<String>,

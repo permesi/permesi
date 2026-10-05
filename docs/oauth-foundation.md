@@ -73,6 +73,15 @@ does not restore either. Replacing redirect or scope allow-lists revokes saved
 consent conservatively and commits atomically under a client lock. Failed validation
 rolls back every change, including revocation. An empty scope allow-list delegates
 no authority, and an empty redirect allow-list permits no interactive redirect flow.
+
+Tenant resources now support explicit [bottom-up soft deletion](resource-lifecycle.md).
+An application requires all its OAuth clients to be explicitly deleted first, including
+disabled registrations. This preserves the existing atomic client/credential/consent
+revocation service. Scope registry metadata never prevents application deletion. Empty
+environments, projects and organizations can then be removed without recursive cascades;
+organization deletion requires its owner and the existing recent-authentication policy.
+Creation and deletion coordinate through transaction-owned PostgreSQL parent locks.
+Deleted ancestry cannot authorize outstanding requests or redeem old codes.
 Future token revocation and cache policy must account for these configuration changes;
 no access or refresh token behavior is implied by this foundation.
 

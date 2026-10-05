@@ -10,6 +10,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use service_utils::api_error::ApiError;
 use sqlx::PgPool;
 use tracing::error;
 
@@ -189,5 +190,51 @@ pub async fn patch_org(
     match update_org_record(&pool, &context, name, slug.as_deref()).await {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(err) => err.into_response(),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/orgs/{org_slug}",
+    params(("org_slug" = String, Path, description = "org slug")),
+    responses(
+        (status = 204, description = "Organization soft-deleted."),
+        (status = 401, description = "Full authenticated session required; stale authentication returns reauthentication_required."),
+        (status = 404, description = "Resource inaccessible or not found."),
+        (status = 409, description = "Organization contains active children.", body = String),
+    ),
+    tag = "orgs"
+)]
+/// Soft-deletes one owner-authorized tenant after locking current membership and ancestry.
+/// Immediate active children must be empty; no recursive deletion occurs.
+/// Inaccessible and repeated targets return 404 without disclosing tenant information.
+/// A valid session needing recent authentication receives the stable reauthentication error code.
+pub async fn delete_org(
+    Path(org_slug): Path<String>,
+    headers: HeaderMap,
+    pool: State<PgPool>,
+) -> impl IntoResponse {
+    let principal = match require_auth(&headers, &pool).await {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+    if !super::super::me::recent_auth_ok(&principal) {
+        return ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "reauthentication_required",
+            "Recent authentication required. Sign in again before deleting the organization.",
+        )
+        .into_response();
+    }
+    match super::storage::delete_resource(
+        &pool,
+        principal.user_id,
+        &org_slug,
+        super::storage::Deletion::Organization,
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error.into_response(),
     }
 }

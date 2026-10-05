@@ -3,7 +3,9 @@
 //! The session-backed list supplies tier-selection hints only. Creation order is
 //! unrestricted; org management authorization and the production limit remain server-side.
 
+use super::deletion::{DeleteResource, DeleteTarget};
 use crate::features::oauth::paths::EnvironmentPaths;
+
 use crate::{
     app_lib::AppError,
     components::{Alert, AlertKind, Button, Spinner, ui::Dialog},
@@ -114,6 +116,15 @@ pub fn ProjectDetailPage() -> impl IntoView {
                     None => view! { <Spinner /> }.into_any(),
                 }}
             </Suspense>
+            {move || params.get().ok().and_then(|p| p.project_slug).map(|slug| {
+                let org = params.get().ok().and_then(|p| p.slug).unwrap_or_default();
+                view! { <DeleteResource refresh=Callback::new(move |()| envs.refetch()) target=DeleteTarget::Project(org, slug.clone()) confirmation_name=slug blocked=Signal::derive(move || match envs.get() {
+                    Some(Ok(items)) if items.is_empty() => None,
+                    Some(Ok(_)) => Some("Delete all environments before deleting this project.".to_owned()),
+                    Some(Err(_)) => Some("Unable to verify active children. Reload this page before deleting.".to_owned()),
+                    None => Some("Checking active children…".to_owned()),
+                }) /> }
+            })}
         </div>
     }
 }

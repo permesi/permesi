@@ -66,16 +66,7 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(users::patch_user))
         .routes(routes!(users::delete_user))
         .routes(routes!(users::set_user_role))
-        .routes(routes!(orgs::organizations::create_org))
-        .routes(routes!(orgs::organizations::list_orgs))
-        .routes(routes!(orgs::organizations::get_org))
-        .routes(routes!(orgs::organizations::patch_org))
-        .routes(routes!(orgs::projects::create_project))
-        .routes(routes!(orgs::projects::list_projects))
-        .routes(routes!(orgs::environments::create_environment))
-        .routes(routes!(orgs::environments::list_environments))
-        .routes(routes!(orgs::applications::create_application))
-        .routes(routes!(orgs::applications::list_applications))
+        .merge(tenant_routes())
         .routes(routes!(orgs::oauth::clients::create_client))
         .routes(routes!(orgs::oauth::clients::list_clients))
         .routes(routes!(orgs::oauth::clients::get_client))
@@ -209,6 +200,26 @@ fn parse_author(author: &str) -> (Option<&str>, Option<&str>) {
     }
 }
 
+/// Registers tenant management and its explicit bottom-up deletion endpoints.
+/// Each handler enforces current session/tenant authority and soft-delete invariants.
+fn tenant_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(orgs::organizations::create_org))
+        .routes(routes!(orgs::organizations::list_orgs))
+        .routes(routes!(orgs::organizations::get_org))
+        .routes(routes!(orgs::organizations::patch_org))
+        .routes(routes!(orgs::projects::create_project))
+        .routes(routes!(orgs::projects::list_projects))
+        .routes(routes!(orgs::environments::create_environment))
+        .routes(routes!(orgs::environments::list_environments))
+        .routes(routes!(orgs::applications::create_application))
+        .routes(routes!(orgs::applications::list_applications))
+        .routes(routes!(orgs::organizations::delete_org))
+        .routes(routes!(orgs::projects::delete_project))
+        .routes(routes!(orgs::environments::delete_environment))
+        .routes(routes!(orgs::applications::delete_application))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +253,33 @@ mod tests {
             assert_eq!(license.name, "BSD-3-Clause");
             assert_eq!(license.identifier.as_deref(), Some("BSD-3-Clause"));
         }
+    }
+
+    /// Every actual lifecycle endpoint advertises success, session, isolation and conflict outcomes.
+    #[test]
+    fn tenant_deletion_openapi_describes_bottom_up_conflicts() -> Result<()> {
+        let document = serde_json::to_value(openapi())?;
+        for path in [
+            "/v1/orgs/{org_slug}",
+            "/v1/orgs/{org_slug}/projects/{project_slug}",
+            "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}",
+            "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}",
+        ] {
+            let deletion = document
+                .get("paths")
+                .and_then(|paths| paths.get(path))
+                .and_then(|operations| operations.get("delete"))
+                .context("Missing DELETE endpoint")?;
+            let responses = deletion.get("responses").context("Missing responses")?;
+            for status in ["204", "401", "404", "409"] {
+                assert!(responses.get(status).is_some(), "{path}: {status}");
+            }
+            assert!(
+                deletion.get("requestBody").is_none(),
+                "Deletion accepts no recursive options"
+            );
+        }
+        Ok(())
     }
 
     #[test]

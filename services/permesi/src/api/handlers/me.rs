@@ -524,7 +524,9 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn recent_auth_ok(principal: &super::auth::principal::Principal) -> bool {
+/// Requires the existing recent-authentication window for high-risk session operations.
+/// Uses server-stored authentication time, falling back to session creation for legacy sessions.
+pub(super) fn recent_auth_ok(principal: &super::auth::principal::Principal) -> bool {
     let now = unix_now();
     let auth_time = principal
         .session_auth_time_unix

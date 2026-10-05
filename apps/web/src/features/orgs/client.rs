@@ -72,3 +72,36 @@ pub async fn list_applications(
 ) -> Result<Vec<ApplicationResponse>, AppError> {
     get_json_with_credentials(&context.applications_api()).await
 }
+
+/// Soft-deletes an empty organization; the backend requires recent owner authentication.
+pub async fn delete_organization(org_slug: &str) -> Result<(), AppError> {
+    let path = format!(
+        "/v1/orgs/{}",
+        crate::features::oauth::paths::segment(org_slug)
+    );
+    crate::app_lib::delete_json_with_headers_with_credentials(&path, &[]).await
+}
+
+/// Soft-deletes a project only after all active environments have been removed.
+pub async fn delete_project(org_slug: &str, project_slug: &str) -> Result<(), AppError> {
+    let path = format!(
+        "/v1/orgs/{}/projects/{}",
+        crate::features::oauth::paths::segment(org_slug),
+        crate::features::oauth::paths::segment(project_slug)
+    );
+    crate::app_lib::delete_json_with_headers_with_credentials(&path, &[]).await
+}
+
+/// Soft-deletes an empty environment under the selected complete ancestry.
+pub async fn delete_environment(
+    context: &crate::features::oauth::paths::EnvironmentPaths,
+) -> Result<(), AppError> {
+    crate::app_lib::delete_json_with_headers_with_credentials(&context.api(), &[]).await
+}
+
+/// Soft-deletes an application after its OAuth clients have been explicitly deleted.
+pub async fn delete_application(
+    context: &crate::features::oauth::paths::ApplicationPaths,
+) -> Result<(), AppError> {
+    crate::app_lib::delete_json_with_headers_with_credentials(&context.api(), &[]).await
+}

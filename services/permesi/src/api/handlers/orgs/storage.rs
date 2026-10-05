@@ -2,12 +2,17 @@
 //!
 //! This module provides functions for CRUD operations on organizations,
 //! projects, environments, and applications, ensuring proper scoping
-//! and constraint handling.
+//! and constraint handling. Creation holds shared locks on active ancestors until
+//! commit; deletion exclusively locks the target and requires no immediate active
+//! children. Rows remain retained, and normal API resolution filters deleted ancestry.
 
 use axum::{http::StatusCode, response::IntoResponse};
 use sqlx::{PgPool, Row};
 use tracing::error;
 use uuid::Uuid;
+
+mod lifecycle;
+pub(super) use lifecycle::{Deletion, delete_resource};
 
 use super::{
     ORG_ROLE_ADMIN, ORG_ROLE_OWNER, ORG_SLUG_MAX,
@@ -39,6 +44,12 @@ impl OrgContext {
         self.roles
             .iter()
             .any(|role| role == ORG_ROLE_OWNER || role == ORG_ROLE_ADMIN)
+    }
+
+    /// Authorizes deletion of the tenant itself only for a server-assigned owner.
+    /// Admin and platform roles confer no organization deletion permission.
+    pub(super) fn is_owner(&self) -> bool {
+        self.roles.iter().any(|role| role == ORG_ROLE_OWNER)
     }
 
     /// Converts this internal org context into an `OrgResponse` DTO for API responses.
@@ -81,6 +92,7 @@ impl EnvironmentRow {
 
 #[derive(Debug)]
 pub(super) enum OrgError {
+    NotFound,
     Conflict(&'static str),
     Database(sqlx::Error),
 }
@@ -90,6 +102,7 @@ impl IntoResponse for OrgError {
     /// Database errors are logged server-side and surfaced as `500` without leaking details.
     fn into_response(self) -> axum::response::Response {
         match self {
+            Self::NotFound => StatusCode::NOT_FOUND.into_response(),
             Self::Conflict(message) => (StatusCode::CONFLICT, message).into_response(),
             Self::Database(err) => {
                 error!("Database error: {err}");
@@ -323,7 +336,7 @@ pub(super) async fn update_org_record(
             SET
                 name = COALESCE($1, name),
                 slug = $2
-            WHERE id = $3
+            WHERE id = $3 AND deleted_at IS NULL
             RETURNING
                 id::text AS id,
                 slug,
@@ -334,11 +347,11 @@ pub(super) async fn update_org_record(
         .bind(name)
         .bind(&candidate)
         .bind(context.id)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await;
 
         match update {
-            Ok(row) => {
+            Ok(Some(row)) => {
                 return Ok(OrgResponse {
                     id: row.get("id"),
                     slug: row.get("slug"),
@@ -346,6 +359,7 @@ pub(super) async fn update_org_record(
                     created_at: row.get("created_at"),
                 });
             }
+            Ok(None) => return Err(OrgError::NotFound),
             Err(err) => {
                 if is_unique_violation(&err) {
                     attempt += 1;
@@ -359,6 +373,7 @@ pub(super) async fn update_org_record(
 
 /// Inserts a project under the given org id and returns a `ProjectResponse`.
 /// Caller must ensure the org id is authorized (typically via `OrgContext::can_manage`).
+/// Shared active-parent locks serialize insertion with organization deletion.
 /// Uniqueness violations on slug are mapped to `409` without exposing database details.
 pub(super) async fn insert_project(
     pool: &PgPool,
@@ -366,6 +381,8 @@ pub(super) async fn insert_project(
     name: &str,
     slug: &str,
 ) -> Result<ProjectResponse, OrgError> {
+    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    lifecycle::lock_parent(&mut tx, lifecycle::Parent::Organization(org_id)).await?;
     let insert = sqlx::query(
         r#"
         INSERT INTO projects (org_id, slug, name)
@@ -380,8 +397,12 @@ pub(super) async fn insert_project(
     .bind(org_id)
     .bind(slug)
     .bind(name)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await;
+
+    if insert.is_ok() {
+        tx.commit().await.map_err(OrgError::Database)?;
+    }
 
     match insert {
         Ok(row) => Ok(ProjectResponse {
@@ -455,7 +476,8 @@ pub(super) async fn resolve_project(
 /// Inserts an environment for a project and returns an `EnvironmentResponse`.
 /// Both tiers can be created independently. The partial unique index remains the
 /// authoritative guard against multiple active production rows, including concurrent inserts.
-/// Caller must have already enforced org/project access; this function is scoped by ids only.
+/// Caller must have already enforced org/project access; active ancestors are share-locked
+/// inside the insertion transaction to serialize with parent deletion.
 /// Production and slug uniqueness violations are mapped to `409`.
 pub(super) async fn insert_environment(
     pool: &PgPool,
@@ -464,12 +486,14 @@ pub(super) async fn insert_environment(
     slug: &str,
     tier: EnvironmentTier,
 ) -> Result<EnvironmentResponse, OrgError> {
+    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    lifecycle::lock_parent(&mut tx, lifecycle::Parent::Project(project_id)).await?;
     if matches!(tier, EnvironmentTier::Production) {
         let production_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM environments WHERE project_id = $1 AND tier = 'production' AND deleted_at IS NULL)",
         )
         .bind(project_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(OrgError::Database)?;
         if production_exists {
@@ -495,8 +519,13 @@ pub(super) async fn insert_environment(
     .bind(slug)
     .bind(name)
     .bind(tier.as_str())
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await;
+
+    // Preserve the existing conflict mapping before committing an aborted insert.
+    if insert.is_ok() {
+        tx.commit().await.map_err(OrgError::Database)?;
+    }
 
     match insert {
         Ok(row) => Ok(EnvironmentResponse {
@@ -578,13 +607,16 @@ pub(super) async fn resolve_environment(
 }
 
 /// Inserts an application within an environment and returns an `ApplicationResponse`.
-/// Caller must have already verified org/project/environment access; this function trusts `environment_id`.
+/// Caller must have already verified org/project/environment access; active ancestors
+/// are share-locked through insertion commit so a deleted environment cannot gain a child.
 /// Uniqueness violations are mapped to `409` without surfacing database details.
 pub(super) async fn insert_application(
     pool: &PgPool,
     environment_id: Uuid,
     name: &str,
 ) -> Result<ApplicationResponse, OrgError> {
+    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    lifecycle::lock_parent(&mut tx, lifecycle::Parent::Environment(environment_id)).await?;
     let insert = sqlx::query(
         r#"
         INSERT INTO applications (environment_id, name)
@@ -597,8 +629,12 @@ pub(super) async fn insert_application(
     )
     .bind(environment_id)
     .bind(name)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await;
+
+    if insert.is_ok() {
+        tx.commit().await.map_err(OrgError::Database)?;
+    }
 
     match insert {
         Ok(row) => Ok(ApplicationResponse {

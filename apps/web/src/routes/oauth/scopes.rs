@@ -5,8 +5,8 @@
 //! so it requires explicit typed confirmation rather than a browser confirm call.
 
 use super::common::{
-    CARD, EmptyState, FormError, INPUT, LABEL, Loading, OAuthNav, SECONDARY, application_context,
-    error_message,
+    CARD, DESTRUCTIVE, EmptyState, FormError, INPUT, LABEL, Loading, OAuthNav, SECONDARY,
+    application_context, error_message,
 };
 use crate::{
     components::{Alert, AlertKind, Button, ui::Dialog},
@@ -167,8 +167,8 @@ fn ScopeControls(
     let edit_error_id = format!("scope-error-{}", scope.id);
     let delete_error_id = format!("scope-delete-error-{}", scope.id);
     view! { <div class="flex gap-2">
-        <button type="button" class=SECONDARY on:click=move |_| { error.set(String::new()); edit_open.set(true); }>"Edit"</button><button type="button" class=SECONDARY on:click=move |_| { confirmation.set(String::new()); delete_error.set(String::new()); delete_open.set(true); }>"Delete"</button>
-        <Dialog id=format!("edit-scope-{}", scope.id) title="Edit Scope Description" open=edit_open busy=edit.pending()>
+        <button type="button" class=format!("inline-flex items-center gap-2 {SECONDARY}") on:click=move |_| { error.set(String::new()); edit_open.set(true); }><span class="material-symbols-outlined text-base" aria-hidden="true">"edit"</span>"Edit"</button><button type="button" class=DESTRUCTIVE on:click=move |_| { confirmation.set(String::new()); delete_error.set(String::new()); delete_open.set(true); }><span class="material-symbols-outlined text-base" aria-hidden="true">"delete"</span>"Delete"</button>
+        <Dialog id=format!("edit-scope-{}", scope.id) title="Edit Scope Description" icon="edit" open=edit_open busy=edit.pending()>
             <form class="space-y-4" on:submit=move |ev| { ev.prevent_default(); if !edit.pending().get_untracked() { error.set(String::new()); edit.dispatch(description.get_untracked()); } }>
                 <code class="block break-all text-sm">{name.get_value()}</code><label for=description_id.clone() class=LABEL>"Description"</label>
                 <textarea id=description_id class=INPUT rows="3" maxlength="2048" prop:value=move || description.get() disabled=move || edit.pending().get() aria-describedby=edit_error_id.clone() on:input=move |ev| description.set(event_target_value(&ev)) />
@@ -176,13 +176,13 @@ fn ScopeControls(
                 <div class="flex justify-end gap-3"><button type="button" class=SECONDARY disabled=move || edit.pending().get() on:click=move |_| edit_open.set(false)>"Cancel"</button><Button button_type="submit" disabled=edit.pending()>{move || if edit.pending().get() { "Saving…" } else { "Save Description" }}</Button></div>
             </form>
         </Dialog>
-        <Dialog id=format!("delete-scope-{}", scope.id) title="Delete OAuth Scope" open=delete_open busy=delete.pending()>
+        <Dialog id=format!("delete-scope-{}", scope.id) title="Delete OAuth Scope" icon="delete" open=delete_open busy=delete.pending()>
             <form class="space-y-4" on:submit=move |ev| { ev.prevent_default(); if confirmation.get_untracked() == name.get_value() && !delete.pending().get_untracked() { delete.dispatch(()); } }>
                 <p class="text-sm">"Deleting this scope removes it from client allow-lists and saved grants. Creating the same name later will not restore those assignments."</p>
                 <label for=confirmation_id.clone() class=LABEL>"Type the scope name to confirm"</label><code class="block break-all">{name.get_value()}</code>
                 <input id=confirmation_id class=INPUT autocomplete="off" spellcheck="false" aria-describedby=delete_error_id.clone() prop:value=move || confirmation.get() disabled=move || delete.pending().get() on:input=move |ev| confirmation.set(event_target_value(&ev)) />
                 <div id=delete_error_id aria-live="polite">{move || if delete_error.get().is_empty() { ().into_any() } else { view! { <Alert kind=AlertKind::Error message=delete_error.get() /> }.into_any() }}</div>
-                <div class="flex justify-end gap-3"><button type="button" class=SECONDARY disabled=move || delete.pending().get() on:click=move |_| delete_open.set(false)>"Cancel"</button><Button button_type="submit" disabled=Signal::derive(move || delete.pending().get() || confirmation.get() != name.get_value())>{move || if delete.pending().get() { "Deleting…" } else { "Delete Scope" }}</Button></div>
+                <div class="flex justify-end gap-3"><button type="button" class=SECONDARY disabled=move || delete.pending().get() on:click=move |_| delete_open.set(false)>"Cancel"</button><button type="submit" class=DESTRUCTIVE disabled=move || delete.pending().get() || confirmation.get() != name.get_value()>{move || if delete.pending().get() { "Deleting…" } else { "Delete Scope" }}</button></div>
             </form>
         </Dialog>
     </div> }

@@ -2475,6 +2475,59 @@
           }
         }
       },
+      "delete": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Soft-deletes one owner-authorized tenant after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.\nA valid session needing recent authentication receives the stable reauthentication error code.",
+        "operationId": "delete_org",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Organization soft-deleted."
+          },
+          "401": {
+            "description": "Full authenticated session required; stale authentication returns reauthentication_required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Organization contains active children.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
       "patch": {
         "tags": [
           "orgs"
@@ -2681,6 +2734,70 @@
         }
       }
     },
+    "/v1/orgs/{org_slug}/projects/{project_slug}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project soft-deleted."
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project contains active children.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/orgs/{org_slug}/projects/{project_slug}/envs": {
       "get": {
         "tags": [
@@ -2823,6 +2940,79 @@
           },
           "409": {
             "description": "Environment conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}": {
+      "delete": {
+        "tags": [
+          "environments"
+        ],
+        "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "operationId": "delete_environment",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Environment soft-deleted."
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Environment contains active children.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2994,6 +3184,98 @@
           },
           "409": {
             "description": "Application already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}": {
+      "delete": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate OAuth clients must be explicitly deleted; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "operationId": "delete_application",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "Application UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Application soft-deleted."
+          },
+          "400": {
+            "description": "Invalid application UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Application contains undeleted OAuth clients.",
             "content": {
               "application/json": {
                 "schema": {
