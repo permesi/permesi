@@ -77,6 +77,36 @@ pub const CASES: &[Case] = &[
         description: "Populated parent conflicts and explicit soft deletion",
         group: "lifecycle",
     },
+    Case {
+        id: "authorization.client_disabled_during_consent",
+        description: "Client disable on B invalidates pending consent on A",
+        group: "lifecycle",
+    },
+    Case {
+        id: "authorization.scope_removed_during_consent",
+        description: "Scope removal on B rejects pending consent without issuing a code",
+        group: "lifecycle",
+    },
+    Case {
+        id: "authorization.redirect_removed_during_consent",
+        description: "Removed callback receives no error redirect from pending consent",
+        group: "lifecycle",
+    },
+    Case {
+        id: "redemption.client_disable_restore",
+        description: "Client re-enable and fresh consent cannot resurrect an old code",
+        group: "lifecycle",
+    },
+    Case {
+        id: "redemption.scope_remove_restore",
+        description: "Restored scope authority requires a fresh grant and single-use code",
+        group: "lifecycle",
+    },
+    Case {
+        id: "redemption.redirect_remove_restore",
+        description: "Restored callback requires fresh consent; original code stays invalid",
+        group: "lifecycle",
+    },
 ];
 
 /// Validates explicit IDs before startup; unsupported IDs cannot silently reduce coverage.
@@ -113,6 +143,7 @@ mod tests {
     fn registry_selection_is_explicit_and_stable() -> Result<()> {
         assert_eq!(select(Suite::Full, &[])?.len(), CASES.len());
         assert_eq!(select(Suite::Smoke, &[])?.len(), 3);
+        assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
         assert_eq!(
             select(Suite::Full, &[])?.last().map(|case| case.id),
             Some("authorization.replica_failover")

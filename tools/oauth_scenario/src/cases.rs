@@ -25,6 +25,8 @@ use sqlx::{PgPool, Row};
 use url::Url;
 use uuid::Uuid;
 
+mod lifecycle;
+
 /// Already authenticated actors and owned infrastructure; no case shares another case's tenant.
 pub struct Context<'a> {
     pub browser: &'a mut Browser,
@@ -130,6 +132,24 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
         "credentials.lifecycle" => credentials(context, fixture).await,
         "authorization.replica_failover" => failover(context, fixture).await,
         "tenant.bottom_up_deletion" => deletion(context, fixture).await,
+        "authorization.client_disabled_during_consent" => {
+            lifecycle::pending_consent(context, fixture, lifecycle::Mutation::Client).await
+        }
+        "authorization.scope_removed_during_consent" => {
+            lifecycle::pending_consent(context, fixture, lifecycle::Mutation::Scopes).await
+        }
+        "authorization.redirect_removed_during_consent" => {
+            lifecycle::pending_consent(context, fixture, lifecycle::Mutation::Redirects).await
+        }
+        "redemption.client_disable_restore" => {
+            lifecycle::restore_code(context, fixture, lifecycle::Mutation::Client).await
+        }
+        "redemption.scope_remove_restore" => {
+            lifecycle::restore_code(context, fixture, lifecycle::Mutation::Scopes).await
+        }
+        "redemption.redirect_remove_restore" => {
+            lifecycle::restore_code(context, fixture, lifecycle::Mutation::Redirects).await
+        }
         _ => Err(Failure::harness("Case has no implementation.")),
     }
 }
@@ -775,10 +795,12 @@ async fn redeem(
         expected.sort();
         check(
             scopes == expected
+                && redeemed.client_id == fixture.app()?.public.client_id
                 && redeemed.nonce.as_deref() == Some(request.nonce.as_str())
                 && redeemed.organization_id == fixture.org.id
                 && redeemed.application_id == fixture.app()?.resource.id
-                && redeemed.issuer == pool_issuer(policy)?,
+                && redeemed.issuer == pool_issuer(policy)?
+                && Some(redeemed.audience.as_str()) == policy.audience.as_deref(),
             "Redeemed code snapshot was widened or incorrectly bound.",
         )?;
     }

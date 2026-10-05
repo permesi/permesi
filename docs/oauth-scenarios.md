@@ -101,15 +101,42 @@ repetitions and parallel isolation with
 | `credentials.lifecycle` | One-time create/rotate, metadata without plaintext, bounded overlap, revoke; public secret issuance denied |
 | `authorization.replica_failover` | Persist on actual A, stop A, consent on actual B, internal redemption |
 | `tenant.bottom_up_deletion` | Populated-parent conflicts, explicit client deletion, bottom-up soft deletion, inaccessible reads and revoked code authority |
+| `authorization.client_disabled_during_consent` | Show consent on A, disable on B, submit on A: direct issuer error, zero codes, fresh-consent recovery after re-enable |
+| `authorization.scope_removed_during_consent` | Remove requested scope on B before approval on A: `invalid_scope` through exact callback/state, zero codes, recovery after restoration |
+| `authorization.redirect_removed_during_consent` | Remove exact callback on B before approval on A: direct issuer error without Location, zero codes, fresh-consent recovery |
+| `redemption.client_disable_restore` | Initially usable code, committed disable/re-enable on B, revoked old grant remains unusable even after fresh consent |
+| `redemption.scope_remove_restore` | Scope removal/restoration cannot revive old code; fresh grant/code has exact bindings, commits once and rejects replay |
+| `redemption.redirect_remove_restore` | Callback removal/restoration cannot revive old code; fresh consent creates a different grant/code |
 
 `smoke` selects the first three cases, `security` selects authorization/redemption
-negatives and failover, `lifecycle` selects credentials/deletion, and `full` selects all.
+negatives and failover, `lifecycle` selects credentials/deletion and the six lifecycle
+revalidation cases, and `full` selects all seventeen cases.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
 Redemption is explicitly the existing transaction-owned internal domain API in the
 runner process, using an isolated administrator pool. It tests domain bindings and
 transactions, rather than runtime-role SQL permissions. It does not test HTTP `/token` or confidential-client authentication.
 Expiration waits the normal 120-second code TTL instead of modifying immutable code
 fields or weakening product configuration.
+
+Lifecycle mutations use the actual management APIs on B and a separate GET verifies
+the committed configuration. Pending consent was displayed on A and is submitted on
+A after the change. Direct failures are actual terminal browser responses with HTTP
+400, no Location header, no intervening document redirect and an issuer URL; a timeout
+or missing browser event cannot satisfy those assertions. The mounted service's shared
+error middleware converts direct handler errors to its JSON envelope. Scope failure
+may redirect only through the still-registered
+callback, preserving state and excluding code/tenant/scope metadata.
+
+Issued-code cases first prove successful domain redemption in a rolled-back independent
+transaction. They then require rejection during mutation, after restoration and after
+fresh consent creates a different grant. Read-only SQL proves the original grant stays
+revoked and the original deadline has not elapsed, excluding expiration as a false-pass
+explanation. Disable/scope cases retain an unchanged, unconsumed code row. Redirect
+replacement deletes registered URI rows, whose existing foreign keys cascade to pending
+requests and codes; that case requires the original code hash to remain absent after
+restoration and fresh consent. The new code has fresh state/nonce, exact
+scope/user/client/application/organization/redirect bindings and normal TTL; it commits
+once and rejects replay. SQL does not seed or mutate authority in these cases.
 
 The CI `OAuth scenarios` job uses the same workflow's compiled Web artifact and native
 services/runner from the checked-out SHA, runs the full suite and harness checks,
@@ -141,9 +168,11 @@ the full MFA matrix or token/OIDC interoperability.
 Local checks cover formatting, workspace Clippy, default/all-feature tests and builds,
 PostgreSQL bootstrap/schema verification, unchanged regenerated OpenAPI, native Web and
 WASM builds, the broader Chromium console suite and both real PostgreSQL browser tests.
-The runner passes all eleven cases; its seven process checks cover startup/deadline
+The current runner passes all seventeen cases; its seven process checks cover startup/deadline
 failure, repeated SIGTERM during cleanup, an injected removal failure, repetitions and
-simultaneous runs. Alternate manifests exercise multiple applications/environments.
+simultaneous runs. The eight-case lifecycle suite also passes two fresh-stack repetitions
+from another working directory with explicit artifacts and an alternate manifest of
+three environments and six applications.
 The container-runtime action's fifteen fixture tests also run with the calling job's
 Podman requirement enabled and disabled. Each fixture selects its own policy, and an
 explicit hosted-runner case verifies that required Podman bypasses system Docker.
@@ -170,3 +199,12 @@ reviewer inspected the code and protocol contracts; the execution results above 
 from the primary implementation run. Runtime-role token exchange, MFA variants, network
 sandboxing/multi-host tests, and pinned browser interoperability remain explicit
 follow-ups rather than claims made by this foundation.
+
+A separate independent Herdr/OMP review of the lifecycle extension used
+`xai-oauth/grok-4.7` with xhigh thinking and found no confirmed actionable defects.
+It checked real A/B routing, committed mutations/read-back, current consent and grant
+validation, redirect cascades, pre-expiry negative controls, fresh exact-bound code
+recovery and replay, browser response receipts, private IPC and the documented token
+deferrals. The reviewer traced the mounted error middleware to verify the JSON direct
+error contract. The execution evidence above comes from the primary run; this review
+required no code corrections or second review.

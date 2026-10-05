@@ -44,8 +44,14 @@ async function initialize() {
       const bytes = incoming.subarray(0, boundary); incoming = incoming.subarray(boundary + 1);
       let response;
       try { response = JSON.parse(bytes.toString('utf8')); } catch { chromium.kill('SIGKILL'); closed(); return; }
+      if (response.method === 'Network.requestWillBeSent' && response.params.type === 'Document' && response.params.redirectResponse) {
+        for (const page of contexts.values()) if (page.session === response.sessionId) page.hadRedirect = true;
+      }
       if (response.method === 'Network.responseReceived' && response.params.type === 'Document') {
-        for (const page of contexts.values()) if (page.session === response.sessionId) page.status = response.params.response.status;
+        for (const page of contexts.values()) if (page.session === response.sessionId) {
+          page.status = response.params.response.status;
+          page.hasLocation = Object.keys(response.params.response.headers).some(name => name.toLowerCase() === 'location');
+        }
       }
       const entry = pending.get(response.id); if (!entry) continue;
       pending.delete(response.id); clearTimeout(entry.timer);
@@ -84,7 +90,7 @@ async function stage(page) {
     if (location.origin !== ${JSON.stringify(page.origin)}) return {stage:'unexpected_origin'};
     if (document.querySelector('form[action="/authorize/consent"]')) return {stage:'consent', items:[...document.querySelectorAll('li')].map(li=>li.textContent)};
     if (location.pathname === '/login' && document.querySelector('#email')) return {stage:'login'};
-    if (document.contentType === 'application/json') return {stage:'protocol_error'};
+    if (document.contentType === 'application/json') return {stage:'protocol_error',url:location.href};
     return null;
   })()`);
 }
@@ -117,8 +123,14 @@ async function action(input) {
   }
   if (input.action === 'decision') {
     if (!['allow','cancel'].includes(input.decision)) throw new Error('decision');
+    page.status = null; page.hasLocation = null; page.hadRedirect = false;
     await evaluate(page, `document.querySelector('button[name="decision"][value="${input.decision}"]').click()`);
-    try { return await wait(async () => { const value = await stage(page); return value?.stage === 'callback' ? value : false; }, input.seconds); }
+    try { return await wait(async () => {
+      const value = await stage(page);
+      if (value?.stage === 'callback') return value;
+      if (value?.stage === 'protocol_error' && page.status !== null && page.hasLocation !== null) return {...value,status:page.status,has_location_header:page.hasLocation,had_redirect:page.hadRedirect};
+      return false;
+    }, input.seconds); }
     catch { return {stage:'consent_incomplete',status:page.status,protocol_error:(await stage(page))?.stage==='protocol_error'}; }
   }
   if (input.action === 'tamper') {

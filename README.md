@@ -123,7 +123,9 @@ Use `just oauth-scenario-list` for stable case IDs or `just oauth-scenario --sui
 for the shorter browser suite. The built `target/debug/permesi-oauth-scenario` also
 runs independently with local artifact paths. See [OAuth scenarios](docs/oauth-scenarios.md)
 for manifests, coverage, reports and cleanup recovery. Internal redemption tests prepare
-the next milestone; there is still no OAuth `/token`, access/ID-token or refresh-token
+the next milestone. Lifecycle cases exercise configuration changes during consent and
+after issuance, including fresh-consent recovery without reviving an old grant/code;
+there is still no OAuth `/token`, access/ID-token or refresh-token
 issuance.
 
 ## Architecture
