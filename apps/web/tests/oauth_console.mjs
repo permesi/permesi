@@ -124,7 +124,7 @@ const server=http.createServer(async(req,res)=>{
   requests.push({method:req.method,path:p,request_id:url.searchParams.get('request_id')});
   res.writeHead(200,{'Content-Type':'text/html'});return res.end('<!doctype html><title>Resume fixture</title><p>Authorization resume reached</p>');
  }
- if(p==='/config.js'){res.writeHead(200,{'Content-Type':'application/javascript'});return res.end(`window.PERMESI_CONFIG={api_base_url:location.origin};`);}
+ if(p==='/config.js'){res.writeHead(200,{'Content-Type':'application/javascript'});return res.end(`window.PERMESI_CONFIG={api_base_url:location.origin,token_base_url:location.origin,client_id:'00000000-0000-0000-0000-000000000000',opaque_server_id:'api.permesi.dev'};`);}
  const target=path.join(root,p==='/'?'index.html':p);
  const file=fs.existsSync(target)&&fs.statSync(target).isFile()?target:path.join(root,'index.html');
  res.writeHead(200,{'Content-Type':file.endsWith('.wasm')?'application/wasm':file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.svg')?'image/svg+xml':'text/html'});
@@ -139,7 +139,7 @@ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
 const profile=`/tmp/permesi-oauth-ui-browser-${process.pid}`;
 fs.mkdirSync(profile);
-const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
+const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost, EXCLUDE ::1, EXCLUDE [::1]','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
 let socket;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try {
@@ -161,6 +161,7 @@ try {
  await call('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('permesi_logged_in','true');"});
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
  await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
+ assert.equal(await evaluate('window.PERMESI_CONFIG.token_base_url'),origin,'Admission requests must stay on the owned fixture origin');
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/console/orgs/crono')).click()");await wait("document.body.innerText.includes('Jobs')");
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/projects/jobs')).click()");await wait("document.body.innerText.includes('Either tier can be created first.')");
  await click('New Environment');await wait("document.querySelector('#create-environment').open");

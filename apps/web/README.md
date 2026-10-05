@@ -99,7 +99,8 @@ failure, metadata refresh and explicit revoke/create recovery preserve the old o
 deadline; the UI never retries issuance automatically or stores plaintext in browser storage.
 
 Minimal authorization consent is rendered by the backend and login/MFA resume is supported.
-Broader grants management and token issuance remain planned. [TODO](../../TODO.md) tracks
+Authorization-code token exchange and signed access/ID tokens are implemented by the service;
+broader grants management and refresh tokens remain planned. [TODO](../../TODO.md) tracks
 completion; the [OAuth roadmap](../../docs/oauth-foundation.md#roadmap) describes dependencies.
 Confidential secret management does not implement the OAuth `client_credentials` M2M grant.
 
@@ -125,6 +126,23 @@ The test recipe passes its selected build directory explicitly so an older
 `dist-build` cannot shadow a fresh `dist`; direct Node runs default to `dist`.
 Dark-mode verification emulates `prefers-color-scheme` and checks actual card and
 heading colors rather than toggling a class the stylesheet does not use.
+
+The same recipe explicitly runs the normally ignored real PostgreSQL browser tests for
+authorization consent/redirects and organization deletion with OPAQUE reauthentication.
+`just web-test-browser-built dist` runs all three stages against an existing distribution
+without rebuilding it; a missing `index.html` or undiscoverable exact backend test fails
+before test startup. `Test & Build` uses this helper with the frontend artifact from the
+same commit and a private Podman
+runtime in a fresh hosted browser job. Its result is required by `CI OK`. The job adapts
+preinstalled Chromium, falling back to Google Chrome, through a private `chromium` alias,
+and uploads no browser profiles, request dumps, credentials or screenshots. WASM Clippy remains a separate
+tracked gate; the browser job does not suppress or replace native lint checks.
+The console fixture explicitly overrides API/admission origins and fixture client/server
+identity, with a browser regression for the admission origin. All three scripts block
+non-loopback hostname resolution and request reduced background networking. External
+font links remain in `index.html` but cannot resolve in these test browsers. The resolver
+rule does not act as an operating-system firewall or block literal external IP addresses;
+fixture API/callback URLs are explicitly loopback and these tests claim that narrower boundary.
 
 Application sections use primary tabs with Material Symbols and an underline for the current section. Inside OAuth Configuration, Summary, Clients and Scopes use a smaller segmented navigation; client details keep Clients selected. Both levels retain text labels, keyboard focus styles and independent active states in light and dark themes.
 

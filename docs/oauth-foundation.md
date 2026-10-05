@@ -475,8 +475,9 @@ rejected until refresh policy and issuance are implemented.
 
 Authorization UX should show the signed-in account and callback host and provide a safe
 restart path for expired requests, with account-switching policy and browser regressions.
-Operational work includes a CI gate for the existing locally exercised Chromium/real-database
-browser tests, Firefox/Safari coverage, multi-replica load tests for shared
+The required browser CI gate now exercises the existing console and real-database
+authorization/OPAQUE flows against the same commit's frontend artifact on an isolated
+hosted runner. Operational work still includes Firefox/Safari coverage, multi-replica load tests for shared
 locks/MultiXact behavior, and sanitized metrics/alerts. Ancestor rows still use ordinary
 share locks: overlapping readers across clients in a subtree can starve organization,
 project, environment or application updates/deletions. Existing ancestor writers lack

@@ -14,7 +14,7 @@ assert(origin&&issuer&&callbackOrigin&&authorizationUrl&&session,'Run through ju
 assert.notEqual(origin,callbackOrigin,'The registered client must use a distinct origin');
 const profile=path.resolve(import.meta.dirname,'../../../.tmp',`authorize-browser-${process.pid}`);
 fs.mkdirSync(profile,{recursive:true});
-const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
+const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost, EXCLUDE ::1, EXCLUDE [::1]','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let socket;
 try {

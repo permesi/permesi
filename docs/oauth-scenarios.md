@@ -167,8 +167,11 @@ runtime HTTP service. Invalid/expired/foreign codes never consume the original a
 
 The CI `OAuth scenarios` job uses the same workflow's compiled Web artifact and native
 services/runner from the checked-out SHA, runs the full suite and harness checks,
-uploads sanitized reports and participates in `CI OK`. Existing database checks remain required in CI. The broader `just web-test-browser`
-suite is validated locally; its separate CI gate remains tracked in `TODO.md`.
+uploads sanitized reports and participates in `CI OK`. Existing database checks remain required in CI.
+The separate required `Browser tests` job downloads that same frontend artifact and runs
+`just web-test-browser-built`, covering the console fixtures and both real PostgreSQL
+authorization/OPAQUE browser tests through an owned Podman runtime on a fresh hosted
+browser machine. `just web-test-browser` builds locally before invoking the same helper.
 
 ## Standard client and protected resource fixture
 
@@ -313,3 +316,18 @@ and closed the remaining informational downgrade coverage gap. GET discovery/JWK
 POST token requests now each fail the test when only that method's scheme guard is
 weakened. The final review reported no confirmed findings at any severity; restored
 default/all-feature runner tests, formatting and runner Clippy passed independently.
+
+The browser-CI extension passes 549 default workspace tests, workspace formatting and
+all-target/all-feature Clippy, the release WASM build, all three browser stages, the
+container action's fifteen fixtures, Actionlint/ShellCheck, JavaScript syntax and
+unchanged OpenAPI comparisons. Three independent Claude/Herdr review rounds resolved
+three low findings: a renamed test could silently run zero cases, browser selection
+documentation was inaccurate, and background-network suppression was overstated.
+Exact ignored-test discovery, accurate browser documentation and explicit DNS rules
+address these findings. Missing-test and admission-origin mutations fail as expected;
+Claude's final review found no remaining actionable findings and independently passed
+the browser helper against the downloaded GitHub frontend artifact. The prior
+[baseline CI run](https://github.com/permesi/permesi/actions/runs/37353233392) passed
+after retrying a transient PostgreSQL startup failure. The new browser job has not
+been exercised on its hosted runner. Hosted Podman, IPv6 and runner-browser behavior
+still need that first run; the TODO remains unchecked until the published change passes.

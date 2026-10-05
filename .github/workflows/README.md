@@ -19,6 +19,7 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 3.  **Exceptions:**
     *   `test.yml` pull-request jobs are hardcoded to use `ubuntu-latest` for safer execution of untrusted PR code.
     *   `coverage.yml`: This workflow is hardcoded to use `ubuntu-latest` for stable tool/runtime behavior.
+    *   `build.yml` browser tests use `ubuntu-latest` for a fresh browser host. A job-local `chromium` alias prefers preinstalled Chromium and falls back to Google Chrome; the step prints the selected version.
     *   `deploy.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
     *   `schemathesis.yml`: This workflow is hardcoded to use `ubuntu-latest` so API contract checks always run on GitHub-hosted runners.
 
@@ -38,6 +39,18 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
   The service image builds inject `github.sha` as `BUILD_GIT_COMMIT_HASH` because the Docker build context
   excludes `.git`, and the binaries would otherwise report an unknown commit.
+  Its required `Browser tests` job downloads the same run's `frontend-dist` artifact and invokes
+  `just web-test-browser-built` without rebuilding WASM or running npm installation. It runs the console
+  fixture suite and explicitly executes both normally ignored real PostgreSQL browser tests for
+  authorization consent/redirects and OPAQUE organization-deletion reauthentication. Node 24, pinned
+  Just 1.58.0 and zsh run on the hosted job; the existing container action requires a private Podman
+  API and owns dependency cleanup. The thirty-minute job timeout bounds setup and execution. Backend
+  test names are checked by exact discovery before execution, so a renamed or missing test fails the job.
+  Fixtures override API and admission origins to loopback. Browser resolver rules block
+  non-loopback hostname lookups; a separate flag requests reduced background service traffic.
+  Browser profiles, credentials, request dumps and screenshots are not uploaded. `CI OK` depends on this job
+  alongside tests, service/frontend builds and OAuth scenarios, so failure, cancellation or skipping
+  the browser gate cannot produce a successful aggregate check.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
   It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed

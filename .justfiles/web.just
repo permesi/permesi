@@ -91,9 +91,33 @@ web-test-browser:
     dist_dir="dist-build"
   fi
   just web-build "$dist_dir"
-  PERMESI_WEB_TEST_DIST="{{root}}/apps/web/${dist_dir}" node {{root}}/apps/web/tests/oauth_console.mjs
-  cargo test -p permesi authorize_browser_real_postgres_consent_and_redirect --lib -- --ignored
-  PERMESI_WEB_TEST_DIST="{{root}}/apps/web/${dist_dir}" cargo test -p permesi organization_deletion_browser_real_opaque_and_postgres --lib -- --ignored
+  just web-test-browser-built "$dist_dir"
+
+[doc("Run console and real PostgreSQL browser tests against an already built Web distribution")]
+web-test-browser-built dist_dir="dist":
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  dist="{{root}}/apps/web/{{dist_dir}}"
+  if [[ ! -f "${dist}/index.html" ]]; then
+    echo "Missing built Web distribution: ${dist}/index.html" >&2
+    exit 1
+  fi
+  tests=(
+    api::handlers::authorize::tests::authorize_browser_real_postgres_consent_and_redirect
+    api::handlers::auth::tests::tenant_deletion::organization_deletion_browser_real_opaque_and_postgres
+  )
+  # libtest exits successfully when a filter matches nothing; require both exact tests first.
+  for test_name in "${tests[@]}"; do
+    listed="$(cargo test --locked -p permesi --lib -- --ignored --list --format terse --exact "$test_name")"
+    if [[ "$listed" != "${test_name}: test" ]]; then
+      echo "Required browser test is missing: ${test_name}" >&2
+      exit 1
+    fi
+  done
+  PERMESI_WEB_TEST_DIST="${dist}" node {{root}}/apps/web/tests/oauth_console.mjs
+  for test_name in "${tests[@]}"; do
+    PERMESI_WEB_TEST_DIST="${dist}" cargo test --locked -p permesi --lib -- --ignored --exact "$test_name"
+  done
 
 web-setup:
   #!/usr/bin/env zsh

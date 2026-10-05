@@ -132,6 +132,11 @@ including tenant/scopes, strict JWT rejection, real expiration and signing-key r
 The full suite includes these cases; this coverage does not claim OIDC certification
 or immediate bearer-token revocation. Refresh-token issuance remains planned.
 
+The `Test & Build` workflow also runs `just web-test-browser-built` against its own
+frontend artifact, covering console fixtures and real PostgreSQL authorization/OPAQUE
+browser flows on an isolated hosted job. Its result is required by the aggregate `CI OK`
+check. Locally, `just web-test-browser` builds the console before running the same suite.
+
 ## Architecture
 
 permesi employs a **Split-Trust Architecture** to separate network noise from core identity logic.
