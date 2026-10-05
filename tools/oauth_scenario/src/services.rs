@@ -19,6 +19,7 @@ use std::{
 pub struct Policy {
     pub oauth: OAuthConfig,
     pub credential_grace_seconds: i64,
+    pub access_token_ttl_seconds: i64,
 }
 
 /// Child processes are stored immediately after spawn, including during partial startup.
@@ -58,6 +59,7 @@ impl Services {
         infra: &Infrastructure,
         origin: &str,
         ca: &Path,
+        access_token_ttl_seconds: i64,
     ) -> Result<Policy> {
         let [permesi, genesis] = binaries;
         let genesis_args = vec![
@@ -92,6 +94,8 @@ impl Services {
                 origin.into(),
                 "--oauth-audience".into(),
                 "scenario-api".into(),
+                "--oauth-access-token-ttl-seconds".into(),
+                access_token_ttl_seconds.to_string(),
                 "--frontend-base-url".into(),
                 origin.into(),
                 "--admission-paserk-url".into(),
@@ -129,6 +133,9 @@ impl Services {
             .safe("Cannot validate isolated service policy.")?;
         Ok(Policy {
             oauth: args.oauth,
+            access_token_ttl_seconds: *matches
+                .get_one::<i64>("oauth-access-token-ttl-seconds")
+                .ok_or_else(|| crate::error::Failure::harness("Missing access lifetime policy."))?,
             credential_grace_seconds: *matches
                 .get_one::<i64>("oauth-client-secret-grace-seconds")
                 .ok_or_else(|| {

@@ -124,9 +124,13 @@ for the shorter browser suite. The built `target/debug/permesi-oauth-scenario` a
 runs independently with local artifact paths. See [OAuth scenarios](docs/oauth-scenarios.md)
 for manifests, coverage, reports and cleanup recovery. The suite tests internal redemption
 and runtime-role HTTP exchange with independent access/ID-token signature and claim checks.
-Lifecycle cases exercise configuration changes during consent and
-after issuance, including fresh-consent recovery without reviving an old grant/code;
-refresh-token issuance remains planned.
+Lifecycle cases exercise configuration changes during consent and after issuance,
+including fresh-consent recovery without reviving an old grant/code.
+`--suite interop --access-token-ttl-seconds 10` tests
+standard `openidconnect-rs` public/confidential clients and an owned HTTPS jobs API,
+including tenant/scopes, strict JWT rejection, real expiration and signing-key rotation.
+The full suite includes these cases; this coverage does not claim OIDC certification
+or immediate bearer-token revocation. Refresh-token issuance remains planned.
 
 ## Architecture
 

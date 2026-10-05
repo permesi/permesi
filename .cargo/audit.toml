@@ -1,14 +1,16 @@
 # cargo-audit policy for this repository.
 #
-# Reviewed on: 2026-02-09
+# Reviewed on: 2026-10-05
 # Revisit when:
-# - sqlx no longer resolves `sqlx-mysql` transitively in Cargo.lock, or
+# - production adds Rust RSA private-key operations, or
 # - a fixed advisory path is available for RUSTSEC-2023-0071.
 
 [advisories]
-# `RUSTSEC-2023-0071` is currently triggered through an inactive transitive path:
-# rsa <- sqlx-mysql <- sqlx-macros-core <- sqlx.
-# The workspace uses PostgreSQL only and does not enable SQLx MySQL features.
+# Active RSA paths include Permesi OIDC/WebAuthn public-key verification and the
+# scenario runner's openidconnect client. Production private RSA signing stays in
+# Vault; Rust private-key operations are limited to ephemeral test fixtures. The
+# private-key timing advisory remains ignored on this reviewed usage boundary;
+# this does not claim the upstream advisory is fixed.
 ignore = ["RUSTSEC-2023-0071"]
 
 # Keep surfacing maintenance risk without failing CI on these warnings.

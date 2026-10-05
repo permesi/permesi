@@ -242,7 +242,7 @@ async fn claims(
             == value(body, "expires_in")
                 .as_i64()
                 .ok_or_else(|| Failure::assertion("Missing TTL."))?
-            && exp - iat == 300
+            && exp - iat == context.access_token_ttl_seconds
             && iat <= chrono::Utc::now().timestamp()
             && exp > chrono::Utc::now().timestamp(),
         "Token expiration policy incorrect.",

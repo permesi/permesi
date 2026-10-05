@@ -17,6 +17,9 @@ pub struct Tls {
 impl Tls {
     /// Generates fresh keys with OS entropy and a CA-signed localhost leaf; verification stays enabled.
     pub fn new(directory: &PrivateDir) -> Result<Self> {
+        // Unit tests do not run main's explicit provider selection; use the same policy.
+        #[cfg(test)]
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let mut root =
             CertificateParams::new(Vec::<String>::new()).safe("Cannot configure private CA.")?;
         root.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);

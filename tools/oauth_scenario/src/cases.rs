@@ -25,6 +25,7 @@ use sqlx::{PgPool, Row};
 use url::Url;
 use uuid::Uuid;
 
+mod interop;
 mod lifecycle;
 mod token;
 
@@ -40,6 +41,8 @@ pub struct Context<'a> {
     pub admin_dsn: &'a str,
     pub policy: &'a OAuthConfig,
     pub credential_grace_seconds: i64,
+    pub access_token_ttl_seconds: i64,
+    pub resource: &'a crate::resource::ResourceServer,
     pub infrastructure: &'a crate::infrastructure::Infrastructure,
     pub manifest: &'a crate::manifest::Manifest,
 }
@@ -120,6 +123,12 @@ impl Request {
 /// Dispatches stable case IDs; missing implementations are errors, not silently successful skips.
 pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     match id {
+        "interop.public_client" => interop::public(context, fixture).await,
+        "interop.confidential_client" => interop::confidential(context, fixture).await,
+        "interop.callback_identity_rejection" => interop::rejection(context, fixture).await,
+        "interop.resource_scope_tenant" => interop::resource(context, fixture).await,
+        "interop.invalid_access_tokens" => interop::invalid_access(context, fixture).await,
+        "interop.signing_key_rotation" => interop::rotation(context, fixture).await,
         "token.public_claims" => token::public_claims(context, fixture).await,
         "token.confidential_credentials" => token::confidential(context, fixture).await,
         "token.validation" => token::validation(context, fixture).await,
@@ -351,6 +360,18 @@ async fn issue_for(
     request: &Request,
     registered: &str,
 ) -> Result<String> {
+    let result = consent_callback(context, request).await?;
+    callback(
+        &result,
+        registered,
+        &request.state,
+        "code",
+        &context.api.origin,
+    )
+}
+
+/// Shares real browser consent assertions with the standard relying-party callback parser.
+async fn consent_callback(context: &mut Context<'_>, request: &Request) -> Result<Value> {
     let page = begin(context, request, "owner").await?;
     check(
         page.get("stage").and_then(Value::as_str) == Some("consent"),
@@ -387,13 +408,7 @@ async fn issue_for(
             _ => "Consent navigation failed before a callback response.",
         },
     )?;
-    callback(
-        &result,
-        registered,
-        &request.state,
-        "code",
-        &context.api.origin,
-    )
+    Ok(result)
 }
 
 /// Verifies exact callback destination and only protocol-required parameters; state is compared unchanged.

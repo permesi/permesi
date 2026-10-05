@@ -463,8 +463,12 @@ The implemented [token exchange](oauth-token-exchange.md) owns authentication/re
 signing/persistence through commit and is tested through the isolated runtime-role HTTP
 stack. It includes current/retiring credentials, failure rollback, claim/signature checks,
 replay/concurrency, issuer identification and shared signing-key rotation. The next token
-milestone is refresh families with strict scope/tenant revalidation; standard OIDC client
-interoperability/conformance and resource-server validation policy remain separate work.
+milestone is refresh families with strict scope/tenant revalidation. The isolated runner's
+standard `openidconnect-rs` client and protected HTTPS jobs fixture exercise public and
+confidential code flow, callback/ID rejection, exact resource scopes/tenants, real expiry
+and public-key rotation. This is a narrow interoperability foundation, not OIDC
+certification. Broader client/conformance coverage and production revocation/resource
+policy remain separate work; see [scenario coverage](oauth-scenarios.md).
 Refresh tokens follow separately with hashed storage, rotation/reuse detection,
 grant-family revocation and current tenant/consent revalidation. `offline_access` stays
 rejected until refresh policy and issuance are implemented.
@@ -529,7 +533,8 @@ pass. No confirmed finding was rejected as a false positive.
 The code phase deliberately requires an OIDC nonce even though Core makes it optional
 for code flow, trading compatibility for explicit ID-token replay binding. RFC 9207
 issuer response parameters and accurate token metadata are now implemented by the token
-milestone; third-party interoperability/conformance remains separately tracked.
+milestone; the standard-library interoperability fixture is now covered, while broader
+clients and formal conformance remain separately tracked.
 Account switching, consent account/callback-host presentation and broader grants UX remain
 separate work; inactive tenant membership fails closed now. Existing broad database runtime
 privileges are outside this change: SQL constraints defend normal writes and browser input,

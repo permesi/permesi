@@ -41,6 +41,9 @@ pub struct Options {
     pub browser_seconds: u64,
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=120))]
     pub cleanup_seconds: u64,
+    /// Overrides the owned issuer through its existing clap/dispatch policy, including real expiry tests.
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(i64).range(1..=3600))]
+    pub access_token_ttl_seconds: i64,
     #[arg(long, default_value = "localhost/permesi-scenario-browser:1")]
     pub browser_image: String,
 }

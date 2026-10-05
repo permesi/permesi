@@ -9,10 +9,12 @@ use crate::{
     files::PrivateDir,
     gateway::Gateway,
     infrastructure::Infrastructure,
+    interop::Transport,
     manifest::Manifest,
     podman::Podman,
     registry::Case,
     report::Report,
+    resource::ResourceServer,
     services::Services,
     tls::Tls,
 };
@@ -36,6 +38,7 @@ pub struct Runtime {
     gateway: Option<Gateway>,
     browser: Option<Browser>,
     infra: Option<Infrastructure>,
+    resource: Option<ResourceServer>,
 }
 
 impl Runtime {
@@ -48,12 +51,13 @@ impl Runtime {
             gateway: None,
             browser: None,
             infra: None,
+            resource: None,
         })
     }
 
     /// Writes a non-secret ownership record before startup so interrupted runs can be recovered manually.
     pub fn ownership(&self, directory: &Path, repetition: u32) -> Result<()> {
-        let ownership = json!({"schema_version":1,"run_id":self.engine.run_id,"engine":"local Podman","network":self.engine.network,"containers":[format!("ps-{}-postgres",self.engine.run_id),format!("ps-{}-vault",self.engine.run_id),format!("ps-{}-browser",self.engine.run_id)],"private_directory":self.private.0,"processes":self.services.identities()});
+        let ownership = json!({"schema_version":1,"run_id":self.engine.run_id,"engine":"local Podman","network":self.engine.network,"containers":[format!("ps-{}-postgres",self.engine.run_id),format!("ps-{}-vault",self.engine.run_id),format!("ps-{}-browser",self.engine.run_id)],"private_directory":self.private.0,"processes":self.services.identities(),"resource_origin":self.resource.as_ref().map(|resource| &resource.origin)});
         std::fs::write(
             directory.join(format!("ownership-{repetition}.json")),
             serde_json::to_vec_pretty(&ownership).safe("Cannot encode ownership record.")?,
@@ -94,32 +98,32 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| Failure::harness("Issuer state missing."))?;
         println!("Starting real Genesis and Permesi replicas A/B.");
-        let policy =
-            self.services
-                .start(inputs.binaries, &sockets, infra, &gateway.origin, &tls.ca)?;
+        let policy = self.services.start(
+            inputs.binaries,
+            &sockets,
+            infra,
+            &gateway.origin,
+            &tls.ca,
+            options.access_token_ttl_seconds,
+        )?;
+        self.resource = Some(
+            ResourceServer::start(
+                &tls,
+                Transport {
+                    client: tls.client(options.request_seconds)?,
+                    issuer: gateway.origin.clone(),
+                },
+                policy
+                    .oauth
+                    .audience
+                    .clone()
+                    .ok_or_else(|| Failure::harness("Missing resource audience."))?,
+            )
+            .await?,
+        );
         self.ownership(directory, repetition)?;
         Services::ready(&sockets, options.readiness_seconds).await?;
-        let browser_files = PrivateDir::new()?;
-        browser_files.write("Containerfile", include_bytes!("../browser/Containerfile"))?;
-        browser_files.write("browser.mjs", include_bytes!("../browser/browser.mjs"))?;
-        browser_files.write("entrypoint.sh", include_bytes!("../browser/entrypoint.sh"))?;
-        println!("Starting isolated Chromium with the run CA.");
-        let image = self
-            .engine
-            .browser_image(&options.browser_image, &browser_files.0)
-            .await?;
-        report.components.browser_image = self.engine.image_identity(&image).await?;
-        report.components.postgres_image = self
-            .engine
-            .image_identity(crate::infrastructure::POSTGRES_IMAGE)
-            .await?;
-        report.components.vault_image = self
-            .engine
-            .image_identity(crate::infrastructure::VAULT_IMAGE)
-            .await?;
-        self.browser =
-            Some(Browser::start(&mut self.engine, &image, &tls.ca, options.browser_seconds).await?);
-        self.engine.verify_private_logs().await?;
+        start_browser(&mut self.engine, &mut self.browser, &tls, options, report).await?;
         let browser = self
             .browser
             .as_mut()
@@ -152,6 +156,11 @@ impl Runtime {
                     admin_dsn: &infra.admin_dsn,
                     policy: &policy.oauth,
                     credential_grace_seconds: policy.credential_grace_seconds,
+                    access_token_ttl_seconds: policy.access_token_ttl_seconds,
+                    resource: self
+                        .resource
+                        .as_ref()
+                        .ok_or_else(|| Failure::harness("Resource server state missing."))?,
                     infrastructure: infra,
                     manifest: inputs.manifest,
                 };
@@ -176,6 +185,15 @@ impl Runtime {
             }
         }
         errors.extend(self.services.stop().await);
+        if let Some(resource) = &mut self.resource {
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), resource.stop())
+                .await
+                .safe("Resource shutdown exceeded its deadline.")
+                .and_then(std::convert::identity);
+            if let Err(error) = result {
+                errors.push(error);
+            }
+        }
         if let Some(gateway) = &mut self.gateway {
             let result = tokio::time::timeout(std::time::Duration::from_secs(5), gateway.stop())
                 .await
@@ -204,6 +222,33 @@ impl Runtime {
         }
         errors
     }
+}
+
+/// Builds/verifies the private browser worker and retains its handle across cancellation.
+async fn start_browser(
+    engine: &mut Podman,
+    browser: &mut Option<Browser>,
+    tls: &Tls,
+    options: &Options,
+    report: &mut Report,
+) -> Result<()> {
+    let files = PrivateDir::new()?;
+    files.write("Containerfile", include_bytes!("../browser/Containerfile"))?;
+    files.write("browser.mjs", include_bytes!("../browser/browser.mjs"))?;
+    files.write("entrypoint.sh", include_bytes!("../browser/entrypoint.sh"))?;
+    println!("Starting isolated Chromium with the run CA.");
+    let image = engine
+        .browser_image(&options.browser_image, &files.0)
+        .await?;
+    report.components.browser_image = engine.image_identity(&image).await?;
+    report.components.postgres_image = engine
+        .image_identity(crate::infrastructure::POSTGRES_IMAGE)
+        .await?;
+    report.components.vault_image = engine
+        .image_identity(crate::infrastructure::VAULT_IMAGE)
+        .await?;
+    *browser = Some(Browser::start(engine, &image, &tls.ca, options.browser_seconds).await?);
+    engine.verify_private_logs().await
 }
 
 /// Runs one independent stack under the whole-run deadline, then cleans up outside that cancelled future.

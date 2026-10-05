@@ -168,7 +168,7 @@ jobs:
       - name: Build exact checked-out service and runner binaries
         run: cargo build --locked -p permesi -p genesis -p permesi-oauth-scenario
       - name: Run all real OAuth scenarios
-        run: target/debug/permesi-oauth-scenario --suite full --report-dir .tmp/oauth-scenario-ci
+        run: target/debug/permesi-oauth-scenario --suite full --access-token-ttl-seconds 10 --report-dir .tmp/oauth-scenario-ci
       - name: Verify harness cleanup and isolation
         run: python3 tools/oauth_scenario/tests/harness.py
       - name: Upload sanitized scenario reports

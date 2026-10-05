@@ -13,14 +13,21 @@ mod error;
 mod files;
 mod gateway;
 mod infrastructure;
+mod interop;
 mod manifest;
 mod podman;
 mod process;
 mod registry;
 mod report;
+mod resource;
 mod runtime;
 mod services;
 mod tls;
+
+#[cfg(test)]
+mod test_http;
+#[cfg(test)]
+mod test_tokens;
 
 use crate::{
     cli::Options,

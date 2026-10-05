@@ -10,6 +10,7 @@ pub enum Suite {
     Security,
     Lifecycle,
     Token,
+    Interop,
     #[default]
     Full,
 }
@@ -133,6 +134,36 @@ pub const CASES: &[Case] = &[
         description: "Restored callback requires fresh consent; original code stays invalid",
         group: "lifecycle",
     },
+    Case {
+        id: "interop.public_client",
+        description: "Standard public OIDC discovery/S256/callback/exchange on B and protected HTTPS jobs",
+        group: "interop",
+    },
+    Case {
+        id: "interop.confidential_client",
+        description: "Standard confidential OIDC HTTP Basic/S256, ID validation and protected jobs",
+        group: "interop",
+    },
+    Case {
+        id: "interop.callback_identity_rejection",
+        description: "Callback state/issuer/duplicate/substitution errors and ID nonce/hash/signature rejection",
+        group: "interop",
+    },
+    Case {
+        id: "interop.resource_scope_tenant",
+        description: "Exact delegated scope and application/tenant resource boundaries; cookies confer no authority",
+        group: "interop",
+    },
+    Case {
+        id: "interop.invalid_access_tokens",
+        description: "Malformed/tampered/unknown-kid/ID token rejection, real finite expiry and bounded refresh",
+        group: "interop",
+    },
+    Case {
+        id: "interop.signing_key_rotation",
+        description: "Real Vault rotation, cached old keys, unknown-kid refresh and old/new protected-resource access",
+        group: "interop",
+    },
 ];
 
 /// Validates explicit IDs before startup; unsupported IDs cannot silently reduce coverage.
@@ -154,6 +185,7 @@ pub fn select(suite: Suite, ids: &[String]) -> Result<Vec<Case>> {
                 Suite::Security => c.group == "security",
                 Suite::Lifecycle => c.group == "lifecycle",
                 Suite::Token => c.group == "token",
+                Suite::Interop => c.group == "interop",
             }
         })
         .collect::<Vec<_>>();
@@ -171,6 +203,12 @@ mod tests {
         assert_eq!(select(Suite::Full, &[])?.len(), CASES.len());
         assert_eq!(select(Suite::Smoke, &[])?.len(), 3);
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
+        assert_eq!(select(Suite::Interop, &[])?.len(), 6);
+        assert!(
+            select(Suite::Interop, &[])?
+                .iter()
+                .all(|case| case.group == "interop")
+        );
         assert_eq!(
             select(Suite::Full, &[])?.last().map(|case| case.id),
             Some("authorization.replica_failover")

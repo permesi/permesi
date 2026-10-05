@@ -16,6 +16,7 @@ target/debug/permesi-oauth-scenario --list
 target/debug/permesi-oauth-scenario --suite smoke
 target/debug/permesi-oauth-scenario --suite full
 target/debug/permesi-oauth-scenario --suite token
+target/debug/permesi-oauth-scenario --suite interop --access-token-ttl-seconds 10
 target/debug/permesi-oauth-scenario --case redemption.bindings
 target/debug/permesi-oauth-scenario --case authorization.consent --repeat 2 --seed 7
 ```
@@ -66,6 +67,11 @@ worker content determines the image tag, preventing stale reuse between runner v
 
 Default deadlines are readiness 90 seconds, HTTP 10 seconds, browser actions 15 seconds,
 whole run 900 seconds and bounded cleanup. CLI ranges prevent unbounded configuration.
+`--access-token-ttl-seconds` defaults to the product's 300 seconds and accepts 1–3600.
+It passes the existing Permesi CLI/dispatch validation on both replicas. Use 10 seconds
+for the interoperability/full suite's real expiration case, as CI does; very short
+lifetimes may expire positive controls during browser/network work. ID-token and
+authorization-code lifetimes retain product defaults. No test changes stored timestamps.
 Only readiness polls retry; assertions, secret issuance and mutations do not retry.
 Startup failure, timeout, SIGINT and SIGTERM enter cleanup. Owned processes have
 kill-on-drop fallback. SIGKILL or host failure cannot run destructors; use the
@@ -117,9 +123,19 @@ repetitions and parallel isolation with
 | `token.replica_replay_race` | Real A/B process HTTP race on pinned private sockets, exactly one committed receipt, replay rejection and independently verified winner |
 | `token.signing_rollback_rotation` | Deny signing in owned Vault policy, code remains unconsumed/unexpired, restore and exchange; rotate actual shared key, forced B JWKS refresh verifies old/new tokens |
 
+| Case | Interoperability assertion |
+| --- | --- |
+| `interop.public_client` | Real discovery, library-generated S256/state/nonce, browser consent on A, cookie-free exchange on B, verified ID token/at_hash and protected HTTPS jobs |
+| `interop.confidential_client` | Library HTTP Basic encoding with a real issued secret, S256, client-audience ID verification and protected jobs |
+| `interop.callback_identity_rejection` | Exact callback, state/issuer/duplicates/error/fragment rejection before exchange; wrong nonce/client, substituted access-token hash and tampered ID signature rejected with successful controls |
+| `interop.resource_scope_tenant` | Allow-list never grants unrequested jobs scope; 403 without jobs:read, 404 for another owned organization/application, 401 for cookie-only/absent bearer |
+| `interop.invalid_access_tokens` | Malformed/tampered/ID/algorithm/header/unknown-kid negatives, 16 concurrent unknown keys produce one refresh; client disable preserves issued JWT authority only until actual expiry |
+| `interop.signing_key_rotation` | Rotate actual Vault authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
+
 `smoke` selects the first three cases, `security` selects authorization/redemption
 negatives and failover, `lifecycle` selects credentials/deletion and the six lifecycle
-revalidation cases, `token` selects the five HTTP issuance cases, and `full` selects all twenty-two cases.
+revalidation cases, `token` selects the five HTTP issuance cases, `interop` selects the six
+standard-client/resource cases, and `full` selects all twenty-eight cases.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
 Redemption is explicitly the existing transaction-owned internal domain API in the
 runner process, using an isolated administrator pool. It tests domain bindings and
@@ -154,6 +170,37 @@ services/runner from the checked-out SHA, runs the full suite and harness checks
 uploads sanitized reports and participates in `CI OK`. Existing database checks remain required in CI. The broader `just web-test-browser`
 suite is validated locally; its separate CI gate remains tracked in `TODO.md`.
 
+## Standard client and protected resource fixture
+
+`openidconnect-rs` 4.0.1 consumes real discovery/JWKS and produces authorization requests,
+public exchanges and confidential HTTP Basic requests. State, nonce and PKCE verifier
+stay in private typed memory. The adapter rejects callback destination/state/issuer
+substitution and duplicate or error responses before exchange. Its verified HTTPS
+transport permits only this run's fixed discovery, JWKS and token URLs, rejects
+redirects/session cookies, and bounds request/response bodies. ID verification pins
+RS256 and JWT type, signature, issuer, client audience, expiration, nonce and at_hash.
+An unknown signing key permits one fixed-origin refresh and revalidation of the same
+response; the single-use code exchange is never retried.
+
+Every stack also owns a separate loopback HTTPS fixture serving
+`GET /orgs/{organization_id}/apps/{application_id}/jobs`. This route belongs only to the
+runner, not Permesi or its OpenAPI. Its independently implemented verifier uses public
+JWKS and pins RS256/at+jwt, signature, issuer, resource audience and finite lifetime
+before consulting tenant/application or jobs:read. Invalid bearer is 401, insufficient
+scope is 403, and foreign tenant/application is a generic 404. Cookies and internal
+session permissions never substitute for delegated authority. Interoperability cases
+register jobs:read through the real management API when a custom manifest omits it.
+
+Public key sets are limited to 32 RSA-2048–4096 keys, cached for 60 seconds with
+single-flight refresh and a two-second unknown-key/failure cooldown. Token headers
+cannot choose key URLs or relax algorithm/type policy. Unknown IDs never allocate
+negative cache entries. Issued JWTs remain usable after client disable until expiration;
+this fixture does not implement live grant lookup, introspection or immediate revocation.
+Unit tests use ephemeral RSA keys to prove rejection of correctly signed bad issuer,
+audience, time, nonce, hash, scope and JOSE controls. Separate tests cover transport
+limits, failed/coalesced fetches and explicit/drop listener cleanup. The listener is
+recorded as a non-secret resource origin and participates in bounded runtime cleanup.
+
 ## Extension contract and remaining work
 
 Add future protocol stages as stable cases with documented preconditions, fresh
@@ -165,21 +212,22 @@ bounded waits and secret-free reporting intact as scenarios grow.
 [Token exchange](oauth-token-exchange.md) now has real runtime-role HTTP scenarios,
 independent RS256/claim verification, current/retiring credentials, rollback, replay,
 concurrency and shared rotation. Next add refresh-family rotation/reuse/concurrency
-coverage alongside its implementation. Standard OIDC client interoperability/conformance
-and resource-server validation/revocation policy remain separately tracked.
+coverage alongside its implementation. The six standard-library/resource scenarios
+provide a narrow interoperability foundation; broader clients, formal OIDC conformance
+and production resource-server revocation policy remain separately tracked.
 
 Durable OPAQUE exchanges, MFA-required variants, richer consent/grants UX,
-Firefox/Safari, multi-host/load/fault tests, third-party OIDC interoperability, UserInfo,
+Firefox/Safari, multi-host/load/fault tests, broader third-party OIDC clients, UserInfo,
 introspection/revocation, device flow and M2M remain in `TODO.md`. Current scenarios
 preserve default MFA policy and require a genuine full session; they do not establish
-the full MFA matrix or token/OIDC interoperability.
+the full MFA matrix or formal OIDC conformance.
 
 ## Validation and independent review
 
 Local checks cover formatting, workspace Clippy, default/all-feature tests and builds,
 PostgreSQL bootstrap/schema verification, regenerated OpenAPI consistency, native Web and
 WASM builds, the broader Chromium console suite and both real PostgreSQL browser tests.
-The runner now includes twenty-two cases; its seven process checks cover startup/deadline
+The runner now includes twenty-eight cases; its seven process checks cover startup/deadline
 failure, repeated SIGTERM during cleanup, an injected removal failure, repetitions and
 simultaneous runs. The eight-case lifecycle suite also passes two fresh-stack repetitions
 from another working directory with explicit artifacts and an alternate manifest of
@@ -229,3 +277,39 @@ kid without retrying exchange or relaxing assertions. The second review found no
 confirmed defects. Primary execution passed all 22 cases, seven harness checks,
 534 default/564 all-feature workspace tests and the browser/schema/OpenAPI gates.
 See [token exchange](oauth-token-exchange.md) for the fixes and remaining trust boundaries.
+
+The standard-client/resource milestone passed all 28 full-suite cases with zero cleanup
+errors, all six interoperability cases again after review fixes, and twelve cases across
+two fresh-stack interoperability repetitions with an alternate manifest omitting jobs:read.
+All 22 runner unit tests, seven process checks, 549 default/579 all-feature workspace tests,
+workspace formatting/Clippy, native/WASM builds, the Chromium console and both real
+PostgreSQL browser tests, schema verification and unchanged OpenAPI comparisons passed.
+Cargo audit passed the existing policy with three maintenance warnings; its RSA advisory
+comment now accurately describes public-key verification and test-only private keys,
+without changing the ignore list or enforcement.
+
+Independent Claude reviews through Herdr applied the deep-code-review skill to the full
+implementation and corrected diff. The first review confirmed a low-severity test defect:
+unreachable destinations could make the transport-pinning test pass after removing its
+guard. Reachable, counted HTTPS controls now prove rejection before I/O, including a
+foreign origin whose CA is trusted by the test client. Accepted coverage improvements
+also exercise missing ID-token type, known-key signature tampering in unit and live cases,
+duplicate JSON members, resource audience arrays and tenant-versus-scope error precedence.
+Mutation tests independently proved the guards fail when removed; the HTTP downgrade
+control checks the policy failure itself so TLS rejection cannot mask a missing guard.
+
+The second review independently killed the corresponding mutations, ran all 22 runner
+tests under default/all features and all six live interoperability cases, and found no
+remaining critical, high, medium or low findings. It also verified the cache-cancellation
+regression: expired keys are cleared before refresh I/O, so cancelling a fetch cannot
+renew stale authority. Informational observations are explicit fixture limits: a cold
+cache with an unknown kid can make two bounded fetches, and repeated full runs with the
+default 300-second token TTL may need a larger total deadline. Use the documented
+ten-second TTL for expiration scenarios. These reviews do not claim formal OIDC
+certification, broader browser/client coverage or production immediate revocation.
+
+Two final focused Claude follow-ups independently verified the documentation evidence
+and closed the remaining informational downgrade coverage gap. GET discovery/JWKS and
+POST token requests now each fail the test when only that method's scheme guard is
+weakened. The final review reported no confirmed findings at any severity; restored
+default/all-feature runner tests, formatting and runner Clippy passed independently.
