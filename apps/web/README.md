@@ -134,9 +134,12 @@ without rebuilding it; a missing `index.html` or undiscoverable exact backend te
 before test startup. `Test & Build` uses this helper with the frontend artifact from the
 same commit and a private Podman
 runtime in a fresh hosted browser job. Its result is required by `CI OK`. The job adapts
-preinstalled Chromium, falling back to Google Chrome, through a private `chromium` alias,
+native Google Chrome, falling back to Chromium, through a private `chromium` alias,
 and uploads no browser profiles, request dumps, credentials or screenshots. WASM Clippy remains a separate
 tracked gate; the browser job does not suppress or replace native lint checks.
+Selection requires headless startup with a host-visible port file and reachable loopback
+DevTools endpoint, using an empty private probe profile that is stopped and removed.
+An installed browser's successful version command alone cannot satisfy this check.
 The console fixture explicitly overrides API/admission origins and fixture client/server
 identity, with a browser regression for the admission origin. All three scripts block
 non-loopback hostname resolution and request reduced background networking. External

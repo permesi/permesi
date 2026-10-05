@@ -212,15 +212,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zsh
           cargo install just --locked --version 1.58.0
-          browser="$(command -v chromium || command -v google-chrome || command -v google-chrome-stable || true)"
-          if [[ -z "${browser}" ]]; then
-            echo "::error::The runner has no Chromium-compatible browser."
-            exit 1
-          fi
-          mkdir -m 700 "${RUNNER_TEMP}/browser-test-bin"
-          ln -s "${browser}" "${RUNNER_TEMP}/browser-test-bin/chromium"
-          echo "${RUNNER_TEMP}/browser-test-bin" >> "$GITHUB_PATH"
-          "${browser}" --version
+      - uses: ./.github/actions/ensure-browser-runtime
       - name: Run console and real PostgreSQL browser tests
         run: just web-test-browser-built
 

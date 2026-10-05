@@ -19,7 +19,7 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 3.  **Exceptions:**
     *   `test.yml` pull-request jobs are hardcoded to use `ubuntu-latest` for safer execution of untrusted PR code.
     *   `coverage.yml`: This workflow is hardcoded to use `ubuntu-latest` for stable tool/runtime behavior.
-    *   `build.yml` browser tests use `ubuntu-latest` for a fresh browser host. A job-local `chromium` alias prefers preinstalled Chromium and falls back to Google Chrome; the step prints the selected version.
+    *   `build.yml` browser tests use `ubuntu-latest` for a fresh browser host. A job-local `chromium` alias prefers native Google Chrome and falls back to Chromium; the step probes headless startup and prints the selected version.
     *   `deploy.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
     *   `schemathesis.yml`: This workflow is hardcoded to use `ubuntu-latest` so API contract checks always run on GitHub-hosted runners.
 
@@ -46,6 +46,10 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   Just 1.58.0 and zsh run on the hosted job; the existing container action requires a private Podman
   API and owns dependency cleanup. The thirty-minute job timeout bounds setup and execution. Backend
   test names are checked by exact discovery before execution, so a renamed or missing test fails the job.
+  The browser action tests its selection policy, then requires an empty private profile with a
+  host-visible DevTools port file and reachable loopback endpoint. A version-capable binary that
+  cannot launch headless is rejected; another installed candidate is tried before setup fails.
+  Probes contain no authentication data and their processes/profiles are retired before tests.
   Fixtures override API and admission origins to loopback. Browser resolver rules block
   non-loopback hostname lookups; a separate flag requests reduced background service traffic.
   Browser profiles, credentials, request dumps and screenshots are not uploaded. `CI OK` depends on this job
@@ -84,6 +88,16 @@ false`), the reusable workflows are read-only by default, and every Cargo comman
 - **`PERMESI_HELM_APP_ID`**: Numeric GitHub App ID used by `.github/actions/dispatch-helm`.
 
 ## Composite Actions
+
+### `ensure-browser-runtime`
+
+Browser jobs use `./.github/actions/ensure-browser-runtime` to select native Google
+Chrome or fall back to Chromium. A private empty profile must publish a valid
+DevTools port and answer a direct loopback readiness request before setup exports
+the job-local alias. Failed probes print startup diagnostics and retire their
+processes and profiles before the next candidate is tried. Test selection,
+fallback, port validation and cleanup locally with
+`python3 .github/actions/ensure-browser-runtime/test_runtime.py`.
 
 ### `ensure-container-runtime`
 

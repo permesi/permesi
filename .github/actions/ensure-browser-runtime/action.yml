@@ -1,0 +1,11 @@
+name: Ensure Browser Runtime
+description: Select a headless browser with a host-visible loopback DevTools endpoint.
+runs:
+  using: composite
+  steps:
+    - name: Test browser runtime selection
+      shell: bash
+      run: python3 "${GITHUB_ACTION_PATH}/test_runtime.py"
+    - name: Select and probe an installed browser
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/runtime.sh"

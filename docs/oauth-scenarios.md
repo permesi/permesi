@@ -328,6 +328,28 @@ address these findings. Missing-test and admission-origin mutations fail as expe
 Claude's final review found no remaining actionable findings and independently passed
 the browser helper against the downloaded GitHub frontend artifact. The prior
 [baseline CI run](https://github.com/permesi/permesi/actions/runs/37353233392) passed
-after retrying a transient PostgreSQL startup failure. The new browser job has not
-been exercised on its hosted runner. Hosted Podman, IPv6 and runner-browser behavior
-still need that first run; the TODO remains unchecked until the published change passes.
+after retrying a transient PostgreSQL startup failure.
+
+The [first hosted browser run](https://github.com/permesi/permesi/actions/runs/37361954328)
+passed private Podman setup and exact test discovery, but Chromium did not create a
+DevTools port file despite its successful version command; startup output was suppressed,
+so the cause is unknown. Browser setup
+now prefers native Chrome and probes headless startup in an empty private profile,
+requiring both a valid port file and reachable loopback DevTools endpoint before
+publishing the alias. Ten fixture regressions cover selection, fallback, unavailable
+or unusable browsers, unterminated port files, invalid ports, HTTP readiness and
+process/profile cleanup including delayed termination, and direct checks despite proxy
+configuration. Reinstating
+the original selector makes the readiness regression fail. The corrected hosted run
+remains pending; the TODO stays unchecked until it passes. Live checks cannot be repeated
+inside the primary session's current loopback-binding restriction; earlier full browser
+validation remains valid for the unchanged test scripts. Claude independently ran the
+live probe and console suite through the selected alias. Its startup review found four
+low issues: an unterminated file could abort fallback, process cleanup and numeric port
+validation lacked decisive assertions, and the startup comment suggested an unproven
+cause. The fallback regression failed before the fix; the code, assertions and comment
+have been corrected. The probe also explicitly bypasses proxies for its loopback check.
+Claude's second startup review verified all fixes, repeated the live probe and console
+suite, and found no remaining actionable findings. Removing the read guard, kill/wait,
+port regex/bounds, or proxy bypass makes the affected regression fail. Delayed shutdown
+verifies waiting for process retirement; it does not assert the precise kill-after duration.
