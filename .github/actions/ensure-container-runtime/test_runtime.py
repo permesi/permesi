@@ -29,6 +29,8 @@ class RuntimeSetupTests(unittest.TestCase):
             GITHUB_ENV=str(self.root / "github-env"),
             GITHUB_STATE=str(self.root / "github-state"),
             RUNNER_ENVIRONMENT="self-hosted",
+            # Each case chooses its runtime policy independently of the calling CI job.
+            PERMESI_TEST_REQUIRE_PODMAN="0",
             RUNNER_TEMP=str(self.stores),
             TEST_ROOT=str(self.root),
         )
@@ -328,6 +330,19 @@ exit 1
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("DOCKER_HOST", exports)
+
+    def test_hosted_runner_can_require_a_private_podman_api(self):
+        """The scenario job's opt-in must bypass even an unhealthy system Docker API."""
+        result, exports = self.run_setup({
+            "RUNNER_ENVIRONMENT": "github-hosted",
+            "PERMESI_TEST_REQUIRE_PODMAN": "1",
+            "TEST_FAIL_DOCKER": "1",
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(exports["CONTAINER_TOOL"], "podman")
+        self.assertNotEqual(exports["DOCKER_HOST"], f"unix://{self.runtime}/docker.sock")
+        self.assertEqual(exports["CONTAINER_HOST"], exports["DOCKER_HOST"])
+        self.assertIn("--root", (self.root / "calls").read_text())
 
 
 if __name__ == "__main__":

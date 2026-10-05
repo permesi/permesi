@@ -144,6 +144,13 @@ WASM builds, the broader Chromium console suite and both real PostgreSQL browser
 The runner passes all eleven cases; its seven process checks cover startup/deadline
 failure, repeated SIGTERM during cleanup, an injected removal failure, repetitions and
 simultaneous runs. Alternate manifests exercise multiple applications/environments.
+The container-runtime action's fifteen fixture tests also run with the calling job's
+Podman requirement enabled and disabled. Each fixture selects its own policy, and an
+explicit hosted-runner case verifies that required Podman bypasses system Docker.
+The first CI attempt exposed inherited runtime-policy inputs in these fixtures before
+scenarios could run. Isolating each fixture's policy fixed the failure without changing
+the runtime or weakening Docker-policy assertions. A focused Herdr/OMP review with the
+same exact Grok provider/model independently passed both suites and found no defects.
 
 The first independent Herdr/OMP review used `xai-oauth/grok-4.7` with xhigh thinking.
 Three medium findings were accepted: host-visible CDP was replaced by inherited pipes,
