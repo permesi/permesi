@@ -1,0 +1,6 @@
+FROM docker.io/library/node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends chromium libnss3-tools ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY browser.mjs /opt/scenario/browser.mjs
+COPY entrypoint.sh /opt/scenario/entrypoint.sh
+ENTRYPOINT ["sh", "/opt/scenario/entrypoint.sh"]

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "organization": "Scenario organization",
+  "project": "Scenario project",
+  "environments": [
+    {"name": "Development", "slug": "development", "tier": "non_production", "applications": [
+      {"name": "Jobs development", "scopes": [
+        {"name": "jobs:read", "description": "Read jobs"},
+        {"name": "jobs:write", "description": "Write jobs"},
+        {"name": "runs:read", "description": "Read execution history"},
+        {"name": "runs:execute", "description": "Execute runs"}
+      ]}
+    ]},
+    {"name": "Production", "slug": "production", "tier": "production", "applications": [
+      {"name": "Jobs production", "scopes": [
+        {"name": "jobs:read", "description": "Read jobs"},
+        {"name": "jobs:write", "description": "Write jobs"},
+        {"name": "runs:read", "description": "Read execution history"},
+        {"name": "runs:execute", "description": "Execute runs"}
+      ]}
+    ]}
+  ]
+}

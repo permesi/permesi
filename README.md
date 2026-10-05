@@ -107,8 +107,24 @@ This repository is a Rust workspace (monorepo) containing:
 - `services/genesis`: edge admission token mint
 - `crates/admission_token`: shared admission token contract + sign/verify helpers
 - `apps/web`: CSR-only Leptos admin console (Trunk + Tailwind, static `dist/`)
+- `tools/oauth_scenario`: standalone real-service OAuth integration runner
 
 Note: service HTTP modules live under `src/api/` (previously `src/permesi/` and `src/genesis/`).
+
+### Isolated OAuth scenarios
+
+`just oauth-scenario` builds and runs the full suite on fresh, disposable PostgreSQL
+and Vault containers, with real Genesis, two Permesi replicas, the compiled Web console
+and Chromium. It creates accounts and tenant fixtures through the APIs and cleans up
+its own resources. Linux and local Podman are required; the development stack and
+production endpoints are never used.
+
+Use `just oauth-scenario-list` for stable case IDs or `just oauth-scenario --suite smoke`
+for the shorter browser suite. The built `target/debug/permesi-oauth-scenario` also
+runs independently with local artifact paths. See [OAuth scenarios](docs/oauth-scenarios.md)
+for manifests, coverage, reports and cleanup recovery. Internal redemption tests prepare
+the next milestone; there is still no OAuth `/token`, access/ID-token or refresh-token
+issuance.
 
 ## Architecture
 

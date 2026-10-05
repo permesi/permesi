@@ -1,5 +1,10 @@
 # OAuth/OIDC foundation
 
+The standalone [OAuth scenario runner](oauth-scenarios.md) exercises real services,
+Web login/consent, shared PostgreSQL code state and tenant/credential lifecycles on a
+disposable stack. Its coverage matrix distinguishes browser/HTTP checks from internal
+redemption and explicitly excludes deferred token issuance.
+
 Permesi implements identity/authentication, sessions, organization authorization,
 OAuth registration management, and Authorization Code + S256 PKCE. Token issuance
 is still deferred; the authorization phase exposes no `/token`. Applications retain their existing logical-tenant meaning and

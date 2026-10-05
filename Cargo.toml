@@ -9,6 +9,7 @@ members = [
   "crates/admission_token",
   "crates/vault_client",
   "crates/test_support", "crates/service_utils",
+  "tools/oauth_scenario",
 ]
 
 [workspace.package]

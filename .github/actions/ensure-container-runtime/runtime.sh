@@ -4,7 +4,7 @@
 # migrations and process/socket removal belong to runner maintenance, not CI jobs.
 set -euo pipefail
 
-if [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted && -S /var/run/docker.sock ]]; then
+if [[ "${PERMESI_TEST_REQUIRE_PODMAN:-0}" != 1 && "${RUNNER_ENVIRONMENT:-}" == github-hosted && -S /var/run/docker.sock ]]; then
     echo "GitHub-hosted runner detected. Using system Docker daemon."
     docker --host unix:///var/run/docker.sock info >/dev/null
     {

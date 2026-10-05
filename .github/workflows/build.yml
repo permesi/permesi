@@ -146,6 +146,42 @@ jobs:
       attestations: write
     secrets: inherit
 
+  oauth-scenarios:
+    name: OAuth scenarios
+    needs: [test, frontend-build]
+    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/rust-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: apps/web/dist
+      - uses: ./.github/actions/ensure-container-runtime
+        env:
+          PERMESI_TEST_REQUIRE_PODMAN: '1'
+      - name: Build exact checked-out service and runner binaries
+        run: cargo build --locked -p permesi -p genesis -p permesi-oauth-scenario
+      - name: Run all real OAuth scenarios
+        run: target/debug/permesi-oauth-scenario --suite full --report-dir .tmp/oauth-scenario-ci
+      - name: Verify harness cleanup and isolation
+        run: python3 tools/oauth_scenario/tests/harness.py
+      - name: Upload sanitized scenario reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: oauth-scenario-reports
+          path: |
+            .tmp/oauth-scenario-ci/**/report.json
+            .tmp/oauth-scenario-ci/**/junit.xml
+            .tmp/oauth-scenario-ci/**/ownership-*.json
+          if-no-files-found: warn
+
   package:
     name: Package GHCR
     needs: [build, frontend-build]
@@ -210,6 +246,7 @@ jobs:
       - test
       - build
       - frontend-build
+      - oauth-scenarios
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded

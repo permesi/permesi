@@ -54,6 +54,7 @@ _default:
 
 import '.justfiles/core.just'
 import '.justfiles/web.just'
+import '.justfiles/oauth_scenario.just'
 import '.justfiles/services.just'
 import '.justfiles/docs_openapi.just'
 import '.justfiles/schemathesis.just'
