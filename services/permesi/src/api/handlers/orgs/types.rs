@@ -46,6 +46,15 @@ pub struct OrgResponse {
     pub created_at: String,
 }
 
+/// Current member's role eligibility, never proof of authority for a mutation.
+/// Emptiness and recent authentication are checked separately at deletion time.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgCapabilities {
+    pub organization_id: String,
+    pub can_manage_resources: bool,
+    pub can_delete_organization: bool,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectResponse {
     pub id: String,

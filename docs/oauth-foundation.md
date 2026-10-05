@@ -80,6 +80,11 @@ disabled registrations. This preserves the existing atomic client/credential/con
 revocation service. Scope registry metadata never prevents application deletion. Empty
 environments, projects and organizations can then be removed without recursive cascades;
 organization deletion requires its owner and the existing recent-authentication policy.
+The console uses server-issued role capabilities and a UUID-pinned confirmation. Inline
+OPAQUE password verification returns to confirmation after refreshing identity, authority
+and children; it never deletes automatically. This reuses current authentication semantics.
+OPAQUE login/reauthentication exchanges remain process-local until the separately tracked
+shared-state migration; durable OAuth request/code state does not remove that limitation.
 Creation and deletion coordinate through transaction-owned PostgreSQL parent locks.
 Deleted ancestry cannot authorize outstanding requests or redeem old codes.
 Future token revocation and cache policy must account for these configuration changes;
@@ -449,6 +454,12 @@ boundaries and dependencies; README and the frontend documentation link back to 
 A milestone is complete only after its implementation, required checks and independent
 review pass. Presently token issuance and interoperable OpenID Provider discovery remain pending.
 
+Tenant deletion polish adds permission-aware controls and inline password reauthentication
+with an explicit final confirmation. Durable OPAQUE login/reauthentication exchanges are
+a separate authentication milestone: replace current bounded process-local storage with
+shared single-use transactional state and test cross-replica expiry/replay races. No sticky
+sessions or multi-replica OPAQUE reliability are claimed by the current implementation.
+
 After credential management, implement real `/token` exchange with confidential-client
 authentication and mandatory S256 for public clients. Keep code consumption and token
 persistence in one transaction, enforce confidential authentication with a matching
@@ -465,7 +476,8 @@ rejected until refresh policy and issuance are implemented.
 
 Authorization UX should show the signed-in account and callback host and provide a safe
 restart path for expired requests, with account-switching policy and browser regressions.
-Operational work includes Firefox/Safari coverage, multi-replica load tests for shared
+Operational work includes a CI gate for the existing locally exercised Chromium/real-database
+browser tests, Firefox/Safari coverage, multi-replica load tests for shared
 locks/MultiXact behavior, and sanitized metrics/alerts. Ancestor rows still use ordinary
 share locks: overlapping readers across clients in a subtree can starve organization,
 project, environment or application updates/deletions. Existing ancestor writers lack

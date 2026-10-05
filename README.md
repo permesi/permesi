@@ -223,9 +223,13 @@ soft-deleted explicitly from the bottom up. Delete OAuth clients before their ap
 client deletion revokes credentials and consent. Environments require no active applications,
 projects require no active environments, and organizations require no active projects.
 Owners/admins manage resource deletion; deleting the organization itself requires its
-owner and recent authentication. The console uses typed confirmation dialogs and shows
-immediate-child blockers. See [resource lifecycle](docs/resource-lifecycle.md) for API,
+owner and recent authentication. Server-issued capabilities control deletion visibility;
+typed dialogs pin the organization UUID and show immediate-child blockers. When requested,
+inline OPAQUE password verification refreshes authority and children before returning to
+confirmation; the owner must explicitly click Delete Organization again. See [resource lifecycle](docs/resource-lifecycle.md) for API,
 transactional race protection and OAuth effects; populated parents never silently cascade.
+OPAQUE login/reauthentication exchanges still use bounded process-local state; shared
+exchange persistence is a tracked follow-up, separate from durable OAuth requests/codes.
 
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,

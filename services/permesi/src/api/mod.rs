@@ -251,6 +251,7 @@ fn build_router(state: AppState) -> Result<Router> {
             CONTENT_TYPE,
             AUTHORIZATION,
             HeaderName::from_static("x-permesi-zero-token"),
+            HeaderName::from_static("x-permesi-expected-organization-id"),
         ])
         .allow_methods([
             Method::GET,
@@ -615,6 +616,52 @@ mod tests {
                 "https://www.permesi.dev",
             ]
         );
+        Ok(())
+    }
+
+    /// Confirmation UUID preflights retain the configured credentialed-origin boundary.
+    #[tokio::test]
+    async fn served_router_allows_organization_uuid_header_only_for_trusted_origins() -> Result<()>
+    {
+        use tower::ServiceExt;
+        for origin in ["https://permesi.dev", "https://untrusted.example"] {
+            let response = served_app()?
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("OPTIONS")
+                        .uri("/v1/orgs/tenant")
+                        .header("origin", origin)
+                        .header("access-control-request-method", "DELETE")
+                        .header(
+                            "access-control-request-headers",
+                            "x-permesi-expected-organization-id",
+                        )
+                        .body(axum::body::Body::empty())?,
+                )
+                .await?;
+            if origin == "https://permesi.dev" {
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("access-control-allow-origin")
+                        .and_then(|h| h.to_str().ok()),
+                    Some(origin)
+                );
+                assert!(
+                    response
+                        .headers()
+                        .get("access-control-allow-headers")
+                        .and_then(|h| h.to_str().ok())
+                        .is_some_and(|h| h.contains("x-permesi-expected-organization-id"))
+                );
+            } else {
+                assert!(
+                    !response
+                        .headers()
+                        .contains_key("access-control-allow-origin")
+                );
+            }
+        }
         Ok(())
     }
 

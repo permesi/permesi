@@ -20,6 +20,7 @@
 //! 4) Perform scoped CRUD for projects, environments, and applications.
 
 pub(crate) mod applications;
+pub(crate) mod capabilities;
 pub(crate) mod environments;
 pub(crate) mod oauth;
 pub(crate) mod organizations;

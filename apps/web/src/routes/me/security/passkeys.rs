@@ -1,30 +1,19 @@
 //! Passkey (WebAuthn) UI section for the security settings page.
 
 use crate::{
-    app_lib::theme::Theme,
-    app_lib::{AppError, config::AppConfig},
+    app_lib::{AppError, theme::Theme},
     components::{Alert, AlertKind, Spinner},
     features::{
-        auth::{
-            client as auth_client,
-            opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
-            state::use_auth,
-            token,
-            types::{OpaqueReauthFinishRequest, OpaqueReauthStartRequest},
-            webauthn,
-        },
+        auth::{opaque::reauthenticate, state::use_auth, token, webauthn},
         passkeys::{
             client,
             types::{PasskeyRegisterFinishRequest, PasskeyRegisterOptionsResponse},
         },
     },
 };
-use base64::Engine;
 use js_sys::{Date, Reflect};
 use leptos::{ev, prelude::*, task::spawn_local};
 use leptos_dom::helpers::{WindowListenerHandle, window_event_listener};
-use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
-use opaque_rand_core::OsRng;
 use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -235,53 +224,14 @@ pub fn PasskeysSection() -> impl IntoView {
         let password = password.clone();
         let auth = auth.clone();
         async move {
-            let config = AppConfig::load();
-            let client_id = normalize_email(
-                &auth
-                    .session
-                    .get_untracked()
-                    .map(|s| s.email)
-                    .unwrap_or_default(),
-            );
-            let server_id = config.opaque_server_id;
-
-            let mut rng = OsRng;
-            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, password.as_bytes())
-                .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
-            let start_request = OpaqueReauthStartRequest {
-                credential_request: base64::engine::general_purpose::STANDARD
-                    .encode(start.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            let start_response =
-                auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
-
-            let response_bytes = base64::engine::general_purpose::STANDARD
-                .decode(start_response.credential_response)
-                .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
-            let credential_response =
-                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
-                    AppError::Config("Unable to complete secure re-auth.".to_string())
+            let email = auth
+                .session
+                .get_untracked()
+                .map(|s| s.email)
+                .ok_or_else(|| {
+                    AppError::Config("Sign in again before removing a passkey.".to_owned())
                 })?;
-
-            let ksf_params = ksf();
-            let params = ClientLoginFinishParameters::new(
-                None,
-                identifiers(client_id.as_bytes(), server_id.as_bytes()),
-                Some(&ksf_params),
-            );
-            let finish = start
-                .state
-                .finish(&mut rng, password.as_bytes(), credential_response, params)
-                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
-
-            let finish_request = OpaqueReauthFinishRequest {
-                login_id: start_response.login_id,
-                credential_finalization: base64::engine::general_purpose::STANDARD
-                    .encode(finish.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
+            reauthenticate(&email, password).await?;
 
             let zero_token = token::fetch_zero_token().await?;
             client::delete_credential(&credential_id, &zero_token).await

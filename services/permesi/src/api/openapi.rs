@@ -204,6 +204,7 @@ fn parse_author(author: &str) -> (Option<&str>, Option<&str>) {
 /// Each handler enforces current session/tenant authority and soft-delete invariants.
 fn tenant_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(orgs::capabilities::get_capabilities))
         .routes(routes!(orgs::organizations::create_org))
         .routes(routes!(orgs::organizations::list_orgs))
         .routes(routes!(orgs::organizations::get_org))

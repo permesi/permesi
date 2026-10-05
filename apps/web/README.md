@@ -130,6 +130,28 @@ Application sections use primary tabs with Material Symbols and an underline for
 
 The API permits credentialed PUT preflights from its existing configured frontend origins so the redirect and scope replacement editors work across origins. This preserves the origin allow-list and server authorization checks.
 
+Tenant deletion controls load `GET /v1/orgs/{org_slug}/capabilities` before showing a
+Danger Zone. Owners/admins may delete children; only owners see organization deletion.
+The flags are uncached presentation hints and every mutation still authorizes server-side.
+Opening a dialog pins the account and organization UUID; organization DELETE sends
+`X-Permesi-Expected-Organization-Id` so slug reuse cannot change the confirmed target.
+
+A `reauthentication_required` response opens password verification in the same Dialog,
+using the existing OPAQUE/admission endpoints and shared client helper also used for
+passkey removal. Success refreshes session identity, capabilities and projects, preserves
+the typed slug, and returns to confirmation with another explicit deletion confirmation required.
+The form ignores auto-repeated Enter so a held password-submit key cannot trigger deletion;
+a fresh Enter press and the Delete button remain available.
+Wrong passwords, unavailable/rate-limited requests, account changes and permission loss
+never trigger deletion. Inputs clear after an attempt or dismissal; no password is placed
+in storage, URLs or logs. Process-local OPAQUE exchange storage remains a separate
+backend roadmap item; cross-replica authentication start/finish is not guaranteed yet.
+
+`just web-test-browser` additionally runs the compiled console against real PostgreSQL,
+OPAQUE handlers and signed admission verification through an isolated loopback fixture.
+It covers wrong/correct password proofs, explicit final confirmation, new projects, role
+loss, account switching and slug reuse. The fixture never changes production TLS policy.
+
 Confirmation dialogs ignore queued close events from an earlier opening if the browser has already reopened the dialog. Pending requests remain visible until they settle; browser regressions cover immediate reopening as well as repeated Escape.
 
 ## Signup + Email Verification Flow

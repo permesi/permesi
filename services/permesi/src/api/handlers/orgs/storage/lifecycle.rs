@@ -24,7 +24,7 @@ pub(super) enum Parent {
 
 /// Path-bound target; each variant deletes only one resource, never its children.
 pub(in super::super) enum Deletion<'a> {
-    Organization,
+    Organization(Option<Uuid>),
     Project(&'a str),
     Environment(&'a str, &'a str),
     Application(&'a str, &'a str, Uuid),
@@ -172,7 +172,7 @@ async fn lock_target(
     target: Deletion<'_>,
 ) -> Result<LockedDeletion, OrgError> {
     let row = match target {
-        Deletion::Organization => LockedDeletion {
+        Deletion::Organization(_) => LockedDeletion {
             id: org.id(),
             children: "SELECT EXISTS(SELECT 1 FROM projects WHERE org_id=$1 AND deleted_at IS NULL)",
             update: "UPDATE organizations SET deleted_at=NOW() WHERE id=$1",
@@ -233,7 +233,14 @@ pub(in super::super) async fn delete_resource(
         .await
         .map_err(OrgError::Database)?
         .ok_or(OrgError::NotFound)?;
-    let owner_only = matches!(target, Deletion::Organization);
+    let owner_only = matches!(target, Deletion::Organization(_));
+    // A browser confirmation may outlive a slug rename/reuse. The optional UUID
+    // only restricts the target; it cannot confer membership or owner authority.
+    if let Deletion::Organization(Some(expected)) = target
+        && context.id() != expected
+    {
+        return Err(OrgError::NotFound);
+    }
     if (owner_only && !context.is_owner()) || (!owner_only && !context.can_manage()) {
         return Err(OrgError::NotFound);
     }

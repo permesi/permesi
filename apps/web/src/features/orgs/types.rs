@@ -34,6 +34,15 @@ pub struct OrgResponse {
     pub created_at: String,
 }
 
+/// Server-derived role eligibility for presentation; mutations independently authorize.
+/// The immutable ID pins an organization confirmation across slug reuse.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct OrgCapabilities {
+    pub organization_id: String,
+    pub can_manage_resources: bool,
+    pub can_delete_organization: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ProjectResponse {
     pub id: String,
@@ -70,7 +79,19 @@ pub struct ApplicationResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{EnvironmentResponse, production_tier_present};
+    use super::{EnvironmentResponse, OrgCapabilities, production_tier_present};
+
+    /// Missing or malformed eligibility cannot silently default to permissive controls.
+    #[test]
+    fn org_capabilities_require_explicit_server_booleans_and_identity() {
+        for body in [
+            r"{}",
+            r#"{"organization_id":"org","can_manage_resources":true}"#,
+            r#"{"organization_id":"org","can_manage_resources":"true","can_delete_organization":true}"#,
+        ] {
+            assert!(serde_json::from_str::<OrgCapabilities>(body).is_err());
+        }
+    }
 
     #[test]
     fn production_tier_selection_uses_classification_not_name_or_slug() {

@@ -20,6 +20,8 @@ const route=`/console/orgs/crono/projects/jobs/envs/production/apps/${app}`;
 const time='2026-10-04T06:00:00Z';
 let clients=[];
 let organizationActive=true, projectActive=true, applicationActive=true;
+let memberRole='owner', delayCapabilities=false, failCapabilities=false;
+const orgId='33333333-3333-4333-8333-333333333333';
 let denyNextResourceDelete=false;
 let requireRecentOrgAuthentication=false;
 let environments=[];
@@ -46,6 +48,7 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/mfa/totp/enroll/start'){return send(200,{secret:'JBSWY3DPEHPK3PXP',qr_code_url:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E',credential_id:'test-enrollment'});}
   if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
   if(p==='/v1/auth/session')return send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
+  if(p==='/v1/orgs/crono/capabilities'){if(delayCapabilities)await new Promise(resolve=>setTimeout(resolve,650));if(failCapabilities)return send(503,{error:{code:'unavailable',message:'Capability lookup unavailable.'}});return send(organizationActive?200:404,organizationActive?{organization_id:orgId,can_manage_resources:['owner','admin'].includes(memberRole),can_delete_organization:memberRole==='owner'}:undefined);}
   if(p==='/v1/orgs')return send(200,organizationActive?[{id:'org',slug:'crono',name:'Crono',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects')return send(200,projectActive?[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects/jobs/envs') {
@@ -62,7 +65,7 @@ const server=http.createServer(async(req,res)=>{
    if(denyNextResourceDelete){denyNextResourceDelete=false;await new Promise(resolve=>setTimeout(resolve,1000));return send(409,'Active children appeared. Reload the resource before deleting.');}
    assert.equal(input,null,'Resource deletion must not accept recursive options');
    if(p===route.replace('/console','/v1')){if(clients.length)return send(409,'Application contains undeleted OAuth clients.');applicationActive=false;return send(204);}
-   if(p==='/v1/orgs/crono'){if(requireRecentOrgAuthentication)return send(401,{error:{code:'reauthentication_required',message:'Sign in again before deleting the organization.'}});if(projectActive)return send(409,'Organization contains active projects.');organizationActive=false;return send(204);}
+   if(p==='/v1/orgs/crono'){assert.equal(req.headers['x-permesi-expected-organization-id'],orgId);if(requireRecentOrgAuthentication)return send(401,{error:{code:'reauthentication_required',message:'Sign in again before deleting the organization.'}});if(projectActive)return send(409,'Organization contains active projects.');organizationActive=false;return send(204);}
    if(p==='/v1/orgs/crono/projects/jobs'){if(environments.length)return send(409,'Project contains active environments.');projectActive=false;return send(204);}
    const slug=p.split('/').at(-1);if(slug==='production'&&applicationActive)return send(409,'Environment contains active applications.');environments=environments.filter(value=>value.slug!==slug);return send(204);
   }
@@ -152,7 +155,7 @@ try {
  const wait=async(expression)=>{for(let i=0;i<100;i++){if(await evaluate(`(()=>{try{return Boolean(${expression});}catch{return false;}})()`))return;await delay(150);}throw Error(`Timeout: ${expression}\n${await evaluate('document.body.innerText')}`);};
  const control=text=>`(()=>{const scope=document.querySelector('dialog[open]')||document;return [...scope.querySelectorAll('a,button,summary')].find(e=>{const label=e.cloneNode(true);label.querySelectorAll('[aria-hidden=true]').forEach(node=>node.remove());return e.getClientRects().length&&!e.disabled&&(e.getAttribute('aria-label')===${JSON.stringify(text)}||label.textContent.trim()===${JSON.stringify(text)});});})()`;
  const click=async(text)=>{await wait(control(text));return evaluate(`(()=>{const e=${control(text)};if(!e)throw Error('Missing enabled control '+${JSON.stringify(text)});e.click();})()`);};
- const fill=async(id,value)=>evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});if(!e)throw Error('Missing input');const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+ const fill=async(id,value)=>{await wait(`document.getElementById(${JSON.stringify(id)}) && !document.getElementById(${JSON.stringify(id)}).disabled`);return evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(id)});if(!e)throw Error('Missing input');const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);};
  const goto=async(p)=>{await call('Page.navigate',{url:origin+p});};
  await call('Runtime.enable');await call('Page.enable');await call('Page.bringToFront');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('permesi_logged_in','true');"});
@@ -394,6 +397,16 @@ try {
  await wait("document.body.innerText.includes('Already Signed In')");
  assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null);
  assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeInvalid);
+ // Capability hints hide destructive controls until loaded and distinguish tenant roles.
+ sessionKind='full';
+ for(const role of ['member','readonly','admin','owner']) {
+  memberRole=role;await goto(route);await wait("document.body.innerText.includes('Application overview')");await delay(350);
+  assert.equal(await evaluate("document.body.innerText.includes('Danger Zone')"),['owner','admin'].includes(role));
+  await goto('/console/orgs/crono');await wait("document.body.innerText.includes('Manage projects and environments for this organization.')");await delay(350);
+  assert.equal(await evaluate("document.body.innerText.includes('Danger Zone')"),role==='owner');
+ }
+ delayCapabilities=true;await goto(route);await wait("document.body.innerText.includes('Application overview')");assert(!await evaluate("document.body.innerText.includes('Danger Zone')"));await wait("document.body.innerText.includes('Danger Zone')");delayCapabilities=false;
+ failCapabilities=true;await goto(route);await wait("document.querySelector('[role=alert]')?.innerText.trim().length>0");assert(!await evaluate("document.body.innerText.includes('Danger Zone')"));failCapabilities=false;
  // Bottom-up deletion requires explicit typed confirmation at every level.
  sessionKind='full';
  await goto('/console/orgs/crono');await wait("document.body.innerText.includes('Danger Zone')");assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Delete Organization')).disabled"));assert(await evaluate("document.body.innerText.includes('Delete all projects before deleting this organization.')"));
@@ -425,8 +438,10 @@ try {
  assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'crono');await click('Cancel');
  await goto('/console/orgs/crono/projects/jobs');await wait("document.body.innerText.includes('No environments')");await confirmDeletion('Delete Project','jobs','/console/orgs/crono');await wait("document.body.innerText.includes('No projects')");
  requireRecentOrgAuthentication=true;await click('Delete Organization');await fill('resource-delete-confirmation','crono');await click('Delete Organization');
- await wait("document.querySelector('#resource-delete-error').innerText.includes('Sign in again before deleting the organization.')");assert(organizationActive);assert(!await evaluate("document.querySelector('#resource-delete-error').innerText.includes('session has expired')"));
- assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'crono');requireRecentOrgAuthentication=false;await click('Delete Organization');await wait("location.pathname==='/console/orgs' && document.body.innerText.includes('No organizations')");
+ await wait("document.querySelector('#resource-delete-password') && document.querySelector('#resource-delete-error').innerText.includes('Verify your password')");assert(organizationActive);
+ await fill('resource-delete-password','discarded-draft');await click('Cancel');
+ assert(!await evaluate("document.querySelector('#resource-delete-password')"),'Cancel clears password step');
+ requireRecentOrgAuthentication=false;await confirmDeletion('Delete Organization','crono','/console/orgs');await wait("document.body.innerText.includes('No organizations')");
  assert(!organizationActive&&!projectActive&&!applicationActive&&environments.length===0);
  for(const endpoint of [route.replace('/console','/v1'),'/v1/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs','/v1/orgs/crono'])assert(requests.some(value=>value.method==='DELETE'&&value.path===endpoint&&value.input===null));
  assert.deepEqual(exceptions,[]);

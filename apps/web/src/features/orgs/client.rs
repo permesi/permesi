@@ -5,7 +5,7 @@ use crate::app_lib::{
 };
 use crate::features::orgs::types::{
     ApplicationResponse, CreateApplicationRequest, CreateEnvironmentRequest, CreateOrgRequest,
-    CreateProjectRequest, EnvironmentResponse, OrgResponse, ProjectResponse,
+    CreateProjectRequest, EnvironmentResponse, OrgCapabilities, OrgResponse, ProjectResponse,
 };
 
 /// Fetches all organizations the current user belongs to.
@@ -74,12 +74,28 @@ pub async fn list_applications(
 }
 
 /// Soft-deletes an empty organization; the backend requires recent owner authentication.
-pub async fn delete_organization(org_slug: &str) -> Result<(), AppError> {
+pub async fn delete_organization(org_slug: &str, expected_id: &str) -> Result<(), AppError> {
     let path = format!(
         "/v1/orgs/{}",
         crate::features::oauth::paths::segment(org_slug)
     );
-    crate::app_lib::delete_json_with_headers_with_credentials(&path, &[]).await
+    crate::app_lib::delete_json_with_headers_with_credentials(
+        &path,
+        &[(
+            "X-Permesi-Expected-Organization-Id".to_owned(),
+            expected_id.to_owned(),
+        )],
+    )
+    .await
+}
+
+/// Loads uncached, current full-session role eligibility without raw roles or platform scopes.
+pub async fn capabilities(org_slug: &str) -> Result<OrgCapabilities, AppError> {
+    let path = format!(
+        "/v1/orgs/{}/capabilities",
+        crate::features::oauth::paths::segment(org_slug)
+    );
+    get_json_with_credentials(&path).await
 }
 
 /// Soft-deletes a project only after all active environments have been removed.

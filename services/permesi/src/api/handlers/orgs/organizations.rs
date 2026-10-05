@@ -196,9 +196,13 @@ pub async fn patch_org(
 #[utoipa::path(
     delete,
     path = "/v1/orgs/{org_slug}",
-    params(("org_slug" = String, Path, description = "org slug")),
+    params(
+        ("org_slug" = String, Path, description = "org slug"),
+        ("X-Permesi-Expected-Organization-Id" = Option<String>, Header, format = "uuid", description = "Optional UUID pin from the confirmed capabilities response. A different organization returns 404."),
+    ),
     responses(
         (status = 204, description = "Organization soft-deleted."),
+        (status = 400, description = "Malformed or repeated expected organization UUID header."),
         (status = 401, description = "Full authenticated session required; stale authentication returns reauthentication_required."),
         (status = 404, description = "Resource inaccessible or not found."),
         (status = 409, description = "Organization contains active children.", body = String),
@@ -209,6 +213,7 @@ pub async fn patch_org(
 /// Immediate active children must be empty; no recursive deletion occurs.
 /// Inaccessible and repeated targets return 404 without disclosing tenant information.
 /// A valid session needing recent authentication receives the stable reauthentication error code.
+/// An optional expected UUID restricts deletion to the originally confirmed organization.
 pub async fn delete_org(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
@@ -226,15 +231,42 @@ pub async fn delete_org(
         )
         .into_response();
     }
+    let expected = match expected_organization_id(&headers) {
+        Ok(expected) => expected,
+        Err(error) => return error.into_response(),
+    };
     match super::storage::delete_resource(
         &pool,
         principal.user_id,
         &org_slug,
-        super::storage::Deletion::Organization,
+        super::storage::Deletion::Organization(expected),
     )
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+/// Parses a single optional UUID restriction, rejecting ambiguity rather than selecting a header.
+/// This condition never supplies authorization and is compatible with clients omitting it.
+fn expected_organization_id(headers: &HeaderMap) -> Result<Option<uuid::Uuid>, ApiError> {
+    let invalid = || {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Invalid expected organization identifier.",
+        )
+    };
+    let mut values = headers.get_all("x-permesi-expected-organization-id").iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(invalid());
+    }
+    let value = value.to_str().map_err(|_| invalid())?;
+    uuid::Uuid::parse_str(value)
+        .map(Some)
+        .map_err(|_| invalid())
 }

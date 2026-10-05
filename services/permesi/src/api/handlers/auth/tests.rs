@@ -1,5 +1,7 @@
 //! Unit and integration tests for the auth module.
 
+mod tenant_deletion;
+
 use super::{
     AuthConfig, AuthState, OpaqueState,
     mfa::MfaConfig,
