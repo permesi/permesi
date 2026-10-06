@@ -107,8 +107,8 @@ contract supplies presentation hints without changing mutation authorization.
 
 OPAQUE login and reauthentication now use [shared encrypted PostgreSQL exchanges](opaque-exchanges.md).
 Start/finish can reach different replicas; elevation is bound to the original session
-and expires with the server-issued exchange. WebAuthn/passkey exchange persistence
-remains separate in TODO.md.
+and expires with the server-issued exchange. [WebAuthn/passkey ceremonies](webauthn-exchanges.md)
+also persist in shared PostgreSQL; remaining MFA/quota milestones are tracked in TODO.md.
 OAuth authorization requests/codes and tenant lifecycle coordination remain PostgreSQL-backed.
 
 ## Validation and review
@@ -156,4 +156,4 @@ Browser tests run explicitly during local validation; current CI builds WASM and
 the native/database suites but has no browser-test job. Adding that gate is tracked
 separately. Four other security-settings flows still contain inline OPAQUE exchanges;
 sharing their helper is outside this focused milestone. Bounded ancestor coordination
-and durable WebAuthn/passkey exchanges remain separate roadmap items.
+and the remaining MFA/quota milestones remain separate roadmap items. [WebAuthn exchanges](webauthn-exchanges.md) now use shared PostgreSQL storage.

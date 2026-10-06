@@ -8,8 +8,8 @@
 //! - MFA bootstrap/challenge sessions gate access when MFA is required or enabled.
 //! - Recovery codes provide the only self-service MFA recovery path.
 //! - PostgreSQL-backed counters enforce shared unauthenticated rate limits and
-//!   encrypted single-use OPAQUE exchanges work across replicas. `WebAuthn` protocol
-//!   state remains bounded and process-local.
+//!   encrypted single-use OPAQUE and `WebAuthn` exchanges work across replicas.
+//!   Pending state is bounded, sealed and shared in PostgreSQL without a local fallback.
 //!
 //! ## Admin Rate Limiting
 //!

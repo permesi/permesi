@@ -5,7 +5,7 @@ admission verification and session cookies. Start and finish can execute on diff
 Permesi replicas behind the same issuer/load balancer. Both use the same PostgreSQL
 writer, Vault `opaque_server_seed` and OPAQUE server identifier. Pending exchanges
 never depend on a process-local map, sticky sessions or a local file. WebAuthn/passkey
-challenge storage remains process-local and is a separate milestone.
+ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges.md).
 
 ## Flow and trust boundary
 
@@ -21,8 +21,8 @@ never logged or persisted in plaintext. Passwords still never reach the server.
 PostgreSQL supplies issuance and expiration time. `PERMESI_OPAQUE_LOGIN_TTL_SECONDS`
 defaults to 300 seconds and accepts 1–3600 seconds; clap and dispatch both validate
 it. `PERMESI_AUTH_MAX_PENDING_STATES` defaults to 10,000. This is now a cluster-wide
-capacity shared by OPAQUE login and reauthentication, while WebAuthn limits retain
-their existing per-flow, per-replica behavior. Replicas must use consistent limits.
+capacity shared by OPAQUE login and reauthentication, while WebAuthn uses
+separate per-purpose cluster-wide limits. Replicas must use consistent limits.
 An advisory transaction lock covers expiry pruning, the capacity check and insertion,
 so concurrent replicas cannot each reserve the last slot. Exhaustion returns 429;
 database or cryptographic failures fail closed with a generic 500.

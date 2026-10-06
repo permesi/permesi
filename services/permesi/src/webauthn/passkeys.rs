@@ -19,23 +19,12 @@
 //!   hash to prevent replay across sessions.
 //! - Passkey responses are never logged or stored in plaintext.
 
+use super::exchange::{Binding, ExchangeStore, Purpose};
 use anyhow::{Context, Result, anyhow};
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
-use tokio::sync::Mutex;
+use std::{collections::HashMap, time::Duration};
 use url::Url;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
-
-const DEFAULT_CHALLENGE_TTL_SECONDS: u64 = 300;
-const DEFAULT_RP_NAME: &str = "Permesi";
-const ENV_PASSKEYS_RP_ID: &str = "PERMESI_PASSKEYS_RP_ID";
-const ENV_PASSKEYS_RP_NAME: &str = "PERMESI_PASSKEYS_RP_NAME";
-const ENV_PASSKEYS_ALLOWED_ORIGINS: &str = "PERMESI_PASSKEYS_ALLOWED_ORIGINS";
-const ENV_PASSKEYS_CHALLENGE_TTL_SECONDS: &str = "PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS";
-const ENV_PASSKEYS_PREVIEW_MODE: &str = "PERMESI_PASSKEYS_PREVIEW_MODE";
 
 #[derive(Clone, Debug)]
 pub struct PasskeyConfig {
@@ -47,47 +36,6 @@ pub struct PasskeyConfig {
 }
 
 impl PasskeyConfig {
-    /// Build passkey configuration from environment with safe defaults.
-    ///
-    /// # Errors
-    /// Returns error if any configured origin cannot be parsed.
-    pub fn from_env(rp_id: &str, default_allowed_origins: &[String]) -> Result<Self> {
-        let rp_id = std::env::var(ENV_PASSKEYS_RP_ID)
-            .ok()
-            .map(|val| val.trim().to_string())
-            .filter(|val| !val.is_empty())
-            .unwrap_or_else(|| rp_id.to_string());
-
-        let rp_name = std::env::var(ENV_PASSKEYS_RP_NAME)
-            .ok()
-            .map(|val| val.trim().to_string())
-            .filter(|val| !val.is_empty())
-            .unwrap_or_else(|| DEFAULT_RP_NAME.to_string());
-
-        let allowed_origins = match std::env::var(ENV_PASSKEYS_ALLOWED_ORIGINS) {
-            Ok(value) => value
-                .split(',')
-                .map(str::trim)
-                .filter(|origin| !origin.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            Err(_) => default_allowed_origins.to_vec(),
-        };
-
-        let challenge_ttl = std::env::var(ENV_PASSKEYS_CHALLENGE_TTL_SECONDS)
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .filter(|value| *value > 0)
-            .map_or_else(
-                || Duration::from_secs(DEFAULT_CHALLENGE_TTL_SECONDS),
-                Duration::from_secs,
-            );
-
-        let preview_mode = parse_bool_env(ENV_PASSKEYS_PREVIEW_MODE).unwrap_or(false);
-
-        Self::new(rp_id, rp_name, allowed_origins, challenge_ttl, preview_mode)
-    }
-
     /// Create a new passkey configuration.
     ///
     /// # Errors
@@ -99,7 +47,12 @@ impl PasskeyConfig {
         challenge_ttl: Duration,
         preview_mode: bool,
     ) -> Result<Self> {
-        if rp_id.trim().is_empty() {
+        if !(1..=3600).contains(&challenge_ttl.as_secs()) {
+            return Err(anyhow!(
+                "Passkey challenge TTL must be between 1 and 3600 seconds"
+            ));
+        }
+        if rp_id.trim().is_empty() || rp_name.trim().is_empty() {
             return Err(anyhow!("Passkey RP ID must not be empty"));
         }
 
@@ -161,26 +114,10 @@ pub enum PasskeyAuthenticationError {
     Webauthn(WebauthnError),
 }
 
-struct PasskeyRegistrationState {
-    user_id: Uuid,
-    session_token_hash: Vec<u8>,
-    origin: String,
-    created_at: Instant,
-    registration: PasskeyRegistration,
-}
-
-struct PasskeyAuthenticationState {
-    origin: String,
-    created_at: Instant,
-    authentication: DiscoverableAuthentication,
-}
-
 pub struct PasskeyService {
     config: PasskeyConfig,
-    max_pending_states: usize,
     webauthn_by_origin: HashMap<String, Webauthn>,
-    reg_states: Mutex<HashMap<Uuid, PasskeyRegistrationState>>,
-    auth_states: Mutex<HashMap<Uuid, PasskeyAuthenticationState>>,
+    exchanges: ExchangeStore,
 }
 
 impl PasskeyService {
@@ -189,7 +126,13 @@ impl PasskeyService {
     /// # Errors
     /// Returns error if the state capacity is zero or the `WebAuthn` builder
     /// fails for any configured origin.
-    pub fn new(config: PasskeyConfig, max_pending_states: usize) -> Result<Self> {
+    pub fn new(
+        config: PasskeyConfig,
+        max_pending_states: usize,
+        pool: sqlx::PgPool,
+        seed: &[u8; 32],
+        timeout_ms: i64,
+    ) -> Result<Self> {
         if max_pending_states == 0 {
             return Err(anyhow!("Passkey state capacity must be greater than zero"));
         }
@@ -205,11 +148,16 @@ impl PasskeyService {
         }
 
         Ok(Self {
-            config,
-            max_pending_states,
             webauthn_by_origin,
-            reg_states: Mutex::new(HashMap::new()),
-            auth_states: Mutex::new(HashMap::new()),
+            exchanges: ExchangeStore::new(
+                pool,
+                seed,
+                config.rp_id().to_owned(),
+                i64::try_from(config.challenge_ttl().as_secs())?,
+                max_pending_states,
+                timeout_ms,
+            )?,
+            config,
         })
     }
 
@@ -250,22 +198,18 @@ impl PasskeyService {
         let (challenge, registration) =
             webauthn.start_passkey_registration(user_id, user_name, user_display_name, None)?;
 
-        let reg_id = Uuid::new_v4();
-        let mut states = self.reg_states.lock().await;
-        prune_registrations(&mut states, self.config.challenge_ttl());
-        if states.len() >= self.max_pending_states {
-            return Err(anyhow!("Too many pending passkey registrations"));
-        }
-        states.insert(
-            reg_id,
-            PasskeyRegistrationState {
-                user_id,
-                session_token_hash,
-                origin: origin.to_string(),
-                created_at: Instant::now(),
-                registration,
-            },
-        );
+        let reg_id = self
+            .exchanges
+            .put(
+                Binding {
+                    purpose: Purpose::PasskeyRegistration,
+                    origin,
+                    user: Some(user_id),
+                    session: Some(&session_token_hash),
+                },
+                &registration,
+            )
+            .await?;
 
         Ok((reg_id, challenge))
     }
@@ -282,30 +226,25 @@ impl PasskeyService {
         origin: &str,
         response: RegisterPublicKeyCredential,
     ) -> Result<Passkey, PasskeyRegistrationError> {
-        let mut states = self.reg_states.lock().await;
-        prune_registrations(&mut states, self.config.challenge_ttl());
-        let state = states
-            .remove(&reg_id)
-            .ok_or(PasskeyRegistrationError::NotFound)?;
-
-        if state.created_at.elapsed() >= self.config.challenge_ttl() {
-            return Err(PasskeyRegistrationError::Expired);
-        }
-        if state.user_id != user_id {
-            return Err(PasskeyRegistrationError::UserMismatch);
-        }
-        if state.session_token_hash != session_token_hash {
-            return Err(PasskeyRegistrationError::SessionMismatch);
-        }
-        if state.origin != origin {
-            return Err(PasskeyRegistrationError::OriginMismatch);
-        }
+        let registration = self
+            .exchanges
+            .take::<PasskeyRegistration>(
+                reg_id,
+                Binding {
+                    purpose: Purpose::PasskeyRegistration,
+                    origin,
+                    user: Some(user_id),
+                    session: Some(session_token_hash),
+                },
+            )
+            .await
+            .map_err(|_| PasskeyRegistrationError::NotFound)?;
 
         let webauthn = self
             .webauthn_for_origin(origin)
             .map_err(|_| PasskeyRegistrationError::OriginMismatch)?;
         webauthn
-            .finish_passkey_registration(&response, &state.registration)
+            .finish_passkey_registration(&response, &registration)
             .map_err(PasskeyRegistrationError::Webauthn)
     }
 
@@ -320,20 +259,18 @@ impl PasskeyService {
         let webauthn = self.webauthn_for_origin(origin)?;
         let (challenge, authentication) = webauthn.start_discoverable_authentication()?;
 
-        let auth_id = Uuid::new_v4();
-        let mut states = self.auth_states.lock().await;
-        prune_authentications(&mut states, self.config.challenge_ttl());
-        if states.len() >= self.max_pending_states {
-            return Err(anyhow!("Too many pending passkey authentications"));
-        }
-        states.insert(
-            auth_id,
-            PasskeyAuthenticationState {
-                origin: origin.to_string(),
-                created_at: Instant::now(),
-                authentication,
-            },
-        );
+        let auth_id = self
+            .exchanges
+            .put(
+                Binding {
+                    purpose: Purpose::PasskeyLogin,
+                    origin,
+                    user: None,
+                    session: None,
+                },
+                &authentication,
+            )
+            .await?;
 
         Ok((auth_id, challenge))
     }
@@ -358,7 +295,9 @@ impl PasskeyService {
 
     /// Consume an authentication state after an assertion fails pre-verification checks.
     pub async fn discard_authentication(&self, auth_id: Uuid) {
-        self.auth_states.lock().await.remove(&auth_id);
+        if self.exchanges.discard(auth_id).await.is_err() {
+            tracing::error!("failed to discard WebAuthn exchange");
+        }
     }
 
     /// Finish passkey authentication against the server-loaded credential.
@@ -372,24 +311,25 @@ impl PasskeyService {
         response: PublicKeyCredential,
         credentials: &[DiscoverableKey],
     ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
-        let mut states = self.auth_states.lock().await;
-        prune_authentications(&mut states, self.config.challenge_ttl());
-        let state = states
-            .remove(&auth_id)
-            .ok_or(PasskeyAuthenticationError::NotFound)?;
-
-        if state.created_at.elapsed() >= self.config.challenge_ttl() {
-            return Err(PasskeyAuthenticationError::Expired);
-        }
-        if state.origin != origin {
-            return Err(PasskeyAuthenticationError::OriginMismatch);
-        }
+        let authentication = self
+            .exchanges
+            .take::<DiscoverableAuthentication>(
+                auth_id,
+                Binding {
+                    purpose: Purpose::PasskeyLogin,
+                    origin,
+                    user: None,
+                    session: None,
+                },
+            )
+            .await
+            .map_err(|_| PasskeyAuthenticationError::NotFound)?;
 
         let webauthn = self
             .webauthn_for_origin(origin)
             .map_err(|_| PasskeyAuthenticationError::OriginMismatch)?;
         webauthn
-            .finish_discoverable_authentication(&response, state.authentication, credentials)
+            .finish_discoverable_authentication(&response, authentication, credentials)
             .map_err(PasskeyAuthenticationError::Webauthn)
     }
 }
@@ -414,24 +354,6 @@ fn normalize_origin(origin: &str) -> Result<String> {
         .port()
         .map_or_else(String::new, |port| format!(":{port}"));
     Ok(format!("{}://{}{}", parsed.scheme(), host, port))
-}
-
-fn parse_bool_env(key: &str) -> Option<bool> {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| match value.trim() {
-            "1" | "true" | "TRUE" | "yes" | "YES" => Some(true),
-            "0" | "false" | "FALSE" | "no" | "NO" => Some(false),
-            _ => None,
-        })
-}
-
-fn prune_registrations(states: &mut HashMap<Uuid, PasskeyRegistrationState>, ttl: Duration) {
-    states.retain(|_, entry| entry.created_at.elapsed() < ttl);
-}
-
-fn prune_authentications(states: &mut HashMap<Uuid, PasskeyAuthenticationState>, ttl: Duration) {
-    states.retain(|_, entry| entry.created_at.elapsed() < ttl);
 }
 
 /// Serialize a passkey for storage.
@@ -464,6 +386,57 @@ mod tests {
         )
     }
 
+    fn test_service(config: PasskeyConfig, cap: usize) -> Result<PasskeyService> {
+        PasskeyService::new(
+            config,
+            cap,
+            sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?,
+            &[1; 32],
+            1000,
+        )
+    }
+
+    async fn durable_service(
+        config: PasskeyConfig,
+        cap: usize,
+    ) -> Result<
+        Option<(
+            test_support::postgres::PostgresContainer,
+            PasskeyService,
+            Uuid,
+            Vec<u8>,
+        )>,
+    > {
+        use sqlx::Connection as _;
+        if let Err(err) = test_support::runtime::ensure_container_runtime() {
+            eprintln!("Skipping integration test: {err}");
+            return Ok(None);
+        }
+        let postgres = test_support::postgres::PostgresContainer::start(
+            test_support::TestNetwork::new("passkey").name(),
+        )
+        .await?;
+        postgres.wait_until_ready().await?;
+        let mut conn = sqlx::PgConnection::connect(&postgres.admin_dsn()).await?;
+        test_support::sql::execute_script(
+            &mut conn,
+            "schema",
+            include_str!("../../../../db/sql/02_permesi.sql"),
+        )
+        .await?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&postgres.admin_dsn())
+            .await?;
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users (email,opaque_registration_record,status) VALUES ('passkey@example.com',$1,'active') RETURNING id").bind(vec![0u8;32]).fetch_one(&pool).await?;
+        Ok(Some((
+            postgres,
+            PasskeyService::new(config, cap, pool, &[1; 32], 1000)?,
+            user,
+            vec![1; 32],
+        )))
+    }
+
     /// `passkey_data` as persisted by webauthn-rs 0.5 (real soft-authenticator registration).
     const PASSKEY_JSON_WEBAUTHN_RS_0_5: &str = r#"{"cred":{"cred_id":"VXSvM5w3eRIFrbtTrvLI5VzbKFs82BW8AEv3F5rfYw0","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":"BPiDk9FXwQQcOI4ue2xwwxv9Gw6_bv0XdSx3GoovAGc","y":"GVYpvy3R8IVlt13BeU-USvW28DRFmdSTfF9xdirBpw0"}}},"counter":0,"transports":null,"user_verified":true,"backup_eligible":false,"backup_state":false,"registration_policy":"required","extensions":{"cred_protect":"Ignored","hmac_create_secret":"NotRequested","appid":"NotRequested","cred_props":"Ignored"},"attestation":{"data":"Self_","metadata":"None"},"attestation_format":"packed"}}"#;
 
@@ -492,9 +465,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn origin_matching_is_exact() -> Result<()> {
-        let service = PasskeyService::new(test_config()?, 100)?;
+    #[tokio::test]
+    async fn origin_matching_is_exact() -> Result<()> {
+        let service = test_service(test_config()?, 100)?;
         assert_eq!(
             service.match_origin("https://example.com"),
             Some("https://example.com".to_string())
@@ -507,8 +480,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn origin_matching_requires_port_match() -> Result<()> {
+    #[tokio::test]
+    async fn origin_matching_requires_port_match() -> Result<()> {
         let config = PasskeyConfig::new(
             "example.com".to_string(),
             "Example".to_string(),
@@ -516,7 +489,7 @@ mod tests {
             Duration::from_mins(2),
             true,
         )?;
-        let service = PasskeyService::new(config, 100)?;
+        let service = test_service(config, 100)?;
         assert_eq!(service.match_origin("https://example.com"), None);
         assert_eq!(
             service.match_origin("https://example.com:8443"),
@@ -549,31 +522,55 @@ mod tests {
 
     #[tokio::test]
     async fn registration_state_is_single_use() -> Result<()> {
-        let service = PasskeyService::new(test_config()?, 100)?;
-        let user_id = Uuid::new_v4();
+        let Some((_postgres, service, user_id, session_hash)) =
+            durable_service(test_config()?, 100).await?
+        else {
+            return Ok(());
+        };
         let (reg_id, _challenge) = service
             .register_begin(
                 user_id,
                 "user@example.com",
                 "Example User",
-                vec![1, 2, 3],
+                session_hash.clone(),
                 "https://example.com",
             )
             .await?;
 
-        let mut states = service.reg_states.lock().await;
-        let first = states.remove(&reg_id);
-        let second = states.remove(&reg_id);
-        assert!(first.is_some());
-        assert!(second.is_none());
+        assert!(
+            service
+                .register_finish(
+                    reg_id,
+                    user_id,
+                    &session_hash,
+                    "https://example.com",
+                    dummy_register_credential()?
+                )
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            service
+                .register_finish(
+                    reg_id,
+                    user_id,
+                    &session_hash,
+                    "https://example.com",
+                    dummy_register_credential()?
+                )
+                .await,
+            Err(PasskeyRegistrationError::NotFound)
+        ));
         Ok(())
     }
 
     #[tokio::test]
     async fn register_finish_rejects_origin_and_consumes_state() -> Result<()> {
-        let service = PasskeyService::new(test_config()?, 100)?;
-        let user_id = Uuid::new_v4();
-        let session_hash = vec![1, 2, 3, 4];
+        let Some((_postgres, service, user_id, session_hash)) =
+            durable_service(test_config()?, 100).await?
+        else {
+            return Ok(());
+        };
         let (reg_id, _challenge) = service
             .register_begin(
                 user_id,
@@ -596,7 +593,7 @@ mod tests {
             .await
             .err()
             .ok_or_else(|| anyhow!("Expected origin mismatch error"))?;
-        assert!(matches!(err, PasskeyRegistrationError::OriginMismatch));
+        assert!(matches!(err, PasskeyRegistrationError::NotFound));
 
         let err = service
             .register_finish(
@@ -615,14 +612,17 @@ mod tests {
 
     #[tokio::test]
     async fn register_finish_rejects_session_mismatch() -> Result<()> {
-        let service = PasskeyService::new(test_config()?, 100)?;
-        let user_id = Uuid::new_v4();
+        let Some((_postgres, service, user_id, session_hash)) =
+            durable_service(test_config()?, 100).await?
+        else {
+            return Ok(());
+        };
         let (reg_id, _challenge) = service
             .register_begin(
                 user_id,
                 "user@example.com",
                 "Example User",
-                vec![1, 2, 3],
+                session_hash.clone(),
                 "https://example.com",
             )
             .await?;
@@ -639,13 +639,17 @@ mod tests {
             .await
             .err()
             .ok_or_else(|| anyhow!("Expected session mismatch error"))?;
-        assert!(matches!(err, PasskeyRegistrationError::SessionMismatch));
+        assert!(matches!(err, PasskeyRegistrationError::NotFound));
         Ok(())
     }
 
     #[tokio::test]
     async fn authentication_start_does_not_disclose_account_credentials() -> Result<()> {
-        let service = PasskeyService::new(test_config()?, 100)?;
+        let Some((_postgres, service, _user_id, _session_hash)) =
+            durable_service(test_config()?, 100).await?
+        else {
+            return Ok(());
+        };
         let (auth_id, challenge) = service.auth_begin("https://example.com").await?;
 
         assert!(challenge.public_key.allow_credentials.is_empty());
@@ -655,7 +659,11 @@ mod tests {
 
     #[tokio::test]
     async fn authentication_start_enforces_pending_state_capacity() -> Result<()> {
-        let service = PasskeyService::new(test_config()?, 1)?;
+        let Some((_postgres, service, _user_id, _session_hash)) =
+            durable_service(test_config()?, 1).await?
+        else {
+            return Ok(());
+        };
         let (_auth_id, _challenge) = service.auth_begin("https://example.com").await?;
 
         assert!(service.auth_begin("https://example.com").await.is_err());

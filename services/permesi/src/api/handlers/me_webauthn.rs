@@ -889,7 +889,13 @@ mod tests {
             Duration::from_mins(5),
             true,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
+        let passkey_service = Arc::new(PasskeyService::new(
+            passkey_config,
+            100,
+            db.pool.clone(),
+            &[1; 32],
+            1000,
+        )?);
 
         let (admission, zero_token) = build_admission()?;
 
@@ -947,7 +953,13 @@ mod tests {
             Duration::from_mins(5),
             true,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
+        let passkey_service = Arc::new(PasskeyService::new(
+            passkey_config,
+            100,
+            db.pool.clone(),
+            &[1; 32],
+            1000,
+        )?);
 
         let app = with_request_correlation(
             Router::new()
@@ -1017,7 +1029,13 @@ mod tests {
             Duration::from_mins(5),
             false,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
+        let passkey_service = Arc::new(PasskeyService::new(
+            passkey_config,
+            100,
+            db.pool.clone(),
+            &[1; 32],
+            1000,
+        )?);
         let (admission, _zero_token) = build_admission()?;
 
         let app = with_request_correlation(
@@ -1080,7 +1098,13 @@ mod tests {
             Duration::from_mins(5),
             false,
         )?;
-        let passkey_service = Arc::new(PasskeyService::new(passkey_config, 100)?);
+        let passkey_service = Arc::new(PasskeyService::new(
+            passkey_config,
+            100,
+            db.pool.clone(),
+            &[1; 32],
+            1000,
+        )?);
         let (admission, zero_token) = build_admission()?;
 
         let app = with_request_correlation(

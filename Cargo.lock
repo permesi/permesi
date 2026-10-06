@@ -3765,6 +3765,7 @@ dependencies = [
  "rustls-pemfile",
  "secrecy",
  "serde",
+ "serde_cbor_2",
  "serde_json",
  "service_utils",
  "sha2 0.10.9",

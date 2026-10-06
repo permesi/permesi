@@ -45,6 +45,33 @@ BEGIN
     END IF;
 END $$;
 
+-- Durable WebAuthn state cannot be rewritten by the runtime role.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') THEN
+        IF NOT has_table_privilege('permesi_runtime','webauthn_exchanges','SELECT')
+            OR NOT has_table_privilege('permesi_runtime','webauthn_exchanges','INSERT')
+            OR NOT has_table_privilege('permesi_runtime','webauthn_exchanges','DELETE')
+            OR has_table_privilege('permesi_runtime','webauthn_exchanges','UPDATE')
+            OR has_table_privilege('permesi_runtime','webauthn_exchanges','TRUNCATE')
+            OR has_table_privilege('permesi_runtime','webauthn_exchanges','REFERENCES')
+            OR has_table_privilege('permesi_runtime','webauthn_exchanges','TRIGGER')
+            OR has_table_privilege('permesi_runtime','webauthn_exchanges','MAINTAIN') THEN
+            RAISE EXCEPTION 'invalid runtime WebAuthn exchange privileges';
+        END IF;
+    END IF;
+    INSERT INTO webauthn_exchanges (id_hash,purpose,origin,rp_id,sealed_state,created_at,expires_at)
+    VALUES (decode(repeat('b1',32),'hex'),'passkey_login','https://example.com','example.com',decode(repeat('00',40),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
+    BEGIN
+        UPDATE webauthn_exchanges SET purpose='security_key_authentication' WHERE id_hash=decode(repeat('b1',32),'hex');
+        RAISE EXCEPTION 'expected WebAuthn ceremony authority constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE webauthn_exchanges SET expires_at=created_at+INTERVAL '2 hours' WHERE id_hash=decode(repeat('b1',32),'hex');
+        RAISE EXCEPTION 'expected bounded WebAuthn TTL';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+END $$;
+
 -- Exchange rows are transient and bounded; application crypto authenticates their contents.
 DO $$
 DECLARE

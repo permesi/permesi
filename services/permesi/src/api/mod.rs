@@ -24,7 +24,7 @@ use crate::{
     tls,
     totp::{DekManager, TotpService},
     vault,
-    webauthn::{PasskeyConfig, PasskeyService, SecurityKeyService},
+    webauthn::{PasskeyService, SecurityKeyService},
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -167,19 +167,12 @@ pub async fn new(
     let totp_service = TotpService::new(dek_manager, pool.clone(), "Permesi".to_string());
 
     // Initialize Security Keys (WebAuthn)
-    let webauthn_allowed_origins = config
-        .auth
-        .webauthn_allowed_origins()
-        .context("Failed to derive WebAuthn allowed origins")?;
-    let security_key_service = SecurityKeyService::new(
-        pool.clone(),
-        config.auth.webauthn_rp_id(),
-        &webauthn_allowed_origins,
-    )
-    .context("Failed to initialize Security Key service")?;
+    let security_key_service =
+        init_security_key_service(&config.auth, pool.clone(), &secrets.opaque_server_seed)?;
 
     // Initialize Passkeys (preview mode supported via env)
-    let passkey_service = init_passkey_service(&config.auth)?;
+    let passkey_service =
+        init_passkey_service(&config.auth, pool.clone(), &secrets.opaque_server_seed)?;
 
     let oauth_state = Arc::new(crate::oauth::oidc::OAuthState::new(
         config.oauth.clone(),
@@ -412,14 +405,46 @@ fn frontend_origins(urls: &[String]) -> Result<Vec<String>> {
         .collect()
 }
 
-fn init_passkey_service(auth_config: &auth::AuthConfig) -> Result<PasskeyService> {
-    let default_origins = auth_config
-        .webauthn_allowed_origins()
-        .context("Failed to derive passkey origins")?;
-    let passkey_config = PasskeyConfig::from_env(auth_config.webauthn_rp_id(), &default_origins)
-        .context("Failed to load passkey configuration")?;
-    PasskeyService::new(passkey_config, auth_config.auth_max_pending_states())
-        .context("Failed to initialize Passkey service")
+/// Constructs shared hardware-key state with the validated ceremony TTL and deadlines.
+fn init_security_key_service(
+    auth: &auth::AuthConfig,
+    pool: sqlx::PgPool,
+    seed: &[u8; 32],
+) -> Result<SecurityKeyService> {
+    SecurityKeyService::new(
+        pool,
+        auth.webauthn_rp_id(),
+        &auth.webauthn_allowed_origins()?,
+        seed,
+        i64::try_from(
+            auth.passkeys()
+                .context("missing WebAuthn configuration")?
+                .challenge_ttl()
+                .as_secs(),
+        )?,
+        auth.auth_max_pending_states(),
+        auth.opaque_exchange_timeout_ms(),
+    )
+}
+
+/// Constructs shared passkey storage using only the validated runtime policy and Vault seed.
+fn init_passkey_service(
+    auth_config: &auth::AuthConfig,
+    pool: sqlx::PgPool,
+    seed: &[u8; 32],
+) -> Result<PasskeyService> {
+    let passkey_config = auth_config
+        .passkeys()
+        .context("missing passkey configuration")?
+        .clone();
+    PasskeyService::new(
+        passkey_config,
+        auth_config.auth_max_pending_states(),
+        pool,
+        seed,
+        auth_config.opaque_exchange_timeout_ms(),
+    )
+    .context("Failed to initialize Passkey service")
 }
 
 #[cfg(test)]

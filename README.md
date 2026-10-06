@@ -258,7 +258,7 @@ transactional race protection and OAuth effects; populated parents never silentl
 OPAQUE login/reauthentication exchanges use bounded, encrypted, single-attempt PostgreSQL
 state across replicas, including original-session binding for reauthentication. See
 [shared OPAQUE exchanges](docs/opaque-exchanges.md) for migration, expiry, retention and
-regression checks. WebAuthn/passkey challenge persistence remains a separate follow-up.
+regression checks. Passkey and hardware-key ceremonies also use [shared sealed PostgreSQL state](docs/webauthn-exchanges.md); the remaining MFA lifecycle and quota milestones are tracked in TODO.
 
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
@@ -385,7 +385,7 @@ Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 
 Unauthenticated authentication flows also use PostgreSQL-backed fixed-window
 limits shared across replicas. The defaults are 100 attempts per IP and 10 per
 normalized account identifier per action in 10 minutes. In-progress OPAQUE exchanges are bounded to 10,000 entries cluster-wide;
-passkey protocol state retains its separate 10,000-entry per-flow, per-replica limit. Configure these with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+WebAuthn protocol state uses a separate 10,000-entry per-purpose cluster-wide limit. Configure these with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
 `PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
 `PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, and
 `PERMESI_AUTH_MAX_PENDING_STATES`.

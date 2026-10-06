@@ -175,6 +175,7 @@ impl Options {
 
 #[must_use]
 pub fn with_args(command: Command) -> Command {
+    let command = super::with_webauthn_args(command);
     let command = with_auth_email_args(command);
     let command = with_auth_outbox_args(command);
     let command = with_auth_opaque_args(command);
@@ -287,7 +288,7 @@ fn with_auth_opaque_args(command: Command) -> Command {
         .arg(
             Arg::new(ARG_AUTH_MAX_PENDING_STATES)
                 .long(ARG_AUTH_MAX_PENDING_STATES)
-                .help("Maximum pending OPAQUE exchanges cluster-wide; WebAuthn limits remain per flow and replica")
+                .help("Maximum pending OPAQUE exchanges cluster-wide and WebAuthn exchanges per flow cluster-wide")
                 .env("PERMESI_AUTH_MAX_PENDING_STATES")
                 .default_value("10000")
                 .value_parser(clap::value_parser!(u64).range(1..)),

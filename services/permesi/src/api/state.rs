@@ -120,6 +120,10 @@ impl AppState {
                 pool.clone(),
                 "permesi.dev",
                 &origins,
+                &[1; 32],
+                300,
+                100,
+                1000,
             )?),
             passkeys: Arc::new(PasskeyService::new(
                 PasskeyConfig::new(
@@ -130,6 +134,9 @@ impl AppState {
                     true,
                 )?,
                 100,
+                pool.clone(),
+                &[1; 32],
+                1000,
             )?),
             pool,
         })

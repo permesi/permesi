@@ -8,6 +8,43 @@ pub mod vault;
 /// Default per-lock/per-statement deadline for shared OPAQUE exchange transactions.
 pub(crate) const DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS: i64 = 1000;
 
+/// Registers `WebAuthn` runtime settings; parsing has no silent environment fallback.
+pub(crate) fn with_webauthn_args(command: clap::Command) -> clap::Command {
+    use clap::{Arg, ArgAction};
+    command
+        .arg(
+            Arg::new("passkeys-rp-id")
+                .long("passkeys-rp-id")
+                .env("PERMESI_PASSKEYS_RP_ID"),
+        )
+        .arg(
+            Arg::new("passkeys-rp-name")
+                .long("passkeys-rp-name")
+                .env("PERMESI_PASSKEYS_RP_NAME")
+                .default_value("Permesi"),
+        )
+        .arg(
+            Arg::new("passkeys-allowed-origins")
+                .long("passkeys-allowed-origins")
+                .env("PERMESI_PASSKEYS_ALLOWED_ORIGINS"),
+        )
+        .arg(
+            Arg::new("passkeys-challenge-ttl-seconds")
+                .long("passkeys-challenge-ttl-seconds")
+                .env("PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS")
+                .default_value("300")
+                .value_parser(clap::value_parser!(u64).range(1..=3600)),
+        )
+        .arg(
+            Arg::new("passkeys-preview-mode")
+                .long("passkeys-preview-mode")
+                .env("PERMESI_PASSKEYS_PREVIEW_MODE")
+                .default_value("false")
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(bool)),
+        )
+}
+
 use clap::{
     Arg, ColorChoice, Command,
     builder::styling::{AnsiColor, Effects, Styles},
@@ -595,5 +632,59 @@ mod tests {
             result.map_err(|e| e.kind()),
             Err(clap::error::ErrorKind::ArgumentConflict)
         );
+    }
+
+    #[test]
+    fn webauthn_cli_rejects_invalid_ttl_and_preview_policy() {
+        for (flag, value) in [
+            ("--passkeys-challenge-ttl-seconds", "0"),
+            ("--passkeys-challenge-ttl-seconds", "3601"),
+            ("--passkeys-preview-mode", "yes"),
+        ] {
+            assert!(
+                super::with_webauthn_args(Command::new("test"))
+                    .try_get_matches_from(["test", flag, value])
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn webauthn_cli_preserves_explicit_rp_origin_and_policy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let matches = super::with_webauthn_args(Command::new("test")).try_get_matches_from([
+            "test",
+            "--passkeys-rp-id",
+            "example.com",
+            "--passkeys-rp-name",
+            "Example",
+            "--passkeys-allowed-origins",
+            "https://example.com:8443",
+            "--passkeys-challenge-ttl-seconds",
+            "60",
+            "--passkeys-preview-mode",
+            "false",
+        ])?;
+        assert_eq!(
+            matches
+                .get_one::<String>("passkeys-rp-id")
+                .map(String::as_str),
+            Some("example.com")
+        );
+        assert_eq!(
+            matches
+                .get_one::<String>("passkeys-allowed-origins")
+                .map(String::as_str),
+            Some("https://example.com:8443")
+        );
+        assert_eq!(
+            matches.get_one::<u64>("passkeys-challenge-ttl-seconds"),
+            Some(&60)
+        );
+        assert_eq!(
+            matches.get_one::<bool>("passkeys-preview-mode"),
+            Some(&false)
+        );
+        Ok(())
     }
 }

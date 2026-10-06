@@ -8,13 +8,14 @@ use crate::{
         AuthState,
         mfa::{MfaState, storage as mfa_storage},
         principal::{require_any_auth, require_mfa_challenge},
-        session::session_cookie_with_ttl,
+        session::{extract_session_token, session_cookie_with_ttl},
         storage::insert_session,
         types::{
             WebauthnAuthenticateFinishRequest, WebauthnAuthenticateStartResponse,
             WebauthnRegisterFinishRequest, WebauthnRegisterStartResponse,
         },
         utils::extract_client_ip,
+        utils::hash_session_token,
     },
     webauthn::{SecurityKeyRepo, SecurityKeyService},
 };
@@ -52,13 +53,17 @@ pub async fn register_start(
         Err(status) => return status.into_response(),
     };
 
+    let Some(session_token) = extract_session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let session_hash = hash_session_token(&session_token);
     let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
         Ok(origin) => origin,
         Err(response) => return *response,
     };
 
     match webauthn_service
-        .register_begin(principal.user_id, &principal.email, &origin)
+        .register_begin(principal.user_id, &principal.email, &origin, &session_hash)
         .await
     {
         Ok((challenge, reg_id)) => (
@@ -111,6 +116,10 @@ pub async fn register_finish(
         return (StatusCode::BAD_REQUEST, "Invalid registration ID").into_response();
     };
 
+    let Some(session_token) = extract_session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let session_hash = hash_session_token(&session_token);
     let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
         Ok(origin) => origin,
         Err(response) => return *response,
@@ -136,6 +145,7 @@ pub async fn register_finish(
             reg_response,
             principal.user_id,
             &request.label,
+            &session_hash,
         )
         .await
     {
@@ -178,11 +188,7 @@ pub async fn register_finish(
         }
         Err(err) => {
             error!("Failed to finish WebAuthn registration: {err}");
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Registration failed: {err}"),
-            )
-                .into_response()
+            (StatusCode::BAD_REQUEST, "Registration failed".to_string()).into_response()
         }
     }
 }
@@ -208,27 +214,30 @@ pub async fn authenticate_start(
         Err(status) => return status.into_response(),
     };
 
+    let Some(session_token) = extract_session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let session_hash = hash_session_token(&session_token);
     let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
         Ok(origin) => origin,
         Err(response) => return *response,
     };
 
-    match webauthn_service
-        .auth_begin(principal.user_id, &origin)
+    if let Ok((challenge, auth_id)) = webauthn_service
+        .auth_begin(principal.user_id, &origin, &session_hash)
         .await
     {
-        Ok((challenge, auth_id)) => (
+        (
             StatusCode::OK,
             Json(WebauthnAuthenticateStartResponse {
                 auth_id: auth_id.to_string(),
                 challenge: serde_json::to_value(challenge).unwrap_or_default(),
             }),
         )
-            .into_response(),
-        Err(err) => {
-            error!("Failed to start WebAuthn authentication: {err}");
-            (StatusCode::NOT_FOUND, err.to_string()).into_response()
-        }
+            .into_response()
+    } else {
+        error!("Failed to start WebAuthn authentication");
+        (StatusCode::BAD_REQUEST, "Authentication unavailable").into_response()
     }
 }
 
@@ -264,6 +273,10 @@ pub async fn authenticate_finish(
         return (StatusCode::BAD_REQUEST, "Invalid authentication ID").into_response();
     };
 
+    let Some(session_token) = extract_session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let session_hash = hash_session_token(&session_token);
     let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
         Ok(origin) => origin,
         Err(response) => return *response,
@@ -283,7 +296,13 @@ pub async fn authenticate_finish(
     let client_ip = extract_client_ip(&headers);
 
     match webauthn_service
-        .auth_finish(auth_id, &origin, auth_response)
+        .auth_finish(
+            auth_id,
+            &origin,
+            auth_response,
+            principal.user_id,
+            &session_hash,
+        )
         .await
     {
         Ok(_) => {
@@ -335,11 +354,7 @@ pub async fn authenticate_finish(
                 None,
             )
             .await;
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Authentication failed: {err}"),
-            )
-                .into_response()
+            (StatusCode::BAD_REQUEST, "Authentication failed".to_string()).into_response()
         }
     }
 }

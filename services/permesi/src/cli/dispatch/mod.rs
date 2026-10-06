@@ -34,6 +34,40 @@ fn require_positive(arg: &str, value: i64) -> Result<i64> {
     }
 }
 
+/// Resolves trusted RP/origin defaults and revalidates clap-defined `WebAuthn` policy.
+fn passkey_config(
+    matches: &clap::ArgMatches,
+    options: &auth::Options,
+) -> Result<crate::webauthn::PasskeyConfig> {
+    // Revalidate clap settings and resolve implicit RP/origin defaults from trusted auth configuration.
+    let base_auth = crate::api::handlers::auth::AuthConfig::new(options.frontend_base_url.clone())
+        .with_cors_allowed_origins(options.cors_allowed_origins.clone());
+    crate::webauthn::PasskeyConfig::new(
+        matches
+            .get_one::<String>("passkeys-rp-id")
+            .cloned()
+            .unwrap_or_else(|| base_auth.webauthn_rp_id().to_owned()),
+        matches
+            .get_one::<String>("passkeys-rp-name")
+            .cloned()
+            .context("missing passkey RP name")?,
+        matches
+            .get_one::<String>("passkeys-allowed-origins")
+            .map_or_else(
+                || base_auth.webauthn_allowed_origins(),
+                |s| Ok(s.split(',').map(|v| v.trim().to_owned()).collect()),
+            )?,
+        std::time::Duration::from_secs(
+            *matches
+                .get_one::<u64>("passkeys-challenge-ttl-seconds")
+                .context("missing passkey TTL")?,
+        ),
+        *matches
+            .get_one::<bool>("passkeys-preview-mode")
+            .context("missing passkey preview policy")?,
+    )
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -91,6 +125,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         auth::ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS,
         auth_opts.rate_limit.account_attempts,
     )?;
+    let passkeys = passkey_config(matches, &auth_opts)?;
     let tls_opts = tls::Options::parse(matches)?;
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
@@ -123,6 +158,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         email_outbox_max_attempts: auth_opts.email_outbox.max_attempts,
         email_outbox_backoff_base_seconds: auth_opts.email_outbox.backoff_base_seconds,
         email_outbox_backoff_max_seconds: auth_opts.email_outbox.backoff_max_seconds,
+        passkeys,
         opaque_server_id: auth_opts.opaque.server_id,
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
         opaque_exchange_timeout_ms: auth_opts.opaque.exchange_timeout_ms,

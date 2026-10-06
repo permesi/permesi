@@ -350,6 +350,7 @@ pub(super) async fn insert_mfa_bootstrap_session_on(
 }
 
 /// Create a random hash-only session using a pool connection.
+#[cfg(test)]
 pub(super) async fn insert_mfa_challenge_session(
     pool: &PgPool,
     user_id: Uuid,

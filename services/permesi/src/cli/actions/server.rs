@@ -33,6 +33,7 @@ pub struct Args {
     pub email_outbox_max_attempts: u32,
     pub email_outbox_backoff_base_seconds: u64,
     pub email_outbox_backoff_max_seconds: u64,
+    pub passkeys: crate::webauthn::PasskeyConfig,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
     pub opaque_exchange_timeout_ms: i64,
@@ -143,6 +144,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
         .with_session_ttl_seconds(args.session_ttl_seconds)
+        .with_passkeys(args.passkeys.clone())
         .with_opaque_server_id(args.opaque_server_id.clone())
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds)
         .with_opaque_exchange_timeout_ms(args.opaque_exchange_timeout_ms)
@@ -437,6 +439,13 @@ mod tests {
             email_outbox_max_attempts: 3,
             email_outbox_backoff_base_seconds: 2,
             email_outbox_backoff_max_seconds: 60,
+            passkeys: crate::webauthn::PasskeyConfig::new(
+                "permesi.example.com".into(),
+                "Permesi".into(),
+                vec!["https://permesi.example.com".into()],
+                std::time::Duration::from_secs(300),
+                false,
+            )?,
             opaque_server_id: "server-id".to_string(),
             opaque_login_ttl_seconds: 60,
             opaque_exchange_timeout_ms: 1000,

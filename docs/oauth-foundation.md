@@ -243,7 +243,7 @@ server snapshot enforce integrity; modifying the locator cannot change authority
 Deploy the Web API base URL against the same issuer origin, over HTTPS. All replicas
 must share PostgreSQL, session/OPAQUE configuration and issuer/resource audience.
 OPAQUE password login/reauthentication exchanges use shared encrypted PostgreSQL state;
-WebAuthn/passkey challenges retain their existing process-local routing constraints.
+WebAuthn/passkey ceremonies also use [shared sealed PostgreSQL state](webauthn-exchanges.md).
 No OAuth request/code state depends on process-local state or requires sticky routing.
 
 The first authorized full session is bound permanently by user and session hash.
@@ -459,8 +459,9 @@ Tenant deletion polish adds permission-aware controls and inline password reauth
 with an explicit final confirmation. Durable OPAQUE login/reauthentication is implemented in a separate shared PostgreSQL
 exchange store with AEAD, single-attempt consumption, exact original-session binding
 and cross-replica expiry/replay/race tests. [Deployment and retention](opaque-exchanges.md)
-describe its limits. WebAuthn/passkey challenges still require shared persistence before
-all authentication flows can operate without replica affinity.
+describe its limits. [WebAuthn/passkey ceremony state](webauthn-exchanges.md) also uses
+shared PostgreSQL, eliminating challenge replica affinity. MFA lifecycle and quota
+hardening remain separately tracked release milestones.
 
 The implemented [token exchange](oauth-token-exchange.md) owns authentication/redemption/
 signing/persistence through commit and is tested through the isolated runtime-role HTTP

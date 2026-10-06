@@ -2,6 +2,7 @@
 
 mod opaque_exchange;
 mod tenant_deletion;
+mod webauthn_exchange;
 
 use super::{
     AuthConfig, AuthState, OpaqueState,

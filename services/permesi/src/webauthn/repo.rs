@@ -1,5 +1,5 @@
 use crate::webauthn::models::SecurityKey;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -62,7 +62,8 @@ impl SecurityKeyRepo {
             .context("Failed to fetch security key")
     }
 
-    /// Updates the sign count and last used timestamp for a key.
+    /// Advances the current counter atomically; concurrent stale assertions fail closed.
+    /// Counterless authenticators are accepted only while both counters remain zero.
     ///
     /// # Errors
     /// Returns error if the database query fails.
@@ -71,14 +72,17 @@ impl SecurityKeyRepo {
         credential_id: &[u8],
         sign_count: i64,
     ) -> Result<()> {
-        sqlx::query(
-            "UPDATE security_keys SET sign_count = $1, last_used_at = NOW() WHERE credential_id = $2",
+        let result = sqlx::query(
+            "UPDATE security_keys SET sign_count = $1, last_used_at = NOW() WHERE credential_id = $2 AND ($1 > sign_count OR ($1=0 AND sign_count=0))",
         )
         .bind(sign_count)
         .bind(credential_id)
         .execute(pool)
         .await
         .context("Failed to update security key usage")?;
+        if result.rows_affected() != 1 {
+            return Err(anyhow!("Security key unavailable"));
+        }
         Ok(())
     }
 

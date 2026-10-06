@@ -38,6 +38,7 @@ pub struct AuthConfig {
     rate_limit_window_seconds: i64,
     rate_limit_ip_attempts: i64,
     rate_limit_account_attempts: i64,
+    passkeys: Option<crate::webauthn::PasskeyConfig>,
     webauthn_rp_id: String,
     webauthn_rp_origin: String,
 }
@@ -67,9 +68,22 @@ impl AuthConfig {
             rate_limit_window_seconds: DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
             rate_limit_ip_attempts: DEFAULT_RATE_LIMIT_IP_ATTEMPTS,
             rate_limit_account_attempts: DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS,
+            passkeys: None,
             webauthn_rp_id: rp_id,
             webauthn_rp_origin: rp_origin,
         }
+    }
+
+    /// Installs dispatch-validated `WebAuthn` configuration; no runtime environment parsing.
+    #[must_use]
+    pub fn with_passkeys(mut self, config: crate::webauthn::PasskeyConfig) -> Self {
+        self.passkeys = Some(config);
+        self
+    }
+
+    /// Retrieves explicit `WebAuthn` policy, required in production server construction.
+    pub(crate) fn passkeys(&self) -> Option<&crate::webauthn::PasskeyConfig> {
+        self.passkeys.as_ref()
     }
 
     #[must_use]

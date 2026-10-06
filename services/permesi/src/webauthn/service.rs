@@ -14,31 +14,20 @@
 //! 3) Bind the in-progress state to the normalized origin so finish requests cannot
 //!    replay a challenge from one trusted origin on another.
 
+use super::exchange::{Binding, ExchangeStore, Purpose};
 use crate::webauthn::repo::SecurityKeyRepo;
 use anyhow::{Result, anyhow};
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
-struct RegistrationState {
-    origin: String,
-    registration: SecurityKeyRegistration,
-}
-
-struct AuthenticationState {
-    origin: String,
-    authentication: SecurityKeyAuthentication,
-}
-
 pub struct SecurityKeyService {
     webauthn_by_origin: HashMap<String, Arc<Webauthn>>,
     pool: PgPool,
-    reg_states: Mutex<HashMap<Uuid, RegistrationState>>,
-    auth_states: Mutex<HashMap<Uuid, AuthenticationState>>,
+    exchanges: ExchangeStore,
 }
 
 impl SecurityKeyService {
@@ -47,7 +36,15 @@ impl SecurityKeyService {
     /// # Errors
     /// Returns error if any configured `WebAuthn` origin is invalid or the
     /// `WebAuthn` builder fails.
-    pub fn new(pool: PgPool, rp_id: &str, allowed_origins: &[String]) -> Result<Self> {
+    pub fn new(
+        pool: PgPool,
+        rp_id: &str,
+        allowed_origins: &[String],
+        seed: &[u8; 32],
+        ttl: i64,
+        capacity: usize,
+        timeout_ms: i64,
+    ) -> Result<Self> {
         if allowed_origins.is_empty() {
             return Err(anyhow!("Security key origins must not be empty"));
         }
@@ -64,9 +61,15 @@ impl SecurityKeyService {
 
         Ok(Self {
             webauthn_by_origin,
+            exchanges: ExchangeStore::new(
+                pool.clone(),
+                seed,
+                rp_id.to_owned(),
+                ttl,
+                capacity,
+                timeout_ms,
+            )?,
             pool,
-            reg_states: Mutex::new(HashMap::new()),
-            auth_states: Mutex::new(HashMap::new()),
         })
     }
 
@@ -97,6 +100,7 @@ impl SecurityKeyService {
         user_id: Uuid,
         user_email: &str,
         origin: &str,
+        session_hash: &[u8],
     ) -> Result<(CreationChallengeResponse, Uuid)> {
         // Fetch existing keys to prevent duplicate registration
         let existing_keys = SecurityKeyRepo::list_user_keys(&self.pool, user_id).await?;
@@ -113,15 +117,18 @@ impl SecurityKeyService {
             None, // Authenticator Attachment
         )?;
 
-        let reg_id = Uuid::new_v4();
-        let mut states = self.reg_states.lock().await;
-        states.insert(
-            reg_id,
-            RegistrationState {
-                origin: origin.to_string(),
-                registration,
-            },
-        );
+        let reg_id = self
+            .exchanges
+            .put(
+                Binding {
+                    purpose: Purpose::SecurityKeyRegistration,
+                    origin,
+                    user: Some(user_id),
+                    session: Some(session_hash),
+                },
+                &registration,
+            )
+            .await?;
 
         Ok((challenge, reg_id))
     }
@@ -137,23 +144,23 @@ impl SecurityKeyService {
         reg_response: RegisterPublicKeyCredential,
         user_id: Uuid,
         label: &str,
+        session_hash: &[u8],
     ) -> Result<()> {
-        let state = {
-            let mut states = self.reg_states.lock().await;
-            states
-                .remove(&reg_id)
-                .ok_or_else(|| anyhow!("Registration session not found or expired"))?
-        };
-
-        if state.origin != origin {
-            return Err(anyhow!(
-                "Registration origin does not match the challenge origin"
-            ));
-        }
+        let registration = self
+            .exchanges
+            .take::<SecurityKeyRegistration>(
+                reg_id,
+                Binding {
+                    purpose: Purpose::SecurityKeyRegistration,
+                    origin,
+                    user: Some(user_id),
+                    session: Some(session_hash),
+                },
+            )
+            .await?;
 
         let webauthn = self.webauthn_for_origin(origin)?;
-        let passkey =
-            webauthn.finish_securitykey_registration(&reg_response, &state.registration)?;
+        let passkey = webauthn.finish_securitykey_registration(&reg_response, &registration)?;
 
         SecurityKeyRepo::create_key(
             &self.pool,
@@ -176,6 +183,7 @@ impl SecurityKeyService {
         &self,
         user_id: Uuid,
         origin: &str,
+        session_hash: &[u8],
     ) -> Result<(RequestChallengeResponse, Uuid)> {
         let keys = SecurityKeyRepo::list_user_keys(&self.pool, user_id).await?;
         if keys.is_empty() {
@@ -190,15 +198,18 @@ impl SecurityKeyService {
         let webauthn = self.webauthn_for_origin(origin)?;
         let (challenge, authentication) = webauthn.start_securitykey_authentication(&passkeys)?;
 
-        let auth_id = Uuid::new_v4();
-        let mut states = self.auth_states.lock().await;
-        states.insert(
-            auth_id,
-            AuthenticationState {
-                origin: origin.to_string(),
-                authentication,
-            },
-        );
+        let auth_id = self
+            .exchanges
+            .put(
+                Binding {
+                    purpose: Purpose::SecurityKeyAuthentication,
+                    origin,
+                    user: Some(user_id),
+                    session: Some(session_hash),
+                },
+                &authentication,
+            )
+            .await?;
 
         Ok((challenge, auth_id))
     }
@@ -212,35 +223,39 @@ impl SecurityKeyService {
         auth_id: Uuid,
         origin: &str,
         auth_response: PublicKeyCredential,
+        user_id: Uuid,
+        session_hash: &[u8],
     ) -> Result<Uuid> {
-        let state = {
-            let mut states = self.auth_states.lock().await;
-            states
-                .remove(&auth_id)
-                .ok_or_else(|| anyhow!("Authentication session not found or expired"))?
-        };
-
-        if state.origin != origin {
-            return Err(anyhow!(
-                "Authentication origin does not match the challenge origin"
-            ));
-        }
+        let authentication = self
+            .exchanges
+            .take::<SecurityKeyAuthentication>(
+                auth_id,
+                Binding {
+                    purpose: Purpose::SecurityKeyAuthentication,
+                    origin,
+                    user: Some(user_id),
+                    session: Some(session_hash),
+                },
+            )
+            .await?;
 
         let webauthn = self.webauthn_for_origin(origin)?;
         let auth_result =
-            webauthn.finish_securitykey_authentication(&auth_response, &state.authentication)?;
+            webauthn.finish_securitykey_authentication(&auth_response, &authentication)?;
 
-        // Update the sign count in DB to prevent clones
+        // Recheck the current credential owner before any session authority is issued.
+        let key = SecurityKeyRepo::get_key(&self.pool, auth_result.cred_id().as_slice())
+            .await?
+            .ok_or_else(|| anyhow!("Security key unavailable"))?;
+        if key.user_id != user_id {
+            return Err(anyhow!("Security key unavailable"));
+        }
         SecurityKeyRepo::update_key_usage(
             &self.pool,
             auth_result.cred_id().as_slice(),
             i64::from(auth_result.counter()),
         )
         .await?;
-
-        let key = SecurityKeyRepo::get_key(&self.pool, auth_result.cred_id().as_slice())
-            .await?
-            .ok_or_else(|| anyhow!("Security key not found in database after authentication"))?;
 
         Ok(key.user_id)
     }
@@ -287,6 +302,10 @@ mod tests {
                 "https://permesi.dev".to_string(),
                 "https://k8s.permesi.dev".to_string(),
             ],
+            &[1; 32],
+            300,
+            100,
+            1000,
         )?;
 
         assert_eq!(
@@ -302,6 +321,10 @@ mod tests {
             sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?,
             "permesi.dev",
             &["https://permesi.dev".to_string()],
+            &[1; 32],
+            300,
+            100,
+            1000,
         )?;
 
         assert_eq!(service.match_origin("https://k8s.permesi.dev"), None);

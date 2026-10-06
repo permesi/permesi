@@ -16,14 +16,14 @@ use crate::api::handlers::{
         AuthState, RateLimitAction, RateLimitDecision,
         mfa::{self, MfaState},
         session::session_cookie_with_ttl,
-        storage::{insert_mfa_bootstrap_session, insert_mfa_challenge_session, insert_session},
+        storage::{
+            insert_mfa_bootstrap_session_on, insert_mfa_challenge_session_on, insert_session_on,
+        },
         utils::extract_client_ip,
         zero_token::{require_zero_token, zero_token_error_response},
     },
 };
-use crate::webauthn::{
-    PasskeyCredential, PasskeyRepo, PasskeyService, deserialize_passkey, serialize_passkey,
-};
+use crate::webauthn::{PasskeyCredential, PasskeyService, deserialize_passkey, serialize_passkey};
 use axum::{
     Json,
     body::Bytes,
@@ -33,7 +33,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use service_utils::request_id::RequestId;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use utoipa::ToSchema;
@@ -219,13 +219,14 @@ pub async fn passkey_login_finish(
         }
     };
 
-    let (user_id, auth_result) = match verify_passkey_assertion(
+    let (user_id, auth_result, mut guard) = match verify_passkey_assertion(
         &pool,
         &passkey_service,
         auth_id,
         &origin,
         auth_response,
         &request_id,
+        auth_state.config().opaque_exchange_timeout_ms(),
     )
     .await
     {
@@ -234,7 +235,7 @@ pub async fn passkey_login_finish(
     };
 
     if let Err(response) = update_passkey_after_auth(
-        &pool,
+        &mut guard,
         user_id,
         &auth_result,
         &request_id,
@@ -245,7 +246,7 @@ pub async fn passkey_login_finish(
         return *response;
     }
 
-    issue_session_for_user(&pool, &auth_state, user_id, &request_id).await
+    issue_session_for_user(&pool, &auth_state, user_id, &request_id, guard).await
 }
 
 /// Resolve a discoverable credential and verify its proof before trusting its user handle.
@@ -253,14 +254,15 @@ pub async fn passkey_login_finish(
 /// Every pre-verification failure consumes the pending challenge. Account status is checked
 /// only after `webauthn-rs` has authenticated the stored credential, so untrusted assertion
 /// fields cannot select a session identity or disclose whether an account is active.
-async fn verify_passkey_assertion(
-    pool: &PgPool,
+async fn verify_passkey_assertion<'a>(
+    pool: &'a PgPool,
     passkey_service: &PasskeyService,
     auth_id: Uuid,
     origin: &str,
     auth_response: PublicKeyCredential,
     request_id: &str,
-) -> Result<(Uuid, AuthenticationResult), HandlerError> {
+    timeout_ms: i64,
+) -> Result<(Uuid, AuthenticationResult, Transaction<'a, Postgres>), HandlerError> {
     let (user_id, credential_id) =
         match passkey_service.identify_authentication(origin, &auth_response) {
             Ok(identifiers) => identifiers,
@@ -273,14 +275,32 @@ async fn verify_passkey_assertion(
             }
         };
 
-    let passkey_row =
-        match load_passkey_row_for_user(pool, user_id, &credential_id, request_id).await {
-            Ok(row) => row,
-            Err(response) => {
-                passkey_service.discard_authentication(auth_id).await;
-                return Err(response);
-            }
-        };
+    let mut guard = pool
+        .begin()
+        .await
+        .map_err(|_| Box::new(login_storage_error()))?;
+    crate::oauth::locking::deadline(&mut guard, timeout_ms)
+        .await
+        .map_err(|_| Box::new(login_storage_error()))?;
+    // Lock identity before credential, consistently with password/status mutation paths.
+    let status =
+        sqlx::query_scalar::<_, String>("SELECT status::text FROM users WHERE id=$1 FOR SHARE")
+            .bind(user_id)
+            .fetch_optional(&mut *guard)
+            .await
+            .map_err(|_| Box::new(login_storage_error()))?;
+    let row = sqlx::query_as::<_, PasskeyCredential>(
+        "SELECT * FROM passkeys WHERE user_id=$1 AND credential_id=$2 FOR UPDATE",
+    )
+    .bind(user_id)
+    .bind(&credential_id)
+    .fetch_optional(&mut *guard)
+    .await
+    .map_err(|_| Box::new(login_storage_error()))?;
+    let Some(passkey_row) = row else {
+        passkey_service.discard_authentication(auth_id).await;
+        return Err(Box::new(StatusCode::UNAUTHORIZED.into_response()));
+    };
     let passkey = match decode_stored_passkey(user_id, request_id, &passkey_row.passkey_data) {
         Ok(passkey) => passkey,
         Err(response) => {
@@ -297,84 +317,16 @@ async fn verify_passkey_assertion(
             Box::new((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response())
         })?;
 
-    match user_is_active(pool, user_id).await {
-        Ok(true) => Ok((user_id, auth_result)),
-        Ok(false) => Err(Box::new(
-            (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
-        )),
-        Err(err) => {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "failed to load passkey account status: {err}"
-            );
-            Err(Box::new(
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response(),
-            ))
-        }
+    if status.as_deref() != Some("active") {
+        return Err(Box::new(StatusCode::UNAUTHORIZED.into_response()));
     }
+    Ok((user_id, auth_result, guard))
 }
 
-/// Check account status only after the passkey assertion has been verified.
-async fn user_is_active(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND status = 'active')",
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-}
-
-async fn load_passkey_row_for_user(
-    pool: &PgPool,
-    user_id: Uuid,
-    credential_id: &[u8],
-    request_id: &str,
-) -> Result<PasskeyCredential, HandlerError> {
-    let passkey_row = match PasskeyRepo::get_passkey(pool, credential_id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            warn!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "passkey login failed: credential not found"
-            );
-            return Err(Box::new(
-                (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
-            ));
-        }
-        Err(err) => {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "failed to load passkey: {err}"
-            );
-            return Err(Box::new(
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response(),
-            ));
-        }
-    };
-
-    if passkey_row.user_id != user_id {
-        warn!(
-            user_id = %user_id,
-            request_id = %request_id,
-            "passkey login failed: user mismatch"
-        );
-        return Err(Box::new(
-            (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
-        ));
-    }
-
-    Ok(passkey_row)
+/// Emits a value-free dependency error without retaining SQL or credential diagnostics.
+fn login_storage_error() -> axum::response::Response {
+    tracing::error!("passkey login storage unavailable");
+    (StatusCode::SERVICE_UNAVAILABLE, "Login unavailable").into_response()
 }
 
 fn decode_stored_passkey(
@@ -419,52 +371,50 @@ fn encode_updated_passkey(
     })
 }
 
+/// Updates the locked credential using the same transaction as subsequent session issuance.
 async fn update_passkey_after_auth(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     user_id: Uuid,
     auth_result: &AuthenticationResult,
     request_id: &str,
     client_ip: Option<&str>,
 ) -> Result<(), HandlerError> {
     let credential_id = auth_result.cred_id().as_slice();
-    let passkey_row = load_passkey_row_for_user(pool, user_id, credential_id, request_id).await?;
+    let passkey_row = sqlx::query_as::<_, PasskeyCredential>(
+        "SELECT * FROM passkeys WHERE user_id=$1 AND credential_id=$2",
+    )
+    .bind(user_id)
+    .bind(credential_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|_| Box::new(login_storage_error()))?;
     let mut passkey = decode_stored_passkey(user_id, request_id, &passkey_row.passkey_data)?;
 
     let updated = passkey.update_credential(auth_result).unwrap_or(false);
 
     if updated {
         let encoded = encode_updated_passkey(user_id, request_id, &passkey)?;
-        if let Err(err) = PasskeyRepo::update_passkey_usage(pool, credential_id, &encoded).await {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "failed to update passkey usage: {err}"
-            );
-        }
-    } else if let Err(err) = PasskeyRepo::touch_passkey(pool, credential_id).await {
-        warn!(
-            user_id = %user_id,
-            request_id = %request_id,
-            "failed to update passkey last_used_at: {err}"
-        );
+        sqlx::query(
+            "UPDATE passkeys SET passkey_data=$1,last_used_at=NOW() WHERE credential_id=$2",
+        )
+        .bind(encoded)
+        .bind(credential_id)
+        .execute(&mut *connection)
+        .await
+        .map_err(|_| Box::new(login_storage_error()))?;
+    } else {
+        sqlx::query("UPDATE passkeys SET last_used_at=NOW() WHERE credential_id=$1")
+            .bind(credential_id)
+            .execute(&mut *connection)
+            .await
+            .map_err(|_| Box::new(login_storage_error()))?;
     }
 
-    if let Err(err) = PasskeyRepo::log_audit(
-        pool,
-        user_id,
-        Some(credential_id),
-        "verify_success",
-        client_ip,
-        None,
-    )
-    .await
-    {
-        warn!(
-            user_id = %user_id,
-            request_id = %request_id,
-            "passkey audit log failed: {err}"
-        );
-    }
+    // The audit FK locks the credential too: use this connection to avoid waiting
+    // on our own FOR UPDATE lock through a second pool connection.
+    sqlx::query("INSERT INTO passkey_audit_log (user_id,credential_id,action,ip_address) VALUES ($1,$2,'verify_success',$3::inet)")
+        .bind(user_id).bind(credential_id).bind(client_ip)
+        .execute(&mut *connection).await.map_err(|_| Box::new(login_storage_error()))?;
 
     info!(
         user_id = %user_id,
@@ -475,92 +425,48 @@ async fn update_passkey_after_auth(
     Ok(())
 }
 
+/// Creates full or limited authority inside the identity/credential transaction; failures roll back.
 async fn create_session_token(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     auth_state: &AuthState,
     user_id: Uuid,
-    request_id: &str,
     mfa_state: MfaState,
 ) -> Result<(String, i64), HandlerError> {
-    match mfa_state {
+    let (token, ttl) = match mfa_state {
         MfaState::RequiredUnenrolled => {
-            if let Err(err) = mfa::storage::delete_full_sessions(pool, user_id).await {
-                error!(
-                    user_id = %user_id,
-                    request_id = %request_id,
-                    "failed to revoke full sessions for MFA bootstrap: {err}"
-                );
-            }
-            insert_mfa_bootstrap_session(
-                pool,
-                user_id,
-                auth_state.mfa().bootstrap_session_ttl_seconds(),
-            )
-            .await
-            .map(|token| (token, auth_state.mfa().bootstrap_session_ttl_seconds()))
-            .map_err(|err| {
-                error!(
-                    user_id = %user_id,
-                    request_id = %request_id,
-                    "failed to create MFA bootstrap session: {err}"
-                );
-                Box::new(
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Login failed".to_string(),
-                    )
-                        .into_response(),
-                )
-            })
-        }
-        MfaState::Enabled => insert_mfa_challenge_session(
-            pool,
-            user_id,
-            auth_state.mfa().challenge_session_ttl_seconds(),
-        )
-        .await
-        .map(|token| (token, auth_state.mfa().challenge_session_ttl_seconds()))
-        .map_err(|err| {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "failed to create MFA challenge session: {err}"
-            );
-            Box::new(
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response(),
-            )
-        }),
-        MfaState::Disabled => {
-            insert_session(pool, user_id, auth_state.config().session_ttl_seconds())
+            sqlx::query("DELETE FROM user_sessions WHERE user_id=$1")
+                .bind(user_id)
+                .execute(&mut *connection)
                 .await
-                .map(|token| (token, auth_state.config().session_ttl_seconds()))
-                .map_err(|err| {
-                    error!(
-                        user_id = %user_id,
-                        request_id = %request_id,
-                        "failed to create session: {err}"
-                    );
-                    Box::new(
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Login failed".to_string(),
-                        )
-                            .into_response(),
-                    )
-                })
+                .map_err(|_| Box::new(login_storage_error()))?;
+            let ttl = auth_state.mfa().bootstrap_session_ttl_seconds();
+            (
+                insert_mfa_bootstrap_session_on(connection, user_id, ttl).await,
+                ttl,
+            )
         }
-    }
+        MfaState::Enabled => {
+            let ttl = auth_state.mfa().challenge_session_ttl_seconds();
+            (
+                insert_mfa_challenge_session_on(connection, user_id, ttl).await,
+                ttl,
+            )
+        }
+        MfaState::Disabled => {
+            let ttl = auth_state.config().session_ttl_seconds();
+            (insert_session_on(connection, user_id, ttl).await, ttl)
+        }
+    };
+    Ok((token.map_err(|_| Box::new(login_storage_error()))?, ttl))
 }
 
+/// Commits credential usage and authority together while current user/credential locks remain held.
 async fn issue_session_for_user(
     pool: &PgPool,
     auth_state: &AuthState,
     user_id: Uuid,
     request_id: &str,
+    mut guard: Transaction<'_, Postgres>,
 ) -> axum::response::Response {
     let mfa_state = match mfa::resolve_login_mfa_state(pool, user_id, auth_state.mfa()).await {
         Ok(state) => state,
@@ -579,10 +485,14 @@ async fn issue_session_for_user(
     };
 
     let (token, ttl_seconds) =
-        match create_session_token(pool, auth_state, user_id, request_id, mfa_state).await {
+        match create_session_token(&mut guard, auth_state, user_id, mfa_state).await {
             Ok(result) => result,
             Err(response) => return *response,
         };
+
+    if guard.commit().await.is_err() {
+        return login_storage_error();
+    }
 
     let mut response_headers = HeaderMap::new();
     match session_cookie_with_ttl(auth_state, &token, ttl_seconds) {

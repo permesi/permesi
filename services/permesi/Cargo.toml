@@ -124,6 +124,7 @@ service_utils = { workspace = true }
 
 [dev-dependencies]
 base32 = "0.5.1"
+serde_cbor_2 = "0.13.0"
 http-body-util.workspace = true
 hyper = { workspace = true }
 hyper-util.workspace = true
