@@ -25,6 +25,11 @@ pub struct Case {
 
 pub const CASES: &[Case] = &[
     Case {
+        id: "authentication.shared_exchanges",
+        description: "Real OPAQUE login/reauth start on A, finish on B, replay and same-user session isolation",
+        group: "security",
+    },
+    Case {
         id: "token.signing_rollback_rotation",
         description: "Real Vault signing denial rolls back consumption; shared rotation verifies old/new tokens",
         group: "token",

@@ -35,6 +35,7 @@ pub struct Args {
     pub email_outbox_backoff_max_seconds: u64,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
+    pub opaque_exchange_timeout_ms: i64,
     pub auth_max_pending_states: usize,
     pub auth_rate_limit_window_seconds: i64,
     pub auth_rate_limit_ip_attempts: i64,
@@ -144,6 +145,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         .with_session_ttl_seconds(args.session_ttl_seconds)
         .with_opaque_server_id(args.opaque_server_id.clone())
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds)
+        .with_opaque_exchange_timeout_ms(args.opaque_exchange_timeout_ms)
         .with_auth_max_pending_states(args.auth_max_pending_states)
         .with_rate_limit(
             args.auth_rate_limit_window_seconds,
@@ -264,12 +266,16 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
 }
 
 /// Return non-secret authentication limits for the startup configuration log.
-fn auth_startup_entries(args: &Args) -> [(&'static str, String); 8] {
+fn auth_startup_entries(args: &Args) -> [(&'static str, String); 9] {
     [
         ("opaque_server_id", args.opaque_server_id.clone()),
         (
             "opaque_login_ttl_seconds",
             args.opaque_login_ttl_seconds.to_string(),
+        ),
+        (
+            "opaque_exchange_timeout_ms",
+            args.opaque_exchange_timeout_ms.to_string(),
         ),
         (
             "auth_max_pending_states",
@@ -386,6 +392,16 @@ fn configure_tls_paths(args: &Args) {
 mod tests {
     use super::*;
 
+    /// Operator overrides must reach the actual production configuration builder.
+    #[test]
+    fn server_auth_config_preserves_configured_exchange_deadline() -> anyhow::Result<()> {
+        let mut args = default_args()?;
+        args.opaque_exchange_timeout_ms = 5000;
+        let config = build_app_config(&args, "http://localhost:8200".into());
+        assert_eq!(config.auth.opaque_exchange_timeout_ms(), 5000);
+        Ok(())
+    }
+
     fn default_args() -> anyhow::Result<Args> {
         Ok(Args {
             port: 8080,
@@ -423,6 +439,7 @@ mod tests {
             email_outbox_backoff_max_seconds: 60,
             opaque_server_id: "server-id".to_string(),
             opaque_login_ttl_seconds: 60,
+            opaque_exchange_timeout_ms: 1000,
             auth_max_pending_states: 1_000,
             auth_rate_limit_window_seconds: 600,
             auth_rate_limit_ip_attempts: 100,

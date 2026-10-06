@@ -19,6 +19,16 @@ BEGIN
         END IF;
     END LOOP;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') THEN
+        IF NOT has_table_privilege('permesi_runtime','opaque_exchanges','SELECT')
+            OR NOT has_table_privilege('permesi_runtime','opaque_exchanges','INSERT')
+            OR NOT has_table_privilege('permesi_runtime','opaque_exchanges','DELETE')
+            OR has_table_privilege('permesi_runtime','opaque_exchanges','UPDATE')
+            OR has_table_privilege('permesi_runtime','opaque_exchanges','TRUNCATE')
+            OR has_table_privilege('permesi_runtime','opaque_exchanges','REFERENCES')
+            OR has_table_privilege('permesi_runtime','opaque_exchanges','TRIGGER')
+            OR has_table_privilege('permesi_runtime','opaque_exchanges','MAINTAIN') THEN
+            RAISE EXCEPTION 'invalid runtime OPAQUE exchange privileges';
+        END IF;
         IF has_table_privilege('permesi_runtime','oauth_token_issuances','UPDATE')
             OR has_table_privilege('permesi_runtime','oauth_token_issuances','DELETE')
             OR has_table_privilege('permesi_runtime','oauth_token_issuances','TRUNCATE')
@@ -33,6 +43,41 @@ BEGIN
             RAISE EXCEPTION 'runtime role may erase credential revocation history';
         END IF;
     END IF;
+END $$;
+
+-- Exchange rows are transient and bounded; application crypto authenticates their contents.
+DO $$
+DECLARE
+    identifier bytea := decode(repeat('a1',32),'hex');
+BEGIN
+    INSERT INTO opaque_exchanges (id_hash,purpose,sealed_state,created_at,expires_at)
+    VALUES (identifier,'login',decode(repeat('00',29),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
+    BEGIN
+        UPDATE opaque_exchanges SET expires_at=created_at WHERE id_hash=identifier;
+        RAISE EXCEPTION 'expected positive exchange TTL constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE opaque_exchanges SET expires_at=created_at+INTERVAL '2 hours' WHERE id_hash=identifier;
+        RAISE EXCEPTION 'expected bounded exchange TTL constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE opaque_exchanges SET purpose='reauth' WHERE id_hash=identifier;
+        RAISE EXCEPTION 'expected verified reauthentication binding constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE opaque_exchanges SET credential_hash=identifier WHERE id_hash=identifier;
+        RAISE EXCEPTION 'expected paired user and credential binding constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE opaque_exchanges SET sealed_state=decode('00','hex') WHERE id_hash=identifier;
+        RAISE EXCEPTION 'expected sealed state length constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        INSERT INTO opaque_exchanges (id_hash,purpose,sealed_state,created_at,expires_at)
+        VALUES (decode('00','hex'),'login',decode(repeat('00',29),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
+        RAISE EXCEPTION 'expected reference hash length constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    DELETE FROM opaque_exchanges WHERE id_hash=identifier;
 END $$;
 
 -- Constraint checks live inside a DO block so we can assert failures explicitly.

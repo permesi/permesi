@@ -1,8 +1,13 @@
 //! Database helpers for auth and verification state.
+//!
+//! Password flows hold identity/credential checks and session writes in one
+//! transaction using the connection-level insertion helpers. Pool wrappers serve
+//! existing independent session flows. Session tokens remain random, hash-only
+//! capabilities; callers disclose them only after their transaction commits.
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -177,8 +182,20 @@ pub(super) async fn insert_verification_records(
     Ok(token)
 }
 
+/// Create a random hash-only session using a pool connection.
 pub(super) async fn insert_session(
     pool: &PgPool,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    let mut connection = pool.acquire().await?;
+    insert_session_on(&mut connection, user_id, ttl_seconds).await
+}
+
+/// Insert through the caller's connection so verified identity locks cover issuance.
+/// Random-token collisions are retried without aborting a surrounding transaction.
+pub(super) async fn insert_session_on(
+    connection: &mut PgConnection,
     user_id: Uuid,
     ttl_seconds: i64,
 ) -> Result<String> {
@@ -186,7 +203,8 @@ pub(super) async fn insert_session(
     // so the caller can set the session cookie.
     let query = r"
         INSERT INTO user_sessions (user_id, session_hash, expires_at)
-        VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+        VALUES ($1, $2, clock_timestamp() + ($3 * INTERVAL '1 second'))
+        ON CONFLICT (session_hash) DO NOTHING
     ";
     let span = tracing::info_span!(
         "db.query",
@@ -202,13 +220,13 @@ pub(super) async fn insert_session(
             .bind(user_id)
             .bind(token_hash)
             .bind(ttl_seconds)
-            .execute(pool)
+            .execute(&mut *connection)
             .instrument(span.clone())
             .await;
 
         match result {
-            Ok(_) => return Ok(token),
-            Err(err) if is_unique_violation(&err) => {}
+            Ok(result) if result.rows_affected() == 1 => return Ok(token),
+            Ok(_) => {}
             Err(err) => return Err(err).context("failed to insert session"),
         }
     }
@@ -278,15 +296,28 @@ pub(super) async fn lookup_full_session(
     }))
 }
 
+/// Create a random hash-only session using a pool connection.
 pub(super) async fn insert_mfa_bootstrap_session(
     pool: &PgPool,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    let mut connection = pool.acquire().await?;
+    insert_mfa_bootstrap_session_on(&mut connection, user_id, ttl_seconds).await
+}
+
+/// Insert through the caller's connection so verified identity locks cover issuance.
+/// Random-token collisions are retried without aborting a surrounding transaction.
+pub(super) async fn insert_mfa_bootstrap_session_on(
+    connection: &mut PgConnection,
     user_id: Uuid,
     ttl_seconds: i64,
 ) -> Result<String> {
     // TODO: Draft-only table `user_mfa_bootstrap_sessions` pending migrations.
     let query = r"
         INSERT INTO user_mfa_bootstrap_sessions (user_id, session_hash, expires_at)
-        VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+        VALUES ($1, $2, clock_timestamp() + ($3 * INTERVAL '1 second'))
+        ON CONFLICT (session_hash) DO NOTHING
     ";
     let span = tracing::info_span!(
         "db.query",
@@ -302,13 +333,13 @@ pub(super) async fn insert_mfa_bootstrap_session(
             .bind(user_id)
             .bind(token_hash)
             .bind(ttl_seconds)
-            .execute(pool)
+            .execute(&mut *connection)
             .instrument(span.clone())
             .await;
 
         match result {
-            Ok(_) => return Ok(token),
-            Err(err) if is_unique_violation(&err) => {}
+            Ok(result) if result.rows_affected() == 1 => return Ok(token),
+            Ok(_) => {}
             Err(err) => return Err(err).context("failed to insert MFA bootstrap session"),
         }
     }
@@ -318,15 +349,28 @@ pub(super) async fn insert_mfa_bootstrap_session(
     ))
 }
 
+/// Create a random hash-only session using a pool connection.
 pub(super) async fn insert_mfa_challenge_session(
     pool: &PgPool,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    let mut connection = pool.acquire().await?;
+    insert_mfa_challenge_session_on(&mut connection, user_id, ttl_seconds).await
+}
+
+/// Insert through the caller's connection so verified identity locks cover issuance.
+/// Random-token collisions are retried without aborting a surrounding transaction.
+pub(super) async fn insert_mfa_challenge_session_on(
+    connection: &mut PgConnection,
     user_id: Uuid,
     ttl_seconds: i64,
 ) -> Result<String> {
     // TODO: Draft-only table `user_mfa_challenge_sessions` pending migrations.
     let query = r"
         INSERT INTO user_mfa_challenge_sessions (user_id, session_hash, expires_at)
-        VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+        VALUES ($1, $2, clock_timestamp() + ($3 * INTERVAL '1 second'))
+        ON CONFLICT (session_hash) DO NOTHING
     ";
     let span = tracing::info_span!(
         "db.query",
@@ -342,13 +386,13 @@ pub(super) async fn insert_mfa_challenge_session(
             .bind(user_id)
             .bind(token_hash)
             .bind(ttl_seconds)
-            .execute(pool)
+            .execute(&mut *connection)
             .instrument(span.clone())
             .await;
 
         match result {
-            Ok(_) => return Ok(token),
-            Err(err) if is_unique_violation(&err) => {}
+            Ok(result) if result.rows_affected() == 1 => return Ok(token),
+            Ok(_) => {}
             Err(err) => return Err(err).context("failed to insert MFA challenge session"),
         }
     }
@@ -433,8 +477,8 @@ pub(super) async fn lookup_mfa_challenge_session(
 }
 
 /// Update the auth timestamp for the current session after a successful re-auth.
-pub(super) async fn update_session_auth_time(
-    pool: &PgPool,
+pub(super) async fn update_session_auth_time<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
     user_id: Uuid,
     token_hash: &[u8],
 ) -> Result<bool> {
@@ -455,7 +499,7 @@ pub(super) async fn update_session_auth_time(
     let row = sqlx::query(query)
         .bind(user_id)
         .bind(token_hash)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .instrument(span)
         .await
         .context("failed to update session auth time")?;

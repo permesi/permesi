@@ -165,8 +165,9 @@ The form ignores auto-repeated Enter so a held password-submit key cannot trigge
 a fresh Enter press and the Delete button remain available.
 Wrong passwords, unavailable/rate-limited requests, account changes and permission loss
 never trigger deletion. Inputs clear after an attempt or dismissal; no password is placed
-in storage, URLs or logs. Process-local OPAQUE exchange storage remains a separate
-backend roadmap item; cross-replica authentication start/finish is not guaranteed yet.
+in storage, URLs or logs. OPAQUE exchanges now use [shared encrypted PostgreSQL state](../../docs/opaque-exchanges.md):
+start/finish can reach different replicas, and reauthentication remains bound to the
+original session. The Web API/payloads and explicit final deletion confirmation are unchanged.
 
 `just web-test-browser` additionally runs the compiled console against real PostgreSQL,
 OPAQUE handlers and signed admission verification through an isolated loopback fixture.

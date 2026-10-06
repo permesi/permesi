@@ -76,7 +76,7 @@ impl Report {
                 "Client credentials/M2M grant",
             ],
             limitations: [
-                "OPAQUE start/finish remains on one replica; its exchange state is process-local.",
+                "WebAuthn/passkey challenge state remains process-local; OPAQUE exchanges use shared PostgreSQL.",
                 "Lifecycle diagnostics include internal rollback controls; token cases exercise real runtime-role HTTP issuance.",
                 "JWT authority expires at its bounded TTL; immediate resource-server revocation/UserInfo/refresh tokens are not implemented.",
             ],

@@ -4,11 +4,13 @@
 //!
 //! Flow Overview: Signup start builds a registration response, and signup finish
 //! stores the registration record plus a verification token. Login start builds
-//! a login response and stores a short-lived login state, and login finish
-//! completes the exchange and issues a session cookie. Re-auth updates the
+//! a login response and seals short-lived state in PostgreSQL. Login finish
+//! atomically consumes that state, verifies the proof and current credential,
+//! then issues a session cookie. Re-auth binds the original session and updates its
 //! session auth timestamp after a password check, and password change replaces
 //! the registration record for the authenticated user.
 
+pub(crate) mod exchange;
 pub(crate) mod login;
 pub(crate) mod password;
 pub(crate) mod reauth;

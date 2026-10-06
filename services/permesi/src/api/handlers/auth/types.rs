@@ -35,6 +35,7 @@ pub struct OpaqueLoginStartRequest {
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct OpaqueLoginStartResponse {
+    /// Unguessable single-attempt reference; only its hash is stored in shared PostgreSQL.
     pub login_id: String,
     pub credential_response: String,
 }
@@ -42,6 +43,7 @@ pub struct OpaqueLoginStartResponse {
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct OpaqueLoginFinishRequest {
     pub login_id: String,
+    /// Compatibility field; authority comes from the server-bound exchange identity.
     pub email: String,
     pub credential_finalization: String,
 }

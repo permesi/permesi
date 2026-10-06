@@ -25,6 +25,7 @@ use sqlx::{PgPool, Row};
 use url::Url;
 use uuid::Uuid;
 
+mod authentication;
 mod interop;
 mod lifecycle;
 mod token;
@@ -123,6 +124,7 @@ impl Request {
 /// Dispatches stable case IDs; missing implementations are errors, not silently successful skips.
 pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     match id {
+        "authentication.shared_exchanges" => authentication::shared_exchanges(context).await,
         "interop.public_client" => interop::public(context, fixture).await,
         "interop.confidential_client" => interop::confidential(context, fixture).await,
         "interop.callback_identity_rejection" => interop::rejection(context, fixture).await,

@@ -669,6 +669,30 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
 CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions (expires_at);
 
+-- Temporary OPAQUE transcripts are AEAD sealed under a Vault-derived key. External
+-- login UUIDs are hashed, and DELETE ... RETURNING consumes one attempt across replicas.
+CREATE TABLE IF NOT EXISTS opaque_exchanges (
+    id_hash BYTEA PRIMARY KEY CHECK (octet_length(id_hash) = 32),
+    purpose TEXT NOT NULL CHECK (purpose IN ('login', 'reauth')),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    credential_hash BYTEA,
+    session_hash BYTEA REFERENCES user_sessions(session_hash) ON DELETE CASCADE
+        CHECK (session_hash IS NULL OR octet_length(session_hash) = 32),
+    sealed_state BYTEA NOT NULL CHECK (octet_length(sealed_state) BETWEEN 29 AND 4096),
+    created_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL CHECK (
+        expires_at > created_at AND expires_at <= created_at + INTERVAL '1 hour'
+    ),
+    CHECK ((user_id IS NULL AND credential_hash IS NULL) OR
+        (user_id IS NOT NULL AND credential_hash IS NOT NULL AND octet_length(credential_hash) = 32)),
+    CHECK ((purpose = 'login' AND session_hash IS NULL) OR
+        (purpose = 'reauth' AND user_id IS NOT NULL AND session_hash IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS opaque_exchanges_expires_idx ON opaque_exchanges (expires_at);
+CREATE INDEX IF NOT EXISTS opaque_exchanges_user_idx ON opaque_exchanges (user_id);
+CREATE INDEX IF NOT EXISTS opaque_exchanges_session_idx ON opaque_exchanges (session_hash)
+    WHERE session_hash IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -748,6 +772,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
+    DELETE FROM opaque_exchanges WHERE expires_at <= NOW();
     DELETE FROM user_sessions WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
@@ -925,6 +950,8 @@ BEGIN
         REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
         REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
+        GRANT SELECT, INSERT, DELETE ON TABLE opaque_exchanges TO permesi_runtime;
+        REVOKE UPDATE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE opaque_exchanges FROM permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;
         GRANT ALL PRIVILEGES ON TABLE totp_audit_log TO permesi_runtime;

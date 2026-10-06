@@ -1,9 +1,10 @@
 //! Typed native management client and real OPAQUE account registration.
 //!
 //! Flow Overview: fetch real Genesis admission, register an OPAQUE account, read
-//! its verification capability only from the isolated outbox, then let the actual
-//! browser establish a session. Fixture hierarchy, scopes and clients are created
-//! through management APIs. Browser cookies are never persisted or reported.
+//! its verification capability only from the isolated outbox, then establish a real
+//! session through the browser or native OPAQUE proofs. Both paths verify session
+//! kind and identity server-side. Fixture hierarchy, scopes and clients are created
+//! through management APIs. Cookies and proofs are never persisted or reported.
 
 use crate::{
     browser::Browser,
@@ -13,8 +14,9 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use opaque_ke::{
-    CipherSuite, ClientRegistration, ClientRegistrationFinishParameters, Identifiers,
-    RegistrationResponse, key_exchange::tripledh::TripleDh,
+    CipherSuite, ClientLogin, ClientLoginFinishParameters, ClientRegistration,
+    ClientRegistrationFinishParameters, CredentialResponse, Identifiers, RegistrationResponse,
+    key_exchange::tripledh::TripleDh,
 };
 use opaque_rand_core::OsRng;
 use reqwest::{Method, StatusCode};
@@ -79,6 +81,29 @@ impl Api {
             .and_then(|cookie| cookie.get("value"))
             .and_then(Value::as_str)
             .ok_or_else(|| Failure::assertion("Real login did not set the session cookie."))?;
+        self.authenticate_cookie(cookie).await
+    }
+
+    /// Verify a cookie actually issued by the native OPAQUE endpoint against the session API.
+    pub async fn authenticated_response(&self, response: &reqwest::Response) -> Result<Self> {
+        check(
+            response.status() == StatusCode::NO_CONTENT,
+            "Native OPAQUE login did not succeed.",
+        )?;
+        let cookie = response
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find_map(|value| value.split(';').next()?.strip_prefix("permesi_session="))
+            .ok_or_else(|| {
+                Failure::assertion("Native OPAQUE login did not issue its session cookie.")
+            })?;
+        self.authenticate_cookie(cookie).await
+    }
+
+    /// Accept only a verified full session; browser/native response data alone confers no authority.
+    async fn authenticate_cookie(&self, cookie: &str) -> Result<Self> {
         let mut authenticated = Self {
             origin: self.origin.clone(),
             client: self.client.clone(),
@@ -184,8 +209,8 @@ impl Api {
         )
     }
 
-    /// Uses a fresh real admission token for every OPAQUE/email mutation.
-    async fn auth_post(&self, path: &str, body: Value, expected: StatusCode) -> Result<Value> {
+    /// Fetch one real Genesis token; it stays in memory and is never a diagnostic.
+    async fn admission_token(&self) -> Result<SecretString> {
         let token: Value = self
             .client
             .get(format!(
@@ -202,14 +227,26 @@ impl Api {
             .await
             .safe("Invalid admission response.")?;
         let token = text_field(&token, "token")?;
-        let response = self
+        Ok(SecretString::from(token))
+    }
+
+    /// Send admission-protected account requests, retaining the original session for reauthentication.
+    async fn auth_response(&self, path: &str, body: Value) -> Result<reqwest::Response> {
+        let token = self.admission_token().await?;
+        let mut request = self
             .client
             .post(format!("{}{path}", self.origin))
-            .header("X-Permesi-Zero-Token", token)
-            .json(&body)
-            .send()
-            .await
-            .safe("Account registration request failed.")?;
+            .header("X-Permesi-Zero-Token", token.expose_secret())
+            .json(&body);
+        if !self.cookie.expose_secret().is_empty() {
+            request = request.header(reqwest::header::COOKIE, self.cookie.expose_secret());
+        }
+        request.send().await.safe("Account HTTP request failed.")
+    }
+
+    /// Uses a fresh real admission token for every OPAQUE/email mutation.
+    async fn auth_post(&self, path: &str, body: Value, expected: StatusCode) -> Result<Value> {
+        let response = self.auth_response(path, body).await?;
         if response.status() != expected {
             let body = response
                 .text()
@@ -243,13 +280,61 @@ impl Api {
     }
 }
 
-/// Existing-account credentials held only for real browser login and never serializable.
+/// Existing-account credentials held only for real OPAQUE login and never serializable.
 pub struct Actor {
     pub email: String,
     pub password: SecretString,
 }
 
 impl Actor {
+    /// Start a native proof on the selected real replica; no protocol state is seeded in SQL.
+    pub async fn password_proof(&self, api: &Api, flow: PasswordFlow) -> Result<PasswordProof> {
+        let mut rng = OsRng;
+        let client =
+            ClientLogin::<Suite>::start(&mut rng, self.password.expose_secret().as_bytes())
+                .safe("Cannot start OPAQUE login.")?;
+        let credential_request = STANDARD.encode(client.message.serialize());
+        let payload = match flow {
+            PasswordFlow::Login => {
+                json!({"email":self.email,"credential_request":credential_request})
+            }
+            PasswordFlow::Reauthenticate => json!({"credential_request":credential_request}),
+        };
+        let response = api
+            .auth_post(flow.start_path(), payload, StatusCode::OK)
+            .await?;
+        let id = text_field(&response, "login_id")?
+            .parse()
+            .safe("Invalid OPAQUE exchange reference.")?;
+        let bytes = STANDARD
+            .decode(text_field(&response, "credential_response")?)
+            .safe("Invalid OPAQUE credential response encoding.")?;
+        let response = CredentialResponse::<Suite>::deserialize(&bytes)
+            .safe("Invalid OPAQUE credential response.")?;
+        let ksf = opaque_argon2::Argon2::default();
+        let finish = client
+            .state
+            .finish(
+                &mut rng,
+                self.password.expose_secret().as_bytes(),
+                response,
+                ClientLoginFinishParameters::new(
+                    None,
+                    Identifiers {
+                        client: Some(self.email.as_bytes()),
+                        server: Some(b"api.permesi.dev"),
+                    },
+                    Some(&ksf),
+                ),
+            )
+            .safe("Cannot complete OPAQUE client proof.")?;
+        Ok(PasswordProof {
+            id,
+            email: self.email.clone(),
+            finalization: SecretString::from(STANDARD.encode(finish.message.serialize())),
+            flow,
+        })
+    }
     /// Registers and verifies a new account through real admission-protected product endpoints.
     pub async fn signup(api: &Api, pool: &PgPool) -> Result<Self> {
         let email = format!("scenario-{}@example.test", Uuid::new_v4().simple());
@@ -314,6 +399,53 @@ impl Actor {
             .await?;
         let login = browser.call(json!({"action":"login","actor":name,"navigate":true,"email":self.email,"password":self.password.expose_secret()})).await?;
         api.authenticated(&login).await
+    }
+}
+
+/// Native fixture purposes mirror existing endpoints; no browser field selects server authority.
+#[derive(Clone, Copy)]
+pub enum PasswordFlow {
+    Login,
+    Reauthenticate,
+}
+
+impl PasswordFlow {
+    /// Start endpoint for one fixed protocol purpose.
+    fn start_path(self) -> &'static str {
+        match self {
+            Self::Login => "/v1/auth/opaque/login/start",
+            Self::Reauthenticate => "/v1/auth/opaque/reauth/start",
+        }
+    }
+    /// Finish endpoint must retain the purpose selected at start.
+    fn finish_path(self) -> &'static str {
+        match self {
+            Self::Login => "/v1/auth/opaque/login/finish",
+            Self::Reauthenticate => "/v1/auth/opaque/reauth/finish",
+        }
+    }
+}
+
+/// Real client finalization retained only in memory; no Debug or Serialize implementation.
+pub struct PasswordProof {
+    id: Uuid,
+    email: String,
+    finalization: SecretString,
+    flow: PasswordFlow,
+}
+
+impl PasswordProof {
+    /// Submit exactly one proof with fresh admission; callers assert both success and replay denial.
+    pub async fn finish(&self, api: &Api) -> Result<reqwest::Response> {
+        let payload = match self.flow {
+            PasswordFlow::Login => {
+                json!({"login_id":self.id.to_string(),"email":self.email,"credential_finalization":self.finalization.expose_secret()})
+            }
+            PasswordFlow::Reauthenticate => {
+                json!({"login_id":self.id.to_string(),"credential_finalization":self.finalization.expose_secret()})
+            }
+        };
+        api.auth_response(self.flow.finish_path(), payload).await
     }
 }
 

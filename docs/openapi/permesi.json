@@ -1148,6 +1148,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Consume one exchange attempt and issue the MFA-appropriate session after proof verification.\nIdentity/status/credential checks and session writes share a transaction before cookie disclosure.",
         "operationId": "opaque_login_finish",
         "parameters": [
           {
@@ -1185,7 +1186,17 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Invalid, expired or already attempted exchange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Authentication storage unavailable; no successful login",
             "content": {
               "application/json": {
                 "schema": {
@@ -1202,6 +1213,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Start a real or indistinguishable dummy exchange with shared capacity and expiry.\nAdmission and rate limits apply before persistence; only a hashed reference is stored.",
         "operationId": "opaque_login_start",
         "parameters": [
           {
@@ -1246,7 +1258,17 @@
             }
           },
           "429": {
-            "description": "Rate limited",
+            "description": "Rate limited or shared exchange capacity exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Authentication storage unavailable; no exchange is issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -1380,7 +1402,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Finish a password re-auth flow and refresh the session auth timestamp.",
+        "summary": "Consume one proof attempt and refresh only its original verified full session.\nRequire current active identity/credentials and commit elevation before returning success.",
         "operationId": "opaque_reauth_finish",
         "parameters": [
           {
@@ -1418,7 +1440,17 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session cookie.",
+            "description": "Invalid session, expired/attempted exchange or session binding mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Authentication storage unavailable; no successful elevation",
             "content": {
               "application/json": {
                 "schema": {
@@ -1435,7 +1467,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Start a password re-auth flow for the current session user.",
+        "summary": "Start an admission-protected password proof bound to the verified full session.\nThe user, credential revision and session hash come from server-side state.",
         "operationId": "opaque_reauth_start",
         "parameters": [
           {
@@ -1490,7 +1522,17 @@
             }
           },
           "429": {
-            "description": "Rate limited",
+            "description": "Rate limited or shared exchange capacity exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Authentication storage unavailable; no exchange is issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -6771,7 +6813,8 @@
             "type": "string"
           },
           "email": {
-            "type": "string"
+            "type": "string",
+            "description": "Compatibility field; authority comes from the server-bound exchange identity."
           },
           "login_id": {
             "type": "string"
@@ -6804,7 +6847,8 @@
             "type": "string"
           },
           "login_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Unguessable single-attempt reference; only its hash is stored in shared PostgreSQL."
           }
         }
       },

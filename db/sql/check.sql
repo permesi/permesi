@@ -121,6 +121,9 @@ BEGIN
     IF to_regclass('public.user_sessions') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: user_sessions';
     END IF;
+    IF to_regclass('public.opaque_exchanges') IS NULL THEN
+        RAISE EXCEPTION 'Missing permesi table: opaque_exchanges';
+    END IF;
     IF to_regclass('public.auth_rate_limits') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: auth_rate_limits';
     END IF;

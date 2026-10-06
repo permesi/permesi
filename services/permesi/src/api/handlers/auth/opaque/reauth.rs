@@ -1,8 +1,11 @@
 //! OPAQUE authentication handlers for session re-authentication.
 //!
-//! These handlers allow an already authenticated session to refresh its
-//! "recent authentication" status by proving knowledge of the current password
-//! without requiring a full logout and login.
+//! Flow Overview: a verified full session starts an admission-protected password
+//! exchange, stored encrypted in PostgreSQL with its exact user and session hash.
+//! Any replica can consume the single attempt, verify the proof and refresh only
+//! that session's authentication timestamp. A user-row lock holds current identity
+//! and credential checks through the update; browser fields confer no identity or
+//! session authority. Login exchanges cannot be reused for elevation.
 
 use crate::api::handlers::{
     AdmissionVerifier,
@@ -29,12 +32,16 @@ use opaque_ke::{
     ServerRegistration,
 };
 use opaque_rand_core::OsRng;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
-/// Start a password re-auth flow for the current session user.
+use super::exchange::{ExchangeIdentity, ExchangePurpose, lock_identity};
+
+/// Start an admission-protected password proof bound to the verified full session.
+/// The user, credential revision and session hash come from server-side state.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/reauth/start",
@@ -46,7 +53,8 @@ use uuid::Uuid;
         (status = 200, description = "OPAQUE re-auth started", body = OpaqueLoginStartResponse),
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
-        (status = 429, description = "Rate limited", body = String)
+        (status = 429, description = "Rate limited or shared exchange capacity exhausted", body = String),
+        (status = 500, description = "Authentication storage unavailable; no exchange is issued", body = String)
     ),
     tag = "auth"
 )]
@@ -106,16 +114,32 @@ pub async fn opaque_reauth_start(
             .into_response();
     };
 
-    match build_reauth_start_response(&pool, &auth_state, &principal, credential_request).await {
+    let Some(token) = extract_session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Ok(session_hash) = <[u8; 32]>::try_from(hash_session_token(&token)) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match build_reauth_start_response(
+        &pool,
+        &auth_state,
+        &principal,
+        session_hash,
+        credential_request,
+    )
+    .await
+    {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err((status, message)) => (status, message).into_response(),
     }
 }
 
+/// Bind the protocol to server-derived user identity, password revision and current session.
 async fn build_reauth_start_response(
     pool: &PgPool,
     auth_state: &AuthState,
     principal: &Principal,
+    session_hash: [u8; 32],
     credential_request: CredentialRequest<OpaqueSuite>,
 ) -> Result<OpaqueLoginStartResponse, (StatusCode, String)> {
     let login_record = match lookup_login_record(pool, &principal.email).await {
@@ -170,15 +194,37 @@ async fn build_reauth_start_response(
         ));
     };
 
-    let Some(login_id) = auth_state
+    let login_id = match auth_state
         .opaque()
-        .store_login_state(start_result.state, Some(record.user_id))
+        .store_login_state(
+            pool,
+            start_result.state,
+            Some(ExchangeIdentity {
+                user_id: record.user_id,
+                credential_hash: Sha256::digest(&record.opaque_record).into(),
+            }),
+            ExchangePurpose::Reauthenticate {
+                user_id: principal.user_id,
+                session_hash,
+            },
+            auth_state.config().opaque_exchange_timeout_ms(),
+        )
         .await
-    else {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many pending login attempts".to_string(),
-        ));
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many pending login attempts".to_string(),
+            ));
+        }
+        Err(_) => {
+            error!("OPAQUE exchange storage failed");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Re-auth failed".to_string(),
+            ));
+        }
     };
     let credential_response =
         base64::engine::general_purpose::STANDARD.encode(start_result.message.serialize());
@@ -188,7 +234,8 @@ async fn build_reauth_start_response(
     })
 }
 
-/// Finish a password re-auth flow and refresh the session auth timestamp.
+/// Consume one proof attempt and refresh only its original verified full session.
+/// Require current active identity/credentials and commit elevation before returning success.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/reauth/finish",
@@ -199,7 +246,8 @@ async fn build_reauth_start_response(
     responses(
         (status = 204, description = "Re-auth success"),
         (status = 400, description = "Validation error", body = String),
-        (status = 401, description = "Missing or invalid session cookie.")
+        (status = 401, description = "Invalid session, expired/attempted exchange or session binding mismatch"),
+        (status = 500, description = "Authentication storage unavailable; no successful elevation", body = String)
     ),
     tag = "auth"
 )]
@@ -243,12 +291,36 @@ pub async fn opaque_reauth_finish(
             .into_response();
     };
 
-    let Some(login_state) = auth_state.opaque().take_login_state(login_id).await else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+    let Some(token) = extract_session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
     };
-    if login_state.user_id != Some(principal.user_id) {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
-    }
+    let Ok(session_hash) = <[u8; 32]>::try_from(hash_session_token(&token)) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let login_state = match auth_state
+        .opaque()
+        .take_login_state(
+            &pool,
+            login_id,
+            ExchangePurpose::Reauthenticate {
+                user_id: principal.user_id,
+                session_hash,
+            },
+            auth_state.config().opaque_exchange_timeout_ms(),
+        )
+        .await
+    {
+        Ok(Some(state)) => state,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
+        Err(_) => {
+            error!("OPAQUE exchange storage failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Re-auth failed".to_string(),
+            )
+                .into_response();
+        }
+    };
 
     if login_state
         .state
@@ -258,12 +330,32 @@ pub async fn opaque_reauth_finish(
         return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
     }
 
-    let Some(token) = extract_session_token(&headers) else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+    let Some(identity) = login_state.identity else {
+        return StatusCode::UNAUTHORIZED.into_response();
     };
-    let token_hash = hash_session_token(&token);
-    match update_session_auth_time(&pool, principal.user_id, &token_hash).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+    let mut tx = match lock_identity(
+        &pool,
+        &identity,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(Some(tx)) => tx,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => {
+            error!("OPAQUE reauthentication identity validation failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match update_session_auth_time(&mut *tx, principal.user_id, &session_hash).await {
+        Ok(true) => {
+            if tx.commit().await.is_err() {
+                error!("OPAQUE reauthentication session transaction commit failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            } else {
+                StatusCode::NO_CONTENT.into_response()
+            }
+        }
         Ok(false) => StatusCode::UNAUTHORIZED.into_response(),
         Err(err) => {
             error!("Failed to update session auth time: {err}");

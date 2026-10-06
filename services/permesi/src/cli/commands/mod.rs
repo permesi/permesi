@@ -5,6 +5,9 @@ pub mod logging;
 pub mod tls;
 pub mod vault;
 
+/// Default per-lock/per-statement deadline for shared OPAQUE exchange transactions.
+pub(crate) const DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS: i64 = 1000;
+
 use clap::{
     Arg, ColorChoice, Command,
     builder::styling::{AnsiColor, Effects, Styles},

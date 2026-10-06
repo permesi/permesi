@@ -1,5 +1,6 @@
 //! Unit and integration tests for the auth module.
 
+mod opaque_exchange;
 mod tenant_deletion;
 
 use super::{
@@ -480,6 +481,14 @@ fn opaque_router(
         .route(
             "/v1/auth/opaque/login/finish",
             post(super::opaque::login::opaque_login_finish),
+        )
+        .route(
+            "/v1/auth/opaque/reauth/start",
+            post(super::opaque::reauth::opaque_reauth_start),
+        )
+        .route(
+            "/v1/auth/opaque/reauth/finish",
+            post(super::opaque::reauth::opaque_reauth_finish),
         )
         .with_state(OpaqueTestState {
             auth: auth_state,

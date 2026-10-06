@@ -57,6 +57,18 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let admission_opts = admission::Options::parse(matches)?;
     let auth_opts = auth::Options::parse(matches)?;
+    if !(1..=3600).contains(&auth_opts.opaque.login_ttl_seconds) {
+        return Err(anyhow!(
+            "invalid argument: --{} must be between 1 and 3600",
+            auth::ARG_OPAQUE_LOGIN_TTL
+        ));
+    }
+    if !(1..=10_000).contains(&auth_opts.opaque.exchange_timeout_ms) {
+        return Err(anyhow!(
+            "invalid argument: --{} must be between 1 and 10000",
+            auth::ARG_OPAQUE_EXCHANGE_TIMEOUT
+        ));
+    }
     let auth_max_pending_states = usize::try_from(auth_opts.max_pending_states)
         .context("--auth-max-pending-states exceeds this platform's capacity")?;
     if auth_max_pending_states == 0 {
@@ -65,6 +77,8 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
             auth::ARG_AUTH_MAX_PENDING_STATES
         ));
     }
+    i64::try_from(auth_max_pending_states)
+        .context("--auth-max-pending-states exceeds PostgreSQL capacity")?;
     let auth_rate_limit_window_seconds = require_positive(
         auth::ARG_AUTH_RATE_LIMIT_WINDOW,
         auth_opts.rate_limit.window_seconds,
@@ -111,6 +125,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         email_outbox_backoff_max_seconds: auth_opts.email_outbox.backoff_max_seconds,
         opaque_server_id: auth_opts.opaque.server_id,
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
+        opaque_exchange_timeout_ms: auth_opts.opaque.exchange_timeout_ms,
         auth_max_pending_states,
         auth_rate_limit_window_seconds,
         auth_rate_limit_ip_attempts,

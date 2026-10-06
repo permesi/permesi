@@ -1,9 +1,9 @@
 //! Test-only HTTPS issuer gateway over real, private Unix-socket service listeners.
 //!
 //! The browser sees one stable issuer while the harness selects A or B. This is
-//! equivalent to a load balancer, not a product test hook. OPAQUE exchange pairs
-//! stay on A because their existing state is process-local. OAuth state and
-//! sessions are shared through PostgreSQL. No request or callback URL is logged.
+//! equivalent to a load balancer, not a product test hook. OPAQUE, OAuth and
+//! management traffic all follow that selection and share PostgreSQL state.
+//! Genesis admission has its own fixed backend. No request or callback URL is logged.
 
 use crate::{
     error::{Result, Safe},
@@ -128,12 +128,12 @@ impl Gateway {
         })
     }
 
-    /// Restores each case to replica A; OPAQUE pairs remain there independently.
+    /// Restores all Permesi traffic, including password exchanges, to replica A.
     pub fn replica_a(&self) {
         self.use_b.store(false, Ordering::SeqCst);
     }
 
-    /// Switches OAuth/management traffic; no browser-controlled input can select a replica.
+    /// Switches all Permesi traffic; no browser-controlled input can select a replica.
     pub fn replica_b(&self) {
         self.use_b.store(true, Ordering::SeqCst);
     }
@@ -230,7 +230,7 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
     }
     let client = if is_genesis {
         &proxy.genesis
-    } else if path.contains("/opaque/") || !proxy.use_b.load(Ordering::SeqCst) {
+    } else if !proxy.use_b.load(Ordering::SeqCst) {
         &proxy.a
     } else {
         &proxy.b
@@ -299,6 +299,89 @@ mod tests {
         error::{Result, check},
         files::PrivateDir,
     };
+
+    /// Real distinct backends must observe the selected replica for every OPAQUE phase.
+    #[tokio::test]
+    async fn proxy_routes_password_exchanges_to_selected_replica() -> Result<()> {
+        let private = PrivateDir::new()?;
+        let mut clients = Vec::new();
+        let mut servers = Vec::new();
+        for label in ["replica-a", "replica-b", "genesis"] {
+            let socket = private.0.join(format!("{label}.sock"));
+            let listener =
+                tokio::net::UnixListener::bind(&socket).safe("Cannot bind test backend.")?;
+            servers.push(tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().fallback(move || async move { label }),
+                )
+                .await
+            }));
+            clients.push(
+                reqwest::Client::builder()
+                    .unix_socket(socket)
+                    .no_proxy()
+                    .build()
+                    .safe("Cannot build test transport.")?,
+            );
+        }
+        let mut clients = clients.into_iter();
+        let proxy = Proxy {
+            a: clients
+                .next()
+                .ok_or_else(|| crate::error::Failure::harness("Missing test replica A."))?,
+            b: clients
+                .next()
+                .ok_or_else(|| crate::error::Failure::harness("Missing test replica B."))?,
+            genesis: clients
+                .next()
+                .ok_or_else(|| crate::error::Failure::harness("Missing test Genesis."))?,
+            use_b: Arc::new(AtomicBool::new(false)),
+            config: Arc::new(String::new()),
+            assets: ServeDir::new(&private.0).fallback(tower_http::services::ServeFile::new(
+                private.0.join("index.html"),
+            )),
+        };
+        let mut observed = Vec::new();
+        for second in [false, true] {
+            proxy.use_b.store(second, Ordering::SeqCst);
+            for path in [
+                "/v1/auth/opaque/login/start",
+                "/v1/auth/opaque/login/finish",
+                "/v1/auth/opaque/reauth/start",
+                "/v1/auth/opaque/reauth/finish",
+                "/admission/token",
+            ] {
+                let request = Request::builder()
+                    .uri(path)
+                    .body(Body::empty())
+                    .safe("Cannot build test request.")?;
+                let response = forward(State(proxy.clone()), request).await;
+                let bytes = to_bytes(response.into_body(), 1024)
+                    .await
+                    .safe("Cannot read test response.")?;
+                observed.push((second, path, bytes));
+            }
+        }
+        for server in servers {
+            server.abort();
+        }
+        for (second, path, bytes) in observed {
+            let expected = if path.starts_with("/admission/") {
+                "genesis"
+            } else if second {
+                "replica-b"
+            } else {
+                "replica-a"
+            };
+            assert_eq!(
+                bytes.as_ref(),
+                expected.as_bytes(),
+                "Wrong backend for {path}."
+            );
+        }
+        Ok(())
+    }
 
     /// Exercises the actual proxy across HTTP/2-style split cookies and an HTTP/1 Unix backend.
     #[tokio::test]

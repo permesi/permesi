@@ -2,20 +2,13 @@
 //!
 //! This module defines the central `AuthState` and `OpaqueState` structures
 //! used across all authentication handlers. It handles OPAQUE registration
-//! and login state management.
+//! configuration. The OPAQUE setup and shared encrypted exchange store are defined
+//! in `opaque::exchange`; this module owns no pending login cache.
 
 use anyhow::{Result, anyhow};
-use opaque_ke::{CipherSuite, ServerLogin, ServerSetup, key_exchange::tripledh::TripleDh};
-use opaque_rand_chacha::ChaCha20Rng;
-use opaque_rand_core::SeedableRng;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tokio::sync::Mutex;
+use opaque_ke::{CipherSuite, key_exchange::tripledh::TripleDh};
+use std::sync::Arc;
 use url::Url;
-use uuid::Uuid;
 
 use super::{mfa::MfaConfig, rate_limit::RateLimiter};
 
@@ -40,6 +33,7 @@ pub struct AuthConfig {
     opaque_kv_mount: String,
     opaque_server_id: String,
     opaque_login_ttl_seconds: u64,
+    opaque_exchange_timeout_ms: i64,
     auth_max_pending_states: usize,
     rate_limit_window_seconds: i64,
     rate_limit_ip_attempts: i64,
@@ -68,6 +62,7 @@ impl AuthConfig {
             opaque_kv_mount: "secret/permesi".to_string(),
             opaque_server_id: DEFAULT_OPAQUE_SERVER_ID.to_string(),
             opaque_login_ttl_seconds: DEFAULT_OPAQUE_LOGIN_TTL_SECONDS,
+            opaque_exchange_timeout_ms: crate::cli::commands::DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS,
             auth_max_pending_states: DEFAULT_AUTH_MAX_PENDING_STATES,
             rate_limit_window_seconds: DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
             rate_limit_ip_attempts: DEFAULT_RATE_LIMIT_IP_ATTEMPTS,
@@ -110,6 +105,13 @@ impl AuthConfig {
     #[must_use]
     pub fn with_opaque_login_ttl_seconds(mut self, seconds: u64) -> Self {
         self.opaque_login_ttl_seconds = seconds;
+        self
+    }
+
+    /// Set the database lock/statement deadline; CLI dispatch and the exchange store validate it.
+    #[must_use]
+    pub fn with_opaque_exchange_timeout_ms(mut self, milliseconds: i64) -> Self {
+        self.opaque_exchange_timeout_ms = milliseconds;
         self
     }
 
@@ -218,6 +220,12 @@ impl AuthConfig {
         self.opaque_login_ttl_seconds
     }
 
+    /// Bound each exchange lock and SQL statement without changing pooled-session defaults.
+    #[must_use]
+    pub fn opaque_exchange_timeout_ms(&self) -> i64 {
+        self.opaque_exchange_timeout_ms
+    }
+
     #[must_use]
     pub fn auth_max_pending_states(&self) -> usize {
         self.auth_max_pending_states
@@ -292,87 +300,7 @@ impl CipherSuite for OpaqueSuite {
     type Ksf = opaque_argon2::Argon2<'static>;
 }
 
-pub(super) struct OpaqueLoginState {
-    pub(super) state: ServerLogin<OpaqueSuite>,
-    pub(super) user_id: Option<Uuid>,
-    created_at: Instant,
-}
-
-pub struct OpaqueState {
-    server_setup: ServerSetup<OpaqueSuite>,
-    server_id: Vec<u8>,
-    login_ttl: Duration,
-    max_pending_logins: usize,
-    login_states: Mutex<HashMap<Uuid, OpaqueLoginState>>,
-}
-
-impl OpaqueState {
-    /// Build deterministic server setup and bounded ephemeral login storage.
-    ///
-    /// All replicas must use the same seed and server identifier. The capacity
-    /// bounds unauthenticated protocol state retained until login completion.
-    pub fn from_seed(
-        seed: [u8; 32],
-        server_id: String,
-        login_ttl: Duration,
-        max_pending_logins: usize,
-    ) -> Self {
-        let mut rng = ChaCha20Rng::from_seed(seed);
-        let server_setup = ServerSetup::<OpaqueSuite>::new(&mut rng);
-        Self {
-            server_setup,
-            server_id: server_id.into_bytes(),
-            login_ttl,
-            max_pending_logins,
-            login_states: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub(super) fn server_setup(&self) -> &ServerSetup<OpaqueSuite> {
-        &self.server_setup
-    }
-
-    pub(super) fn server_id(&self) -> &[u8] {
-        &self.server_id
-    }
-
-    /// Store one OPAQUE exchange after pruning expired entries.
-    ///
-    /// Returns `None` when the configured capacity has been reached; callers
-    /// must reject the start request without issuing an unusable login ID.
-    pub(super) async fn store_login_state(
-        &self,
-        state: ServerLogin<OpaqueSuite>,
-        user_id: Option<Uuid>,
-    ) -> Option<Uuid> {
-        let login_id = Uuid::new_v4();
-        let mut states = self.login_states.lock().await;
-        states.retain(|_, entry| entry.created_at.elapsed() < self.login_ttl);
-        if states.len() >= self.max_pending_logins {
-            return None;
-        }
-        states.insert(
-            login_id,
-            OpaqueLoginState {
-                state,
-                user_id,
-                created_at: Instant::now(),
-            },
-        );
-        Some(login_id)
-    }
-
-    pub(super) async fn take_login_state(&self, login_id: Uuid) -> Option<OpaqueLoginState> {
-        let mut states = self.login_states.lock().await;
-        if let Some(state) = states.remove(&login_id)
-            && state.created_at.elapsed() < self.login_ttl
-        {
-            Some(state)
-        } else {
-            None
-        }
-    }
-}
+pub use super::opaque::exchange::OpaqueState;
 
 pub struct AuthState {
     config: AuthConfig,
@@ -419,10 +347,7 @@ impl AuthState {
 #[cfg(test)]
 mod tests {
     use super::super::rate_limit::RateLimiter;
-    use super::{AuthConfig, AuthState, OpaqueState, OpaqueSuite};
-    use opaque_ke::{ClientLogin, ServerLogin, ServerLoginParameters};
-    use opaque_rand_chacha::ChaCha20Rng;
-    use opaque_rand_core::SeedableRng;
+    use super::{AuthConfig, AuthState, OpaqueState};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -491,37 +416,7 @@ mod tests {
             10,
         );
         assert_eq!(state.server_id(), b"opaque.test");
-        assert_eq!(state.login_ttl, Duration::from_secs(5));
-    }
-
-    #[tokio::test]
-    async fn opaque_state_enforces_pending_login_capacity() -> anyhow::Result<()> {
-        let state = OpaqueState::from_seed(
-            [42u8; 32],
-            "opaque.test".to_string(),
-            Duration::from_secs(5),
-            1,
-        );
-
-        for (seed, expected) in [(1_u8, true), (2_u8, false)] {
-            let mut client_rng = ChaCha20Rng::from_seed([seed; 32]);
-            let client = ClientLogin::<OpaqueSuite>::start(&mut client_rng, b"password")?;
-            let mut server_rng = ChaCha20Rng::from_seed([seed.saturating_add(10); 32]);
-            let login = ServerLogin::start(
-                &mut server_rng,
-                state.server_setup(),
-                None,
-                client.message,
-                b"user@example.com",
-                ServerLoginParameters::default(),
-            )?;
-
-            assert_eq!(
-                state.store_login_state(login.state, None).await.is_some(),
-                expected
-            );
-        }
-        Ok(())
+        assert_eq!(state.login_ttl(), Duration::from_secs(5));
     }
 
     #[test]

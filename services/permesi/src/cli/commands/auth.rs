@@ -14,6 +14,7 @@ pub const ARG_EMAIL_OUTBOX_BACKOFF_MAX: &str = "email-outbox-backoff-max-seconds
 
 pub const ARG_OPAQUE_SERVER_ID: &str = "opaque-server-id";
 pub const ARG_OPAQUE_LOGIN_TTL: &str = "opaque-login-ttl-seconds";
+pub const ARG_OPAQUE_EXCHANGE_TIMEOUT: &str = "opaque-exchange-timeout-ms";
 pub const ARG_AUTH_MAX_PENDING_STATES: &str = "auth-max-pending-states";
 
 pub const ARG_AUTH_RATE_LIMIT_WINDOW: &str = "auth-rate-limit-window-seconds";
@@ -36,6 +37,7 @@ pub struct EmailOutboxOptions {
 pub struct OpaqueOptions {
     pub server_id: String,
     pub login_ttl_seconds: u64,
+    pub exchange_timeout_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +136,10 @@ impl Options {
                     .get_one::<u64>(ARG_OPAQUE_LOGIN_TTL)
                     .copied()
                     .unwrap_or(300),
+                exchange_timeout_ms: matches
+                    .get_one::<i64>(ARG_OPAQUE_EXCHANGE_TIMEOUT)
+                    .copied()
+                    .ok_or_else(|| anyhow::anyhow!("missing required OPAQUE exchange timeout"))?,
             },
             max_pending_states: matches
                 .get_one::<u64>(ARG_AUTH_MAX_PENDING_STATES)
@@ -273,18 +279,26 @@ fn with_auth_opaque_args(command: Command) -> Command {
         .arg(
             Arg::new(ARG_OPAQUE_LOGIN_TTL)
                 .long(ARG_OPAQUE_LOGIN_TTL)
-                .help("TTL for OPAQUE login state storage")
+                .help("TTL for shared OPAQUE exchange storage (1-3600 seconds)")
                 .env("PERMESI_OPAQUE_LOGIN_TTL_SECONDS")
                 .default_value("300")
-                .value_parser(clap::value_parser!(u64)),
+                .value_parser(clap::value_parser!(u64).range(1..=3600)),
         )
         .arg(
             Arg::new(ARG_AUTH_MAX_PENDING_STATES)
                 .long(ARG_AUTH_MAX_PENDING_STATES)
-                .help("Maximum in-progress authentication protocol states per flow and replica")
+                .help("Maximum pending OPAQUE exchanges cluster-wide; WebAuthn limits remain per flow and replica")
                 .env("PERMESI_AUTH_MAX_PENDING_STATES")
                 .default_value("10000")
                 .value_parser(clap::value_parser!(u64).range(1..)),
+        )
+        .arg(
+            Arg::new(ARG_OPAQUE_EXCHANGE_TIMEOUT)
+                .long(ARG_OPAQUE_EXCHANGE_TIMEOUT)
+                .help("Per-lock and per-statement OPAQUE exchange deadline (1-10000 milliseconds)")
+                .env("PERMESI_OPAQUE_EXCHANGE_TIMEOUT_MS")
+                .default_value("1000")
+                .value_parser(clap::value_parser!(i64).range(1..=10000)),
         )
 }
 
@@ -338,6 +352,58 @@ fn with_admin_args(command: Command) -> Command {
 
 #[cfg(test)]
 mod tests {
+    /// Lock/statement waits have positive bounded defaults and cannot be disabled by configuration.
+    #[test]
+    fn opaque_exchange_deadline_parser_enforces_bounds_and_default() -> anyhow::Result<()> {
+        temp_env::with_var(
+            "PERMESI_OPAQUE_EXCHANGE_TIMEOUT_MS",
+            None::<&str>,
+            || -> anyhow::Result<()> {
+                for value in ["-1", "0", "10001", "9223372036854775807"] {
+                    assert!(
+                        super::with_args(clap::Command::new("test"))
+                            .try_get_matches_from(["test", "--opaque-exchange-timeout-ms", value])
+                            .is_err()
+                    );
+                }
+                for value in ["1", "1000", "10000"] {
+                    assert!(
+                        super::with_args(clap::Command::new("test"))
+                            .try_get_matches_from(["test", "--opaque-exchange-timeout-ms", value])
+                            .is_ok()
+                    );
+                }
+                let defaults =
+                    super::with_args(clap::Command::new("test")).try_get_matches_from(["test"])?;
+                assert_eq!(
+                    defaults
+                        .get_one::<i64>(super::ARG_OPAQUE_EXCHANGE_TIMEOUT)
+                        .copied(),
+                    Some(crate::cli::commands::DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS)
+                );
+                Ok(())
+            },
+        )
+    }
+
+    /// Invalid lifetimes fail before startup; one-second and one-hour boundaries are supported.
+    #[test]
+    fn opaque_exchange_ttl_parser_enforces_short_positive_lifetime() {
+        for value in ["0", "3601", "18446744073709551615"] {
+            assert!(
+                super::with_args(clap::Command::new("test"))
+                    .try_get_matches_from(["test", "--opaque-login-ttl-seconds", value])
+                    .is_err()
+            );
+        }
+        for value in ["1", "300", "3600"] {
+            assert!(
+                super::with_args(clap::Command::new("test"))
+                    .try_get_matches_from(["test", "--opaque-login-ttl-seconds", value])
+                    .is_ok()
+            );
+        }
+    }
     use super::*;
     use clap::Command;
 
@@ -357,6 +423,7 @@ mod tests {
             ARG_EMAIL_OUTBOX_BACKOFF_MAX,
             ARG_OPAQUE_SERVER_ID,
             ARG_OPAQUE_LOGIN_TTL,
+            ARG_OPAQUE_EXCHANGE_TIMEOUT,
             ARG_AUTH_MAX_PENDING_STATES,
             ARG_AUTH_RATE_LIMIT_WINDOW,
             ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS,

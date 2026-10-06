@@ -43,6 +43,15 @@ run `verify_permesi.sql`, and verify that authentication still works afterward.
 
 ## Runtime role & grant checks
 
+Shared OPAQUE state adds `opaque_exchanges`: hashed external references, AEAD-sealed
+server transcripts, purpose/user/password-revision/session bindings and bounded
+database-clock expiration. Reapply `02_permesi.sql` before the new binary; bootstrap
+and reapplication apply narrow SELECT/INSERT/DELETE runtime privileges, explicitly
+revoking MAINTAIN as well as mutation/DDL-related privileges. Expired
+exchanges are pruned during new starts and existing maintenance. See
+[deployment and retention](../../docs/opaque-exchanges.md); encrypted WAL/backups
+follow ordinary database retention and are not cryptographically erased by row removal.
+
 Use these psql commands to verify runtime roles and grants after bootstrap:
 
 ```sql

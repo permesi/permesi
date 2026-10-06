@@ -7,8 +7,9 @@
 //! - Password auth uses `OPAQUE` to establish sessions without exposing plaintext.
 //! - MFA bootstrap/challenge sessions gate access when MFA is required or enabled.
 //! - Recovery codes provide the only self-service MFA recovery path.
-//! - PostgreSQL-backed counters enforce shared unauthenticated rate limits, while
-//!   bounded in-memory maps retain only short-lived OPAQUE/WebAuthn protocol state.
+//! - PostgreSQL-backed counters enforce shared unauthenticated rate limits and
+//!   encrypted single-use OPAQUE exchanges work across replicas. `WebAuthn` protocol
+//!   state remains bounded and process-local.
 //!
 //! ## Admin Rate Limiting
 //!

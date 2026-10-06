@@ -18,6 +18,7 @@ target/debug/permesi-oauth-scenario --suite full
 target/debug/permesi-oauth-scenario --suite token
 target/debug/permesi-oauth-scenario --suite interop --access-token-ttl-seconds 10
 target/debug/permesi-oauth-scenario --case redemption.bindings
+target/debug/permesi-oauth-scenario --case authentication.shared_exchanges
 target/debug/permesi-oauth-scenario --case authorization.consent --repeat 2 --seed 7
 ```
 
@@ -48,8 +49,9 @@ Every run owns UUID-labeled Podman containers/network, random loopback ports, pr
 files and fresh credentials. Dependency ports bind to `127.0.0.1`. Real service
 processes use the existing same-host Unix-socket mode in a mode-0700 directory. A
 test-only HTTPS gateway keeps one stable issuer while selecting actual replicas A/B.
-OPAQUE pairs stay on A because those existing exchanges remain process-local. OAuth
-requests, sessions, grants and codes use shared PostgreSQL. The failover case stops A
+OAuth requests, sessions, grants, codes and encrypted OPAQUE exchanges use shared
+PostgreSQL. Ordinary browser setup selects A; `authentication.shared_exchanges` deliberately
+starts native login/reauthentication on A and finishes on B using real runtime-role APIs. The failover case stops A
 after request persistence and completes consent on B. This is multi-process state
 coverage, not a claim of multi-host transport/load testing.
 
@@ -101,6 +103,7 @@ repetitions and parallel isolation with
 | --- | --- |
 | `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, accurate code/token discovery and public JWKS |
 | `authorization.consent` | Real browser S256 consent, exact scopes/state/nonce/redirect/TTL, high-entropy code and hash-only row |
+| `authentication.shared_exchanges` | Real OPAQUE login/reauthentication start on A and finish on B, actual session verification, replay rejection and same-user session binding |
 | `authorization.login_resume` | Anonymous durable request on A, actual Web login, resume/consent on B |
 | `authorization.cancel_saved` | Cancellation without code, fresh saved-consent code/nonce/bindings, exact saved scopes, forced consent and added browser scope-field rejection |
 | `authorization.validation` | Unknown/disabled/deleted clients; modified/prefix/foreign redirects; response type; unknown/disallowed/duplicate/internal scopes; missing/malformed/plain PKCE and missing nonce |
@@ -219,7 +222,7 @@ coverage alongside its implementation. The six standard-library/resource scenari
 provide a narrow interoperability foundation; broader clients, formal OIDC conformance
 and production resource-server revocation policy remain separately tracked.
 
-Durable OPAQUE exchanges, MFA-required variants, richer consent/grants UX,
+Durable WebAuthn/passkey exchanges, MFA-required variants, richer consent/grants UX,
 Firefox/Safari, multi-host/load/fault tests, broader third-party OIDC clients, UserInfo,
 introspection/revocation, device flow and M2M remain in `TODO.md`. Current scenarios
 preserve default MFA policy and require a genuine full session; they do not establish
@@ -353,3 +356,29 @@ Claude's second startup review verified all fixes, repeated the live probe and c
 suite, and found no remaining actionable findings. Removing the read guard, kill/wait,
 port regex/bounds, or proxy bypass makes the affected regression fail. Delayed shutdown
 verifies waiting for process retirement; it does not assert the precise kill-after duration.
+
+The shared-OPAQUE phase adds `authentication.shared_exchanges` and passes all 29 full-suite
+cases on the corrected gateway, with zero cleanup errors. Four independent Claude/Herdr
+reviews verified real A/B routing, replay/session binding, PostgreSQL constraints and
+transaction ordering. The initial gateway pinned OPAQUE requests to A; a real Unix-backend
+routing regression now prevents that false cross-replica result. With corrected routing,
+the old in-memory binary fails the native finish step and the shared-store binary passes.
+Claude independently passed all seven process/harness checks and all three browser stages
+against the final rebuilt native binaries and CSR assets.
+
+Final workspace runs pass 581 default and 611 all-feature tests, including 29 real PostgreSQL
+exchange regressions. The two ignored PostgreSQL browser tests were exercised separately.
+Formatting, all-target/all-feature Clippy, release WASM/native builds, OpenAPI generation
+and comparisons, fresh bootstrap/reapplication and runtime-privilege verification pass.
+The final review's targeted reversions fail on the intended assertions for metadata
+retargeting, early identity commits in both HTTP handlers, global-capacity serialization,
+configured deadlines and pooled-setting leaks, and malformed reauthentication consumption.
+No confirmed implementation defects remain; operational limits and hardening follow-ups
+are explicit in [the exchange design](opaque-exchanges.md) and [TODO](../TODO.md).
+
+The hosted browser run's failed-job retry also failed on the old published commit
+`bf31d19`, again without a DevTools port file. The corrected browser selector and shared
+OPAQUE changes remain local pending publication: SSH push authentication is unavailable,
+and the normal HTTPS credential-helper fallback cannot resolve GitHub in the primary
+session. This is not evidence of a successful corrected hosted run. The browser CI and
+OPAQUE publication milestones remain unchecked until that run passes.

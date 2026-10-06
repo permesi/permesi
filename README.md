@@ -186,7 +186,7 @@ schedule pg_cron jobs directly.
 
 - **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.
 - **TOTP protection:** Per-user TOTP secrets use envelope encryption backed by the Vault Transit `chacha20-poly1305` key at `transit/permesi` / `totp`; plaintext seeds are not stored in PostgreSQL.
-- **OPAQUE (user auth):** Client-side OPAQUE; server stores only the registration record. The server setup seed is stored in Vault KV v2 (`opaque_server_seed`).
+- **OPAQUE (user auth):** Client-side OPAQUE; permanent credentials are registration records, while temporary login/reauthentication state is sealed in shared PostgreSQL. The server setup seed is stored in Vault KV v2 (`opaque_server_seed`).
 
 ## Admission Token Verification (Offline)
 
@@ -255,8 +255,10 @@ typed dialogs pin the organization UUID and show immediate-child blockers. When 
 inline OPAQUE password verification refreshes authority and children before returning to
 confirmation; the owner must explicitly click Delete Organization again. See [resource lifecycle](docs/resource-lifecycle.md) for API,
 transactional race protection and OAuth effects; populated parents never silently cascade.
-OPAQUE login/reauthentication exchanges still use bounded process-local state; shared
-exchange persistence is a tracked follow-up, separate from durable OAuth requests/codes.
+OPAQUE login/reauthentication exchanges use bounded, encrypted, single-attempt PostgreSQL
+state across replicas, including original-session binding for reauthentication. See
+[shared OPAQUE exchanges](docs/opaque-exchanges.md) for migration, expiry, retention and
+regression checks. WebAuthn/passkey challenge persistence remains a separate follow-up.
 
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
@@ -333,12 +335,15 @@ sequenceDiagram
     Note over U, P: OPAQUE login
     U->>P: /v1/auth/opaque/login/start + zero token
     P->>P: Verify token (PASERK keyset)
+    P->>DB: Store hashed reference and encrypted exchange
     P-->>U: credential_response + login_id
 
+    Note over P, DB: Finish may execute on another Permesi replica
     U->>P: /v1/auth/opaque/login/finish + zero token
     P->>P: Verify token (PASERK keyset)
+    P->>DB: Atomically consume exchange
     P->>P: OPAQUE finish (no password sent)
-    P->>DB: Persist session
+    P->>DB: Lock current user/credential and persist session
     P-->>U: 204 + Set-Cookie (session)
 
     Note over U, P: Session hydration
@@ -379,9 +384,8 @@ Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 
 
 Unauthenticated authentication flows also use PostgreSQL-backed fixed-window
 limits shared across replicas. The defaults are 100 attempts per IP and 10 per
-normalized account identifier per action in 10 minutes. In-progress OPAQUE and
-passkey protocol states are separately bounded to 10,000 entries per flow and
-replica. Configure these with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+normalized account identifier per action in 10 minutes. In-progress OPAQUE exchanges are bounded to 10,000 entries cluster-wide;
+passkey protocol state retains its separate 10,000-entry per-flow, per-replica limit. Configure these with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
 `PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
 `PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, and
 `PERMESI_AUTH_MAX_PENDING_STATES`.

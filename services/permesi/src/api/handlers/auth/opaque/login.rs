@@ -1,7 +1,11 @@
 //! OPAQUE authentication handlers for user login.
 //!
-//! This module provides endpoints for starting and finishing the OPAQUE PAKE
-//! exchange. Successful logins issue sessions based on the user's MFA state.
+//! Flow Overview: admission-protected start persists an encrypted exchange in
+//! PostgreSQL; finish consumes one attempt and verifies the client proof on any
+//! replica. Server-bound identity and the current credential revision determine
+//! authority. A user-row lock spans session issuance, with the existing MFA policy
+//! selecting a full, bootstrap or challenge session. Browser email fields cannot
+//! replace the bound identity, and storage failures never issue a successful response.
 
 use crate::api::handlers::{
     AdmissionVerifier,
@@ -11,7 +15,7 @@ use crate::api::handlers::{
         session::session_cookie_with_ttl,
         state::{AuthState, OpaqueSuite},
         storage::{
-            insert_mfa_bootstrap_session, insert_mfa_challenge_session, insert_session,
+            insert_mfa_bootstrap_session_on, insert_mfa_challenge_session_on, insert_session_on,
             lookup_login_record,
         },
         types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, OpaqueLoginStartResponse},
@@ -32,11 +36,16 @@ use opaque_ke::{
     ServerRegistration,
 };
 use opaque_rand_core::OsRng;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
+use super::exchange::{ExchangeIdentity, ExchangePurpose, lock_identity};
+
+/// Start a real or indistinguishable dummy exchange with shared capacity and expiry.
+/// Admission and rate limits apply before persistence; only a hashed reference is stored.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/login/start",
@@ -47,7 +56,8 @@ use uuid::Uuid;
     responses(
         (status = 200, description = "OPAQUE login started", body = OpaqueLoginStartResponse),
         (status = 400, description = "Validation error", body = String),
-        (status = 429, description = "Rate limited", body = String)
+        (status = 429, description = "Rate limited or shared exchange capacity exhausted", body = String),
+        (status = 500, description = "Authentication storage unavailable; no exchange is issued", body = String)
     ),
     tag = "auth"
 )]
@@ -117,6 +127,8 @@ pub async fn opaque_login_start(
     (StatusCode::OK, Json(response)).into_response()
 }
 
+/// Hide absent/inactive accounts behind a dummy transcript and persist only sealed server state.
+/// The server-derived identity and credential revision determine all later session authority.
 async fn build_login_start_response(
     pool: &PgPool,
     auth_state: &AuthState,
@@ -135,12 +147,18 @@ async fn build_login_start_response(
     };
 
     // Only active users get a real password file; inactive users get a dummy flow.
-    let (password_file, user_id) = match login_record {
+    let (password_file, identity) = match login_record {
         Some(record) if record.status == "active" => {
             let password_file = ServerRegistration::deserialize(&record.opaque_record)
                 .map_err(|_| anyhow!("Invalid stored registration record"));
             match password_file {
-                Ok(file) => (Some(file), Some(record.user_id)),
+                Ok(file) => (
+                    Some(file),
+                    Some(ExchangeIdentity {
+                        user_id: record.user_id,
+                        credential_hash: Sha256::digest(&record.opaque_record).into(),
+                    }),
+                ),
                 Err(err) => {
                     error!("Invalid registration record: {err}");
                     (None, None)
@@ -174,15 +192,31 @@ async fn build_login_start_response(
     };
 
     // Store the login state server-side so finish can complete the exchange.
-    let Some(login_id) = auth_state
+    let login_id = match auth_state
         .opaque()
-        .store_login_state(start_result.state, user_id)
+        .store_login_state(
+            pool,
+            start_result.state,
+            identity,
+            ExchangePurpose::Login,
+            auth_state.config().opaque_exchange_timeout_ms(),
+        )
         .await
-    else {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many pending login attempts".to_string(),
-        ));
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many pending login attempts".to_string(),
+            ));
+        }
+        Err(_) => {
+            error!("OPAQUE exchange storage failed");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Login failed".to_string(),
+            ));
+        }
     };
     let credential_response =
         base64::engine::general_purpose::STANDARD.encode(start_result.message.serialize());
@@ -193,6 +227,8 @@ async fn build_login_start_response(
     })
 }
 
+/// Consume one exchange attempt and issue the MFA-appropriate session after proof verification.
+/// Identity/status/credential checks and session writes share a transaction before cookie disclosure.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/login/finish",
@@ -203,7 +239,8 @@ async fn build_login_start_response(
     responses(
         (status = 204, description = "Login success"),
         (status = 400, description = "Validation error", body = String),
-        (status = 401, description = "Unauthorized", body = String)
+        (status = 401, description = "Invalid, expired or already attempted exchange", body = String),
+        (status = 500, description = "Authentication storage unavailable; no successful login", body = String)
     ),
     tag = "auth"
 )]
@@ -246,8 +283,26 @@ pub async fn opaque_login_finish(
             .into_response();
     };
 
-    let Some(login_state) = auth_state.opaque().take_login_state(login_id).await else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+    let login_state = match auth_state
+        .opaque()
+        .take_login_state(
+            &pool,
+            login_id,
+            ExchangePurpose::Login,
+            auth_state.config().opaque_exchange_timeout_ms(),
+        )
+        .await
+    {
+        Ok(Some(state)) => state,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
+        Err(_) => {
+            error!("OPAQUE exchange storage failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Login failed".to_string(),
+            )
+                .into_response();
+        }
     };
 
     // Always finish the protocol before resolving the intentionally hidden user
@@ -257,8 +312,9 @@ pub async fn opaque_login_finish(
         .state
         .finish(credential_finalization, ServerLoginParameters::default());
 
-    match (finish_result, login_state.user_id) {
-        (Ok(_), Some(user_id)) => {
+    match (finish_result, login_state.identity) {
+        (Ok(_), Some(identity)) => {
+            let user_id = identity.user_id;
             let mfa_state =
                 match mfa::resolve_login_mfa_state(&pool, user_id, auth_state.mfa()).await {
                     Ok(state) => state,
@@ -272,13 +328,43 @@ pub async fn opaque_login_finish(
                     }
                 };
 
+            let mut tx = match lock_identity(
+                &pool,
+                &identity,
+                auth_state.config().opaque_exchange_timeout_ms(),
+            )
+            .await
+            {
+                Ok(Some(tx)) => tx,
+                Ok(None) => {
+                    return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+                }
+                Err(_) => {
+                    error!("OPAQUE login identity validation failed");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Login failed".to_string(),
+                    )
+                        .into_response();
+                }
+            };
             let (token, ttl_seconds) = match mfa_state {
                 MfaState::RequiredUnenrolled => {
-                    if let Err(err) = mfa::storage::delete_full_sessions(&pool, user_id).await {
-                        error!("Failed to revoke full sessions for MFA bootstrap: {err}");
+                    if sqlx::query("DELETE FROM user_sessions WHERE user_id=$1")
+                        .bind(user_id)
+                        .execute(&mut *tx)
+                        .await
+                        .is_err()
+                    {
+                        error!("OPAQUE login full-session revocation failed");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Login failed".to_string(),
+                        )
+                            .into_response();
                     }
-                    match insert_mfa_bootstrap_session(
-                        &pool,
+                    match insert_mfa_bootstrap_session_on(
+                        &mut tx,
                         user_id,
                         auth_state.mfa().bootstrap_session_ttl_seconds(),
                     )
@@ -296,8 +382,8 @@ pub async fn opaque_login_finish(
                     }
                 }
                 MfaState::Enabled => {
-                    match insert_mfa_challenge_session(
-                        &pool,
+                    match insert_mfa_challenge_session_on(
+                        &mut tx,
                         user_id,
                         auth_state.mfa().challenge_session_ttl_seconds(),
                     )
@@ -315,8 +401,12 @@ pub async fn opaque_login_finish(
                     }
                 }
                 MfaState::Disabled => {
-                    match insert_session(&pool, user_id, auth_state.config().session_ttl_seconds())
-                        .await
+                    match insert_session_on(
+                        &mut tx,
+                        user_id,
+                        auth_state.config().session_ttl_seconds(),
+                    )
+                    .await
                     {
                         Ok(token) => (token, auth_state.config().session_ttl_seconds()),
                         Err(err) => {
@@ -331,6 +421,14 @@ pub async fn opaque_login_finish(
                 }
             };
 
+            if tx.commit().await.is_err() {
+                error!("OPAQUE login session transaction commit failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Login failed".to_string(),
+                )
+                    .into_response();
+            }
             let mut response_headers = HeaderMap::new();
             match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
                 Ok(cookie) => {

@@ -90,8 +90,9 @@ organization deletion requires its owner and the existing recent-authentication 
 The console uses server-issued role capabilities and a UUID-pinned confirmation. Inline
 OPAQUE password verification returns to confirmation after refreshing identity, authority
 and children; it never deletes automatically. This reuses current authentication semantics.
-OPAQUE login/reauthentication exchanges remain process-local until the separately tracked
-shared-state migration; durable OAuth request/code state does not remove that limitation.
+OPAQUE login/reauthentication now uses shared encrypted PostgreSQL state, independently
+of OAuth request/code persistence. Reauthentication binds the exact original full session;
+see [shared authentication exchanges](opaque-exchanges.md).
 Creation and deletion coordinate through transaction-owned PostgreSQL parent locks.
 Deleted ancestry cannot authorize outstanding requests or redeem old codes.
 Future token revocation and cache policy must account for these configuration changes;
@@ -241,8 +242,9 @@ the browser deadline never changes PostgreSQL expiry. The cookie and
 server snapshot enforce integrity; modifying the locator cannot change authority.
 Deploy the Web API base URL against the same issuer origin, over HTTPS. All replicas
 must share PostgreSQL, session/OPAQUE configuration and issuer/resource audience.
-Existing process-local login handshakes retain their existing operational constraints;
-no OAuth request/code state depends on them or requires sticky routing.
+OPAQUE password login/reauthentication exchanges use shared encrypted PostgreSQL state;
+WebAuthn/passkey challenges retain their existing process-local routing constraints.
+No OAuth request/code state depends on process-local state or requires sticky routing.
 
 The first authorized full session is bound permanently by user and session hash.
 Resume and consent recheck an active user/session, active membership, every ancestor,
@@ -454,10 +456,11 @@ A milestone is complete only after its implementation, required checks and indep
 review pass. Token exchange, signed access/ID tokens and accurate code-flow discovery are implemented; refresh, UserInfo and conformance remain pending.
 
 Tenant deletion polish adds permission-aware controls and inline password reauthentication
-with an explicit final confirmation. Durable OPAQUE login/reauthentication exchanges are
-a separate authentication milestone: replace current bounded process-local storage with
-shared single-use transactional state and test cross-replica expiry/replay races. No sticky
-sessions or multi-replica OPAQUE reliability are claimed by the current implementation.
+with an explicit final confirmation. Durable OPAQUE login/reauthentication is implemented in a separate shared PostgreSQL
+exchange store with AEAD, single-attempt consumption, exact original-session binding
+and cross-replica expiry/replay/race tests. [Deployment and retention](opaque-exchanges.md)
+describe its limits. WebAuthn/passkey challenges still require shared persistence before
+all authentication flows can operate without replica affinity.
 
 The implemented [token exchange](oauth-token-exchange.md) owns authentication/redemption/
 signing/persistence through commit and is tested through the isolated runtime-role HTTP

@@ -105,10 +105,10 @@ roadmap; row locks establish lifecycle consistency, not a production latency gua
 Existing organization metadata DTOs continue to omit roles; the separate capability
 contract supplies presentation hints without changing mutation authorization.
 
-OPAQUE exchange state for login and reauthentication is bounded and single-use but
-currently process-local. Start/finish reaching different replicas can fail; this phase
-adds no sticky-session mechanism and does not claim shared authentication exchanges.
-Migrating that state to transactional shared storage is tracked separately in TODO.md.
+OPAQUE login and reauthentication now use [shared encrypted PostgreSQL exchanges](opaque-exchanges.md).
+Start/finish can reach different replicas; elevation is bound to the original session
+and expires with the server-issued exchange. WebAuthn/passkey exchange persistence
+remains separate in TODO.md.
 OAuth authorization requests/codes and tenant lifecycle coordination remain PostgreSQL-backed.
 
 ## Validation and review
@@ -156,4 +156,4 @@ Browser tests run explicitly during local validation; current CI builds WASM and
 the native/database suites but has no browser-test job. Adding that gate is tracked
 separately. Four other security-settings flows still contain inline OPAQUE exchanges;
 sharing their helper is outside this focused milestone. Bounded ancestor coordination
-and durable OPAQUE exchanges remain separate roadmap items.
+and durable WebAuthn/passkey exchanges remain separate roadmap items.
