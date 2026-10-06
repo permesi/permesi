@@ -161,5 +161,5 @@ an isolated purpose-removal mutation staying green is not a protocol bypass. Exa
 throughput, capacity fairness, limited-MFA revocation, HTTP error classification and nonce
 lifetimes remain explicitly deferred for the reasons above. The pre-existing `AGENTS.md`
 OpenAPI binary example is outside this phase; `just openapi` uses the actual
-`permesi-openapi` binary. Publication and a successful corrected hosted CI run remain
-pending; see [validation evidence](oauth-scenarios.md#validation-and-independent-review).
+`permesi-openapi` binary. The implementation is published on `sandbox`; successful
+corrected hosted browser CI remains pending; see [validation evidence](oauth-scenarios.md#validation-and-independent-review).

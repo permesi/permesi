@@ -3,12 +3,12 @@ use reqwest::Method;
 use serde_json::{Value, json};
 use testcontainers::core::wait::HttpWaitStrategy;
 use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
+    ContainerAsync, ContainerRequest, GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
 };
 use tokio::time::{Duration, sleep};
 
-use crate::container::start_with_port_retry;
+use crate::container::{start_with_port_retry, with_loopback_port};
 
 const VAULT_PORT: u16 = 8200;
 
@@ -148,29 +148,9 @@ impl VaultContainer {
     /// Returns an error if the container fails to start or the port cannot be resolved.
     pub async fn start_with_config(network: &str, config: VaultConfig) -> Result<Self> {
         crate::runtime::ensure_container_runtime()?;
-        let command = vec![
-            "server".to_string(),
-            "-dev".to_string(),
-            format!("-dev-root-token-id={}", config.root_token),
-            "-dev-listen-address=0.0.0.0:8200".to_string(),
-        ];
 
         let (container, _) = start_with_port_retry("Vault", "vault", |container_name| {
-            let image = GenericImage::new(&config.image, &config.tag)
-                .with_exposed_port(VAULT_PORT.tcp())
-                .with_wait_for(WaitFor::http(
-                    HttpWaitStrategy::new("/v1/sys/health")
-                        .with_port(VAULT_PORT.tcp())
-                        // testcontainers requires an explicit response matcher; Vault dev-mode returns 200.
-                        .with_expected_status_code(200_u16),
-                ))
-                .with_cmd(command.clone())
-                .with_container_name(container_name);
-            if network != "bridge" && network != "default" {
-                image.with_network(network)
-            } else {
-                image
-            }
+            fixture_request(&config, container_name, network)
         })
         .await?;
 
@@ -639,5 +619,36 @@ fn vault_error_message(body: &str) -> String {
         truncated
     } else {
         format!("{truncated}...")
+    }
+}
+
+/// Builds the exact request used by the live fixture, including HTTP readiness.
+pub(crate) fn fixture_request(
+    config: &VaultConfig,
+    container_name: &str,
+    network: &str,
+) -> ContainerRequest<GenericImage> {
+    let command = vec![
+        "server".to_string(),
+        "-dev".to_string(),
+        format!("-dev-root-token-id={}", config.root_token),
+        "-dev-listen-address=0.0.0.0:8200".to_string(),
+    ];
+
+    let image = GenericImage::new(&config.image, &config.tag)
+        .with_exposed_port(VAULT_PORT.tcp())
+        .with_wait_for(WaitFor::http(
+            HttpWaitStrategy::new("/v1/sys/health")
+                .with_port(VAULT_PORT.tcp())
+                // testcontainers requires an explicit response matcher; Vault dev-mode returns 200.
+                .with_expected_status_code(200_u16),
+        ))
+        .with_cmd(command.clone())
+        .with_container_name(container_name);
+    let image = with_loopback_port(image, VAULT_PORT);
+    if network != "bridge" && network != "default" {
+        image.with_network(network)
+    } else {
+        image
     }
 }

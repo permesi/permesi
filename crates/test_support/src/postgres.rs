@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use sqlx::{Connection, PgConnection};
 use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
+    ContainerAsync, ContainerRequest, GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
 };
 use tokio::time::{Duration, sleep};
 
-use crate::container::start_with_port_retry;
+use crate::container::{start_with_port_retry, with_loopback_port};
 
 const POSTGRES_PORT: u16 = 5432;
 
@@ -81,20 +81,7 @@ impl PostgresContainer {
         crate::runtime::ensure_container_runtime()?;
         let (container, container_name) =
             start_with_port_retry("Postgres", "postgres", |container_name| {
-                let image = GenericImage::new(&config.image, &config.tag)
-                    .with_exposed_port(POSTGRES_PORT.tcp())
-                    .with_wait_for(WaitFor::message_on_stdout(
-                        "database system is ready to accept connections",
-                    ))
-                    .with_env_var("POSTGRES_USER", &config.user)
-                    .with_env_var("POSTGRES_PASSWORD", &config.password)
-                    .with_env_var("POSTGRES_DB", &config.db_name)
-                    .with_container_name(container_name);
-                if network != "bridge" && network != "default" {
-                    image.with_network(network)
-                } else {
-                    image
-                }
+                fixture_request(&config, container_name, network)
             })
             .await?;
 
@@ -238,6 +225,29 @@ impl PostgresContainer {
                 }
             }
         }
+    }
+}
+
+/// Builds the exact request used by the live fixture, including loopback publication.
+pub(crate) fn fixture_request(
+    config: &PostgresConfig,
+    container_name: &str,
+    network: &str,
+) -> ContainerRequest<GenericImage> {
+    let image = GenericImage::new(&config.image, &config.tag)
+        .with_exposed_port(POSTGRES_PORT.tcp())
+        .with_wait_for(WaitFor::message_on_stdout(
+            "database system is ready to accept connections",
+        ))
+        .with_env_var("POSTGRES_USER", &config.user)
+        .with_env_var("POSTGRES_PASSWORD", &config.password)
+        .with_env_var("POSTGRES_DB", &config.db_name)
+        .with_container_name(container_name);
+    let image = with_loopback_port(image, POSTGRES_PORT);
+    if network != "bridge" && network != "default" {
+        image.with_network(network)
+    } else {
+        image
     }
 }
 

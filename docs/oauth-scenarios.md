@@ -376,9 +376,15 @@ configured deadlines and pooled-setting leaks, and malformed reauthentication co
 No confirmed implementation defects remain; operational limits and hardening follow-ups
 are explicit in [the exchange design](opaque-exchanges.md) and [TODO](../TODO.md).
 
-The hosted browser run's failed-job retry also failed on the old published commit
-`bf31d19`, again without a DevTools port file. The corrected browser selector and shared
-OPAQUE changes remain local pending publication: SSH push authentication is unavailable,
-and the normal HTTPS credential-helper fallback cannot resolve GitHub in the primary
-session. This is not evidence of a successful corrected hosted run. The browser CI and
-OPAQUE publication milestones remain unchecked until that run passes.
+The old browser selector failed again on the retry of `bf31d19`. The selector and shared
+OPAQUE implementation were subsequently committed and pushed as `5453167`. Its
+[hosted run](https://github.com/permesi/permesi/actions/runs/37421297944) passes Chrome
+readiness, the console browser stage and all other required jobs, including the 29 real
+OAuth scenarios and seven harness checks, but both attempts fail during PostgreSQL
+fixture port resolution. Claude reproduced the failure against Podman 4.9.3: implicit
+publish-all bindings report an empty `HostIp`, which testcontainers 0.28 cannot parse.
+Podman 5.x supplies `0.0.0.0`, explaining the passing local tests. Fixtures now explicitly
+request a random `127.0.0.1` port for PostgreSQL and Vault; this is discoverable on both
+versions and avoids exposing test services to the LAN. A regression checks the requested
+binding and its discoverability. The corrected hosted gate remains pending; this evidence
+must not be described as a green run.

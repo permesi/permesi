@@ -1,4 +1,7 @@
-//! Container start with a retry for rootless host-port races.
+//! Loopback fixture publication and container start with bounded port-race retries.
+//!
+//! Explicit IPv4 bindings keep test services private and make their allocated ports
+//! discoverable across Podman versions, including 4.x empty publish-all metadata.
 //!
 //! Test containers publish their service port on a random host port. Rootless Podman
 //! picks that port itself (`rootlessport`), and when many containers start in
@@ -13,13 +16,39 @@ use std::{
     future::Future,
     process::{Command, Stdio},
 };
-use testcontainers::{ContainerAsync, ContainerRequest, GenericImage, runners::AsyncRunner};
+use testcontainers::{
+    ContainerAsync, ContainerRequest, GenericImage, ImageExt,
+    bollard::models::{HostConfig, PortBinding},
+    runners::AsyncRunner,
+};
 use tokio::time::{Duration, sleep};
 
 use crate::unique_name;
 
 /// Attempts before a host-port race is reported as a failure.
 const PORT_RACE_ATTEMPTS: u32 = 5;
+
+/// Publishes an automatically allocated IPv4 loopback port explicitly.
+/// Podman 4.x reports an empty `HostIp` for publish-all mappings, which testcontainers
+/// cannot resolve. Explicit binding works on both 4.x and 5.x and keeps fixtures off LANs.
+pub(crate) fn with_loopback_port(
+    image: ContainerRequest<GenericImage>,
+    port: u16,
+) -> ContainerRequest<GenericImage> {
+    image.with_host_config_modifier(move |config| bind_loopback(config, port))
+}
+
+/// Owns the fixture's sole published port; the engine selects its ephemeral host number.
+fn bind_loopback(config: &mut HostConfig, port: u16) {
+    config.publish_all_ports = Some(false);
+    config.port_bindings = Some(std::collections::HashMap::from([(
+        format!("{port}/tcp"),
+        Some(vec![PortBinding {
+            host_ip: Some("127.0.0.1".into()),
+            host_port: Some(String::new()),
+        }]),
+    )]));
+}
 
 /// Start the container `build` describes for a given name, retrying only when the
 /// runtime lost a race for its random host port. Returns the running container and the
@@ -108,6 +137,51 @@ mod tests {
     use super::*;
     use anyhow::anyhow;
     use std::{fmt, sync::Mutex};
+
+    /// The engine's allocated port stays discoverable without wildcard/empty `HostIp` metadata.
+    #[test]
+    fn loopback_port_is_resolvable_and_never_requests_publish_all() -> Result<()> {
+        for network in ["bridge", "private-test-network"] {
+            let postgres = crate::postgres::fixture_request(
+                &crate::postgres::PostgresConfig::new(),
+                "postgres-test",
+                network,
+            );
+            let vault = crate::vault::fixture_request(
+                &crate::vault::VaultConfig::new(),
+                "vault-test",
+                network,
+            );
+            assert_loopback(&postgres, 5432)?;
+            assert_loopback(&vault, 8200)?;
+        }
+        Ok(())
+    }
+
+    fn assert_loopback(image: &ContainerRequest<GenericImage>, port: u16) -> Result<()> {
+        use testcontainers::core::{IntoContainerPort, ports::Ports};
+        let mut config = HostConfig::default();
+        image
+            .host_config_modifier()
+            .ok_or_else(|| anyhow!("missing port modifier"))?(&mut config);
+        assert_eq!(config.publish_all_ports, Some(false));
+        let ports = config
+            .port_bindings
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing bindings"))?;
+        let values = ports
+            .get_mut(&format!("{port}/tcp"))
+            .and_then(Option::as_mut)
+            .ok_or_else(|| anyhow!("missing TCP binding"))?;
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].host_ip.as_deref(), Some("127.0.0.1"));
+        assert_eq!(values[0].host_port.as_deref(), Some(""));
+        values[0].host_port = Some("49152".into()); // emulate the runtime's random allocation
+        let resolved = Ports::try_from(ports.clone())?;
+        assert_eq!(resolved.map_to_host_port_ipv4(port.tcp()), Some(49152));
+        assert_eq!(resolved.map_to_host_port_ipv6(port.tcp()), None);
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct StartError(&'static str);
