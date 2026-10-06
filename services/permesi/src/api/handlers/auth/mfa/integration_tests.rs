@@ -614,29 +614,118 @@ async fn mfa_enrollment_rejects_confirmed_credential_without_fresh_proof() -> Re
         return Ok(());
     };
     let user = insert_active_user(&ctx.pool, "confirmed@example.com").await?;
-    let (_secret, _qr, credential) = ctx
+    let (secret, _qr, credential) = ctx
         .totp_service
         .enroll_begin(user, "confirmed@example.com", None)
         .await?;
     crate::totp::repo::TotpRepo::confirm_credential(&ctx.pool, user, credential).await?;
+    super::storage::upsert_mfa_state(&ctx.pool, user, MfaState::RequiredUnenrolled, None).await?;
     let bootstrap =
         crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
             .await?;
     let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    for code in [
+        "bogus".to_owned(),
+        current_totp(&secret, "confirmed@example.com")?,
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/auth/mfa/totp/enroll/finish")
+                    .header(COOKIE, format!("permesi_session={bootstrap}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_vec(
+                        &json!({"credential_id":credential,"code":code}),
+                    )?))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.headers().get(SET_COOKIE).is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+                .bind(user)
+                .fetch_one(&ctx.pool)
+                .await?,
+            0
+        );
+    }
+    Ok(())
+}
+
+/// Rejected codes retain durable failure audit without consuming or upgrading the original session.
+#[tokio::test]
+async fn mfa_rejected_totp_proofs_commit_failure_audits_without_authority() -> Result<()> {
+    let Some(ctx) = TestContext::with_capacity(1).await? else {
+        return Ok(());
+    };
+    let user = insert_active_user(&ctx.pool, "audit@example.com").await?;
+    let (_, _, credential) = ctx
+        .totp_service
+        .enroll_begin(user, "audit@example.com", None)
+        .await?;
+    super::storage::upsert_mfa_state(&ctx.pool, user, MfaState::RequiredUnenrolled, None).await?;
+    let bootstrap =
+        crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
+            .await?;
+    let challenge =
+        crate::api::handlers::auth::storage::insert_mfa_challenge_session(&ctx.pool, user, 300)
+            .await?;
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/v1/auth/mfa/totp/enroll/finish")
                 .header(COOKIE, format!("permesi_session={bootstrap}"))
                 .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(
-                    &json!({"credential_id":credential,"code":"bogus"}),
-                )?))?,
+                .body(Body::from(
+                    json!({"credential_id":credential,"code":"bogus"}).to_string(),
+                ))?,
         )
         .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(response.headers().get(SET_COOKIE).is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM totp_audit_log WHERE user_id=$1 AND action='confirm_fail'"
+        )
+        .bind(user)
+        .fetch_one(&ctx.pool)
+        .await?,
+        1
+    );
+    crate::totp::repo::TotpRepo::confirm_credential(&ctx.pool, user, credential).await?;
+    crate::api::handlers::auth::mfa::storage::upsert_mfa_state(
+        &ctx.pool,
+        user,
+        crate::api::handlers::auth::mfa::MfaState::Enabled,
+        None,
+    )
+    .await?;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/mfa/totp/verify")
+                .header(COOKIE, format!("permesi_session={challenge}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(json!({"code":"bogus"}).to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.headers().get(SET_COOKIE).is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM totp_audit_log WHERE user_id=$1 AND action='verify_failure'"
+        )
+        .bind(user)
+        .fetch_one(&ctx.pool)
+        .await?,
+        1
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
             .bind(user)
@@ -653,6 +742,7 @@ async fn password_rotation_blocks_revoked_mfa_routes_and_removes_unconfirmed_tot
         return Ok(());
     };
     let user = insert_active_user(&ctx.pool, "rotation@example.com").await?;
+    super::storage::upsert_mfa_state(&ctx.pool, user, MfaState::RequiredUnenrolled, None).await?;
     let bootstrap =
         crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
             .await?;
@@ -706,6 +796,169 @@ async fn password_rotation_blocks_revoked_mfa_routes_and_removes_unconfirmed_tot
             .fetch_one(&ctx.pool)
             .await?,
         0
+    );
+    Ok(())
+}
+
+/// Generates real proof from the server's returned enrollment secret, including confirmed-row probes.
+fn current_totp(secret: &str, email: &str) -> Result<String> {
+    let secret = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, secret)
+        .ok_or_else(|| anyhow!("invalid TOTP secret"))?;
+    Ok(totp_rs::Builder::new()
+        .with_algorithm(totp_rs::Algorithm::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .with_issuer(Some("Permesi"))
+        .with_account_name(email)
+        .build()
+        .map_err(|_| anyhow!("invalid test TOTP"))?
+        .generate_current()
+        .to_string())
+}
+
+/// Completing one enrollment revokes every earlier bootstrap and its in-flight factor authority.
+#[tokio::test]
+async fn mfa_totp_completion_revokes_other_bootstraps_and_pending_enrollment() -> Result<()> {
+    let Some(ctx) = TestContext::with_capacity(1).await? else {
+        return Ok(());
+    };
+    let email = "bootstrap-revocation@example.com";
+    let user = insert_active_user(&ctx.pool, email).await?;
+    super::storage::upsert_mfa_state(&ctx.pool, user, MfaState::RequiredUnenrolled, None).await?;
+    let first =
+        crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
+            .await?;
+    let stale =
+        crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
+            .await?;
+    let (secret, _, credential) = ctx.totp_service.enroll_begin(user, email, None).await?;
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    let payload =
+        json!({"credential_id":credential,"code":current_totp(&secret,email)?}).to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/mfa/totp/enroll/finish")
+                .header(COOKIE, format!("permesi_session={first}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(payload.clone()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(SET_COOKIE).is_some());
+    for (method, path, body) in [
+        (
+            "POST",
+            "/v1/auth/mfa/totp/enroll/start".to_owned(),
+            "{}".to_owned(),
+        ),
+        (
+            "POST",
+            "/v1/auth/mfa/totp/enroll/finish".to_owned(),
+            payload,
+        ),
+        (
+            "DELETE",
+            format!("/v1/me/mfa/webauthn/{}", Uuid::new_v4()),
+            String::new(),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(COOKIE, format!("permesi_session={stale}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get(SET_COOKIE).is_none());
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM user_mfa_bootstrap_sessions WHERE user_id=$1"
+        )
+        .bind(user)
+        .fetch_one(&ctx.pool)
+        .await?,
+        0
+    );
+    Ok(())
+}
+
+/// Real recovery proof revokes full, challenge and previous bootstrap authority in one commit.
+#[tokio::test]
+async fn mfa_recovery_revokes_all_previous_sessions_and_consumes_its_code() -> Result<()> {
+    let Some(ctx) = TestContext::with_capacity(1).await? else {
+        return Ok(());
+    };
+    let user = insert_active_user(&ctx.pool, "recovery@example.com").await?;
+    let auth = auth_state();
+    let batch = super::recovery::RecoveryCodeBatch::generate(
+        auth.mfa().recovery_pepper().context("pepper")?,
+    )?;
+    let mut tx = ctx.pool.begin().await?;
+    super::storage::insert_recovery_codes_on(&mut tx, user, batch.batch_id, &batch.code_hashes)
+        .await?;
+    super::storage::upsert_mfa_state(&mut *tx, user, MfaState::Enabled, Some(batch.batch_id))
+        .await?;
+    tx.commit().await?;
+    let _full = insert_session(&ctx.pool, user).await?;
+    let challenge =
+        crate::api::handlers::auth::storage::insert_mfa_challenge_session(&ctx.pool, user, 300)
+            .await?;
+    let _other =
+        crate::api::handlers::auth::storage::insert_mfa_challenge_session(&ctx.pool, user, 300)
+            .await?;
+    let _bootstrap =
+        crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
+            .await?;
+    let app = app_router(auth, ctx.pool.clone(), ctx.totp_service.clone());
+    let code = batch.codes.first().context("recovery code")?;
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/auth/mfa/recovery")
+            .header(COOKIE, format!("permesi_session={challenge}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(json!({"code":code}).to_string()))
+    };
+    let response = app.clone().oneshot(request()?).await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let cookie = response
+        .headers()
+        .get(SET_COOKIE)
+        .context("bootstrap cookie")?
+        .to_str()?;
+    let token = cookie
+        .split(';')
+        .next()
+        .context("cookie pair")?
+        .strip_prefix("permesi_session=")
+        .context("cookie token")?;
+    assert_eq!(
+        crate::api::handlers::auth::session_kind::SessionKind::from_token(token),
+        crate::api::handlers::auth::session_kind::SessionKind::MfaBootstrap
+    );
+    let row: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT COUNT(*) FROM user_sessions WHERE user_id=$1),(SELECT COUNT(*) FROM user_mfa_challenge_sessions WHERE user_id=$1),(SELECT COUNT(*) FROM user_mfa_bootstrap_sessions WHERE user_id=$1),(SELECT COUNT(*) FROM user_mfa_recovery_codes WHERE user_id=$1 AND used_at IS NOT NULL)").bind(user).fetch_one(&ctx.pool).await?;
+    assert_eq!(row, (0, 0, 1, 1));
+    assert_eq!(
+        super::storage::load_mfa_state(&ctx.pool, user)
+            .await?
+            .context("state")?
+            .state,
+        MfaState::RequiredUnenrolled
+    );
+    assert_eq!(
+        app.oneshot(request()?).await?.status(),
+        StatusCode::UNAUTHORIZED
     );
     Ok(())
 }

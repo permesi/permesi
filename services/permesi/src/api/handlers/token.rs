@@ -5,9 +5,7 @@
 //! Only committed output reaches JSON. Every response prevents caching and contains no
 //! redirects, SQL/Vault diagnostics, submitted secrets or internal authorization details.
 
-use super::auth::{
-    AuthState, RateLimitAction, RateLimitConfig, RateLimitDecision, extract_client_ip,
-};
+use super::auth::{AuthState, RateLimitAction, RateLimitConfig, extract_client_ip};
 use crate::oauth::{
     oidc::OAuthState,
     tokens::{self, TokenError, TokenResponse, request},
@@ -73,18 +71,22 @@ async fn handle(
         policy.ip_attempts,
         policy.client_ip_attempts,
     ));
-    if limiter
+    if let Some(status) = limiter
         .check_ip(ip.as_deref(), RateLimitAction::TokenExchange)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return Err(TokenError::Limited);
+        return Err(if status == StatusCode::SERVICE_UNAVAILABLE {
+            TokenError::Unavailable
+        } else {
+            TokenError::Limited
+        });
     }
     let body = axum::body::to_bytes(body, oauth.config.tokens.max_body_bytes)
         .await
         .map_err(|_| TokenError::InvalidRequest)?;
     let (request, authentication) = request::parse(&parts.headers, &body)?;
-    if limiter
+    if let Some(status) = limiter
         .check_email(
             &format!(
                 "token-client/{}/ip/{}",
@@ -94,9 +96,13 @@ async fn handle(
             RateLimitAction::TokenExchange,
         )
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return Err(TokenError::Limited);
+        return Err(if status == StatusCode::SERVICE_UNAVAILABLE {
+            TokenError::Unavailable
+        } else {
+            TokenError::Limited
+        });
     }
     tokens::exchange(pool, oauth, request, authentication).await
 }

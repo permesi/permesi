@@ -11,8 +11,8 @@ ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges
 
 Start validates the existing request and builds the library's credential response.
 It generates a random UUID and stores only its SHA-256 hash in `opaque_exchanges`.
-The serialized server transcript is encrypted with ChaCha20-Poly1305 using a fresh
-96-bit nonce and a domain-separated HMAC-SHA256 key derived from the Vault seed.
+The serialized server transcript is encrypted with XChaCha20-Poly1305 using a fresh
+192-bit nonce and a domain-separated HMAC-SHA256 key derived from the Vault seed.
 AEAD authenticates the reference hash, purpose, user, registered credential hash,
 original reauthentication session hash, issuance/expiration and configured server ID.
 The raw reference is returned to the client; it and the decrypted transcript are
@@ -20,34 +20,24 @@ never logged or persisted in plaintext. Passwords still never reach the server.
 
 PostgreSQL supplies issuance and expiration time. `PERMESI_OPAQUE_LOGIN_TTL_SECONDS`
 defaults to 300 seconds and accepts 1–3600 seconds; clap and dispatch both validate
-it. `PERMESI_AUTH_MAX_PENDING_STATES` defaults to 10,000. This is now a cluster-wide
-capacity shared by OPAQUE login and reauthentication, while WebAuthn uses
-separate per-purpose cluster-wide limits. Replicas must use consistent limits.
-An advisory transaction lock covers expiry pruning, the capacity check and insertion,
-so concurrent replicas cannot each reserve the last slot. Exhaustion returns 429;
-database or cryptographic failures fail closed with a generic 500.
-Pruning uses the current database statement's time so PostgreSQL can use the expiry
-index. The strict global limit still serializes starts and counts pending rows; this
-bounded design favors simple capacity correctness. Production throughput/queueing
-and alternatives to the exact count remain operational follow-ups, not proven linear
-scaling with added replicas.
-Existing admission and PostgreSQL IP/email rate limits run before reserving state,
-but the store has no per-principal pending quota. Sustained starts for different
-accounts can exhaust the shared cap. Production abuse testing, trusted-edge handling
-of forwarded IP headers, separate flow capacity controls and fair occupancy quotas
-remain tracked hardening work; the global bound alone is not abuse isolation.
+it. `PERMESI_AUTH_MAX_PENDING_STATES` defaults to 10,000 as an additional per-purpose
+ceiling. Login and reauthentication now have independent flow ceilings and fair
+HMAC account occupancy quotas. An advisory transaction lock covers expiry pruning,
+counting and insertion, so replicas cannot reserve the last slot twice. Capacity
+returns 429; dependency and cryptographic-initialization failures return generic 503.
+Pruning uses current statement time and the expiry index. Exact counts still serialize
+starts, so throughput/queueing and multi-host abuse testing remain operational follow-ups.
+Admission and shared IP/account request budgets also precede reservation. See
+[authentication operations](authentication-operations.md) for flow/subject defaults,
+verified transport identity, explicit proxy trust and outcome/timing telemetry.
 
-`PERMESI_OPAQUE_EXCHANGE_TIMEOUT_MS` bounds each database lock and statement in
-start, consumption and identity/session-write transactions. It defaults to 1000 ms
-and accepts 1–10,000 ms, validated by clap, dispatch and the store. Transaction-local
-settings reuse the existing PostgreSQL deadline helper and do not alter pooled-session
-defaults. A timeout returns generic 500 without a successful authentication response;
-consumption rolled back before commitment remains unused, while a later issuance
-failure leaves the already consumed exchange unavailable. This is a database deadline,
-not a claim of a total HTTP/network deadline or a measured production throughput target.
-If an original session is revoked between reauthentication's session check and state
-insertion, the foreign key rejects the reservation and the handler returns generic
-500; classifying that race as 401 and transient database failures as 503 is deferred.
+`PERMESI_OPAQUE_EXCHANGE_TIMEOUT_MS` bounds pool acquisition plus each database lock
+and statement in start, consumption and current-authority transactions. Its default is
+1000 ms and range 1–10,000, checked in clap/dispatch/storage. Transaction-local settings
+reset on pool return. Dependency timeouts return generic 503; aborted consumption stays
+unused, while a later issuance failure leaves the committed attempt consumed. This is
+not a total HTTP/network deadline. Revoked or expired sessions reject authority; a foreign
+key race during pending insertion still returns generic 503 without issuing authority.
 
 Finish uses `DELETE ... RETURNING` to consume exactly one attempt before verifying
 the proof. Expired, tampered, replayed and wrong-purpose/session attempts return 401
@@ -96,10 +86,9 @@ retention removes it. Encryption under a long-lived Vault seed does not provide
 cryptographic erasure or forward secrecy for archived transcripts after combined
 database/seed compromise. Permesi uses independent random HTTPS session cookies;
 the OPAQUE session key is not used to encrypt those cookies.
-The random 96-bit AEAD nonce has a finite collision bound under the long-lived
-seed-derived key. A per-exchange subkey or extended-nonce design and an explicit
-encryption-key lifetime policy remain defense-in-depth follow-ups for large cumulative
-issuance volumes; this phase retains the existing library's ChaCha20-Poly1305 primitive.
+The 192-bit random nonce and v2 key domain now follow the explicit cumulative-volume
+and upgrade policy in [authentication operations](authentication-operations.md).
+Independent Vault exchange-key rotation remains separate from permanent OPAQUE setup.
 
 ## Regression checks
 
@@ -159,7 +148,7 @@ of 401; restoring it passes. The final review found no confirmed implementation 
 A purpose-only metadata change without a session-hash change is rejected by the schema;
 a schema-valid purpose change must also alter the authenticated session hash. Therefore
 an isolated purpose-removal mutation staying green is not a protocol bypass. Exact-count
-throughput, capacity fairness, HTTP error classification and nonce
-lifetimes remain explicitly deferred for the reasons above. The pre-existing `AGENTS.md`
+throughput remains a measured deployment concern; shared subject/flow quotas, dependency
+classification, trusted-peer handling and nonce policy now follow [authentication operations](authentication-operations.md). The pre-existing `AGENTS.md`
 OpenAPI binary example is outside this phase; `just openapi` uses the actual
 `permesi-openapi` binary. The implementation is published on `sandbox`; corrected hosted run 37426417421 passes every required job; see [validation evidence](oauth-scenarios.md#validation-and-independent-review).

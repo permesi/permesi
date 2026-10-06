@@ -8,8 +8,7 @@
 //! No submitted URL, code, cookie, nonce, SQL error, or authorization context is logged.
 
 use super::auth::{
-    AuthState, RateLimitAction, RateLimitDecision, SessionKind, extract_client_ip,
-    hash_session_token,
+    AuthState, RateLimitAction, SessionKind, extract_client_ip, hash_session_token,
     session::{authenticate_session, extract_session_token},
 };
 use crate::oauth::{
@@ -83,8 +82,11 @@ pub(crate) async fn jwks(
         return secured(StatusCode::SERVICE_UNAVAILABLE.into_response());
     }
     let refresh = requests_jwks_refresh(&headers);
-    if refresh && oauth_rate_limited(&auth, &headers, RateLimitAction::JwksRefresh).await {
-        return secured(StatusCode::TOO_MANY_REQUESTS.into_response());
+    if refresh
+        && let Some(status) =
+            oauth_rate_limited(&auth, &headers, RateLimitAction::JwksRefresh).await
+    {
+        return secured(status.into_response());
     }
     let keys = if refresh {
         oauth.refresh_jwks().await
@@ -126,8 +128,8 @@ pub(crate) async fn authorize(
     if oauth.config.issuer.is_none() {
         return secured(StatusCode::SERVICE_UNAVAILABLE.into_response());
     }
-    if oauth_rate_limited(&auth, &headers, RateLimitAction::Authorize).await {
-        return secured(StatusCode::TOO_MANY_REQUESTS.into_response());
+    if let Some(status) = oauth_rate_limited(&auth, &headers, RateLimitAction::Authorize).await {
+        return secured(status.into_response());
     }
     let Ok(Query(input)) = input else {
         return direct_invalid();
@@ -175,8 +177,8 @@ pub(crate) async fn resume(
     if oauth.config.issuer.is_none() {
         return secured(StatusCode::SERVICE_UNAVAILABLE.into_response());
     }
-    if oauth_rate_limited(&auth, &headers, RateLimitAction::Authorize).await {
-        return secured(StatusCode::TOO_MANY_REQUESTS.into_response());
+    if let Some(status) = oauth_rate_limited(&auth, &headers, RateLimitAction::Authorize).await {
+        return secured(status.into_response());
     }
     let (Ok(Query(input)), Some(browser)) = (input, browser_token(&headers)) else {
         return direct_invalid();
@@ -220,8 +222,8 @@ pub(crate) async fn consent(
     if !consent_origin_allowed(&headers, issuer) {
         return direct_invalid();
     }
-    if oauth_rate_limited(&auth, &headers, RateLimitAction::Authorize).await {
-        return secured(StatusCode::TOO_MANY_REQUESTS.into_response());
+    if let Some(status) = oauth_rate_limited(&auth, &headers, RateLimitAction::Authorize).await {
+        return secured(status.into_response());
     }
     let (Ok(Form(input)), Some(browser)) = (input, browser_token(&headers)) else {
         return direct_invalid();
@@ -299,16 +301,16 @@ async fn advance(
     let Some(issuer) = service.config.issuer.as_deref() else {
         return secured(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    if auth
+    if let Some(status) = auth
         .rate_limiter()
         .check_email(
             &format!("oauth-request/{id}/{}", hex::encode(browser.hash())),
             RateLimitAction::Authorize,
         )
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return secured(StatusCode::TOO_MANY_REQUESTS.into_response());
+        return secured(status.into_response());
     }
     let session = match session_binding(headers, service.pool).await {
         Ok(session) => session,
@@ -488,11 +490,11 @@ async fn oauth_rate_limited(
     auth: &AuthState,
     headers: &HeaderMap,
     action: RateLimitAction,
-) -> bool {
+) -> Option<StatusCode> {
     auth.rate_limiter()
         .check_ip(extract_client_ip(headers).as_deref(), action)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
 }
 
 /// Makes only nonsecret positive discovery/JWKS responses cacheable for the bounded TTL.

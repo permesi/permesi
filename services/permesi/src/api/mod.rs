@@ -238,6 +238,7 @@ async fn stop_worker(name: &str, worker: JoinHandle<()>) {
 /// error envelope, CORS, shared state, and request correlation (outermost, so every
 /// response carries it).
 fn build_router(state: AppState) -> Result<Router> {
+    let operations = state.auth.config().operations().clone();
     let allowed_origins = frontend_origins(state.auth.config().cors_allowed_origins())?;
     let cors = CorsLayer::new()
         .allow_headers([
@@ -272,7 +273,11 @@ fn build_router(state: AppState) -> Result<Router> {
             .route("/health", options(health::health)),
     )
     .layer(cors)
-    .with_state(state);
+    .with_state(state)
+    .layer(axum::middleware::from_fn_with_state(
+        operations,
+        auth::operations::verified_peer,
+    ));
     Ok(request_id::with_request_correlation(app))
 }
 
@@ -305,7 +310,11 @@ async fn serve_socket(
     let drain_started = CancellationToken::new();
 
     info!("Listening on unix:{}", path.display());
-    let socket_server = axum::serve(listener, app).with_graceful_shutdown({
+    let socket_server = axum::serve(
+        listener,
+        app.layer(axum::Extension(auth::operations::UnixPeer)),
+    )
+    .with_graceful_shutdown({
         let shutdown_reason = shutdown_reason.clone();
         let drain_started = drain_started.clone();
         async move {
@@ -379,7 +388,7 @@ async fn serve_tls(
     axum_server::from_tcp_rustls(listener, tls_config)
         .context("Failed to configure TLS server from pre-bound TCP listener")?
         .handle(handle)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await?;
 
     if let Some(signal) = shutdown_reason.lock().await.take() {
@@ -411,7 +420,7 @@ fn init_security_key_service(
     pool: sqlx::PgPool,
     seed: &[u8; 32],
 ) -> Result<SecurityKeyService> {
-    SecurityKeyService::new(
+    Ok(SecurityKeyService::new(
         pool,
         auth.webauthn_rp_id(),
         &auth.webauthn_allowed_origins()?,
@@ -424,7 +433,8 @@ fn init_security_key_service(
         )?,
         auth.auth_max_pending_states(),
         auth.opaque_exchange_timeout_ms(),
-    )
+    )?
+    .with_operations(auth.operations().clone()))
 }
 
 /// Constructs shared passkey storage using only the validated runtime policy and Vault seed.
@@ -444,6 +454,7 @@ fn init_passkey_service(
         seed,
         auth_config.opaque_exchange_timeout_ms(),
     )
+    .map(|service| service.with_operations(auth_config.operations().clone()))
     .context("Failed to initialize Passkey service")
 }
 

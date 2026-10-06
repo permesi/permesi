@@ -128,12 +128,12 @@ impl TotpService {
         ip: Option<&str>,
         ua: Option<&str>,
     ) -> Result<bool> {
-        let cred = TotpRepo::get_credential(&mut *connection, credential_id)
-            .await?
-            .ok_or_else(|| anyhow!("Credential not found"))?;
+        let Some(cred) = TotpRepo::get_credential(&mut *connection, credential_id).await? else {
+            return Ok(false);
+        };
 
         if cred.user_id != user_id {
-            return Err(anyhow!("Credential does not belong to user"));
+            return Ok(false);
         }
 
         if cred.confirmed_at.is_some() {

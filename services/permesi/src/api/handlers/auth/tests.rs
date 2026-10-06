@@ -332,6 +332,37 @@ async fn login_mfa_resolution_fails_closed_on_storage_error() -> Result<()> {
     Ok(())
 }
 
+/// Logout clears the browser cookie but cannot claim durable revocation during a database outage.
+#[tokio::test]
+async fn logout_storage_failure_returns_503_and_clears_cookie() -> Result<()> {
+    let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
+    pool.close().await;
+    let app = Router::new()
+        .route("/v1/auth/logout", post(super::session::logout))
+        .with_state(SessionTestState {
+            auth: auth_state(),
+            pool,
+        });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/logout")
+                .header(COOKIE, "permesi_session=previous-authority")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        response
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("Max-Age=0"))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn verify_token_reuse_rejected() -> Result<()> {
     let Some(db) = TestDb::new().await? else {

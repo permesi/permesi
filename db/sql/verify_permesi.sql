@@ -3,6 +3,16 @@
 
 BEGIN;
 
+-- Shared pending admission metadata must remain hash-only and indexed after upgrades.
+DO $$
+BEGIN
+    IF to_regclass('opaque_exchanges_subject_idx') IS NULL OR to_regclass('webauthn_exchanges_subject_idx') IS NULL
+        OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='opaque_exchanges' AND column_name='subject_tag' AND data_type='bytea')
+        OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='webauthn_exchanges' AND column_name='subject_tag' AND data_type='bytea') THEN
+        RAISE EXCEPTION 'missing authentication subject admission metadata';
+    END IF;
+END $$;
+
 -- Credential lifecycle backstops must survive schema reapplication and bootstrap grants.
 DO $$
 DECLARE

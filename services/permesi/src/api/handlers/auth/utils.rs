@@ -78,34 +78,12 @@ pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
     }
 }
 
-/// Extract and canonicalize a client IP from trusted reverse-proxy headers.
-///
-/// Prioritizes Cloudflare's `CF-Connecting-IP`. Invalid values are ignored,
-/// but the service cannot authenticate the headers themselves: deployments
-/// must strip client-supplied forwarding headers at the proxy boundary.
+/// Reads only the canonical address installed by the served transport-trust middleware.
+/// Public forwarding headers never authorize a throttling identity.
 pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
-    if let Some(cf_ip) = headers
-        .get("cf-connecting-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .and_then(|value| value.parse::<IpAddr>().ok())
-    {
-        return Some(cf_ip.to_string());
-    }
-
-    let forwarded = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .and_then(|value| value.parse::<IpAddr>().ok());
-    if let Some(ip) = forwarded {
-        return Some(ip.to_string());
-    }
     headers
-        .get("x-real-ip")
+        .get("x-permesi-client-ip")
         .and_then(|value| value.to_str().ok())
-        .map(str::trim)
         .and_then(|value| value.parse::<IpAddr>().ok())
         .map(|ip| ip.to_string())
 }
@@ -227,11 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn extract_client_ip_prefers_cloudflare() {
+    fn extract_client_ip_rejects_raw_cloudflare() {
         let mut headers = HeaderMap::new();
         headers.insert("cf-connecting-ip", HeaderValue::from_static("1.1.1.1"));
         headers.insert("x-forwarded-for", HeaderValue::from_static("2.2.2.2"));
-        assert_eq!(extract_client_ip(&headers), Some("1.1.1.1".to_string()));
+        assert_eq!(extract_client_ip(&headers), None);
     }
 
     #[test]
@@ -251,21 +229,21 @@ mod tests {
     }
 
     #[test]
-    fn extract_client_ip_prefers_forwarded() {
+    fn extract_client_ip_rejects_raw_forwarded() {
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-forwarded-for",
             HeaderValue::from_static("1.2.3.4, 5.6.7.8"),
         );
         headers.insert("x-real-ip", HeaderValue::from_static("9.9.9.9"));
-        assert_eq!(extract_client_ip(&headers), Some("1.2.3.4".to_string()));
+        assert_eq!(extract_client_ip(&headers), None);
     }
 
     #[test]
-    fn extract_client_ip_falls_back_to_real_ip() {
+    fn extract_client_ip_rejects_raw_real_ip() {
         let mut headers = HeaderMap::new();
         headers.insert("x-real-ip", HeaderValue::from_static("9.9.9.9"));
-        assert_eq!(extract_client_ip(&headers), Some("9.9.9.9".to_string()));
+        assert_eq!(extract_client_ip(&headers), None);
     }
 
     #[test]
@@ -284,7 +262,7 @@ mod tests {
         );
         headers.insert("x-real-ip", HeaderValue::from_static("2001:db8::1"));
 
-        assert_eq!(extract_client_ip(&headers), Some("2001:db8::1".to_string()));
+        assert_eq!(extract_client_ip(&headers), None);
     }
 
     #[test]

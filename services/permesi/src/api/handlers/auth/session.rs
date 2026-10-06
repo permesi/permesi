@@ -37,6 +37,7 @@ const SESSION_COOKIE_NAME: &str = "permesi_session";
     path = "/v1/auth/session",
     responses(
         (status = 200, description = "Session is active", body = SessionResponse),
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "No active session")
     ),
     tag = "auth"
@@ -79,7 +80,7 @@ pub async fn session(headers: HeaderMap, pool: State<PgPool>) -> impl IntoRespon
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => {
             error!("Failed to lookup session: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
 }
@@ -98,7 +99,7 @@ pub(crate) async fn authenticate_session(
         Ok(record) => Ok(record),
         Err(err) => {
             error!("Failed to lookup session: {err}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(StatusCode::SERVICE_UNAVAILABLE)
         }
     }
 }
@@ -107,7 +108,8 @@ pub(crate) async fn authenticate_session(
     post,
     path = "/v1/auth/logout",
     responses(
-        (status = 204, description = "Session cleared")
+        (status = 204, description = "Session cleared"),
+        (status = 503, description = "Session revocation storage unavailable")
     ),
     tag = "auth"
 )]
@@ -116,10 +118,12 @@ pub async fn logout(
     pool: State<PgPool>,
     auth_state: State<Arc<AuthState>>,
 ) -> impl IntoResponse {
+    let mut status = StatusCode::NO_CONTENT;
     if let Some(token) = extract_session_token(&headers)
-        && let Err(err) = delete_any_session(&pool, &token).await
+        && delete_any_session(&pool, &token).await.is_err()
     {
-        error!("Failed to delete session: {err}");
+        error!("Failed to revoke session");
+        status = StatusCode::SERVICE_UNAVAILABLE;
     }
 
     // Always clear the cookie, even if the session record was missing.
@@ -127,7 +131,7 @@ pub async fn logout(
     if let Ok(cookie) = clear_session_cookie(auth_state.config()) {
         response_headers.insert(SET_COOKIE, cookie);
     }
-    (StatusCode::NO_CONTENT, response_headers).into_response()
+    (status, response_headers).into_response()
 }
 
 /// Build a secure `HttpOnly` cookie for the session token with a custom TTL.

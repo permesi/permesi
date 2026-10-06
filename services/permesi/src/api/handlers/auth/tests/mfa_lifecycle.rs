@@ -21,6 +21,13 @@ async fn password_rotation_revokes_full_and_both_limited_sessions_and_ceremonies
         return Ok(());
     };
     let user = user(&db.pool).await?;
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        user,
+        super::super::mfa::MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await?;
     let full = storage::insert_session(&db.pool, user, 300).await?;
     let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
     let challenge = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
@@ -153,6 +160,13 @@ async fn password_rotation_rolls_back_when_limited_revocation_fails() -> Result<
         return Ok(());
     };
     let user = user(&db.pool).await?;
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        user,
+        super::super::mfa::MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await?;
     let full = storage::insert_session(&db.pool, user, 300).await?;
     let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
     sqlx::raw_sql("CREATE FUNCTION reject_bootstrap_revocation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected revocation failure'; END $$; CREATE TRIGGER reject_bootstrap_revocation BEFORE DELETE ON user_mfa_bootstrap_sessions FOR EACH ROW EXECUTE FUNCTION reject_bootstrap_revocation();").execute(&db.pool).await?;
@@ -177,5 +191,59 @@ async fn password_rotation_rolls_back_when_limited_revocation_fails() -> Result<
             .commit()
             .await?;
     }
+    Ok(())
+}
+
+/// A bootstrap issued before another enrollment cannot add/replace factors after MFA is enabled.
+#[tokio::test]
+async fn mfa_stale_bootstrap_loses_enrollment_authority_after_another_factor_finishes() -> Result<()>
+{
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let user = user(&db.pool).await?;
+    let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
+    let full = storage::insert_session(&db.pool, user, 300).await?;
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        user,
+        super::super::mfa::MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await?;
+    AuthorityGuard::acquire(
+        &db.pool,
+        &headers(&bootstrap)?,
+        user,
+        Policy::Enrollment,
+        1000,
+    )
+    .await
+    .map_err(|_| anyhow!("unenrolled bootstrap"))?
+    .commit()
+    .await?;
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        user,
+        super::super::mfa::MfaState::Enabled,
+        None,
+    )
+    .await?;
+    assert!(matches!(
+        AuthorityGuard::acquire(
+            &db.pool,
+            &headers(&bootstrap)?,
+            user,
+            Policy::Enrollment,
+            1000
+        )
+        .await,
+        Err(StatusCode::UNAUTHORIZED)
+    ));
+    AuthorityGuard::acquire(&db.pool, &headers(&full)?, user, Policy::Enrollment, 1000)
+        .await
+        .map_err(|_| anyhow!("full session may manage factors"))?
+        .commit()
+        .await?;
     Ok(())
 }

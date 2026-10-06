@@ -24,6 +24,7 @@ const DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS: i64 = 10;
 
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
+    operations: super::operations::OperationsConfig,
     frontend_base_url: String,
     /// All allowed CORS origins (includes the primary `frontend_base_url`).
     cors_allowed_origins: Vec<String>,
@@ -55,6 +56,7 @@ impl AuthConfig {
         let rp_origin = frontend_base_url.trim_end_matches('/').to_string();
 
         Self {
+            operations: super::operations::OperationsConfig::defaults(),
             cors_allowed_origins: vec![frontend_base_url.clone()],
             frontend_base_url,
             email_token_ttl_seconds: DEFAULT_TOKEN_TTL_SECONDS,
@@ -72,6 +74,18 @@ impl AuthConfig {
             webauthn_rp_id: rp_id,
             webauthn_rp_origin: rp_origin,
         }
+    }
+
+    /// Installs dispatch-validated `WebAuthn` configuration; no runtime environment parsing.
+    #[must_use]
+    pub fn with_operations(mut self, config: super::operations::OperationsConfig) -> Self {
+        self.operations = config;
+        self
+    }
+
+    /// Shared admission and transport trust policy, resolved before server startup.
+    pub(crate) fn operations(&self) -> &super::operations::OperationsConfig {
+        &self.operations
     }
 
     /// Installs dispatch-validated `WebAuthn` configuration; no runtime environment parsing.

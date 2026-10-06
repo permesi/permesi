@@ -13,7 +13,7 @@
 use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
-        AuthState, RateLimitAction, RateLimitDecision,
+        AuthState, RateLimitAction,
         mfa::{self, MfaState},
         session::session_cookie_with_ttl,
         storage::{
@@ -89,13 +89,13 @@ pub async fn passkey_login_start(
     };
 
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
-        .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .check_ip(client_ip.as_deref(), RateLimitAction::PasskeyLogin)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
     if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);
@@ -120,7 +120,10 @@ pub async fn passkey_login_start(
         "passkey login start requested"
     );
 
-    match passkey_service.auth_begin(&origin).await {
+    match passkey_service
+        .auth_begin_for_ip(&origin, client_ip.as_deref())
+        .await
+    {
         Ok((auth_id, challenge)) => (
             StatusCode::OK,
             Json(PasskeyLoginStartResponse {
@@ -134,11 +137,7 @@ pub async fn passkey_login_start(
                 request_id = %request_id,
                 "failed to start passkey login: {err}"
             );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Login failed".to_string(),
-            )
-                .into_response()
+            crate::webauthn::exchange::error_response(&err)
         }
     }
 }
@@ -176,13 +175,13 @@ pub async fn passkey_login_finish(
     };
 
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
-        .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .check_ip(client_ip.as_deref(), RateLimitAction::PasskeyLogin)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
@@ -269,7 +268,17 @@ async fn verify_passkey_assertion<'a>(
     let authentication = passkey_service
         .consume_authentication(auth_id, origin)
         .await
-        .map_err(|_| Box::new(StatusCode::UNAUTHORIZED.into_response()))?;
+        .map_err(|error| {
+            Box::new(
+                match error {
+                    crate::webauthn::PasskeyAuthenticationError::Unavailable => {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    }
+                    _ => StatusCode::UNAUTHORIZED,
+                }
+                .into_response(),
+            )
+        })?;
     let (user_id, credential_id) =
         match passkey_service.identify_authentication(origin, &auth_response) {
             Ok(identifiers) => identifiers,

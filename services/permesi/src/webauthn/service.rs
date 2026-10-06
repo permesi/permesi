@@ -53,6 +53,15 @@ pub(crate) struct VerifiedKey {
 }
 
 impl SecurityKeyService {
+    /// Installs startup-validated shared subject/flow admission budgets.
+    #[must_use]
+    pub fn with_operations(
+        mut self,
+        policy: crate::api::handlers::auth::operations::OperationsConfig,
+    ) -> Self {
+        self.exchanges = self.exchanges.with_policy(policy);
+        self
+    }
     /// Create a new security key service.
     ///
     /// # Errors
@@ -225,7 +234,7 @@ impl SecurityKeyService {
     ) -> Result<(RequestChallengeResponse, Uuid)> {
         let keys = SecurityKeyRepo::list_user_keys(&self.pool, user_id).await?;
         if keys.is_empty() {
-            return Err(anyhow!("No security keys registered for this user"));
+            return Err(super::exchange::ExchangeError::Invalid.into());
         }
 
         let mut passkeys = Vec::new();

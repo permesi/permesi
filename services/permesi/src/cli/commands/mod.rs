@@ -8,7 +8,69 @@ pub mod vault;
 /// Default per-lock/per-statement deadline for shared OPAQUE exchange transactions.
 pub(crate) const DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS: i64 = 1000;
 
-/// Registers `WebAuthn` runtime settings; parsing has no silent environment fallback.
+/// Default fair-share ceiling for each keyed subject in a pending authentication purpose.
+pub const DEFAULT_AUTH_SUBJECT_LIMIT: i64 = 16;
+pub const DEFAULT_AUTH_LOGIN_LIMIT: i64 = 10000;
+pub const DEFAULT_AUTH_REAUTH_LIMIT: i64 = 1000;
+pub const DEFAULT_AUTH_REGISTRATION_LIMIT: i64 = 1000;
+pub const DEFAULT_AUTH_MFA_LIMIT: i64 = 1000;
+
+/// Defines every authentication admission/trusted-edge runtime option in clap.
+pub(crate) fn with_operations_args(mut command: clap::Command) -> clap::Command {
+    for (name, env, default) in [
+        (
+            "auth-pending-subject-limit",
+            "PERMESI_AUTH_PENDING_SUBJECT_LIMIT",
+            "16",
+        ),
+        (
+            "auth-pending-login-limit",
+            "PERMESI_AUTH_PENDING_LOGIN_LIMIT",
+            "10000",
+        ),
+        (
+            "auth-pending-reauth-limit",
+            "PERMESI_AUTH_PENDING_REAUTH_LIMIT",
+            "1000",
+        ),
+        (
+            "auth-pending-registration-limit",
+            "PERMESI_AUTH_PENDING_REGISTRATION_LIMIT",
+            "1000",
+        ),
+        (
+            "auth-pending-mfa-limit",
+            "PERMESI_AUTH_PENDING_MFA_LIMIT",
+            "1000",
+        ),
+    ] {
+        command = command.arg(
+            clap::Arg::new(name)
+                .long(name)
+                .env(env)
+                .default_value(default)
+                .value_parser(clap::value_parser!(i64).range(1..=1_000_000)),
+        );
+    }
+    command
+        .arg(
+            clap::Arg::new("auth-trusted-proxy")
+                .long("auth-trusted-proxy")
+                .env("PERMESI_AUTH_TRUSTED_PROXIES")
+                .value_delimiter(',')
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(sqlx::types::ipnetwork::IpNetwork))
+                .help("Explicit trusted proxy CIDRs; edge must overwrite X-Real-IP"),
+        )
+        .arg(
+            clap::Arg::new("auth-trust-unix-proxy")
+                .long("auth-trust-unix-proxy")
+                .env("PERMESI_AUTH_TRUST_UNIX_PROXY")
+                .action(clap::ArgAction::SetTrue)
+                .help("Trust X-Real-IP from the restricted same-host Unix proxy"),
+        )
+}
+
 pub(crate) fn with_webauthn_args(command: clap::Command) -> clap::Command {
     use clap::{Arg, ArgAction};
     command

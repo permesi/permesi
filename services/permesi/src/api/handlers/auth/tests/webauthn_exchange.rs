@@ -12,6 +12,295 @@ use webauthn_rs::prelude::{DiscoverableKey, PublicKeyCredential, RegisterPublicK
 
 const ORIGIN: &str = "https://example.com";
 
+#[derive(Clone)]
+struct TraceSink(Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for TraceSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("capture poisoned"))?
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Actual success/replay/capacity/outage events have fixed dimensions and disclose no state/subject.
+#[tokio::test]
+async fn webauthn_outcome_tracing_excludes_protocol_state_and_subjects() -> Result<()> {
+    use tracing::instrument::WithSubscriber;
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let store = ExchangeStore::new(
+        db.pool.clone(),
+        &[1; 32],
+        "example.com".into(),
+        300,
+        1,
+        1000,
+    )?;
+    let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = TraceSink(output.clone());
+    let subscriber = Arc::new(
+        tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish(),
+    );
+    let binding = || Binding {
+        purpose: Purpose::PasskeyLogin,
+        origin: ORIGIN,
+        user: None,
+        session: None,
+    };
+    let id = store
+        .put_for_subject(
+            binding(),
+            &json!({"challenge":"private-state-sentinel"}),
+            "sensitive-subject-sentinel",
+        )
+        .with_subscriber(subscriber.clone())
+        .await?;
+    assert!(
+        store
+            .put_for_subject(binding(), &json!({}), "sensitive-subject-sentinel")
+            .with_subscriber(subscriber.clone())
+            .await
+            .is_err()
+    );
+    store
+        .take::<Value>(id, binding())
+        .with_subscriber(subscriber.clone())
+        .await?;
+    assert!(
+        store
+            .take::<Value>(id, binding())
+            .with_subscriber(subscriber.clone())
+            .await
+            .is_err()
+    );
+    db.pool.close().await;
+    assert!(
+        store
+            .put_for_subject(binding(), &json!({}), "sensitive-subject-sentinel")
+            .with_subscriber(subscriber)
+            .await
+            .is_err()
+    );
+    let bytes = output
+        .lock()
+        .map_err(|_| anyhow!("capture poisoned"))?
+        .clone();
+    let logs = std::str::from_utf8(&bytes)?;
+    for value in [
+        "authentication exchange outcome",
+        "elapsed_ms",
+        "success",
+        "invalid",
+        "capacity",
+        "unavailable",
+    ] {
+        assert!(logs.contains(value));
+    }
+    for value in [
+        "private-state-sentinel",
+        "sensitive-subject-sentinel",
+        id.to_string().as_str(),
+        ORIGIN,
+    ] {
+        assert!(!logs.contains(value));
+    }
+    Ok(())
+}
+
+/// One abusive subject cannot occupy a whole flow; another flow has its own ceiling.
+#[tokio::test]
+async fn webauthn_pending_quotas_are_fair_shared_and_flow_separated() -> Result<()> {
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let mut policy = super::super::operations::OperationsConfig::defaults();
+    policy.subject_limit = 1;
+    policy.login_limit = 2;
+    let a = ExchangeStore::new(
+        db.pool.clone(),
+        &[1; 32],
+        "example.com".into(),
+        300,
+        100,
+        1000,
+    )?
+    .with_policy(policy.clone());
+    let b = ExchangeStore::new(
+        db.pool.clone(),
+        &[1; 32],
+        "example.com".into(),
+        300,
+        100,
+        1000,
+    )?
+    .with_policy(policy);
+    let binding = || Binding {
+        purpose: Purpose::PasskeyLogin,
+        origin: ORIGIN,
+        user: None,
+        session: None,
+    };
+    let id = a
+        .put_for_subject(binding(), &json!({}), "anonymous:192.0.2.1")
+        .await?;
+    let error = b
+        .put_for_subject(binding(), &json!({}), "anonymous:192.0.2.1")
+        .await;
+    assert!(matches!(
+        error
+            .as_ref()
+            .err()
+            .and_then(|e| e.downcast_ref::<crate::webauthn::exchange::ExchangeError>()),
+        Some(crate::webauthn::exchange::ExchangeError::Capacity)
+    ));
+    b.put_for_subject(binding(), &json!({}), "anonymous:192.0.2.2")
+        .await?;
+    assert!(
+        a.put_for_subject(binding(), &json!({}), "anonymous:192.0.2.3")
+            .await
+            .is_err()
+    );
+    let user = insert_test_user(&db.pool).await?;
+    b.put(
+        Binding {
+            purpose: Purpose::SecurityKeyRegistration,
+            origin: ORIGIN,
+            user: Some(user),
+            session: Some(&[1; 32]),
+        },
+        &json!({}),
+    )
+    .await?;
+    a.take::<Value>(id, binding()).await?;
+    b.put_for_subject(binding(), &json!({}), "anonymous:192.0.2.1")
+        .await?;
+    let tags: Vec<Vec<u8>> = sqlx::query_scalar("SELECT subject_tag FROM webauthn_exchanges")
+        .fetch_all(&db.pool)
+        .await?;
+    assert!(
+        tags.iter()
+            .all(|tag| tag.len() == 32 && tag != Sha256::digest(b"anonymous:192.0.2.1").as_slice())
+    );
+    Ok(())
+}
+
+/// Concurrent starts from an abusive subject never oversubscribe its shared quota.
+#[tokio::test]
+async fn webauthn_pending_contention_preserves_fairness_and_bounded_pool_waits() -> Result<()> {
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let mut policy = super::super::operations::OperationsConfig::defaults();
+    policy.subject_limit = 1;
+    let store = Arc::new(
+        ExchangeStore::new(
+            db.pool.clone(),
+            &[1; 32],
+            "example.com".into(),
+            300,
+            100,
+            1000,
+        )?
+        .with_policy(policy),
+    );
+    let mut requests = tokio::task::JoinSet::new();
+    for _ in 0..12 {
+        let store = store.clone();
+        requests.spawn(async move {
+            store
+                .put_for_subject(
+                    Binding {
+                        purpose: Purpose::PasskeyLogin,
+                        origin: ORIGIN,
+                        user: None,
+                        session: None,
+                    },
+                    &json!({}),
+                    "anonymous:192.0.2.1",
+                )
+                .await
+        });
+    }
+    let mut winners = 0;
+    while let Some(result) = requests.join_next().await {
+        match result? {
+            Ok(_) => winners += 1,
+            Err(error) => assert!(matches!(
+                error.downcast_ref::<crate::webauthn::exchange::ExchangeError>(),
+                Some(crate::webauthn::exchange::ExchangeError::Capacity)
+            )),
+        }
+    }
+    assert_eq!(winners, 1);
+    store
+        .put_for_subject(
+            Binding {
+                purpose: Purpose::PasskeyLogin,
+                origin: ORIGIN,
+                user: None,
+                session: None,
+            },
+            &json!({}),
+            "anonymous:192.0.2.2",
+        )
+        .await?;
+    let single = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(db.pool.connect_options().as_ref().clone())
+        .await?;
+    let reserved = single.acquire().await?;
+    let started = std::time::Instant::now();
+    assert!(super::super::operations::begin(&single, 100).await.is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    drop(reserved);
+    super::super::operations::begin(&single, 1000)
+        .await?
+        .commit()
+        .await?;
+    Ok(())
+}
+
+/// Dependency outages stay distinct from missing proofs and from capacity rejection.
+#[tokio::test]
+async fn webauthn_dependency_errors_are_503_and_capacity_has_retry_after() -> Result<()> {
+    let pool = sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
+    pool.close().await;
+    let service = passkeys(pool.clone(), 300, 100)?;
+    assert!(matches!(
+        service.consume_authentication(Uuid::new_v4(), ORIGIN).await,
+        Err(crate::webauthn::PasskeyAuthenticationError::Unavailable)
+    ));
+    let error = service
+        .auth_begin_for_ip(ORIGIN, Some("192.0.2.1"))
+        .await
+        .err()
+        .context("closed store must fail")?;
+    let response = crate::webauthn::exchange::error_response(&error);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let response = crate::webauthn::exchange::error_response(
+        &crate::webauthn::exchange::ExchangeError::Capacity.into(),
+    );
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+        Some("1")
+    );
+    Ok(())
+}
+
 /// A minimal test-only authenticator with real RSA signatures and UV/UP assertions.
 struct Authenticator {
     key: RsaPrivateKey,
@@ -571,11 +860,31 @@ async fn webauthn_http_mfa_elevation_is_single_session_and_rotation_safe() -> Re
     let app = Router::new()
         .route("/register", post(webauthn::register_finish))
         .route("/authenticate", post(webauthn::authenticate_finish))
+        .route(
+            "/key/{credential_id}",
+            axum::routing::delete(webauthn::delete_key),
+        )
         .with_state(AppState {
             security_keys: b,
             ..AppState::for_tests(single)?
         });
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        user,
+        super::super::mfa::MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await?;
     let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
+    let stale = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
+    let (stale_challenge, stale_id) = a
+        .register_begin(
+            user,
+            "user@example.com",
+            ORIGIN,
+            &hash_session_token(&stale),
+        )
+        .await?;
     let (challenge, id) = a
         .register_begin(
             user,
@@ -615,6 +924,35 @@ async fn webauthn_http_mfa_elevation_is_single_session_and_rotation_safe() -> Re
         .fetch_one(&db.pool)
         .await?,
         0
+    );
+    let attacker = Authenticator::new()?;
+    let stale_response = app.clone().oneshot(Request::builder().method("POST").uri("/register")
+        .header("Origin", ORIGIN).header(COOKIE,format!("permesi_session={stale}"))
+        .header(CONTENT_TYPE,"application/json").body(Body::from(serde_json::to_vec(&json!({"reg_id":stale_id,"label":"attacker","response":attacker.register(&stale_challenge)?}))?))?).await?;
+    assert_eq!(stale_response.status(), StatusCode::UNAUTHORIZED);
+    assert!(stale_response.headers().get(SET_COOKIE).is_none());
+    let credential: Vec<u8> =
+        sqlx::query_scalar("SELECT credential_id FROM security_keys WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?;
+    let stale_delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/key/{}", hex::encode(credential)))
+                .header(COOKIE, format!("permesi_session={stale}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(stale_delete.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM security_keys WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?,
+        1
     );
     let limited = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
     let (challenge, id) = a

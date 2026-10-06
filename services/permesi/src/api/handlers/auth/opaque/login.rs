@@ -11,7 +11,7 @@ use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
         mfa::{self, MfaState},
-        rate_limit::{RateLimitAction, RateLimitDecision},
+        rate_limit::RateLimitAction,
         session::session_cookie_with_ttl,
         state::{AuthState, OpaqueSuite},
         storage::{
@@ -57,7 +57,7 @@ use super::exchange::{ExchangeIdentity, ExchangePurpose, lock_identity};
         (status = 200, description = "OPAQUE login started", body = OpaqueLoginStartResponse),
         (status = 400, description = "Validation error", body = String),
         (status = 429, description = "Rate limited or shared exchange capacity exhausted", body = String),
-        (status = 500, description = "Authentication storage unavailable; no exchange is issued", body = String)
+        (status = 503, description = "Authentication storage unavailable; no exchange is issued", body = String)
     ),
     tag = "auth"
 )]
@@ -80,21 +80,21 @@ pub async fn opaque_login_start(
 
     // Rate-limit before zero-token verification to keep abuse cheap to reject.
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Login)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::Login)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
@@ -121,7 +121,7 @@ pub async fn opaque_login_start(
     let response =
         match build_login_start_response(&pool, &auth_state, &email, credential_request).await {
             Ok(response) => response,
-            Err((status, message)) => return (status, message).into_response(),
+            Err((status, message)) => return super::super::operations::failure(status, message),
         };
 
     (StatusCode::OK, Json(response)).into_response()
@@ -139,10 +139,7 @@ async fn build_login_start_response(
         Ok(record) => record,
         Err(err) => {
             error!("Login lookup failed: {err}");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Login failed".to_string(),
-            ));
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string()));
         }
     };
 
@@ -199,7 +196,11 @@ async fn build_login_start_response(
             start_result.state,
             identity,
             ExchangePurpose::Login,
-            auth_state.config().opaque_exchange_timeout_ms(),
+            super::exchange::Admission {
+                subject: email,
+                policy: auth_state.config().operations(),
+                timeout_ms: auth_state.config().opaque_exchange_timeout_ms(),
+            },
         )
         .await
     {
@@ -212,10 +213,7 @@ async fn build_login_start_response(
         }
         Err(_) => {
             error!("OPAQUE exchange storage failed");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Login failed".to_string(),
-            ));
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string()));
         }
     };
     let credential_response =
@@ -240,7 +238,7 @@ async fn build_login_start_response(
         (status = 204, description = "Login success"),
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Invalid, expired or already attempted exchange", body = String),
-        (status = 500, description = "Authentication storage unavailable; no successful login", body = String)
+        (status = 503, description = "Authentication storage unavailable; no successful login", body = String)
     ),
     tag = "auth"
 )]
@@ -297,11 +295,7 @@ pub async fn opaque_login_finish(
         Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
         Err(_) => {
             error!("OPAQUE exchange storage failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Login failed".to_string(),
-            )
-                .into_response();
+            return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string()).into_response();
         }
     };
 
@@ -328,10 +322,7 @@ pub async fn opaque_login_finish(
                 }
                 Err(_) => {
                     error!("OPAQUE login identity validation failed");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Login failed".to_string(),
-                    )
+                    return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                         .into_response();
                 }
             };
@@ -340,10 +331,7 @@ pub async fn opaque_login_finish(
                     Ok(state) => state,
                     Err(err) => {
                         error!("Failed to resolve MFA state: {err}");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Login failed".to_string(),
-                        )
+                        return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                             .into_response();
                     }
                 };
@@ -357,10 +345,7 @@ pub async fn opaque_login_finish(
                         .is_err()
                     {
                         error!("OPAQUE login full-session revocation failed");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Login failed".to_string(),
-                        )
+                        return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                             .into_response();
                     }
                     match insert_mfa_bootstrap_session_on(
@@ -373,10 +358,7 @@ pub async fn opaque_login_finish(
                         Ok(token) => (token, auth_state.mfa().bootstrap_session_ttl_seconds()),
                         Err(err) => {
                             error!("Failed to create MFA bootstrap session: {err}");
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "Login failed".to_string(),
-                            )
+                            return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                                 .into_response();
                         }
                     }
@@ -392,10 +374,7 @@ pub async fn opaque_login_finish(
                         Ok(token) => (token, auth_state.mfa().challenge_session_ttl_seconds()),
                         Err(err) => {
                             error!("Failed to create MFA challenge session: {err}");
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "Login failed".to_string(),
-                            )
+                            return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                                 .into_response();
                         }
                     }
@@ -411,10 +390,7 @@ pub async fn opaque_login_finish(
                         Ok(token) => (token, auth_state.config().session_ttl_seconds()),
                         Err(err) => {
                             error!("Failed to create session: {err}");
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "Login failed".to_string(),
-                            )
+                            return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                                 .into_response();
                         }
                     }
@@ -423,10 +399,7 @@ pub async fn opaque_login_finish(
 
             if tx.commit().await.is_err() {
                 error!("OPAQUE login session transaction commit failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
+                return (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string())
                     .into_response();
             }
             let mut response_headers = HeaderMap::new();
@@ -438,11 +411,7 @@ pub async fn opaque_login_finish(
                 }
                 Err(err) => {
                     error!("Failed to set session cookie: {err}");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Login failed".to_string(),
-                    )
-                        .into_response()
+                    (StatusCode::SERVICE_UNAVAILABLE, "Login failed".to_string()).into_response()
                 }
             }
         }

@@ -163,6 +163,9 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
         opaque_exchange_timeout_ms: auth_opts.opaque.exchange_timeout_ms,
         auth_max_pending_states,
+        auth_operations: crate::api::handlers::auth::operations::OperationsConfig::from_matches(
+            matches,
+        )?,
         auth_rate_limit_window_seconds,
         auth_rate_limit_ip_attempts,
         auth_rate_limit_account_attempts,

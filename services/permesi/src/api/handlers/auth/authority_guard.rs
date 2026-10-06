@@ -49,11 +49,7 @@ impl AuthorityGuard {
             return Err(StatusCode::UNAUTHORIZED);
         }
         let hash = hash_session_token(&token);
-        let mut transaction = pool
-            .begin()
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        crate::oauth::locking::deadline(&mut transaction, timeout_ms)
+        let mut transaction = super::operations::begin(pool, timeout_ms)
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         // NO KEY UPDATE serializes lifecycle writers/elevations while permitting FK
@@ -86,6 +82,19 @@ impl AuthorityGuard {
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         if valid != Some(true) {
             return Err(StatusCode::UNAUTHORIZED);
+        }
+        if kind == SessionKind::MfaBootstrap {
+            // Another enrollment may already have enabled MFA after this limited cookie was issued.
+            let unenrolled: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM user_mfa_state WHERE user_id=$1 AND state='required_unenrolled')",
+            )
+            .bind(user)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            if !unenrolled {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
         }
         Ok(Self {
             transaction,
@@ -137,6 +146,13 @@ impl AuthorityGuard {
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         self.consume_original()
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        // Completion ends enrollment authority for every earlier password login,
+        // including ceremonies started on other replicas before MFA was enabled.
+        sqlx::query("DELETE FROM user_mfa_bootstrap_sessions WHERE user_id=$1")
+            .bind(user)
+            .execute(self.connection())
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         let cookie = super::session::session_cookie_with_ttl(auth, &token, ttl)

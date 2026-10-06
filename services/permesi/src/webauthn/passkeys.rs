@@ -98,6 +98,7 @@ impl PasskeyConfig {
 
 #[derive(Debug)]
 pub enum PasskeyRegistrationError {
+    Unavailable,
     NotFound,
     Expired,
     UserMismatch,
@@ -108,6 +109,7 @@ pub enum PasskeyRegistrationError {
 
 #[derive(Debug)]
 pub enum PasskeyAuthenticationError {
+    Unavailable,
     NotFound,
     Expired,
     OriginMismatch,
@@ -121,6 +123,15 @@ pub struct PasskeyService {
 }
 
 impl PasskeyService {
+    /// Installs startup-validated shared admission policy for every ceremony.
+    #[must_use]
+    pub fn with_operations(
+        mut self,
+        policy: crate::api::handlers::auth::operations::OperationsConfig,
+    ) -> Self {
+        self.exchanges = self.exchanges.with_policy(policy);
+        self
+    }
     /// Create a new passkey service.
     ///
     /// # Errors
@@ -238,7 +249,16 @@ impl PasskeyService {
                 },
             )
             .await
-            .map_err(|_| PasskeyRegistrationError::NotFound)?;
+            .map_err(|error| {
+                if error
+                    .downcast_ref::<super::exchange::ExchangeError>()
+                    .is_some()
+                {
+                    PasskeyRegistrationError::NotFound
+                } else {
+                    PasskeyRegistrationError::Unavailable
+                }
+            })?;
 
         let webauthn = self
             .webauthn_for_origin(origin)
@@ -256,12 +276,21 @@ impl PasskeyService {
     /// # Errors
     /// Returns error if origin is invalid or `WebAuthn` fails.
     pub async fn auth_begin(&self, origin: &str) -> Result<(Uuid, RequestChallengeResponse)> {
+        self.auth_begin_for_ip(origin, None).await
+    }
+
+    /// Bounds anonymous pending state by the canonical transport identity, never a browser handle.
+    pub(crate) async fn auth_begin_for_ip(
+        &self,
+        origin: &str,
+        ip: Option<&str>,
+    ) -> Result<(Uuid, RequestChallengeResponse)> {
         let webauthn = self.webauthn_for_origin(origin)?;
         let (challenge, authentication) = webauthn.start_discoverable_authentication()?;
 
         let auth_id = self
             .exchanges
-            .put(
+            .put_for_subject(
                 Binding {
                     purpose: Purpose::PasskeyLogin,
                     origin,
@@ -269,6 +298,7 @@ impl PasskeyService {
                     session: None,
                 },
                 &authentication,
+                &format!("anonymous:{}", ip.unwrap_or("unknown")),
             )
             .await?;
 
@@ -333,7 +363,16 @@ impl PasskeyService {
                 },
             )
             .await
-            .map_err(|_| PasskeyAuthenticationError::NotFound)?;
+            .map_err(|error| {
+                if error
+                    .downcast_ref::<super::exchange::ExchangeError>()
+                    .is_some()
+                {
+                    PasskeyAuthenticationError::NotFound
+                } else {
+                    PasskeyAuthenticationError::Unavailable
+                }
+            })?;
         Ok(authentication)
     }
 

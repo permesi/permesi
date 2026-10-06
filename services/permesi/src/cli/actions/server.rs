@@ -8,6 +8,7 @@ use url::Url;
 
 #[derive(Debug)]
 pub struct Args {
+    pub auth_operations: crate::api::handlers::auth::operations::OperationsConfig,
     pub port: u16,
     pub socket_path: Option<String>,
     pub dsn: String,
@@ -140,6 +141,7 @@ pub async fn execute(args: Args) -> Result<()> {
 
 fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
     let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url.clone())
+        .with_operations(args.auth_operations.clone())
         .with_cors_allowed_origins(args.cors_allowed_origins.clone())
         .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
@@ -450,6 +452,7 @@ mod tests {
             opaque_login_ttl_seconds: 60,
             opaque_exchange_timeout_ms: 1000,
             auth_max_pending_states: 1_000,
+            auth_operations: crate::api::handlers::auth::operations::OperationsConfig::defaults(),
             auth_rate_limit_window_seconds: 600,
             auth_rate_limit_ip_attempts: 100,
             auth_rate_limit_account_attempts: 10,

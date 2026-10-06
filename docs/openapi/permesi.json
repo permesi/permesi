@@ -805,6 +805,16 @@
         "responses": {
           "204": {
             "description": "Session cleared"
+          },
+          "503": {
+            "description": "Session revocation storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -921,6 +931,16 @@
               }
             }
           },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Authentication storage unavailable",
             "content": {
@@ -954,6 +974,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
             "content": {
               "application/json": {
                 "schema": {
@@ -1008,6 +1038,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
             "content": {
               "application/json": {
                 "schema": {
@@ -1121,6 +1161,16 @@
               }
             }
           },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Authentication storage unavailable",
             "content": {
@@ -1217,6 +1267,16 @@
               }
             }
           },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Authentication storage unavailable",
             "content": {
@@ -1282,7 +1342,7 @@
               }
             }
           },
-          "500": {
+          "503": {
             "description": "Authentication storage unavailable; no successful login",
             "content": {
               "application/json": {
@@ -1354,7 +1414,7 @@
               }
             }
           },
-          "500": {
+          "503": {
             "description": "Authentication storage unavailable; no exchange is issued",
             "content": {
               "application/json": {
@@ -1536,7 +1596,7 @@
               }
             }
           },
-          "500": {
+          "503": {
             "description": "Authentication storage unavailable; no successful elevation",
             "content": {
               "application/json": {
@@ -1618,7 +1678,7 @@
               }
             }
           },
-          "500": {
+          "503": {
             "description": "Authentication storage unavailable; no exchange is issued",
             "content": {
               "application/json": {
@@ -1954,6 +2014,16 @@
           },
           "204": {
             "description": "No active session"
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }

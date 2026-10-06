@@ -4,6 +4,7 @@
 
 #![allow(clippy::too_many_lines, clippy::indexing_slicing)]
 
+use crate::api::handlers::auth::RateLimitDecision;
 use anyhow::{Context, Result, ensure};
 use axum::{
     Router,

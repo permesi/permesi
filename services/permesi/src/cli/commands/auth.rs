@@ -175,6 +175,7 @@ impl Options {
 
 #[must_use]
 pub fn with_args(command: Command) -> Command {
+    let command = super::with_operations_args(command);
     let command = super::with_webauthn_args(command);
     let command = with_auth_email_args(command);
     let command = with_auth_outbox_args(command);

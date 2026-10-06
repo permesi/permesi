@@ -37,7 +37,7 @@ use crate::{
         AuthState,
         authority_guard::{AuthorityGuard, Policy},
         principal::{require_any_auth, require_mfa_challenge},
-        rate_limit::{RateLimitAction, RateLimitDecision},
+        rate_limit::RateLimitAction,
         session::session_cookie_with_ttl,
         storage::insert_mfa_bootstrap_session_on,
         types::{
@@ -206,6 +206,7 @@ fn parse_bool_env(key: &str) -> Option<bool> {
     path = "/v1/auth/mfa/totp/enroll/start",
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Enrollment started", body = MfaTotpEnrollStartResponse),
         (status = 401, description = "Unauthorized")
     ),
@@ -221,6 +222,17 @@ pub async fn totp_enroll_start(
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
+
+    if let Err(status) = super::operations::factor_admission(
+        &auth_state,
+        &headers,
+        &principal.email,
+        super::RateLimitAction::WebauthnEnrollment,
+    )
+    .await
+    {
+        return status.into_response();
+    }
 
     let mut guard = match AuthorityGuard::acquire(
         &pool,
@@ -261,7 +273,7 @@ pub async fn totp_enroll_start(
         }
         Err(err) => {
             error!("Failed to start TOTP enrollment: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
 }
@@ -273,6 +285,7 @@ pub async fn totp_enroll_start(
     request_body = MfaTotpEnrollFinishRequest,
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Enrollment finished with replacement cookie and recovery codes", body = crate::api::handlers::me::RecoveryCodesResponse),
         (status = 400, description = "Invalid code"),
         (status = 401, description = "Unauthorized")
@@ -290,6 +303,17 @@ pub async fn totp_enroll_finish(
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
+
+    if let Err(status) = super::operations::factor_admission(
+        &auth_state,
+        &headers,
+        &principal.email,
+        super::RateLimitAction::WebauthnEnrollment,
+    )
+    .await
+    {
+        return status.into_response();
+    }
 
     let Some(Json(request)) = payload else {
         return (StatusCode::BAD_REQUEST, "Missing payload").into_response();
@@ -326,24 +350,24 @@ pub async fn totp_enroll_finish(
         .await
     {
         Ok(true) => {} // Success
-        Ok(false) => return (StatusCode::BAD_REQUEST, "Invalid TOTP code").into_response(),
+        Ok(false) => return commit_factor_rejection(guard).await,
         Err(e) => {
             error!("Error confirming TOTP: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     }
 
     // Generate recovery codes as part of enrollment
     let Some(pepper) = auth_state.mfa().recovery_pepper() else {
         error!("MFA enrollment finished without pepper configured");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
     let batch = match recovery::RecoveryCodeBatch::generate(pepper) {
         Ok(batch) => batch,
         Err(err) => {
             error!("Failed to generate recovery codes: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
 
@@ -356,7 +380,7 @@ pub async fn totp_enroll_finish(
     .await
     {
         error!("Failed to save recovery codes: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     // Enable MFA in user_mfa_state
@@ -373,7 +397,7 @@ pub async fn totp_enroll_finish(
     .await
     {
         error!("Failed to enable MFA: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     match guard.issue_full(&auth_state).await {
@@ -394,6 +418,7 @@ pub async fn totp_enroll_finish(
     request_body = MfaTotpVerifyRequest,
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 204, description = "Verification successful"),
         (status = 400, description = "Invalid code"),
         (status = 401, description = "Unauthorized")
@@ -411,6 +436,17 @@ pub async fn totp_verify(
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
+
+    if let Err(status) = super::operations::factor_admission(
+        &auth_state,
+        &headers,
+        &principal.email,
+        super::RateLimitAction::MfaVerification,
+    )
+    .await
+    {
+        return status.into_response();
+    }
 
     let Some(Json(request)) = payload else {
         return (StatusCode::BAD_REQUEST, "Missing payload").into_response();
@@ -434,7 +470,7 @@ pub async fn totp_verify(
         Ok(None) => return (StatusCode::UNAUTHORIZED, "MFA state not found").into_response(),
         Err(err) => {
             error!("Failed to load MFA state: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
 
@@ -457,10 +493,10 @@ pub async fn totp_verify(
         .await
     {
         Ok(true) => {} // Success
-        Ok(false) => return (StatusCode::BAD_REQUEST, "Invalid TOTP code").into_response(),
+        Ok(false) => return commit_factor_rejection(guard).await,
         Err(e) => {
             error!("Error verifying TOTP: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     }
 
@@ -474,6 +510,15 @@ pub async fn totp_verify(
     }
 }
 
+/// Commits only failure audit, leaving original authority intact and publishing no replacement.
+async fn commit_factor_rejection(guard: AuthorityGuard) -> axum::response::Response {
+    if guard.commit().await.is_ok() {
+        (StatusCode::BAD_REQUEST, "Invalid TOTP code").into_response()
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE.into_response()
+    }
+}
+
 /// Verify a recovery code during MFA challenge and issue a bootstrap session.
 #[utoipa::path(
     post,
@@ -481,6 +526,7 @@ pub async fn totp_verify(
     request_body = MfaRecoveryRequest,
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 204, description = "Recovery accepted"),
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Unauthorized"),
@@ -505,27 +551,27 @@ pub async fn mfa_recovery(
     };
 
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::MfaRecovery)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_email(&principal.email, RateLimitAction::MfaRecovery)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     let Some(pepper) = auth_state.mfa().recovery_pepper() else {
         error!("MFA recovery attempted without pepper configured");
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
             "Recovery unavailable".to_string(),
         )
             .into_response();
@@ -537,7 +583,7 @@ pub async fn mfa_recovery(
         Err(err) => {
             error!("Failed to load MFA state: {err}");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Recovery failed".to_string(),
             )
                 .into_response();
@@ -557,7 +603,7 @@ pub async fn mfa_recovery(
         Err(err) => {
             error!("Failed to list recovery codes: {err}");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Recovery failed".to_string(),
             )
                 .into_response();
@@ -606,7 +652,7 @@ pub async fn mfa_recovery(
         Err(err) => {
             error!("Failed to consume recovery code: {err}");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Recovery failed".to_string(),
             )
                 .into_response();
@@ -627,7 +673,7 @@ pub async fn mfa_recovery(
     {
         error!("Failed to update MFA state: {err}");
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
             "Recovery failed".to_string(),
         )
             .into_response();
@@ -644,6 +690,14 @@ pub async fn mfa_recovery(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
+    if sqlx::query("DELETE FROM user_mfa_bootstrap_sessions WHERE user_id=$1")
+        .bind(principal.user_id)
+        .execute(guard.connection())
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     let token = match insert_mfa_bootstrap_session_on(
         guard.connection(),
         principal.user_id,
@@ -655,16 +709,13 @@ pub async fn mfa_recovery(
         Err(err) => {
             error!("Failed to create MFA bootstrap session: {err}");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Recovery failed".to_string(),
             )
                 .into_response();
         }
     };
 
-    if guard.consume_original().await.is_err() || guard.commit().await.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
     let mut response_headers = HeaderMap::new();
     match session_cookie_with_ttl(
         &auth_state,
@@ -672,6 +723,9 @@ pub async fn mfa_recovery(
         auth_state.mfa().bootstrap_session_ttl_seconds(),
     ) {
         Ok(cookie) => {
+            if guard.consume_original().await.is_err() || guard.commit().await.is_err() {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             response_headers.insert(axum::http::header::SET_COOKIE, cookie);
             info!(user_id = %principal.user_id, "MFA recovery accepted");
             (StatusCode::NO_CONTENT, response_headers).into_response()
@@ -679,7 +733,7 @@ pub async fn mfa_recovery(
         Err(err) => {
             error!("Failed to set MFA bootstrap cookie: {err}");
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Recovery failed".to_string(),
             )
                 .into_response()

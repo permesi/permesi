@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use chacha20poly1305::{
-    ChaCha20Poly1305, Nonce,
+    XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
 };
 use chrono::{DateTime, Utc};
@@ -30,7 +30,14 @@ use uuid::Uuid;
 
 use super::super::state::OpaqueSuite;
 
-const KEY_LABEL: &[u8] = b"permesi/opaque-exchange/encryption-key/v1";
+const KEY_LABEL: &[u8] = b"permesi/opaque-exchange/encryption-key/v2";
+
+/// Server-derived normalized account and dispatch-validated admission/deadline policy.
+pub(in crate::api::handlers::auth) struct Admission<'a> {
+    pub subject: &'a str,
+    pub policy: &'a super::super::operations::OperationsConfig,
+    pub timeout_ms: i64,
+}
 
 /// Server-derived identity and the exact registered credential used at start.
 pub(in crate::api::handlers::auth) struct ExchangeIdentity {
@@ -82,6 +89,7 @@ pub struct OpaqueState {
 }
 
 struct ExchangeRow {
+    subject_tag: Option<Vec<u8>>,
     id_hash: Vec<u8>,
     purpose: String,
     user_id: Option<Uuid>,
@@ -97,6 +105,7 @@ impl ExchangeRow {
     /// Decode the consumed snapshot without panicking or exposing stored state in errors.
     fn from_row(row: &PgRow) -> Result<Self> {
         Ok(Self {
+            subject_tag: row.try_get("subject_tag")?,
             id_hash: row.try_get("id_hash")?,
             purpose: row.try_get("purpose")?,
             user_id: row.try_get("user_id")?,
@@ -147,13 +156,13 @@ impl OpaqueState {
     }
 
     /// Derive an independent AEAD key; fixed-size secret key material is zeroized on drop.
-    fn cipher(&self) -> Result<ChaCha20Poly1305> {
+    fn cipher(&self) -> Result<XChaCha20Poly1305> {
         let mut mac =
             <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(self.storage_seed.expose_secret())
                 .map_err(|_| anyhow!("OPAQUE state key derivation failed"))?;
         mac.update(KEY_LABEL);
         let key = Zeroizing::new(<[u8; 32]>::from(mac.finalize().into_bytes()));
-        ChaCha20Poly1305::new_from_slice(key.as_ref())
+        XChaCha20Poly1305::new_from_slice(key.as_ref())
             .map_err(|_| anyhow!("OPAQUE state key initialization failed"))
     }
 
@@ -166,6 +175,7 @@ impl OpaqueState {
             row.user_id,
             &row.credential_hash,
             &row.session_hash,
+            &row.subject_tag,
             row.created_at.timestamp_micros(),
             row.expires_at.timestamp_micros(),
             &self.server_id,
@@ -180,15 +190,16 @@ impl OpaqueState {
         state: ServerLogin<OpaqueSuite>,
         identity: Option<ExchangeIdentity>,
         purpose: ExchangePurpose,
-        timeout_ms: i64,
+        admission: Admission<'_>,
     ) -> Result<Option<Uuid>> {
+        let mut observation = super::super::operations::Observation::new(purpose.name(), "start");
         let ttl = i64::try_from(self.login_ttl.as_secs()).context("invalid OPAQUE exchange TTL")?;
         let maximum =
             i64::try_from(self.max_pending_logins).context("invalid OPAQUE exchange capacity")?;
         if !(1..=3600).contains(&ttl) || maximum <= 0 {
             return Err(anyhow!("invalid OPAQUE exchange limits"));
         }
-        let mut tx = begin(pool, timeout_ms).await?;
+        let mut tx = begin(pool, admission.timeout_ms).await?;
         sqlx::query(
             "SELECT pg_advisory_xact_lock(hashtextextended('permesi:opaque-exchanges:v1',0))",
         )
@@ -198,11 +209,21 @@ impl OpaqueState {
         sqlx::query("DELETE FROM opaque_exchanges WHERE expires_at <= statement_timestamp()")
             .execute(&mut *tx)
             .await?;
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM opaque_exchanges")
+        let subject =
+            super::super::rate_limit::SubjectKey::derive(self.storage_seed.expose_secret())?
+                .tag(&format!("pending:{}:{}", purpose.name(), admission.subject))
+                .context("admission key unavailable")?;
+        let flow_limit = match purpose {
+            ExchangePurpose::Login => admission.policy.login_limit,
+            ExchangePurpose::Reauthenticate { .. } => admission.policy.reauth_limit,
+        };
+        let (count, subject_count): (i64,i64) = sqlx::query_as("SELECT COUNT(*),COUNT(*) FILTER (WHERE subject_tag=$2) FROM opaque_exchanges WHERE purpose=$1")
+            .bind(purpose.name()).bind(subject.as_slice())
             .fetch_one(&mut *tx)
             .await?;
-        if count >= maximum {
+        if count >= maximum.min(flow_limit) || subject_count >= admission.policy.subject_limit {
             tx.commit().await?;
+            observation.outcome = "capacity";
             return Ok(None);
         }
         let id = Uuid::new_v4();
@@ -210,6 +231,7 @@ impl OpaqueState {
             .fetch_one(&mut *tx)
             .await?;
         let mut row = ExchangeRow {
+            subject_tag: Some(subject.to_vec()),
             id_hash: hash_id(id).to_vec(),
             purpose: purpose.name().to_owned(),
             user_id: identity.as_ref().map(|value| value.user_id),
@@ -221,12 +243,12 @@ impl OpaqueState {
             valid: true,
         };
         let plaintext = Zeroizing::new(state.serialize());
-        let mut nonce_bytes = [0u8; 12];
+        let mut nonce_bytes = [0u8; 24];
         getrandom::fill(&mut nonce_bytes)?;
         let ciphertext = self
             .cipher()?
             .encrypt(
-                &Nonce::from(nonce_bytes),
+                &XNonce::from(nonce_bytes),
                 Payload {
                     msg: plaintext.as_slice(),
                     aad: &self.aad(&row)?,
@@ -235,9 +257,10 @@ impl OpaqueState {
             .map_err(|_| anyhow!("OPAQUE state encryption failed"))?;
         row.sealed_state.extend_from_slice(&nonce_bytes);
         row.sealed_state.extend_from_slice(&ciphertext);
-        sqlx::query("INSERT INTO opaque_exchanges (id_hash,purpose,user_id,credential_hash,session_hash,sealed_state,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
-            .bind(row.id_hash).bind(row.purpose).bind(row.user_id).bind(row.credential_hash).bind(row.session_hash).bind(row.sealed_state).bind(row.created_at).bind(row.expires_at).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO opaque_exchanges (id_hash,purpose,user_id,credential_hash,session_hash,sealed_state,created_at,expires_at,subject_tag) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+            .bind(row.id_hash).bind(row.purpose).bind(row.user_id).bind(row.credential_hash).bind(row.session_hash).bind(row.sealed_state).bind(row.created_at).bind(row.expires_at).bind(row.subject_tag).execute(&mut *tx).await?;
         tx.commit().await?;
+        observation.outcome = "success";
         Ok(Some(id))
     }
 
@@ -250,9 +273,11 @@ impl OpaqueState {
         purpose: ExchangePurpose,
         timeout_ms: i64,
     ) -> Result<Option<OpaqueLoginState>> {
+        let mut observation = super::super::operations::Observation::new(purpose.name(), "finish");
         let mut tx = begin(pool, timeout_ms).await?;
         let row = sqlx::query("DELETE FROM opaque_exchanges WHERE id_hash=$1 RETURNING *,expires_at>clock_timestamp() AS valid").bind(hash_id(id).as_slice()).fetch_optional(&mut *tx).await?;
         tx.commit().await?;
+        observation.outcome = "invalid";
         let Some(row) = row else {
             return Ok(None);
         };
@@ -274,11 +299,11 @@ impl OpaqueState {
         {
             return Ok(None);
         }
-        let Some((nonce, ciphertext)) = row.sealed_state.split_first_chunk::<12>() else {
+        let Some((nonce, ciphertext)) = row.sealed_state.split_first_chunk::<24>() else {
             return Ok(None);
         };
         let plaintext = match self.cipher()?.decrypt(
-            &Nonce::from(*nonce),
+            &XNonce::from(*nonce),
             Payload {
                 msg: ciphertext,
                 aad: &self.aad(&row)?,
@@ -304,6 +329,7 @@ impl OpaqueState {
             (None, None) => None,
             _ => return Ok(None),
         };
+        observation.outcome = "success";
         Ok(Some(OpaqueLoginState { state, identity }))
     }
 }
@@ -340,10 +366,5 @@ pub(in crate::api::handlers::auth) async fn lock_identity<'a>(
 
 /// Apply transaction-local deadlines before any contended operation; invalid limits fail closed.
 async fn begin(pool: &PgPool, timeout_ms: i64) -> Result<Transaction<'_, Postgres>> {
-    if !(1..=10_000).contains(&timeout_ms) {
-        return Err(anyhow!("invalid OPAQUE exchange deadline"));
-    }
-    let mut tx = pool.begin().await?;
-    crate::oauth::locking::deadline(&mut tx, timeout_ms).await?;
-    Ok(tx)
+    super::super::operations::begin(pool, timeout_ms).await
 }

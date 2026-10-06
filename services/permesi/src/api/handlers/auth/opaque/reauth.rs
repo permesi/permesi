@@ -11,7 +11,7 @@ use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
         principal::{Principal, require_auth},
-        rate_limit::{RateLimitAction, RateLimitDecision},
+        rate_limit::RateLimitAction,
         session::extract_session_token,
         state::{AuthState, OpaqueSuite},
         storage::{lookup_login_record, update_session_auth_time},
@@ -54,7 +54,7 @@ use super::exchange::{ExchangeIdentity, ExchangePurpose, lock_identity};
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
         (status = 429, description = "Rate limited or shared exchange capacity exhausted", body = String),
-        (status = 500, description = "Authentication storage unavailable; no exchange is issued", body = String)
+        (status = 503, description = "Authentication storage unavailable; no exchange is issued", body = String)
     ),
     tag = "auth"
 )]
@@ -77,21 +77,21 @@ pub async fn opaque_reauth_start(
 
     // Rate-limit before zero-token verification to keep abuse cheap to reject.
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
-        .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .check_ip(client_ip.as_deref(), RateLimitAction::Reauthenticate)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
-        .check_email(&principal.email, RateLimitAction::Login)
+        .check_email(&principal.email, RateLimitAction::Reauthenticate)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
@@ -118,7 +118,7 @@ pub async fn opaque_reauth_start(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let Ok(session_hash) = <[u8; 32]>::try_from(hash_session_token(&token)) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     match build_reauth_start_response(
         &pool,
@@ -130,7 +130,7 @@ pub async fn opaque_reauth_start(
     .await
     {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err((status, message)) => (status, message).into_response(),
+        Err((status, message)) => super::super::operations::failure(status, message),
     }
 }
 
@@ -147,7 +147,7 @@ async fn build_reauth_start_response(
         Err(err) => {
             error!("Re-auth lookup failed: {err}");
             return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Re-auth failed".to_string(),
             ));
         }
@@ -165,7 +165,7 @@ async fn build_reauth_start_response(
         Err(err) => {
             error!("Invalid registration record for re-auth: {err}");
             return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Re-auth failed".to_string(),
             ));
         }
@@ -207,7 +207,11 @@ async fn build_reauth_start_response(
                 user_id: principal.user_id,
                 session_hash,
             },
-            auth_state.config().opaque_exchange_timeout_ms(),
+            super::exchange::Admission {
+                subject: &principal.email,
+                policy: auth_state.config().operations(),
+                timeout_ms: auth_state.config().opaque_exchange_timeout_ms(),
+            },
         )
         .await
     {
@@ -221,7 +225,7 @@ async fn build_reauth_start_response(
         Err(_) => {
             error!("OPAQUE exchange storage failed");
             return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Re-auth failed".to_string(),
             ));
         }
@@ -247,7 +251,7 @@ async fn build_reauth_start_response(
         (status = 204, description = "Re-auth success"),
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Invalid session, expired/attempted exchange or session binding mismatch"),
-        (status = 500, description = "Authentication storage unavailable; no successful elevation", body = String)
+        (status = 503, description = "Authentication storage unavailable; no successful elevation", body = String)
     ),
     tag = "auth"
 )]
@@ -295,7 +299,7 @@ pub async fn opaque_reauth_finish(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let Ok(session_hash) = <[u8; 32]>::try_from(hash_session_token(&token)) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let login_state = match auth_state
         .opaque()
@@ -315,7 +319,7 @@ pub async fn opaque_reauth_finish(
         Err(_) => {
             error!("OPAQUE exchange storage failed");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "Re-auth failed".to_string(),
             )
                 .into_response();
@@ -344,14 +348,14 @@ pub async fn opaque_reauth_finish(
         Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
         Err(_) => {
             error!("OPAQUE reauthentication identity validation failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
     match update_session_auth_time(&mut *tx, principal.user_id, &session_hash).await {
         Ok(true) => {
             if tx.commit().await.is_err() {
                 error!("OPAQUE reauthentication session transaction commit failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                StatusCode::SERVICE_UNAVAILABLE.into_response()
             } else {
                 StatusCode::NO_CONTENT.into_response()
             }
@@ -359,7 +363,7 @@ pub async fn opaque_reauth_finish(
         Ok(false) => StatusCode::UNAUTHORIZED.into_response(),
         Err(err) => {
             error!("Failed to update session auth time: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
 }

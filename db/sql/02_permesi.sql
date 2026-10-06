@@ -707,6 +707,10 @@ CREATE TABLE IF NOT EXISTS opaque_exchanges (
         (purpose = 'reauth' AND user_id IS NOT NULL AND session_hash IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS opaque_exchanges_expires_idx ON opaque_exchanges (expires_at);
+ALTER TABLE opaque_exchanges ADD COLUMN IF NOT EXISTS subject_tag BYTEA CHECK (subject_tag IS NULL OR octet_length(subject_tag)=32);
+CREATE INDEX IF NOT EXISTS opaque_exchanges_subject_idx ON opaque_exchanges (purpose,subject_tag);
+ALTER TABLE webauthn_exchanges ADD COLUMN IF NOT EXISTS subject_tag BYTEA CHECK (subject_tag IS NULL OR octet_length(subject_tag)=32);
+CREATE INDEX IF NOT EXISTS webauthn_exchanges_subject_idx ON webauthn_exchanges (purpose,subject_tag);
 CREATE INDEX IF NOT EXISTS opaque_exchanges_user_idx ON opaque_exchanges (user_id);
 CREATE INDEX IF NOT EXISTS opaque_exchanges_session_idx ON opaque_exchanges (session_hash)
     WHERE session_hash IS NOT NULL;
@@ -757,7 +761,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
     dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
     subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
     action TEXT NOT NULL CHECK (action IN (
-        'signup', 'login', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
+        'signup', 'login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
     )),
     attempts BIGINT NOT NULL CHECK (attempts > 0),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -767,7 +771,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
 -- Add the independent OAuth authorization counter without changing existing actions.
 ALTER TABLE auth_rate_limits DROP CONSTRAINT IF EXISTS auth_rate_limits_action_check;
 ALTER TABLE auth_rate_limits ADD CONSTRAINT auth_rate_limits_action_check
-    CHECK (action IN ('signup','login','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','jwks_refresh','client_credentials_management','client_credentials_revocation'));
+    CHECK (action IN ('signup','login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','jwks_refresh','client_credentials_management','client_credentials_revocation'));
 
 CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
 

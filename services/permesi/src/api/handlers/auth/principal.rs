@@ -130,7 +130,7 @@ pub async fn require_auth(headers: &HeaderMap, pool: &PgPool) -> Result<Principa
             }
             let scopes = resolve_scopes(pool, record.user_id).await.map_err(|err| {
                 error!("Failed to resolve principal scopes: {err}");
-                StatusCode::INTERNAL_SERVER_ERROR
+                StatusCode::SERVICE_UNAVAILABLE
             })?;
             Ok(Principal {
                 scopes,
@@ -154,7 +154,7 @@ pub async fn require_any_auth(headers: &HeaderMap, pool: &PgPool) -> Result<Prin
             }
             let scopes = resolve_scopes(pool, record.user_id).await.map_err(|err| {
                 error!("Failed to resolve principal scopes: {err}");
-                StatusCode::INTERNAL_SERVER_ERROR
+                StatusCode::SERVICE_UNAVAILABLE
             })?;
             Ok(Principal {
                 scopes,
@@ -183,7 +183,7 @@ pub async fn require_mfa_challenge(
             }
             let scopes = resolve_scopes(pool, record.user_id).await.map_err(|err| {
                 error!("Failed to resolve principal scopes: {err}");
-                StatusCode::INTERNAL_SERVER_ERROR
+                StatusCode::SERVICE_UNAVAILABLE
             })?;
             Ok(Principal {
                 scopes,

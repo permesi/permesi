@@ -447,6 +447,10 @@ feature logs a warning if that variable is present instead of silently dropping 
 - Frontend env is compile-time (via `option_env!`). Set `PERMESI_API_BASE_URL`, `PERMESI_TOKEN_BASE_URL`, and `PERMESI_CLIENT_ID` before build.
 - `PERMESI_CLIENT_ID` is public (embedded in WASM); store it in GitHub Actions Variables, not Secrets.
 
+Authentication admission uses shared subject/flow quotas and explicit proxy trust. See
+[authentication operations](docs/authentication-operations.md) for configuration,
+upgrade requirements, outage responses, telemetry and encryption lifetime policy.
+
 ## Local Development (Full Flow)
 
 Default ports: genesis `8000`, permesi `8001`, web `8081`.

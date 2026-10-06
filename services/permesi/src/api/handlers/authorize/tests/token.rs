@@ -656,14 +656,35 @@ async fn token_exchange_shared_budget_and_body_limits_preserve_code() -> Result<
     );
     let mut form = url::form_urlencoded::Serializer::new(String::new());
     form.extend_pairs(fields(&code, &client, REDIRECT, VERIFIER));
-    let reply = router(&budgeted)
+    let body = form.finish();
+    let peer_router = router(&budgeted).layer(axum::middleware::from_fn_with_state(
+        crate::api::handlers::auth::operations::OperationsConfig::defaults(),
+        crate::api::handlers::auth::operations::verified_peer,
+    ));
+    // A raw forwarded header cannot bypass the exhausted unknown-peer bucket.
+    let spoofed = peer_router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/token")
                 .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header("x-forwarded-for", "192.0.2.77")
-                .body(Body::from(form.finish()))?,
+                .header("x-permesi-client-ip", "192.0.2.77")
+                .body(Body::from(body.clone()))?,
+        )
+        .await?;
+    assert_eq!(spoofed.status(), StatusCode::TOO_MANY_REQUESTS);
+    let reply = peer_router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(axum::extract::ConnectInfo(
+                    "192.0.2.77:443".parse::<std::net::SocketAddr>()?,
+                ))
+                .body(Body::from(body))?,
         )
         .await?;
     assert_eq!(reply.status(), StatusCode::OK);

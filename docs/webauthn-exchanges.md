@@ -38,9 +38,10 @@ Deleting or replacing that credential cannot validate an outstanding old proof.
 `PERMESI_AUTH_MAX_PENDING_STATES` currently bounds each of the four ceremony purposes
 cluster-wide. A PostgreSQL advisory transaction lock coordinates capacity across
 replicas; expiry cleanup and insertion occur in the same transaction. The configured
-`PERMESI_OPAQUE_EXCHANGE_TIMEOUT_MS` also bounds ceremony statements/locks.
-Pending per-user fairness and separate operation/error budgets remain the operations
-milestone; this capacity guarantee does not claim unlimited throughput.
+`PERMESI_OPAQUE_EXCHANGE_TIMEOUT_MS` also bounds pool acquisition and ceremony
+statements/locks. Shared user/anonymous-IP quotas, separate flow/action budgets and
+429/503 classification follow [authentication operations](authentication-operations.md).
+These capacity guarantees do not claim unlimited throughput.
 
 RP ID/name, allowed origins, challenge TTL and preview mode are clap configuration,
 then revalidated at dispatch. Use `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`,
@@ -64,3 +65,7 @@ concurrent single-use consumption, counter races and HTTP session issuance. No p
 verifier is mocked. Existing passkey/origin/preview/body parsing tests remain enabled.
 Database schema checks cover the table, lifecycle constraints, cleanup and restricted
 runtime privileges. Hosted browser CI uses the normal project fixture/build workflow.
+
+Pending admission, transport trust, generic 429/503 responses and outcome/timing events
+follow [authentication operations](authentication-operations.md). Apply its transient-format
+upgrade/drain guidance together with this schema.

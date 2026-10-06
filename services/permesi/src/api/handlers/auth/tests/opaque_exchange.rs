@@ -205,7 +205,7 @@ async fn opaque_exchange_capacity_lock_wait_is_bounded() -> Result<()> {
     blocker.rollback().await?;
     let response =
         result.context("OPAQUE start remained blocked beyond the configured deadline")??;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(!response.headers().contains_key(SET_COOKIE));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM opaque_exchanges")
@@ -230,7 +230,7 @@ async fn opaque_exchange_consumption_lock_wait_is_bounded() -> Result<()> {
         .execute(&mut *blocker)
         .await?;
     let response = finish_under_lock(&f, &proof, None, blocker).await?;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(!response.headers().contains_key(SET_COOKIE));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM opaque_exchanges")
@@ -268,7 +268,7 @@ async fn opaque_exchange_identity_lock_wait_is_bounded() -> Result<()> {
             .execute(&mut *blocker)
             .await?;
         let response = finish_under_lock(&f, &proof, cookie, blocker).await?;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(!response.headers().contains_key(SET_COOKIE));
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM opaque_exchanges")
@@ -794,7 +794,7 @@ async fn opaque_login_mfa_issuance_failure_rolls_back_session_changes() -> Resul
         None,
     )
     .await?;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(!response.headers().contains_key(SET_COOKIE));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions")
@@ -1202,6 +1202,84 @@ async fn opaque_state_enforces_pending_login_capacity_across_replicas() -> Resul
     Ok(())
 }
 
+/// Fair unknown-account admission and reserved reauthentication capacity are shared across replicas.
+#[tokio::test]
+async fn opaque_pending_subject_quotas_preserve_other_accounts_and_reauthentication() -> Result<()>
+{
+    let Some(f) = Fixture::new(Duration::from_secs(300), 100).await? else {
+        return Ok(());
+    };
+    let mut policy = super::super::operations::OperationsConfig::defaults();
+    policy.subject_limit = 1;
+    policy.login_limit = 2;
+    policy.reauth_limit = 1;
+    let config = auth_config().with_operations(policy);
+    let a = opaque_router(
+        Arc::new(AuthState::new(
+            config.clone(),
+            OpaqueState::from_seed(
+                [0; 32],
+                "api.permesi.dev".into(),
+                Duration::from_secs(300),
+                100,
+            ),
+            Arc::new(RateLimiter::noop()),
+            MfaConfig::new(),
+        )),
+        f.admission.clone(),
+        f.db.pool.clone(),
+    );
+    let b = opaque_router(
+        Arc::new(AuthState::new(
+            config,
+            OpaqueState::from_seed(
+                [0; 32],
+                "api.permesi.dev".into(),
+                Duration::from_secs(300),
+                100,
+            ),
+            Arc::new(RateLimiter::noop()),
+            MfaConfig::new(),
+        )),
+        f.admission.clone(),
+        f.db.pool.clone(),
+    );
+    for (router, email, expected) in [
+        (&a, "absent@example.com", StatusCode::OK),
+        (&b, "absent@example.com", StatusCode::TOO_MANY_REQUESTS),
+        (&b, "another@example.com", StatusCode::OK),
+        (&a, "third@example.com", StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        let client = ClientLogin::<OpaqueSuite>::start(&mut opaque_rand_core::OsRng, b"unknown")?;
+        assert_eq!(post(router,"/v1/auth/opaque/login/start",json!({"email":email,"credential_request":STANDARD.encode(client.message.serialize())}),&f.zero,None).await?.status(),expected);
+    }
+    proof(&b, EMAIL, &f.password, &f.zero, Some(&f.first)).await?;
+    let client = ClientLogin::<OpaqueSuite>::start(&mut opaque_rand_core::OsRng, &f.password)?;
+    assert_eq!(
+        post(
+            &a,
+            "/v1/auth/opaque/reauth/start",
+            json!({"credential_request":STANDARD.encode(client.message.serialize())}),
+            &f.zero,
+            Some(&f.second)
+        )
+        .await?
+        .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let rows: Vec<(String, Vec<u8>)> =
+        sqlx::query_as("SELECT purpose,subject_tag FROM opaque_exchanges")
+            .fetch_all(&f.db.pool)
+            .await?;
+    assert_eq!(rows.len(), 3);
+    assert!(
+        rows.iter()
+            .all(|(_, tag)| tag.len() == 32
+                && tag != Sha256::digest(b"absent@example.com").as_slice())
+    );
+    Ok(())
+}
+
 /// Wait until both competing starts reach a database lock, before releasing the insertion gate.
 async fn capacity_requests_reach_gate(pool: &PgPool) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -1297,7 +1375,7 @@ async fn opaque_exchange_storage_outage_issues_no_session() -> Result<()> {
         None,
     )
     .await?;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(!response.headers().contains_key(SET_COOKIE));
     let body = to_bytes(response.into_body(), 1024).await?;
     assert_eq!(body.as_ref(), b"Login failed");
@@ -1328,7 +1406,17 @@ async fn opaque_exchange_persists_no_plaintext_reference_or_transcript() -> Resu
     )?;
     let plaintext = server.state.serialize().to_vec();
     let id = state
-        .store_login_state(&db.pool, server.state, None, ExchangePurpose::Login, 1000)
+        .store_login_state(
+            &db.pool,
+            server.state,
+            None,
+            ExchangePurpose::Login,
+            super::super::opaque::exchange::Admission {
+                subject: "test",
+                policy: &super::super::operations::OperationsConfig::defaults(),
+                timeout_ms: 1000,
+            },
+        )
         .await?
         .context("exchange persisted")?;
     let (stored_hash, ciphertext): (Vec<u8>, Vec<u8>) =
@@ -1337,7 +1425,7 @@ async fn opaque_exchange_persists_no_plaintext_reference_or_transcript() -> Resu
             .await?;
     assert_eq!(stored_hash, Sha256::digest(id.as_bytes()).as_slice());
     assert_ne!(stored_hash, id.as_bytes());
-    assert_eq!(ciphertext.len(), plaintext.len() + 28);
+    assert_eq!(ciphertext.len(), plaintext.len() + 40);
     assert!(
         !ciphertext
             .windows(plaintext.len())

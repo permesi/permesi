@@ -34,6 +34,7 @@ mod admin_token;
 pub(crate) mod authority_guard;
 pub(crate) mod mfa;
 pub(crate) mod opaque;
+pub(crate) mod operations;
 pub(crate) mod passkeys;
 pub(crate) mod principal;
 mod rate_limit;
@@ -47,7 +48,9 @@ pub(crate) mod verification;
 mod zero_token;
 
 pub use admin::{AdminConfig, AdminState};
-pub(crate) use rate_limit::{RateLimitAction, RateLimitDecision};
+pub(crate) use rate_limit::RateLimitAction;
+#[cfg(test)]
+pub(crate) use rate_limit::RateLimitDecision;
 pub use rate_limit::{RateLimitConfig, RateLimiter, SubjectKey};
 pub(crate) use session_kind::SessionKind;
 pub use state::{AuthConfig, AuthState, OpaqueState};

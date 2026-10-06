@@ -12,7 +12,7 @@ use tracing::error;
 
 use crate::api::handlers::AdmissionVerifier;
 
-use super::rate_limit::{RateLimitAction, RateLimitDecision};
+use super::rate_limit::RateLimitAction;
 use super::state::AuthState;
 use super::storage::{
     ResendOutcome, consume_verification_token, enqueue_resend_verification,
@@ -55,14 +55,14 @@ pub async fn verify_email(
     }
 
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::VerifyEmail)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
         // Rate limits are enforced before any token work to avoid amplification.
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
@@ -85,15 +85,15 @@ pub async fn verify_email(
     };
 
     if let Ok(Some(email)) = lookup_email_by_token_hash(&mut tx, &token_hash).await
-        && auth_state
+        && let Some(status) = auth_state
             .rate_limiter()
             .check_email(&email, RateLimitAction::VerifyEmail)
             .await
-            == RateLimitDecision::Limited
+            .denial_status()
     {
         // Email-based limits reduce repeated verification attempts for the same address.
         let _ = tx.rollback().await;
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     match consume_verification_token(&mut tx, &token_hash).await {
@@ -156,22 +156,32 @@ pub async fn resend_verification(
     }
 
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::ResendVerification)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
         // Resend is intentionally opaque; rate limits still return 204.
-        return StatusCode::NO_CONTENT.into_response();
+        return if status == StatusCode::SERVICE_UNAVAILABLE {
+            status
+        } else {
+            StatusCode::NO_CONTENT
+        }
+        .into_response();
     }
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::ResendVerification)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return StatusCode::NO_CONTENT.into_response();
+        return if status == StatusCode::SERVICE_UNAVAILABLE {
+            status
+        } else {
+            StatusCode::NO_CONTENT
+        }
+        .into_response();
     }
 
     if let Err(_err) = require_zero_token(&headers, &admission).await {

@@ -6,7 +6,7 @@
 use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
-        rate_limit::{RateLimitAction, RateLimitDecision},
+        rate_limit::RateLimitAction,
         state::{AuthState, OpaqueSuite},
         storage::{SignupOutcome, insert_user_and_verification},
         types::{
@@ -61,21 +61,21 @@ pub async fn opaque_signup_start(
 
     // Rate-limit before zero-token verification to keep abuse cheap to reject.
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Signup)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::Signup)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
@@ -154,21 +154,21 @@ pub async fn opaque_signup_finish(
 
     // Rate-limit before zero-token verification to keep abuse cheap to reject.
     let client_ip = extract_client_ip(&headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_ip(client_ip.as_deref(), RateLimitAction::Signup)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
         .check_email(&email, RateLimitAction::Signup)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "Rate limited".to_string()).into_response();
+        return (status, "Rate limited".to_string()).into_response();
     }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {

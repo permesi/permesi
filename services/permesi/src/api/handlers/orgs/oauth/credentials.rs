@@ -13,7 +13,7 @@ use super::{
     },
 };
 use crate::{
-    api::handlers::auth::{AuthState, RateLimitAction, RateLimitDecision},
+    api::handlers::auth::{AuthState, RateLimitAction},
     oauth::{credentials::CredentialError, oidc::OAuthState, service::ApplicationContext},
 };
 use axum::{
@@ -99,7 +99,7 @@ async fn context(
                 crate::oauth::service::Error::NotFound => StatusCode::NOT_FOUND,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             })?;
-        if auth
+        if let Some(status) = auth
             .rate_limiter()
             .check_email(
                 &format!(
@@ -109,9 +109,9 @@ async fn context(
                 action,
             )
             .await
-            == RateLimitDecision::Limited
+            .denial_status()
         {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
+            return Err(status);
         }
     }
     Ok(context)

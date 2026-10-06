@@ -19,6 +19,10 @@ use tracing::error;
 
 #[derive(Clone, Copy, Debug)]
 pub enum RateLimitAction {
+    Reauthenticate,
+    PasskeyLogin,
+    WebauthnEnrollment,
+    MfaVerification,
     Signup,
     Login,
     VerifyEmail,
@@ -34,6 +38,10 @@ pub enum RateLimitAction {
 impl RateLimitAction {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Reauthenticate => "reauthenticate",
+            Self::PasskeyLogin => "passkey_login",
+            Self::WebauthnEnrollment => "webauthn_enrollment",
+            Self::MfaVerification => "mfa_verification",
             Self::Signup => "signup",
             Self::Login => "login",
             Self::VerifyEmail => "verify_email",
@@ -52,6 +60,18 @@ impl RateLimitAction {
 pub enum RateLimitDecision {
     Allowed,
     Limited,
+    Unavailable,
+}
+
+impl RateLimitDecision {
+    /// Every non-allowed result denies admission; dependency failure is distinct from abuse.
+    pub(crate) const fn denial_status(self) -> Option<axum::http::StatusCode> {
+        match self {
+            Self::Allowed => None,
+            Self::Limited => Some(axum::http::StatusCode::TOO_MANY_REQUESTS),
+            Self::Unavailable => Some(axum::http::StatusCode::SERVICE_UNAVAILABLE),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,7 +114,7 @@ impl SubjectKey {
     }
 
     /// Keyed tag stored in place of the raw subject.
-    fn tag(&self, subject: &str) -> Option<[u8; 32]> {
+    pub(crate) fn tag(&self, subject: &str) -> Option<[u8; 32]> {
         mac(&self.0, subject.as_bytes())
     }
 }
@@ -195,7 +215,7 @@ impl RateLimiter {
 
         let Some(subject_hash) = key.tag(subject) else {
             error!(dimension, "rate-limit subject tag failed; failing closed");
-            return RateLimitDecision::Limited;
+            return RateLimitDecision::Unavailable;
         };
         let query = r"
             INSERT INTO auth_rate_limits (
@@ -217,7 +237,7 @@ impl RateLimiter {
             RETURNING attempts
         ";
 
-        match sqlx::query_scalar::<_, i64>(query)
+        if let Ok(attempts) = sqlx::query_scalar::<_, i64>(query)
             .bind(dimension)
             .bind(subject_hash.as_slice())
             .bind(action.as_str())
@@ -225,15 +245,14 @@ impl RateLimiter {
             .fetch_one(pool)
             .await
         {
-            Ok(attempts) => decision_for_attempts(attempts, limit(*config)),
-            Err(err) => {
-                error!(
-                    dimension,
-                    action = action.as_str(),
-                    "authentication rate-limit check failed closed: {err}"
-                );
-                RateLimitDecision::Limited
-            }
+            decision_for_attempts(attempts, limit(*config))
+        } else {
+            error!(
+                dimension,
+                action = action.as_str(),
+                "authentication rate-limit check failed closed"
+            );
+            RateLimitDecision::Unavailable
         }
     }
 }
@@ -280,7 +299,7 @@ mod tests {
             limiter
                 .check_email("user@example.com", RateLimitAction::Login)
                 .await,
-            RateLimitDecision::Limited
+            RateLimitDecision::Unavailable
         );
         Ok(())
     }

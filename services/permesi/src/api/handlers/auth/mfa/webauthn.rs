@@ -40,6 +40,7 @@ type HandlerError = Box<axum::response::Response>;
     path = "/v1/auth/mfa/webauthn/register/start",
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Registration challenge generated", body = WebauthnRegisterStartResponse),
         (status = 401, description = "Unauthorized")
     ),
@@ -48,12 +49,24 @@ type HandlerError = Box<axum::response::Response>;
 pub async fn register_start(
     headers: HeaderMap,
     pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
     webauthn_service: State<Arc<SecurityKeyService>>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
+
+    if let Err(status) = super::super::operations::factor_admission(
+        &auth_state,
+        &headers,
+        &principal.email,
+        super::super::RateLimitAction::WebauthnEnrollment,
+    )
+    .await
+    {
+        return status.into_response();
+    }
 
     let Some(session_token) = extract_session_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -77,8 +90,8 @@ pub async fn register_start(
         )
             .into_response(),
         Err(err) => {
-            error!("Failed to start WebAuthn registration: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            error!("Failed to start WebAuthn registration");
+            crate::webauthn::exchange::error_response(&err)
         }
     }
 }
@@ -188,8 +201,8 @@ pub async fn register_finish(
             }
         }
         Err(err) => {
-            error!("Failed to finish WebAuthn registration: {err}");
-            (StatusCode::BAD_REQUEST, "Registration failed".to_string()).into_response()
+            error!("Failed to finish WebAuthn registration");
+            crate::webauthn::exchange::error_response(&err)
         }
     }
 }
@@ -226,6 +239,7 @@ async fn persist_registered_key(
     path = "/v1/auth/mfa/webauthn/authenticate/start",
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Authentication challenge generated", body = WebauthnAuthenticateStartResponse),
         (status = 401, description = "Unauthorized"),
         (status = 400, description = "Authentication unavailable")
@@ -235,12 +249,24 @@ async fn persist_registered_key(
 pub async fn authenticate_start(
     headers: HeaderMap,
     pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
     webauthn_service: State<Arc<SecurityKeyService>>,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
+
+    if let Err(status) = super::super::operations::factor_admission(
+        &auth_state,
+        &headers,
+        &principal.email,
+        super::super::RateLimitAction::MfaVerification,
+    )
+    .await
+    {
+        return status.into_response();
+    }
 
     let Some(session_token) = extract_session_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -251,21 +277,19 @@ pub async fn authenticate_start(
         Err(response) => return *response,
     };
 
-    if let Ok((challenge, auth_id)) = webauthn_service
+    match webauthn_service
         .auth_begin(principal.user_id, &origin, &session_hash)
         .await
     {
-        (
+        Ok((challenge, auth_id)) => (
             StatusCode::OK,
             Json(WebauthnAuthenticateStartResponse {
                 auth_id: auth_id.to_string(),
                 challenge: serde_json::to_value(challenge).unwrap_or_default(),
             }),
         )
-            .into_response()
-    } else {
-        error!("Failed to start WebAuthn authentication");
-        (StatusCode::BAD_REQUEST, "Authentication unavailable").into_response()
+            .into_response(),
+        Err(error) => crate::webauthn::exchange::error_response(&error),
     }
 }
 
@@ -368,7 +392,7 @@ pub async fn authenticate_finish(
             }
         }
         Err(err) => {
-            error!("Failed to finish WebAuthn authentication: {err}");
+            error!("Failed to finish WebAuthn authentication");
             let _ = SecurityKeyRepo::log_audit(
                 &pool,
                 principal.user_id,
@@ -378,7 +402,7 @@ pub async fn authenticate_finish(
                 None,
             )
             .await;
-            (StatusCode::BAD_REQUEST, "Authentication failed".to_string()).into_response()
+            crate::webauthn::exchange::error_response(&err)
         }
     }
 }

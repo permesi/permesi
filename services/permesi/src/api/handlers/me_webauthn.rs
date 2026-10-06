@@ -24,7 +24,7 @@ use webauthn_rs::prelude::{Passkey, RegisterPublicKeyCredential};
 use super::{
     AdmissionVerifier,
     auth::{
-        AuthState, RateLimitAction, RateLimitDecision,
+        AuthState, RateLimitAction,
         authority_guard::{AuthorityGuard, Policy},
         extract_client_ip, hash_session_token,
         principal::require_auth,
@@ -89,6 +89,7 @@ pub struct PasskeyCredentialListResponse {
     ),
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Passkey registration options", body = PasskeyRegisterOptionsResponse),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Unauthorized"),
@@ -185,7 +186,7 @@ pub async fn register_options(
                 request_id = %request_id,
                 "failed to start passkey registration: {err}"
             );
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            crate::webauthn::exchange::error_response(&err)
         }
     }
 }
@@ -199,6 +200,7 @@ pub async fn register_options(
     request_body = PasskeyRegisterFinishRequest,
     responses(
         (status = 503, description = "Authentication storage unavailable"),
+        (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Passkey registration finished", body = PasskeyRegisterFinishResponse),
         (status = 400, description = "Invalid registration response"),
         (status = 401, description = "Unauthorized"),
@@ -304,6 +306,10 @@ pub async fn register_finish(
                 "passkey registration failed"
             );
             let response = match err {
+                PasskeyRegistrationError::Unavailable => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Authentication temporarily unavailable",
+                ),
                 PasskeyRegistrationError::NotFound
                 | PasskeyRegistrationError::Expired
                 | PasskeyRegistrationError::UserMismatch
@@ -661,26 +667,22 @@ async fn enforce_rate_limits(
     email: &str,
 ) -> Result<(), HandlerError> {
     let client_ip = extract_client_ip(headers);
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
-        .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .check_ip(client_ip.as_deref(), RateLimitAction::WebauthnEnrollment)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return Err(Box::new(
-            (StatusCode::TOO_MANY_REQUESTS, "Rate limited").into_response(),
-        ));
+        return Err(Box::new((status, "Rate limited").into_response()));
     }
 
-    if auth_state
+    if let Some(status) = auth_state
         .rate_limiter()
-        .check_email(email, RateLimitAction::Login)
+        .check_email(email, RateLimitAction::WebauthnEnrollment)
         .await
-        == RateLimitDecision::Limited
+        .denial_status()
     {
-        return Err(Box::new(
-            (StatusCode::TOO_MANY_REQUESTS, "Rate limited").into_response(),
-        ));
+        return Err(Box::new((status, "Rate limited").into_response()));
     }
 
     Ok(())
