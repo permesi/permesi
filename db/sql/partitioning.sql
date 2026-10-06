@@ -6,7 +6,8 @@ CREATE OR REPLACE FUNCTION genesis_tokens_rollover(retention_days int, premake_d
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+-- Never resolve a caller's temporary relations before trusted tables and catalogs.
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     d date;

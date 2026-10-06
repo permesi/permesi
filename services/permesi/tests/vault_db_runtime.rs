@@ -27,6 +27,10 @@ const GENESIS_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/01_genesis.sql"
 ));
+const GENESIS_PARTITION_SQL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../db/sql/partitioning.sql"
+));
 const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/02_permesi.sql"
@@ -263,6 +267,8 @@ async fn verify_genesis_runtime(
     .await
     .context("Failed to connect with genesis dynamic creds")?;
 
+    verify_rollover_ignores_runtime_temporary_views(&mut connection).await?;
+
     let client_id: i16 = sqlx::query_scalar("SELECT id FROM clients WHERE id = 0")
         .fetch_one(&mut connection)
         .await
@@ -309,6 +315,8 @@ async fn verify_genesis_runtime(
     .await
     .context("Failed to connect with refreshed genesis creds")?;
 
+    verify_rollover_ignores_runtime_temporary_views(&mut new_conn).await?;
+
     let stored_id: Option<String> =
         sqlx::query_scalar("SELECT id::text FROM tokens WHERE id::text = $1 LIMIT 1")
             .bind(&token_id)
@@ -320,6 +328,45 @@ async fn verify_genesis_runtime(
         "Token row should persist"
     );
 
+    Ok(())
+}
+
+/// Proves privileged catalog reads cannot execute a runtime-created temporary view's function.
+async fn verify_rollover_ignores_runtime_temporary_views(
+    connection: &mut PgConnection,
+) -> Result<()> {
+    sqlx::raw_sql(
+        "CREATE TEMP TABLE rollover_authority_probe (executor NAME NOT NULL);
+         GRANT INSERT ON pg_temp.rollover_authority_probe TO PUBLIC;
+         CREATE FUNCTION pg_temp.capture_rollover_authority(relation_name TEXT) RETURNS TEXT
+         LANGUAGE plpgsql VOLATILE AS $$
+           BEGIN INSERT INTO pg_temp.rollover_authority_probe VALUES (current_user);
+             RETURN relation_name; END;
+         $$;
+         CREATE TEMP VIEW pg_class AS
+           SELECT oid,pg_temp.capture_rollover_authority(relname::TEXT) AS relname
+           FROM pg_catalog.pg_class;
+         GRANT SELECT ON pg_temp.pg_class TO PUBLIC;
+         -- An empty premake range avoids any partition DDL in this harmless authority probe.
+         SELECT public.genesis_tokens_rollover(7,-1);",
+    )
+    .execute(&mut *connection)
+    .await?;
+    let function_calls: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pg_temp.rollover_authority_probe")
+            .fetch_one(&mut *connection)
+            .await?;
+    ensure!(
+        function_calls == 0,
+        "Privileged rollover executed a runtime temporary view's function"
+    );
+    sqlx::raw_sql(
+        "DROP VIEW pg_temp.pg_class;
+         DROP FUNCTION pg_temp.capture_rollover_authority(TEXT);
+         DROP TABLE pg_temp.rollover_authority_probe;",
+    )
+    .execute(&mut *connection)
+    .await?;
     Ok(())
 }
 
@@ -385,6 +432,7 @@ async fn bootstrap_genesis(postgres: &PostgresContainer) -> Result<()> {
         .await
         .context("Failed to connect to genesis DB for schema setup")?;
     apply_schema(&mut genesis, GENESIS_SCHEMA_SQL).await?;
+    apply_schema(&mut genesis, GENESIS_PARTITION_SQL).await?;
     apply_schema(&mut genesis, GENESIS_SEED_SQL).await?;
     sqlx::query("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
         .execute(&mut genesis)
