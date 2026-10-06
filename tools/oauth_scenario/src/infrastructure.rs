@@ -21,6 +21,7 @@ const GENESIS_SQL: &str = include_str!("../../../db/sql/01_genesis.sql");
 const GENESIS_CLIENT_SQL: &str = include_str!("../../../db/sql/seed_test_client.sql");
 const PERMESI_SQL: &str = include_str!("../../../db/sql/02_permesi.sql");
 const BOOTSTRAP_SQL: &str = include_str!("../../../db/sql/00_init.sql");
+const VERIFY_SQL: &str = include_str!("../../../db/sql/verify_permesi.sql");
 
 /// Dynamic service credentials never implement Debug or Serialize.
 pub struct AppRole {
@@ -106,17 +107,7 @@ impl Infrastructure {
         test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SQL)
             .await
             .safe("Cannot apply Permesi schema.")?;
-        let marker = "GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;";
-        let (_, grants) = BOOTSTRAP_SQL
-            .split_once(marker)
-            .ok_or_else(|| Failure::harness("Canonical runtime grants are missing."))?;
-        test_support::sql::execute_script(
-            &mut connection,
-            "canonical runtime grants",
-            &format!("{marker}{grants}"),
-        )
-        .await
-        .safe("Cannot apply canonical runtime grants.")?;
+        apply_runtime_grants(&mut connection).await?;
         let pool = PgPool::connect(&admin_dsn)
             .await
             .safe("Cannot open isolated assertion pool.")?;
@@ -192,6 +183,25 @@ pub fn random() -> Result<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).safe("Operating-system entropy is unavailable.")?;
     Ok(STANDARD.encode(bytes))
+}
+
+/// Applies the canonical bootstrap exceptions and verifies that broad grants cannot erase replay history.
+async fn apply_runtime_grants(connection: &mut PgConnection) -> Result<()> {
+    let marker = "GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;";
+    let (_, grants) = BOOTSTRAP_SQL
+        .split_once(marker)
+        .ok_or_else(|| Failure::harness("Canonical runtime grants are missing."))?;
+    test_support::sql::execute_script(
+        &mut *connection,
+        "canonical runtime grants",
+        &format!("{marker}{grants}"),
+    )
+    .await
+    .safe("Cannot apply canonical runtime grants.")?;
+    test_support::sql::execute_script(&mut *connection, "verify_permesi.sql", VERIFY_SQL)
+        .await
+        .safe("Canonical runtime grants violate schema protections.")?;
+    Ok(())
 }
 
 /// Retries only dependency readiness; authentication and scenario mutations are never retried.

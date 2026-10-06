@@ -31,6 +31,10 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/02_permesi.sql"
 ));
+const BOOTSTRAP_SQL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../db/sql/00_init.sql"
+));
 const GENESIS_SEED_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../db/sql/seed_test_client.sql"
@@ -50,6 +54,8 @@ async fn vault_runtime_roles_survive_revocation() -> Result<()> {
     let permesi_root_password = Uuid::new_v4().simple().to_string();
     let genesis_root_password = Uuid::new_v4().simple().to_string();
     bootstrap_database(&postgres, &permesi_root_password, &genesis_root_password).await?;
+    // Reapplication must preserve narrow refresh authority, not restore broad bootstrap grants.
+    bootstrap_permesi(&postgres).await?;
 
     let vault = VaultContainer::start(network.name()).await?;
     vault.enable_secrets_engine("database", "database").await?;
@@ -134,6 +140,8 @@ async fn verify_permesi_runtime(
     .await
     .context("Failed to connect with permesi dynamic creds")?;
 
+    verify_refresh_permissions(&mut connection).await?;
+
     sqlx::query("INSERT INTO roles (name) VALUES ('auditor') ON CONFLICT DO NOTHING")
         .execute(&mut connection)
         .await
@@ -166,12 +174,38 @@ async fn verify_permesi_runtime(
     .await
     .context("Failed to connect with refreshed permesi creds")?;
 
+    verify_refresh_permissions(&mut new_conn).await?;
+
     let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles WHERE name = 'auditor'")
         .fetch_one(&mut new_conn)
         .await
         .context("Failed to read roles with refreshed permesi creds")?;
     ensure!(role_count == 1, "Expected auditor role to persist");
 
+    Ok(())
+}
+
+/// Verifies the effective permissions inherited by an actual Vault-minted runtime identity.
+async fn verify_refresh_permissions(connection: &mut PgConnection) -> Result<()> {
+    let protected: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM unnest(ARRAY['oauth_refresh_families','oauth_refresh_tokens']) t, unnest(ARRAY['UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p WHERE has_table_privilege(current_user,t,p)) AND has_table_privilege(current_user,'oauth_refresh_families','SELECT,INSERT') AND has_table_privilege(current_user,'oauth_refresh_tokens','SELECT,INSERT') AND has_column_privilege(current_user,'oauth_refresh_families','revoked_at','UPDATE') AND has_column_privilege(current_user,'oauth_refresh_families','revocation_reason','UPDATE') AND has_column_privilege(current_user,'oauth_refresh_tokens','consumed_at','UPDATE')")
+        .fetch_one(&mut *connection).await?;
+    ensure!(
+        protected,
+        "Runtime refresh permissions exceed transition authority"
+    );
+    for statement in [
+        "DELETE FROM oauth_refresh_tokens",
+        "TRUNCATE oauth_refresh_tokens",
+        "DELETE FROM oauth_refresh_families",
+        "TRUNCATE oauth_refresh_families",
+        "UPDATE oauth_refresh_families SET expires_at=expires_at+INTERVAL '1 second'",
+        "UPDATE oauth_refresh_tokens SET previous_hash=NULL",
+    ] {
+        assert_permission_denied(
+            sqlx::query(statement).execute(&mut *connection).await,
+            "runtime cannot rewrite refresh bindings or erase replay history",
+        )?;
+    }
     Ok(())
 }
 
@@ -386,63 +420,16 @@ async fn bootstrap_permesi(postgres: &PostgresContainer) -> Result<()> {
         .context("Failed to reassign permesi ownership")?;
 
     create_runtime_role(&mut permesi, "permesi_runtime").await?;
-    sqlx::query("GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi_runtime admin option")?;
-    sqlx::query("GRANT CONNECT, TEMPORARY ON DATABASE permesi TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime connect")?;
-    sqlx::query("GRANT USAGE ON SCHEMA public TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime schema usage")?;
-    sqlx::query("GRANT USAGE ON TYPE user_status TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime user_status usage")?;
-    sqlx::query("GRANT USAGE ON TYPE email_outbox_status TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime email_outbox_status usage")?;
-    sqlx::query("GRANT USAGE ON TYPE environment_tier TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime environment_tier usage")?;
-    sqlx::query("GRANT USAGE ON TYPE org_membership_status TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime org_membership_status usage")?;
-    sqlx::query("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime tables privileges")?;
-    sqlx::query("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO permesi_runtime")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to grant permesi runtime sequences privileges")?;
-    sqlx::query(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public \
-        GRANT ALL PRIVILEGES ON TABLES TO permesi_runtime",
+    let marker = "GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;";
+    let (_, grants) = BOOTSTRAP_SQL
+        .split_once(marker)
+        .context("Canonical runtime grants are missing")?;
+    test_support::sql::execute_script(
+        &mut permesi,
+        "canonical runtime grants",
+        &format!("{marker}{grants}"),
     )
-    .execute(&mut permesi)
-    .await
-    .context("Failed to set permesi default table privileges")?;
-    sqlx::query(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public \
-        GRANT ALL PRIVILEGES ON SEQUENCES TO permesi_runtime",
-    )
-    .execute(&mut permesi)
-    .await
-    .context("Failed to set permesi default sequence privileges")?;
-    sqlx::query(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public \
-        GRANT USAGE ON TYPES TO permesi_runtime",
-    )
-    .execute(&mut permesi)
-    .await
-    .context("Failed to set permesi default type privileges")?;
+    .await?;
 
     Ok(())
 }

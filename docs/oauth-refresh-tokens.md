@@ -59,6 +59,9 @@ permit only insertion/read and the transition columns; they forbid rewriting bin
 deleting/truncating replay history. Privileged cleanup removes a family's entire lineage
 seven days after its absolute expiration, retaining spent tokens while the family can live.
 Physical privileged grant/user deletion can still cascade; normal tenant lifecycle is soft deletion.
+Both schema reapplication and the bootstrap's final grant segment enforce these restrictions.
+The isolated runner checks the transactional schema verifier after canonical bootstrap grants;
+Vault integration checks the effective permissions of minted and replacement runtime users.
 
 ## Lifetimes and user lifecycle
 

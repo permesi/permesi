@@ -135,6 +135,11 @@ REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
 -- Token receipt history is immutable for runtime roles, including bootstrap-wide grants.
 REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
 REVOKE UPDATE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE opaque_exchanges, webauthn_exchanges FROM permesi_runtime;
+-- Refresh replay evidence and immutable bindings must survive the bootstrap-wide grant above.
+REVOKE ALL ON TABLE oauth_refresh_families, oauth_refresh_tokens FROM permesi_runtime;
+GRANT SELECT, INSERT ON TABLE oauth_refresh_families, oauth_refresh_tokens TO permesi_runtime;
+GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
+GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO permesi_runtime;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public
