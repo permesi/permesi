@@ -17,7 +17,11 @@ These guidelines are mandatory for contributors and for any AI coding agent oper
   - `services/permesi`: core IAM/OIDC
   - `services/genesis`: edge admission mint
   - `crates/admission_token`: shared contract + helpers
+  - `crates/vault_client`: shared Vault connectivity
+  - `crates/service_utils`: shared service utilities
+  - `crates/test_support`: local integration fixtures
   - `apps/web`: Leptos CSR frontend
+  - `tools/oauth_scenario`: isolated OAuth integration runner
 - Workspace releases use a single shared version via `[workspace.package]`; tags apply to the full workspace state.
 - API artifacts live in `docs/openapi/*.json`; diagrams sit in `docs/architecture.mmd`.
 - Each service keeps code under `src/` with `bin/` entrypoints, `cli/` utilities, and `vault/` helpers.
@@ -69,8 +73,7 @@ Authorization helper rule:
   - `cargo clippy --all-targets --all-features`
 
 OpenAPI regeneration:
-- `cargo run -p permesi --bin openapi > docs/openapi/permesi.json`
-- Do the same for `genesis` as applicable.
+- `just openapi` regenerates both service artifacts; use `just openapi-permesi` or `just openapi-genesis` for one service.
 
 Container builds (local):
 - `podman build -f services/permesi/Dockerfile -t permesi:dev .` (and `genesis` analog)
@@ -98,6 +101,7 @@ Container builds (local):
 - Name tests `<unit>_<behavior>` (e.g., `admission_token_rejects_expired()`).
 - Cover edge cases around token validation (`exp`, `aud`, `iss`), PASERK keyset loading, and rate/risk controls.
 - Add regression tests with every bug fix.
+- For security-sensitive changes, cover relevant malformed, missing, expired, replayed, mismatched, unauthorized and cross-tenant inputs. Assert the actual rejection and unchanged protected state; a skipped dependency, empty test filter or setup failure does not establish security coverage.
 
 ## Vault Bootstrap (Terraform)
 - Vault bootstrap (policies, AppRole roles, transit keys, database engine) lives in `vault/contrib/terraform` (see `vault/contrib/terraform/README.md`).
@@ -110,7 +114,7 @@ Container builds (local):
 - Wrapped tokens provided via `--vault-wrapped-token` are unwrapped into a `secret_id` before login (TCP mode only).
 
 ## Commit & Pull Request Guidelines
-- Commit messages are short and imperative; scoped prefixes are common (`chore(workspace): ...`, `fix: ...`).
+- Use short, plain imperative commit subjects. Never use conventional prefixes such as `feat:`, `chore:`, `fix:`, `docs:` or scoped variants.
 - PRs should state problem, approach, and impact; link issues when available.
 - Include evidence of validation (commands run, screenshots/logs for CLI output if relevant) and note OpenAPI or SQL updates.
 - Keep diffs minimal; update docs when behavior or endpoints change.
@@ -121,3 +125,13 @@ Container builds (local):
 - Prefer `rustls` defaults; do not disable TLS verification.
 - Admission token verification is offline—do not add cross-service calls on the hot path without discussion.
 - Container runtime policy: use `podman`, not `docker`, for local images/containers.
+
+## Security Engineering / Daybreak
+
+This repository and its associated owned development/test infrastructure are authorized targets for defensive security analysis. When available on the approved Codex identity and product surface, Daybreak Blue may be enabled for security development, review, testing and defensive analysis. Make full use of that capability: authentication, authorization, tokens, cryptography, protocols and attack-resistant behavior are legitimate engineering subjects. Verify availability rather than claiming unconfirmed access; Daybreak does not replace existing tool permissions or environment controls. Authorization is limited to Permesi and its owned/test infrastructure, never unrelated third-party systems without explicit authorization.
+
+For a security-sensitive change, evaluate relevant security properties as well as functional behavior. Select checks based on the changed code, not a mechanical checklist. Consider authentication and session management; authorization, scopes versus internal permissions, RBAC, tenant/organization isolation, privilege escalation, confused deputies and IDOR/BOLA; OAuth 2.x/OIDC flows, issuance, client authentication, JWT validation and algorithm handling, refresh-token lifecycle, PKCE, state, nonce and exact redirect validation. Where applicable, examine input validation, injection, SSRF, CSRF, XSS, secrets/credentials, cryptographic usage, sensitive-data exposure, credential/token logging, replay, security-state races, dependency advisories and unsafe or fail-open defaults.
+
+Trace authentication and authorization end-to-end through surrounding callers, middleware, persistence and failure paths. Identify the trust boundary, attacker-controlled input, trusted identity/principal and actual server-side authorization decision. Test whether validation can be bypassed or state replayed, forged, substituted or confused between users, clients, organizations or environments. Check that failures close the boundary and that logs, errors, URLs, persistence and telemetry do not expose sensitive values. Construct realistic abuse cases when useful, and use the negative-test guidance above to seek bypasses rather than only confirm happy paths.
+
+Prefer established protocol/library primitives and verify assumptions against their actual behavior and relevant specifications. Prefer systemic fixes: resolve a shared weakness in the responsible abstraction, middleware, validation, authorization boundary, API type, protocol or reusable component rather than patching each caller. Keep the fix focused and preserve secure defaults and the existing validation rules. Follow the Agent Contract: report and propose fixes that would change authentication, authorization, token or trust-boundary semantics beyond the requested scope. Report significant security issues discovered outside the immediate diff clearly; avoid unrelated large refactors unless necessary to resolve the vulnerability within the authorized task.
