@@ -11,9 +11,376 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.3.52"
+    "version": "0.4.0"
   },
   "paths": {
+    "/.well-known/openid-configuration": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Returns static public issuer metadata without database budgets or header-derived identity.",
+        "operationId": "discovery",
+        "responses": {
+          "200": {
+            "description": "Implemented authorization-code, token and signing metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authorize": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Persists validated requests before login; raw code plaintext exists only in a client redirect.",
+        "operationId": "authorize",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "response_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nonce",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "response_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "request",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "request_uri",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "claims",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "audience",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_age",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id_token_hint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "acr_values",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal consent page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Validated client redirect or existing Web login",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Exact registered redirect with code/state or protocol error, or configured login"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request without a trusted redirect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared authorization request rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authorize/consent": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Requires server-generated CSRF plus bound browser/full session; scope additions are rejected.",
+        "operationId": "consent",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "303": {
+            "description": "Validated redirect with code or access_denied"
+          },
+          "400": {
+            "description": "Invalid consent form or binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared OAuth rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authorize/resume": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Resumes stored authority after login/MFA on any replica, requiring the binding cookie.",
+        "operationId": "resume",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal consent page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Client or login redirect"
+          },
+          "400": {
+            "description": "Invalid, expired or browser-mismatched request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared OAuth rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth issuer unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -39,6 +406,47 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jwks.json": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Publishes cached public Vault key versions without using the authentication database.\nSingle-flight refresh and negative caching bound upstream reads; malformed keys fail closed.",
+        "operationId": "jwks",
+        "responses": {
+          "200": {
+            "description": "Retained Vault RSA public signing versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jwks"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared JWKS refresh budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "OAuth/key source unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -79,6 +487,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/token": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Exchanges S256 codes or single-use refresh tokens; failures before commit roll back the owned transaction.",
+        "operationId": "token",
+        "requestBody": {
+          "description": "grant_type=authorization_code with code, redirect_uri, code_verifier; or grant_type=refresh_token with refresh_token and optional narrowing scope. Public clients supply client_id; confidential clients use HTTP Basic",
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Committed RS256 access token, optional initial OIDC ID token and rotating refresh token after explicit offline consent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, client, grant, scope or unsupported grant type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid HTTP Basic client authentication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared token exchange budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Issuer or exchange dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
                 }
               }
             }
@@ -325,6 +805,16 @@
         "responses": {
           "204": {
             "description": "Session cleared"
+          },
+          "503": {
+            "description": "Session revocation storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -379,6 +869,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -401,8 +901,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Enrollment finished"
+          "200": {
+            "description": "Enrollment finished with replacement cookie and recovery codes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodesResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid code",
@@ -416,6 +923,26 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -447,6 +974,26 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -498,6 +1045,26 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -542,6 +1109,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -564,6 +1141,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid authentication request or proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Unauthorized",
             "content": {
@@ -574,8 +1161,18 @@
               }
             }
           },
-          "404": {
-            "description": "No security keys registered",
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -628,6 +1225,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -659,6 +1266,26 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Authentication capacity or rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -668,6 +1295,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Consume one exchange attempt and issue the MFA-appropriate session after proof verification.\nIdentity/status/credential checks and session writes share a transaction before cookie disclosure.",
         "operationId": "opaque_login_finish",
         "parameters": [
           {
@@ -705,7 +1333,17 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Invalid, expired or already attempted exchange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable; no successful login",
             "content": {
               "application/json": {
                 "schema": {
@@ -722,6 +1360,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Start a real or indistinguishable dummy exchange with shared capacity and expiry.\nAdmission and rate limits apply before persistence; only a hashed reference is stored.",
         "operationId": "opaque_login_start",
         "parameters": [
           {
@@ -766,7 +1405,17 @@
             }
           },
           "429": {
-            "description": "Rate limited",
+            "description": "Rate limited or shared exchange capacity exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable; no exchange is issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -783,7 +1432,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Finish a password change by storing the new registration record and revoking sessions.",
+        "summary": "Rotates on the exact current, recently authenticated full session's guarded transaction.\nAll revocations and the password revision commit together; failures publish no change.",
         "operationId": "opaque_password_finish",
         "parameters": [
           {
@@ -822,6 +1471,16 @@
           },
           "401": {
             "description": "Missing or invalid session cookie.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -900,7 +1559,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Finish a password re-auth flow and refresh the session auth timestamp.",
+        "summary": "Consume one proof attempt and refresh only its original verified full session.\nRequire current active identity/credentials and commit elevation before returning success.",
         "operationId": "opaque_reauth_finish",
         "parameters": [
           {
@@ -938,7 +1597,17 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session cookie.",
+            "description": "Invalid session, expired/attempted exchange or session binding mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable; no successful elevation",
             "content": {
               "application/json": {
                 "schema": {
@@ -955,7 +1624,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Start a password re-auth flow for the current session user.",
+        "summary": "Start an admission-protected password proof bound to the verified full session.\nThe user, credential revision and session hash come from server-side state.",
         "operationId": "opaque_reauth_start",
         "parameters": [
           {
@@ -1010,7 +1679,17 @@
             }
           },
           "429": {
-            "description": "Rate limited",
+            "description": "Rate limited or shared exchange capacity exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable; no exchange is issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -1195,6 +1874,26 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1250,6 +1949,16 @@
           },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1315,6 +2024,16 @@
           },
           "204": {
             "description": "No active session"
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1457,6 +2176,7 @@
         "tags": [
           "me"
         ],
+        "summary": "Replaces recovery authority only after locking the exact current, recently authenticated session.\nCode and batch writes commit together; dependency failures disclose no new recovery codes.",
         "operationId": "regenerate_recovery_codes",
         "responses": {
           "200": {
@@ -1481,6 +2201,16 @@
           },
           "409": {
             "description": "MFA not enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1530,6 +2260,7 @@
         "tags": [
           "me"
         ],
+        "summary": "Removes TOTP under current identity/session locks and a fresh database recency check.\nStorage failures roll back factor and MFA-state changes and return generic 503.",
         "operationId": "disable_totp",
         "responses": {
           "204": {
@@ -1537,6 +2268,16 @@
           },
           "401": {
             "description": "Unauthorized or recent auth required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1593,6 +2334,16 @@
           },
           "404": {
             "description": "Security key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1719,6 +2470,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1776,6 +2537,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1866,6 +2637,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1922,6 +2703,16 @@
           },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -2077,6 +2868,82 @@
           }
         }
       },
+      "delete": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Soft-deletes one owner-authorized tenant after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.\nA valid session needing recent authentication receives the stable reauthentication error code.\nAn optional expected UUID restricts deletion to the originally confirmed organization.",
+        "operationId": "delete_org",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Permesi-Expected-Organization-Id",
+            "in": "header",
+            "description": "Optional UUID pin from the confirmed capabilities response. A different organization returns 404.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Organization soft-deleted."
+          },
+          "400": {
+            "description": "Malformed or repeated expected organization UUID header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full authenticated session required; stale authentication returns reauthentication_required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Organization contains active children.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
       "patch": {
         "tags": [
           "orgs"
@@ -2137,6 +3004,68 @@
           },
           "404": {
             "description": "Organization not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/capabilities": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Returns only server-derived owner/admin eligibility for an active tenant member.\nInaccessible tenants return 404; all outcomes prohibit caching stale authority hints.",
+        "operationId": "get_capabilities",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current role eligibility; not mutation authorization. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgCapabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Capability lookup unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2283,6 +3212,70 @@
         }
       }
     },
+    "/v1/orgs/{org_slug}/projects/{project_slug}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project soft-deleted."
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project contains active children.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/orgs/{org_slug}/projects/{project_slug}/envs": {
       "get": {
         "tags": [
@@ -2350,7 +3343,7 @@
         "tags": [
           "environments"
         ],
-        "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\n`storage::insert_environment` enforces a single `production` tier and gates `non_production`.\nThe response includes only environment DTO fields.",
+        "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\nEither tier may be created first; the database enforces at most one active production per project.\nThe response includes only environment DTO fields.",
         "operationId": "create_environment",
         "parameters": [
           {
@@ -2425,6 +3418,79 @@
           },
           "409": {
             "description": "Environment conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}": {
+      "delete": {
+        "tags": [
+          "environments"
+        ],
+        "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "operationId": "delete_environment",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Environment soft-deleted."
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Environment contains active children.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2596,6 +3662,2321 @@
           },
           "409": {
             "description": "Application already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}": {
+      "delete": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate OAuth clients must be explicitly deleted; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "operationId": "delete_application",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "Application UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Application soft-deleted."
+          },
+          "400": {
+            "description": "Invalid application UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full authenticated session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Application contains undeleted OAuth clients.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients": {
+      "get": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Lists non-deleted registrations for an active org member, including disabled clients.",
+        "operationId": "list_clients",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Creates a client and validated allow-lists atomically; only org owners/admins may write.",
+        "operationId": "create_client",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClientRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Configuration already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "JSON payload deserialization failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients/{client_id}": {
+      "get": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Returns registration fields only when this client belongs to the resolved application.",
+        "operationId": "get_client",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Soft-deletes an application-bound client and revokes consent/credentials for org managers.",
+        "operationId": "delete_client",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Operation succeeded."
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Updates name or disabled state for org managers; identifiers and classification are immutable.",
+        "operationId": "patch_client",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchClientRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Configuration already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "JSON payload deserialization failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients/{client_id}/redirect-uris": {
+      "get": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Returns exact registered redirects to active org members without normalization.",
+        "operationId": "get_redirects",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Replaces redirect registrations atomically for org managers; invalid/duplicate URIs fail.",
+        "operationId": "replace_redirects",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedirectsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "JSON payload deserialization failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients/{client_id}/scopes": {
+      "get": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Returns only configured delegated scope names to an active member of this organization.",
+        "operationId": "get_client_scopes",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Replaces a client's application-bound allow-list for org managers; unknown scopes fail.",
+        "operationId": "replace_client_scopes",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientScopesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "JSON payload deserialization failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients/{client_id}/secrets": {
+      "get": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Lists usable credential metadata for active organization members.",
+        "operationId": "list_secrets",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "Project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "Environment slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "Application UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Public client UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Client cannot receive credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service capacity or database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Issues initial plaintext once for an owner/admin; an existing current credential conflicts.",
+        "operationId": "create_secret",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "Project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "Environment slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "Application UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Public client UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Credential operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Client cannot receive credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Untrusted browser origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale current credential or overlap active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid JSON payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared mutation budget exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service capacity or database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients/{client_id}/secrets/rotate": {
+      "post": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Atomically retires the expected credential and reveals one replacement to an owner/admin.",
+        "operationId": "rotate_secret",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "Project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "Environment slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "Application UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Public client UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Credential operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Client cannot receive credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Untrusted browser origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale current credential or overlap active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid JSON payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared mutation budget exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service capacity or database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/clients/{client_id}/secrets/{secret_id}": {
+      "delete": {
+        "tags": [
+          "oauth-clients"
+        ],
+        "summary": "Revokes at commit with a separate shared budget; repeated owned revocation succeeds.",
+        "operationId": "revoke_secret",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "Org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "Project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "Environment slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "Application UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Public client UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "secret_id",
+            "in": "path",
+            "description": "Credential UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Credential operation succeeded."
+          },
+          "400": {
+            "description": "Client cannot receive credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Untrusted browser origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared mutation budget exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service capacity or database deadline exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/scopes": {
+      "get": {
+        "tags": [
+          "oauth-scopes"
+        ],
+        "summary": "Lists application and read-only protocol scope metadata to active organization members.",
+        "operationId": "list_scopes",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScopeResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "oauth-scopes"
+        ],
+        "summary": "Defines API authority for this application; owner/admin required and protocol names reserved.",
+        "operationId": "create_scope",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Configuration already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "JSON payload deserialization failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}/oauth/scopes/{scope_id}": {
+      "delete": {
+        "tags": [
+          "oauth-scopes"
+        ],
+        "summary": "Deletes API authority for org managers and removes dependent allow-list/grant edges.",
+        "operationId": "delete_scope",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Operation succeeded."
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "oauth-scopes"
+        ],
+        "summary": "Updates an API scope description for org managers; names and protocol entries are immutable.",
+        "operationId": "patch_scope",
+        "parameters": [
+          {
+            "name": "org_slug",
+            "in": "path",
+            "description": "org slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_slug",
+            "in": "path",
+            "description": "project slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env_slug",
+            "in": "path",
+            "description": "env slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "path",
+            "description": "UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Operation succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or OAuth configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource inaccessible or absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "JSON payload deserialization failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Persistence failure.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3067,6 +6448,93 @@
           }
         }
       },
+      "ClientResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "application_id",
+          "client_id",
+          "name",
+          "client_type",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string",
+            "description": "Public identifier used in management paths and future protocol requests."
+          },
+          "client_type": {
+            "$ref": "#/components/schemas/ClientType"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "ClientScopesRequest": {
+        "type": "object",
+        "required": [
+          "scopes"
+        ],
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClientType": {
+        "type": "string",
+        "description": "Whether a deployment can protect credentials; this does not enable any grant type.",
+        "enum": [
+          "public",
+          "confidential"
+        ]
+      },
+      "ConsentInput": {
+        "type": "object",
+        "description": "Consent form accepts only a stored request, CSRF capability and binary decision.",
+        "required": [
+          "request_id",
+          "csrf",
+          "decision"
+        ],
+        "properties": {
+          "csrf": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateApplicationRequest": {
         "type": "object",
         "required": [
@@ -3077,6 +6545,34 @@
             "type": "string"
           }
         }
+      },
+      "CreateClientRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "client_type"
+        ],
+        "properties": {
+          "client_type": {
+            "$ref": "#/components/schemas/ClientType"
+          },
+          "name": {
+            "type": "string"
+          },
+          "redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "CreateEnvironmentRequest": {
         "type": "object",
@@ -3092,7 +6588,8 @@
             "type": "string"
           },
           "tier": {
-            "$ref": "#/components/schemas/EnvironmentTier"
+            "$ref": "#/components/schemas/EnvironmentTier",
+            "description": "Classification only: either tier may be created first. Defaults to non-production.\nA project allows at most one active production environment."
           }
         }
       },
@@ -3130,6 +6627,30 @@
           }
         }
       },
+      "CreateScopeRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Case-sensitive OAuth token in resource:action format (for example jobs:read).\nExactly one colon and two nonempty parts are required; protocol/internal names are reserved.",
+            "example": "jobs:read",
+            "maxLength": 128,
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateSecretRequest": {
+        "type": "object",
+        "description": "Explicit empty creation body; unknown fields cannot alter hashing/lifecycle policy.",
+        "additionalProperties": false
+      },
       "DatabaseStats": {
         "type": "object",
         "required": [
@@ -3166,6 +6687,91 @@
           }
         }
       },
+      "Discovery": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TokenSecurityMetadata"
+          },
+          {
+            "type": "object",
+            "required": [
+              "issuer",
+              "authorization_endpoint",
+              "token_endpoint",
+              "jwks_uri",
+              "response_types_supported",
+              "response_modes_supported",
+              "subject_types_supported",
+              "id_token_signing_alg_values_supported",
+              "code_challenge_methods_supported",
+              "grant_types_supported",
+              "request_parameter_supported",
+              "request_uri_parameter_supported",
+              "claims_parameter_supported"
+            ],
+            "properties": {
+              "authorization_endpoint": {
+                "type": "string"
+              },
+              "claims_parameter_supported": {
+                "type": "boolean"
+              },
+              "code_challenge_methods_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "grant_types_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "id_token_signing_alg_values_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "jwks_uri": {
+                "type": "string"
+              },
+              "request_parameter_supported": {
+                "type": "boolean"
+              },
+              "request_uri_parameter_supported": {
+                "type": "boolean"
+              },
+              "response_modes_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "response_types_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "subject_types_supported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "token_endpoint": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Metadata advertises only implemented code/token behavior and public key location."
+      },
       "EnvironmentResponse": {
         "type": "object",
         "required": [
@@ -3189,12 +6795,14 @@
             "type": "string"
           },
           "tier": {
-            "type": "string"
+            "type": "string",
+            "description": "Security/operational classification, independent of the environment's name or slug."
           }
         }
       },
       "EnvironmentTier": {
         "type": "string",
+        "description": "Classifies sibling environments directly owned by a project, without creation prerequisites.\nEach project permits zero or one active production environment and many non-production ones.",
         "enum": [
           "production",
           "non_production"
@@ -3254,6 +6862,79 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "IssuedSecretResponse": {
+        "type": "object",
+        "description": "Sole plaintext-bearing DTO; returned once by successful create/rotate with no-store.",
+        "required": [
+          "credential",
+          "client_secret"
+        ],
+        "properties": {
+          "client_secret": {
+            "type": "string"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/SecretResponse"
+          },
+          "previous": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SecretResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Jwk": {
+        "type": "object",
+        "description": "RSA verification key encoded using unsigned big-endian base64url integers.",
+        "required": [
+          "kty",
+          "use",
+          "alg",
+          "kid",
+          "n",
+          "e"
+        ],
+        "properties": {
+          "alg": {
+            "type": "string"
+          },
+          "e": {
+            "type": "string"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "kty": {
+            "type": "string"
+          },
+          "n": {
+            "type": "string"
+          },
+          "use": {
+            "type": "string"
+          }
+        }
+      },
+      "Jwks": {
+        "type": "object",
+        "description": "Public-only JSON Web Key Set; every retained Vault version is independently identifiable.",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Jwk"
+            }
           }
         }
       },
@@ -3401,7 +7082,8 @@
             "type": "string"
           },
           "email": {
-            "type": "string"
+            "type": "string",
+            "description": "Compatibility field; authority comes from the server-bound exchange identity."
           },
           "login_id": {
             "type": "string"
@@ -3434,7 +7116,8 @@
             "type": "string"
           },
           "login_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Unguessable single-attempt reference; only its hash is stored in shared PostgreSQL."
           }
         }
       },
@@ -3545,6 +7228,26 @@
         ],
         "properties": {
           "registration_response": {
+            "type": "string"
+          }
+        }
+      },
+      "OrgCapabilities": {
+        "type": "object",
+        "description": "Current member's role eligibility, never proof of authority for a mutation.\nEmptiness and recent authentication are checked separately at deletion time.",
+        "required": [
+          "organization_id",
+          "can_manage_resources",
+          "can_delete_organization"
+        ],
+        "properties": {
+          "can_delete_organization": {
+            "type": "boolean"
+          },
+          "can_manage_resources": {
+            "type": "boolean"
+          },
+          "organization_id": {
             "type": "string"
           }
         }
@@ -3697,6 +7400,36 @@
           }
         }
       },
+      "PatchClientRequest": {
+        "type": "object",
+        "properties": {
+          "disabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PatchScopeRequest": {
+        "type": "object",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "PlatformStats": {
         "type": "object",
         "required": [
@@ -3751,6 +7484,21 @@
           }
         }
       },
+      "RedirectsRequest": {
+        "type": "object",
+        "required": [
+          "redirect_uris"
+        ],
+        "properties": {
+          "redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "ResendVerificationRequest": {
         "type": "object",
         "required": [
@@ -3758,6 +7506,78 @@
         ],
         "properties": {
           "email": {
+            "type": "string"
+          }
+        }
+      },
+      "RotateSecretRequest": {
+        "type": "object",
+        "description": "Optimistic concurrency binding to the credential the manager actually reviewed.",
+        "required": [
+          "current_secret_id"
+        ],
+        "properties": {
+          "current_secret_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScopeResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "application_id",
+          "name",
+          "description",
+          "kind",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "\"protocol\" entries have server-defined semantics and are read-only."
+          },
+          "name": {
+            "type": "string",
+            "description": "Original OAuth token; application resource/action semantics are derived, never duplicated."
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretResponse": {
+        "type": "object",
+        "description": "Current or retiring metadata, never a credential hash or recoverable secret.",
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
             "type": "string"
           }
         }
@@ -3849,6 +7669,74 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "TokenFailure": {
+        "type": "object",
+        "description": "OAuth error envelope deliberately excludes submitted values and diagnostic text.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "description": "Successful protocol response. Secrets have no Debug and serialize only at the wire boundary.",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "scope"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refresh_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenSecurityMetadata": {
+        "type": "object",
+        "description": "Implemented client authentication and issuer identification capabilities.",
+        "required": [
+          "token_endpoint_auth_methods_supported",
+          "authorization_response_iss_parameter_supported"
+        ],
+        "properties": {
+          "authorization_response_iss_parameter_supported": {
+            "type": "boolean"
+          },
+          "token_endpoint_auth_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -4100,6 +7988,12 @@
     {
       "name": "applications",
       "description": "Application endpoints"
+    },
+    {
+      "name": "oauth-clients"
+    },
+    {
+      "name": "oauth-scopes"
     }
   ]
 }
