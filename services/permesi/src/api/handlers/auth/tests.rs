@@ -1,5 +1,6 @@
 //! Unit and integration tests for the auth module.
 
+mod mfa_lifecycle;
 mod opaque_exchange;
 mod tenant_deletion;
 mod webauthn_exchange;

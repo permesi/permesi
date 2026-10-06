@@ -31,6 +31,7 @@ pub(crate) mod admin;
 mod admin_rate_limit;
 mod admin_storage;
 mod admin_token;
+pub(crate) mod authority_guard;
 pub(crate) mod mfa;
 pub(crate) mod opaque;
 pub(crate) mod passkeys;

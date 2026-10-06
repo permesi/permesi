@@ -18,10 +18,10 @@ use uuid::Uuid;
 
 use super::auth::{
     AuthState,
+    authority_guard::{AuthorityGuard, Policy},
     mfa::{self, MfaState},
     principal::require_auth,
 };
-use crate::totp::repo::TotpRepo;
 
 const RECOVERY_RECENT_AUTH_SECONDS: i64 = 10 * 60;
 
@@ -258,6 +258,7 @@ pub async fn revoke_session(
     path = "/v1/me/mfa/recovery-codes",
     responses(
         (status = 200, description = "Recovery codes regenerated.", body = RecoveryCodesResponse),
+        (status = 503, description = "Authentication storage unavailable."),
         (status = 401, description = "Missing or invalid session cookie."),
         (status = 409, description = "MFA not enabled.")
     ),
@@ -290,7 +291,19 @@ pub async fn regenerate_recovery_codes(
             .into_response();
     };
 
-    let state = match mfa::storage::load_mfa_state(&pool, principal.user_id).await {
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Full,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    let state = match mfa::storage::load_mfa_state(guard.connection(), principal.user_id).await {
         Ok(state) => state,
         Err(err) => {
             error!("Failed to load MFA state: {err}");
@@ -313,8 +326,8 @@ pub async fn regenerate_recovery_codes(
         }
     };
 
-    if let Err(err) = mfa::storage::insert_recovery_codes(
-        &pool,
+    if let Err(err) = mfa::storage::insert_recovery_codes_on(
+        guard.connection(),
         principal.user_id,
         batch.batch_id,
         &batch.code_hashes,
@@ -326,7 +339,7 @@ pub async fn regenerate_recovery_codes(
     }
 
     if let Err(err) = mfa::storage::upsert_mfa_state(
-        &pool,
+        guard.connection(),
         principal.user_id,
         MfaState::Enabled,
         Some(batch.batch_id),
@@ -337,6 +350,9 @@ pub async fn regenerate_recovery_codes(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    if guard.commit().await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     (
         StatusCode::OK,
         Json(RecoveryCodesResponse { codes: batch.codes }),
@@ -349,11 +365,16 @@ pub async fn regenerate_recovery_codes(
     path = "/v1/me/mfa/totp",
     responses(
         (status = 204, description = "TOTP disabled."),
+        (status = 503, description = "Authentication storage unavailable."),
         (status = 401, description = "Unauthorized or recent auth required."),
     ),
     tag = "me"
 )]
-pub async fn disable_totp(headers: HeaderMap, pool: State<PgPool>) -> impl IntoResponse {
+pub async fn disable_totp(
+    headers: HeaderMap,
+    pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
+) -> impl IntoResponse {
     let principal = match require_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
@@ -367,30 +388,44 @@ pub async fn disable_totp(headers: HeaderMap, pool: State<PgPool>) -> impl IntoR
             .into_response();
     }
 
-    // 1. Disable in totp_credentials
-    if let Err(err) = TotpRepo::disable_active_credentials(&pool, principal.user_id).await {
-        error!("Failed to disable TOTP credentials: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
-    // 2. Update user_mfa_state. If security keys remain, keep it Enabled but clear recovery_batch_id.
-    let remaining_keys = crate::webauthn::SecurityKeyRepo::list_user_keys(&pool, principal.user_id)
-        .await
-        .unwrap_or_default();
-
-    let new_state = if remaining_keys.is_empty() {
-        MfaState::Disabled
-    } else {
-        MfaState::Enabled
-    };
-
-    if let Err(err) =
-        mfa::storage::upsert_mfa_state(&pool, principal.user_id, new_state, None).await
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Full,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
     {
-        error!("Failed to update MFA state: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    if sqlx::query("DELETE FROM totp_credentials WHERE user_id=$1")
+        .bind(principal.user_id)
+        .execute(guard.connection())
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-
+    let remaining = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM security_keys WHERE user_id=$1)",
+    )
+    .bind(principal.user_id)
+    .fetch_one(guard.connection())
+    .await;
+    let state = match remaining {
+        Ok(true) => MfaState::Enabled,
+        Ok(false) => MfaState::Disabled,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if mfa::storage::upsert_mfa_state(guard.connection(), principal.user_id, state, None)
+        .await
+        .is_err()
+        || guard.commit().await.is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 

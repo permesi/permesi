@@ -4,7 +4,7 @@
 //! manage recovery code batches, and handle session revocation during recovery.
 
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 use super::MfaState;
@@ -20,7 +20,10 @@ pub struct MfaStateRecord {
 ///
 /// # Errors
 /// Returns an error if the database query fails.
-pub async fn load_mfa_state(pool: &PgPool, user_id: Uuid) -> Result<Option<MfaStateRecord>> {
+pub async fn load_mfa_state<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<Option<MfaStateRecord>> {
     let query = r"
         SELECT state::text AS state, recovery_batch_id
         FROM user_mfa_state
@@ -29,7 +32,7 @@ pub async fn load_mfa_state(pool: &PgPool, user_id: Uuid) -> Result<Option<MfaSt
     ";
     let row = sqlx::query(query)
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("failed to load MFA state")?;
     row.map(|row| {
@@ -45,8 +48,8 @@ pub async fn load_mfa_state(pool: &PgPool, user_id: Uuid) -> Result<Option<MfaSt
 }
 
 /// Upsert MFA state and active recovery batch for a user.
-pub async fn upsert_mfa_state(
-    pool: &PgPool,
+pub async fn upsert_mfa_state<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
     user_id: Uuid,
     state: MfaState,
     recovery_batch_id: Option<Uuid>,
@@ -63,15 +66,15 @@ pub async fn upsert_mfa_state(
         .bind(user_id)
         .bind(state.as_str())
         .bind(recovery_batch_id)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("failed to upsert MFA state")?;
     Ok(())
 }
 
-/// Insert a batch of recovery code hashes for a user.
-pub async fn insert_recovery_codes(
-    pool: &PgPool,
+/// Inserts the entire recovery batch through the caller's guarded transaction.
+pub async fn insert_recovery_codes_on(
+    connection: &mut PgConnection,
     user_id: Uuid,
     batch_id: Uuid,
     code_hashes: &[String],
@@ -85,7 +88,7 @@ pub async fn insert_recovery_codes(
             .bind(user_id)
             .bind(batch_id)
             .bind(hash)
-            .execute(pool)
+            .execute(&mut *connection)
             .await
             .context("failed to insert recovery code")?;
     }
@@ -118,8 +121,8 @@ pub async fn list_recovery_code_hashes(
 }
 
 /// Mark a recovery code as used (atomic).
-pub async fn consume_recovery_code_hash(
-    pool: &PgPool,
+pub async fn consume_recovery_code_hash<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
     user_id: Uuid,
     batch_id: Uuid,
     code_hash: &str,
@@ -137,29 +140,35 @@ pub async fn consume_recovery_code_hash(
         .bind(user_id)
         .bind(batch_id)
         .bind(code_hash)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("failed to consume recovery code")?;
     Ok(row.is_some())
 }
 
 /// Delete all full sessions for a user.
-pub async fn delete_full_sessions(pool: &PgPool, user_id: Uuid) -> Result<()> {
+pub async fn delete_full_sessions<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<()> {
     let query = "DELETE FROM user_sessions WHERE user_id = $1";
     sqlx::query(query)
         .bind(user_id)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("failed to delete full sessions")?;
     Ok(())
 }
 
 /// Delete all MFA challenge sessions for a user.
-pub async fn delete_mfa_challenge_sessions(pool: &PgPool, user_id: Uuid) -> Result<()> {
+pub async fn delete_mfa_challenge_sessions<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<()> {
     let query = "DELETE FROM user_mfa_challenge_sessions WHERE user_id = $1";
     sqlx::query(query)
         .bind(user_id)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("failed to delete MFA challenge sessions")?;
     Ok(())

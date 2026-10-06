@@ -183,6 +183,7 @@ pub(super) async fn insert_verification_records(
 }
 
 /// Create a random hash-only session using a pool connection.
+#[cfg(test)]
 pub(super) async fn insert_session(
     pool: &PgPool,
     user_id: Uuid,
@@ -297,6 +298,7 @@ pub(super) async fn lookup_full_session(
 }
 
 /// Create a random hash-only session using a pool connection.
+#[cfg(test)]
 pub(super) async fn insert_mfa_bootstrap_session(
     pool: &PgPool,
     user_id: Uuid,
@@ -507,7 +509,8 @@ pub(super) async fn update_session_auth_time<'e>(
     Ok(row.is_some())
 }
 
-/// Replace the OPAQUE registration record and revoke all sessions for the user.
+/// Replaces the password record and atomically revokes full/limited sessions and pending proofs.
+/// The user-row writer lock serializes this security event against guarded authority issuance.
 pub(super) async fn rotate_password_and_clear_sessions(
     pool: &PgPool,
     user_id: Uuid,
@@ -550,6 +553,20 @@ pub(super) async fn rotate_password_and_clear_sessions(
         .instrument(span)
         .await
         .context("failed to delete user sessions")?;
+
+    for query in [
+        "DELETE FROM user_mfa_bootstrap_sessions WHERE user_id=$1",
+        "DELETE FROM user_mfa_challenge_sessions WHERE user_id=$1",
+        "DELETE FROM opaque_exchanges WHERE user_id=$1",
+        "DELETE FROM webauthn_exchanges WHERE user_id=$1",
+        "DELETE FROM totp_credentials WHERE user_id=$1 AND confirmed_at IS NULL",
+    ] {
+        sqlx::query(query)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to revoke pending authentication authority")?;
+    }
 
     tx.commit()
         .await

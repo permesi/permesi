@@ -17,6 +17,8 @@
 use super::exchange::{Binding, ExchangeStore, Purpose};
 use crate::webauthn::repo::SecurityKeyRepo;
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,6 +30,26 @@ pub struct SecurityKeyService {
     webauthn_by_origin: HashMap<String, Arc<Webauthn>>,
     pool: PgPool,
     exchanges: ExchangeStore,
+}
+
+/// Authenticated snapshot of the exact credentials offered by the ceremony.
+#[derive(Serialize, Deserialize)]
+struct AuthenticationState {
+    authentication: SecurityKeyAuthentication,
+    credentials: Vec<CredentialBinding>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CredentialBinding {
+    id: Vec<u8>,
+    fingerprint: [u8; 32],
+}
+
+/// Verified proof whose credential revision must remain current through session issuance.
+pub(crate) struct VerifiedKey {
+    pub(crate) user: Uuid,
+    pub(crate) id: Vec<u8>,
+    pub(crate) fingerprint: [u8; 32],
 }
 
 impl SecurityKeyService {
@@ -146,6 +168,32 @@ impl SecurityKeyService {
         label: &str,
         session_hash: &[u8],
     ) -> Result<()> {
+        let passkey = self
+            .verify_registration(reg_id, origin, reg_response, user_id, session_hash)
+            .await?;
+        SecurityKeyRepo::create_key(
+            &self.pool,
+            user_id,
+            passkey.cred_id().as_slice(),
+            &serde_json::to_vec(&passkey)?,
+            label,
+            0, // Initial sign count for new key
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Consumes the original ceremony and verifies a registration without publishing credentials.
+    /// The endpoint persists the result through its current-session lifecycle transaction.
+    pub(crate) async fn verify_registration(
+        &self,
+        reg_id: Uuid,
+        origin: &str,
+        reg_response: RegisterPublicKeyCredential,
+        user_id: Uuid,
+        session_hash: &[u8],
+    ) -> Result<SecurityKey> {
         let registration = self
             .exchanges
             .take::<SecurityKeyRegistration>(
@@ -162,17 +210,7 @@ impl SecurityKeyService {
         let webauthn = self.webauthn_for_origin(origin)?;
         let passkey = webauthn.finish_securitykey_registration(&reg_response, &registration)?;
 
-        SecurityKeyRepo::create_key(
-            &self.pool,
-            user_id,
-            passkey.cred_id().as_slice(),
-            &serde_json::to_vec(&passkey)?,
-            label,
-            0, // Initial sign count for new key
-        )
-        .await?;
-
-        Ok(())
+        Ok(passkey)
     }
 
     /// Starts the authentication flow.
@@ -190,10 +228,17 @@ impl SecurityKeyService {
             return Err(anyhow!("No security keys registered for this user"));
         }
 
-        let passkeys: Vec<SecurityKey> = keys
-            .into_iter()
-            .filter_map(|k| serde_json::from_slice(&k.public_key).ok())
-            .collect();
+        let mut passkeys = Vec::new();
+        let mut credentials = Vec::new();
+        for key in keys {
+            if let Ok(parsed) = serde_json::from_slice::<SecurityKey>(&key.public_key) {
+                credentials.push(CredentialBinding {
+                    id: key.credential_id.as_slice().to_vec(),
+                    fingerprint: Sha256::digest(&key.public_key).into(),
+                });
+                passkeys.push(parsed);
+            }
+        }
 
         let webauthn = self.webauthn_for_origin(origin)?;
         let (challenge, authentication) = webauthn.start_securitykey_authentication(&passkeys)?;
@@ -207,7 +252,10 @@ impl SecurityKeyService {
                     user: Some(user_id),
                     session: Some(session_hash),
                 },
-                &authentication,
+                &AuthenticationState {
+                    authentication,
+                    credentials,
+                },
             )
             .await?;
 
@@ -218,17 +266,17 @@ impl SecurityKeyService {
     ///
     /// # Errors
     /// Returns error if the session is not found, authentication fails, or database query fails.
-    pub async fn auth_finish(
+    pub(crate) async fn auth_finish(
         &self,
         auth_id: Uuid,
         origin: &str,
         auth_response: PublicKeyCredential,
         user_id: Uuid,
         session_hash: &[u8],
-    ) -> Result<Uuid> {
+    ) -> Result<VerifiedKey> {
         let authentication = self
             .exchanges
-            .take::<SecurityKeyAuthentication>(
+            .take::<AuthenticationState>(
                 auth_id,
                 Binding {
                     purpose: Purpose::SecurityKeyAuthentication,
@@ -240,14 +288,21 @@ impl SecurityKeyService {
             .await?;
 
         let webauthn = self.webauthn_for_origin(origin)?;
-        let auth_result =
-            webauthn.finish_securitykey_authentication(&auth_response, &authentication)?;
+        let auth_result = webauthn
+            .finish_securitykey_authentication(&auth_response, &authentication.authentication)?;
+        let binding = authentication
+            .credentials
+            .iter()
+            .find(|binding| binding.id.as_slice() == auth_result.cred_id().as_slice())
+            .ok_or_else(|| anyhow!("Security key unavailable"))?;
 
         // Recheck the current credential owner before any session authority is issued.
         let key = SecurityKeyRepo::get_key(&self.pool, auth_result.cred_id().as_slice())
             .await?
             .ok_or_else(|| anyhow!("Security key unavailable"))?;
-        if key.user_id != user_id {
+        if key.user_id != user_id
+            || <[u8; 32]>::from(Sha256::digest(&key.public_key)) != binding.fingerprint
+        {
             return Err(anyhow!("Security key unavailable"));
         }
         SecurityKeyRepo::update_key_usage(
@@ -257,7 +312,11 @@ impl SecurityKeyService {
         )
         .await?;
 
-        Ok(key.user_id)
+        Ok(VerifiedKey {
+            user: key.user_id,
+            id: binding.id.clone(),
+            fingerprint: binding.fingerprint,
+        })
     }
 }
 

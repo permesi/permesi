@@ -311,6 +311,16 @@ impl PasskeyService {
         response: PublicKeyCredential,
         credentials: &[DiscoverableKey],
     ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
+        let authentication = self.consume_authentication(auth_id, origin).await?;
+        self.verify_consumed_authentication(origin, &response, authentication, credentials)
+    }
+
+    /// Commits single-use consumption before a caller reserves a credential/session transaction.
+    pub(crate) async fn consume_authentication(
+        &self,
+        auth_id: Uuid,
+        origin: &str,
+    ) -> Result<DiscoverableAuthentication, PasskeyAuthenticationError> {
         let authentication = self
             .exchanges
             .take::<DiscoverableAuthentication>(
@@ -324,12 +334,22 @@ impl PasskeyService {
             )
             .await
             .map_err(|_| PasskeyAuthenticationError::NotFound)?;
+        Ok(authentication)
+    }
 
+    /// Verifies the consumed proof against currently locked credentials without acquiring SQL connections.
+    pub(crate) fn verify_consumed_authentication(
+        &self,
+        origin: &str,
+        response: &PublicKeyCredential,
+        authentication: DiscoverableAuthentication,
+        credentials: &[DiscoverableKey],
+    ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
         let webauthn = self
             .webauthn_for_origin(origin)
             .map_err(|_| PasskeyAuthenticationError::OriginMismatch)?;
         webauthn
-            .finish_discoverable_authentication(&response, authentication, credentials)
+            .finish_discoverable_authentication(response, authentication, credentials)
             .map_err(PasskeyAuthenticationError::Webauthn)
     }
 }

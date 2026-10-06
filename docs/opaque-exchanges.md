@@ -65,8 +65,9 @@ and account-status changes cannot pass that lock and invalidate the identity bef
 issuance; rotation that follows full-session issuance revokes that session too. MFA
 still determines whether login issues a full, bootstrap or challenge session. The
 same transaction revokes full sessions before required-MFA bootstrap issuance.
-Password rotation's existing revocation covers full sessions; revoking limited MFA
-bootstrap/challenge sessions on rotation remains a separate follow-up.
+Password rotation now revokes full and limited MFA sessions together and removes bound
+pending proofs; [MFA lifecycle guards](mfa-lifecycle.md) prevent concurrent elevation
+from restoring authority after that security event.
 The exchange is already consumed if later issuance fails, so the client must restart
 the existing login flow rather than replay a proof.
 
@@ -158,8 +159,7 @@ of 401; restoring it passes. The final review found no confirmed implementation 
 A purpose-only metadata change without a session-hash change is rejected by the schema;
 a schema-valid purpose change must also alter the authenticated session hash. Therefore
 an isolated purpose-removal mutation staying green is not a protocol bypass. Exact-count
-throughput, capacity fairness, limited-MFA revocation, HTTP error classification and nonce
+throughput, capacity fairness, HTTP error classification and nonce
 lifetimes remain explicitly deferred for the reasons above. The pre-existing `AGENTS.md`
 OpenAPI binary example is outside this phase; `just openapi` uses the actual
-`permesi-openapi` binary. The implementation is published on `sandbox`; successful
-corrected hosted browser CI remains pending; see [validation evidence](oauth-scenarios.md#validation-and-independent-review).
+`permesi-openapi` binary. The implementation is published on `sandbox`; corrected hosted run 37426417421 passes every required job; see [validation evidence](oauth-scenarios.md#validation-and-independent-review).

@@ -35,10 +35,11 @@ use uuid::Uuid;
 use crate::{
     api::handlers::auth::{
         AuthState,
+        authority_guard::{AuthorityGuard, Policy},
         principal::{require_any_auth, require_mfa_challenge},
         rate_limit::{RateLimitAction, RateLimitDecision},
         session::session_cookie_with_ttl,
-        storage::{insert_mfa_bootstrap_session, insert_session},
+        storage::insert_mfa_bootstrap_session_on,
         types::{
             MfaRecoveryRequest, MfaTotpEnrollFinishRequest, MfaTotpEnrollStartResponse,
             MfaTotpVerifyRequest,
@@ -94,21 +95,37 @@ pub(crate) fn enforce_required_state(required: bool, state: MfaState) -> MfaStat
 /// Database and state-decoding errors fail closed. When MFA is globally
 /// required, the persisted state is advanced before any scoped session can be
 /// issued, preventing login paths from silently bypassing the second factor.
+#[cfg(test)]
 pub(crate) async fn resolve_login_mfa_state(
     pool: &PgPool,
     user_id: Uuid,
     config: &MfaConfig,
 ) -> Result<MfaState> {
-    let record = storage::load_mfa_state(pool, user_id)
+    let mut connection = pool.acquire().await?;
+    resolve_login_mfa_state_on(&mut connection, user_id, config).await
+}
+
+/// Resolves/persists MFA policy through the caller's identity-guarded connection.
+pub(crate) async fn resolve_login_mfa_state_on(
+    connection: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    config: &MfaConfig,
+) -> Result<MfaState> {
+    let record = storage::load_mfa_state(&mut *connection, user_id)
         .await
         .context("failed to resolve login MFA state")?;
     let current = record.map_or(MfaState::Disabled, |record| record.state);
     let effective = enforce_required_state(config.required(), current);
 
     if effective == MfaState::RequiredUnenrolled && current != MfaState::RequiredUnenrolled {
-        storage::upsert_mfa_state(pool, user_id, MfaState::RequiredUnenrolled, None)
-            .await
-            .context("failed to persist required login MFA state")?;
+        storage::upsert_mfa_state(
+            &mut *connection,
+            user_id,
+            MfaState::RequiredUnenrolled,
+            None,
+        )
+        .await
+        .context("failed to persist required login MFA state")?;
     }
 
     Ok(effective)
@@ -188,6 +205,7 @@ fn parse_bool_env(key: &str) -> Option<bool> {
     post,
     path = "/v1/auth/mfa/totp/enroll/start",
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Enrollment started", body = MfaTotpEnrollStartResponse),
         (status = 401, description = "Unauthorized")
     ),
@@ -197,27 +215,50 @@ pub async fn totp_enroll_start(
     headers: HeaderMap,
     pool: State<PgPool>,
     totp_service: State<TotpService>,
+    auth_state: State<Arc<AuthState>>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
 
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Enrollment,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
     let label = Some("Permesi User".to_string()); // Could come from principal
 
     match totp_service
-        .enroll_begin(principal.user_id, &principal.email, label)
+        .enroll_begin_on(
+            guard.connection(),
+            principal.user_id,
+            &principal.email,
+            label,
+        )
         .await
     {
-        Ok((secret_str, qr_code_url, credential_id)) => (
-            StatusCode::OK,
-            Json(MfaTotpEnrollStartResponse {
-                secret: secret_str,
-                qr_code_url,
-                credential_id: credential_id.to_string(),
-            }),
-        )
-            .into_response(),
+        Ok((secret_str, qr_code_url, credential_id)) => {
+            if guard.commit().await.is_err() {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            (
+                StatusCode::OK,
+                Json(MfaTotpEnrollStartResponse {
+                    secret: secret_str,
+                    qr_code_url,
+                    credential_id: credential_id.to_string(),
+                }),
+            )
+                .into_response()
+        }
         Err(err) => {
             error!("Failed to start TOTP enrollment: {err}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -231,7 +272,8 @@ pub async fn totp_enroll_start(
     path = "/v1/auth/mfa/totp/enroll/finish",
     request_body = MfaTotpEnrollFinishRequest,
     responses(
-        (status = 204, description = "Enrollment finished"),
+        (status = 503, description = "Authentication storage unavailable"),
+        (status = 200, description = "Enrollment finished with replacement cookie and recovery codes", body = crate::api::handlers::me::RecoveryCodesResponse),
         (status = 400, description = "Invalid code"),
         (status = 401, description = "Unauthorized")
     ),
@@ -257,11 +299,24 @@ pub async fn totp_enroll_finish(
         return (StatusCode::BAD_REQUEST, "Invalid credential ID").into_response();
     };
 
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Enrollment,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
     let client_ip = extract_client_ip(&headers);
 
     // Verify code via TotpService
     match totp_service
-        .enroll_confirm(
+        .enroll_confirm_on(
+            guard.connection(),
             principal.user_id,
             credential_id,
             &request.code,
@@ -292,9 +347,13 @@ pub async fn totp_enroll_finish(
         }
     };
 
-    if let Err(err) =
-        storage::insert_recovery_codes(&pool, principal.user_id, batch.batch_id, &batch.code_hashes)
-            .await
+    if let Err(err) = storage::insert_recovery_codes_on(
+        guard.connection(),
+        principal.user_id,
+        batch.batch_id,
+        &batch.code_hashes,
+    )
+    .await
     {
         error!("Failed to save recovery codes: {err}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -306,7 +365,7 @@ pub async fn totp_enroll_finish(
     // storage::upsert_mfa_state implementation only touches state and batch_id if secret is not passed?
     // Let's assume it handles NULL update.
     if let Err(err) = storage::upsert_mfa_state(
-        &pool,
+        guard.connection(),
         principal.user_id,
         MfaState::Enabled,
         Some(batch.batch_id),
@@ -317,36 +376,14 @@ pub async fn totp_enroll_finish(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    // After enrollment, upgrade to a full session
-    let (token, ttl_seconds) = match insert_session(
-        &pool,
-        principal.user_id,
-        auth_state.config().session_ttl_seconds(),
-    )
-    .await
-    {
-        Ok(token) => (token, auth_state.config().session_ttl_seconds()),
-        Err(err) => {
-            error!("Failed to create full session after MFA enrollment: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let mut response_headers = HeaderMap::new();
-    match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
-        Ok(cookie) => {
-            response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-            (
-                StatusCode::OK,
-                response_headers,
-                Json(crate::api::handlers::me::RecoveryCodesResponse { codes: batch.codes }),
-            )
-                .into_response()
-        }
-        Err(err) => {
-            error!("Failed to set session cookie: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+    match guard.issue_full(&auth_state).await {
+        Ok(cookie) => (
+            StatusCode::OK,
+            [(axum::http::header::SET_COOKIE, cookie)],
+            Json(crate::api::handlers::me::RecoveryCodesResponse { codes: batch.codes }),
+        )
+            .into_response(),
+        Err(status) => status.into_response(),
     }
 }
 
@@ -356,6 +393,7 @@ pub async fn totp_enroll_finish(
     path = "/v1/auth/mfa/totp/verify",
     request_body = MfaTotpVerifyRequest,
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Verification successful"),
         (status = 400, description = "Invalid code"),
         (status = 401, description = "Unauthorized")
@@ -378,8 +416,20 @@ pub async fn totp_verify(
         return (StatusCode::BAD_REQUEST, "Missing payload").into_response();
     };
 
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Challenge,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
     // Check MFA state is Enabled (security check)
-    let record = match storage::load_mfa_state(&pool, principal.user_id).await {
+    let record = match storage::load_mfa_state(guard.connection(), principal.user_id).await {
         Ok(Some(record)) => record,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "MFA state not found").into_response(),
         Err(err) => {
@@ -397,7 +447,13 @@ pub async fn totp_verify(
     let client_ip = extract_client_ip(&headers);
 
     match totp_service
-        .verify(principal.user_id, &request.code, client_ip.as_deref(), None)
+        .verify_on(
+            guard.connection(),
+            principal.user_id,
+            &request.code,
+            client_ip.as_deref(),
+            None,
+        )
         .await
     {
         Ok(true) => {} // Success
@@ -408,35 +464,13 @@ pub async fn totp_verify(
         }
     }
 
-    // Success: Upgrade to full session
-    let (token, ttl_seconds) = match insert_session(
-        &pool,
-        principal.user_id,
-        auth_state.config().session_ttl_seconds(),
-    )
-    .await
-    {
-        Ok(token) => (token, auth_state.config().session_ttl_seconds()),
-        Err(err) => {
-            error!("Failed to create full session after TOTP verification: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    if let Err(err) = storage::delete_mfa_challenge_sessions(&pool, principal.user_id).await {
-        error!("Failed to revoke MFA challenge sessions: {err}");
-    }
-
-    let mut response_headers = HeaderMap::new();
-    match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
-        Ok(cookie) => {
-            response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-            (StatusCode::NO_CONTENT, response_headers).into_response()
-        }
-        Err(err) => {
-            error!("Failed to set session cookie: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+    match guard.issue_full(&auth_state).await {
+        Ok(cookie) => (
+            StatusCode::NO_CONTENT,
+            [(axum::http::header::SET_COOKIE, cookie)],
+        )
+            .into_response(),
+        Err(status) => status.into_response(),
     }
 }
 
@@ -446,6 +480,7 @@ pub async fn totp_verify(
     path = "/v1/auth/mfa/recovery",
     request_body = MfaRecoveryRequest,
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Recovery accepted"),
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Unauthorized"),
@@ -496,7 +531,7 @@ pub async fn mfa_recovery(
             .into_response();
     };
 
-    let record = match storage::load_mfa_state(&pool, principal.user_id).await {
+    let record = match storage::load_mfa_state(&*pool, principal.user_id).await {
         Ok(Some(record)) => record,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "MFA state not found").into_response(),
         Err(err) => {
@@ -542,8 +577,25 @@ pub async fn mfa_recovery(
         return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
     };
 
-    let consumed = match storage::consume_recovery_code_hash(
+    let mut guard = match AuthorityGuard::acquire(
         &pool,
+        &headers,
+        principal.user_id,
+        Policy::Challenge,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    let current = storage::load_mfa_state(guard.connection(), principal.user_id).await;
+    if !matches!(current,Ok(Some(record)) if record.state==MfaState::Enabled && record.recovery_batch_id==Some(batch_id))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let consumed = match storage::consume_recovery_code_hash(
+        guard.connection(),
         principal.user_id,
         batch_id,
         &matched_hash,
@@ -565,9 +617,13 @@ pub async fn mfa_recovery(
         return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
     }
 
-    if let Err(err) =
-        storage::upsert_mfa_state(&pool, principal.user_id, MfaState::RequiredUnenrolled, None)
-            .await
+    if let Err(err) = storage::upsert_mfa_state(
+        guard.connection(),
+        principal.user_id,
+        MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await
     {
         error!("Failed to update MFA state: {err}");
         return (
@@ -577,15 +633,19 @@ pub async fn mfa_recovery(
             .into_response();
     }
 
-    if let Err(err) = storage::delete_full_sessions(&pool, principal.user_id).await {
+    if let Err(err) = storage::delete_full_sessions(guard.connection(), principal.user_id).await {
         error!("Failed to revoke full sessions after recovery: {err}");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    if let Err(err) = storage::delete_mfa_challenge_sessions(&pool, principal.user_id).await {
+    if let Err(err) =
+        storage::delete_mfa_challenge_sessions(guard.connection(), principal.user_id).await
+    {
         error!("Failed to revoke MFA challenge sessions: {err}");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    let token = match insert_mfa_bootstrap_session(
-        &pool,
+    let token = match insert_mfa_bootstrap_session_on(
+        guard.connection(),
         principal.user_id,
         auth_state.mfa().bootstrap_session_ttl_seconds(),
     )
@@ -602,6 +662,9 @@ pub async fn mfa_recovery(
         }
     };
 
+    if guard.consume_original().await.is_err() || guard.commit().await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     let mut response_headers = HeaderMap::new();
     match session_cookie_with_ttl(
         &auth_state,

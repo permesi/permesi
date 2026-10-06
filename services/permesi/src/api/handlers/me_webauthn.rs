@@ -14,7 +14,7 @@ use axum::{
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use service_utils::request_id::RequestId;
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use utoipa::ToSchema;
@@ -24,8 +24,11 @@ use webauthn_rs::prelude::{Passkey, RegisterPublicKeyCredential};
 use super::{
     AdmissionVerifier,
     auth::{
-        AuthState, RateLimitAction, RateLimitDecision, extract_client_ip, hash_session_token,
-        principal::require_auth, session::extract_session_token,
+        AuthState, RateLimitAction, RateLimitDecision,
+        authority_guard::{AuthorityGuard, Policy},
+        extract_client_ip, hash_session_token,
+        principal::require_auth,
+        session::extract_session_token,
     },
     verify_token,
 };
@@ -85,6 +88,7 @@ pub struct PasskeyCredentialListResponse {
         ("X-Permesi-Zero-Token" = String, Header, description = "Genesis zero token")
     ),
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Passkey registration options", body = PasskeyRegisterOptionsResponse),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Unauthorized"),
@@ -194,6 +198,7 @@ pub async fn register_options(
     ),
     request_body = PasskeyRegisterFinishRequest,
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Passkey registration finished", body = PasskeyRegisterFinishResponse),
         (status = 400, description = "Invalid registration response"),
         (status = 401, description = "Unauthorized"),
@@ -242,11 +247,6 @@ pub async fn register_finish(
 
     match finish_result {
         Ok(passkey) => {
-            info!(
-                user_id = %context.user_id,
-                request_id = %context.request_id,
-                "passkey registration succeeded"
-            );
             let preview = passkey_service.config().preview_mode();
             if preview {
                 return (
@@ -261,8 +261,20 @@ pub async fn register_finish(
                     .into_response();
             }
 
-            if let Err(response) = persist_passkey(
+            let mut guard = match AuthorityGuard::acquire(
                 &pool,
+                &headers,
+                context.user_id,
+                Policy::Full,
+                auth_state.config().opaque_exchange_timeout_ms(),
+            )
+            .await
+            {
+                Ok(guard) => guard,
+                Err(status) => return status.into_response(),
+            };
+            if let Err(response) = persist_passkey(
+                guard.connection(),
                 context.user_id,
                 &passkey,
                 &context.request_id,
@@ -273,6 +285,9 @@ pub async fn register_finish(
                 return *response;
             }
 
+            if guard.commit().await.is_err() {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             (
                 StatusCode::OK,
                 Json(PasskeyRegisterFinishResponse {
@@ -309,6 +324,7 @@ pub async fn register_finish(
     get,
     path = "/v1/me/webauthn/credentials",
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Registered passkeys", body = PasskeyCredentialListResponse),
         (status = 401, description = "Unauthorized")
     ),
@@ -385,6 +401,7 @@ pub async fn list_credentials(
         ("X-Permesi-Zero-Token" = String, Header, description = "Genesis zero token")
     ),
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Passkey deleted"),
         (status = 400, description = "Invalid credential id or missing zero token"),
         (status = 401, description = "Unauthorized"),
@@ -400,6 +417,7 @@ pub async fn delete_credential(
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
     pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
     admission: State<Arc<AdmissionVerifier>>,
     passkey_service: State<Arc<PasskeyService>>,
 ) -> impl IntoResponse {
@@ -438,36 +456,41 @@ pub async fn delete_credential(
         Err(response) => return *response,
     };
 
-    match PasskeyRepo::delete_passkey(&pool, principal.user_id, &credential_id).await {
-        Ok(true) => {
-            if let Err(err) = PasskeyRepo::log_audit(
-                &pool,
-                principal.user_id,
-                Some(&credential_id),
-                "delete",
-                extract_client_ip(&headers).as_deref(),
-                None,
-            )
-            .await
-            {
-                warn!(
-                    user_id = %principal.user_id,
-                    request_id = %request_id,
-                    "passkey audit delete failed: {err}"
-                );
-            }
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!(
-                user_id = %principal.user_id,
-                request_id = %request_id,
-                "passkey delete failed: {err}"
-            );
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Full,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    let deleted = sqlx::query("DELETE FROM passkeys WHERE user_id=$1 AND credential_id=$2")
+        .bind(principal.user_id)
+        .bind(&credential_id)
+        .execute(guard.connection())
+        .await;
+    match deleted {
+        Ok(result) if result.rows_affected() == 1 => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+    if sqlx::query(
+        "INSERT INTO passkey_audit_log (user_id,action,ip_address) VALUES ($1,'delete',$2::inet)",
+    )
+    .bind(principal.user_id)
+    .bind(extract_client_ip(&headers))
+    .execute(guard.connection())
+    .await
+    .is_err()
+        || guard.commit().await.is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 fn extract_origin(
@@ -568,69 +591,29 @@ fn parse_register_finish(
     Ok((reg_id, reg_response))
 }
 
+/// Persists a verified credential and audit in the current-session lifecycle transaction.
 async fn persist_passkey(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     user_id: Uuid,
     passkey: &Passkey,
     request_id: &str,
     ip: Option<&str>,
 ) -> Result<(), HandlerError> {
-    let credential_id = passkey.cred_id().as_slice();
-    match PasskeyRepo::get_passkey(pool, credential_id).await {
-        Ok(Some(_)) => {
-            warn!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "passkey registration rejected: credential already exists"
-            );
-            return Err(Box::new(
-                (StatusCode::BAD_REQUEST, "Passkey already registered").into_response(),
-            ));
-        }
-        Ok(None) => {}
-        Err(err) => {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "passkey registration lookup failed: {err}"
-            );
-            return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
-        }
-    }
-
-    let passkey_data = match serialize_passkey(passkey) {
-        Ok(data) => data,
-        Err(err) => {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "passkey serialization failed: {err}"
-            );
-            return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
-        }
-    };
-
-    if let Err(err) =
-        PasskeyRepo::create_passkey(pool, user_id, credential_id, &passkey_data, None).await
-    {
-        error!(
-            user_id = %user_id,
-            request_id = %request_id,
-            "passkey persistence failed: {err}"
-        );
-        return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
-    }
-
-    if let Err(err) =
-        PasskeyRepo::log_audit(pool, user_id, Some(credential_id), "register", ip, None).await
-    {
+    let data = serialize_passkey(passkey)
+        .map_err(|_| Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()))?;
+    let result = sqlx::query("INSERT INTO passkeys (credential_id,user_id,passkey_data) VALUES ($1,$2,$3) ON CONFLICT (credential_id) DO NOTHING")
+        .bind(passkey.cred_id().as_slice()).bind(user_id).bind(data).execute(&mut *connection).await.map_err(|_|Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()))?;
+    if result.rows_affected() != 1 {
         warn!(
-            user_id = %user_id,
-            request_id = %request_id,
-            "passkey audit log failed: {err}"
+            request_id,
+            "passkey registration rejected: credential already exists"
         );
+        return Err(Box::new(
+            (StatusCode::BAD_REQUEST, "Passkey already registered").into_response(),
+        ));
     }
-
+    sqlx::query("INSERT INTO passkey_audit_log (user_id,credential_id,action,ip_address) VALUES ($1,$2,'register',$3::inet)")
+        .bind(user_id).bind(passkey.cred_id().as_slice()).bind(ip).execute(&mut *connection).await.map_err(|_|Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()))?;
     Ok(())
 }
 

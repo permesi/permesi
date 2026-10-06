@@ -110,9 +110,12 @@ impl DekManager {
     ///
     /// # Errors
     /// Returns an error if no active DEK is found or if database query fails.
-    pub async fn get_active_dek_id(&self, pool: &PgPool) -> Result<Uuid> {
+    pub async fn get_active_dek_id<'a>(
+        &self,
+        executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    ) -> Result<Uuid> {
         let rec = sqlx::query("SELECT dek_id FROM totp_deks WHERE status = 'active'")
-            .fetch_optional(pool)
+            .fetch_optional(executor)
             .await?;
 
         match rec {

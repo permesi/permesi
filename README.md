@@ -358,6 +358,8 @@ sequenceDiagram
 
 Users sign up with email and password, then can register passkeys from `/console/me/security` once they are logged in. Passkey login is discoverable and does not send an email or account-specific credential list during the start request; the authenticator returns an opaque user handle that Permesi binds to the stored credential before verification. Email is required only when the user expands the password form and uses OPAQUE.
 
+Password rotation atomically revokes full and limited MFA sessions, and factor completion rechecks current session authority under PostgreSQL locks; see [MFA lifecycle](docs/mfa-lifecycle.md). Enrollment returns a replacement cookie that callers must adopt.
+
 MFA enforcement is consistent across login paths. If TOTP is enabled for the account, the login flow always proceeds to the MFA challenge after either password or passkey authentication succeeds.
 
 ```mermaid
@@ -492,7 +494,7 @@ The dev stack keeps to itself so it can share a host with other projects. Every 
 - `just db-verify`: Confirm database constraints and schema state.
 - `just openapi`: Regenerate OpenAPI specs from code.
 
-Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE`.
+Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE=true|false`. Startup now rejects formerly accepted empty values, invalid TTL fallbacks, trailing empty origins and boolean aliases; see the [upgrade notes](docs/webauthn-exchanges.md#policy-and-operation).
 
 #### Releasing
 

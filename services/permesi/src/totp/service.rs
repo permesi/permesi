@@ -1,6 +1,6 @@
 use crate::totp::{crypto, dek_manager::DekManager, repo::TotpRepo};
 use anyhow::{Context, Result, anyhow};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use totp_rs::{Algorithm, Builder, Secret, Totp};
 use uuid::Uuid;
 
@@ -33,12 +33,32 @@ impl TotpService {
         user_email: &str,
         label: Option<String>,
     ) -> Result<(String, String, Uuid)> {
+        let mut transaction = self.pool.begin().await?;
+        let result = self
+            .enroll_begin_on(&mut transaction, user_id, user_email, label)
+            .await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    /// Verifies/mutates the factor on the caller's current-session guarded connection.
+    /// No nested pool acquisition occurs; failure rolls back protected state.
+    ///
+    /// # Errors
+    /// Returns factor, encryption-key or storage errors without publishing authority.
+    pub async fn enroll_begin_on(
+        &self,
+        connection: &mut PgConnection,
+        user_id: Uuid,
+        user_email: &str,
+        label: Option<String>,
+    ) -> Result<(String, String, Uuid)> {
         // 1. Generate new random secret
         let secret = Secret::generate();
         let secret_bytes = secret.as_bytes().to_vec();
 
         // 2. Get active DEK
-        let dek_id = self.dek_manager.get_active_dek_id(&self.pool).await?;
+        let dek_id = self.dek_manager.get_active_dek_id(&mut *connection).await?;
         let dek_bytes = self
             .dek_manager
             .get_dek(dek_id)
@@ -51,8 +71,8 @@ impl TotpService {
             crypto::encrypt_seed(&dek_bytes, &secret_bytes, None, user_id, credential_id)?;
 
         // 4. Store in DB
-        TotpRepo::create_credential(
-            &self.pool,
+        TotpRepo::create_credential_on(
+            &mut *connection,
             credential_id,
             user_id,
             dek_id,
@@ -86,7 +106,29 @@ impl TotpService {
         ip: Option<&str>,
         ua: Option<&str>,
     ) -> Result<bool> {
-        let cred = TotpRepo::get_credential(&self.pool, credential_id)
+        let mut transaction = self.pool.begin().await?;
+        let result = self
+            .enroll_confirm_on(&mut transaction, user_id, credential_id, code, ip, ua)
+            .await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    /// Verifies/mutates the factor on the caller's current-session guarded connection.
+    /// No nested pool acquisition occurs; failure rolls back protected state.
+    ///
+    /// # Errors
+    /// Returns factor, encryption-key or storage errors without publishing authority.
+    pub async fn enroll_confirm_on(
+        &self,
+        connection: &mut PgConnection,
+        user_id: Uuid,
+        credential_id: Uuid,
+        code: &str,
+        ip: Option<&str>,
+        ua: Option<&str>,
+    ) -> Result<bool> {
+        let cred = TotpRepo::get_credential(&mut *connection, credential_id)
             .await?
             .ok_or_else(|| anyhow!("Credential not found"))?;
 
@@ -95,7 +137,8 @@ impl TotpService {
         }
 
         if cred.confirmed_at.is_some() {
-            return Ok(true);
+            // An already enrolled credential is not fresh enrollment proof.
+            return Ok(false);
         }
 
         let dek_bytes = self
@@ -116,13 +159,20 @@ impl TotpService {
         let valid = check_current_totp(&totp, code)?;
 
         if valid {
-            TotpRepo::confirm_credential(&self.pool, user_id, credential_id).await?;
-            TotpRepo::log_audit(&self.pool, user_id, Some(credential_id), "confirm", ip, ua)
-                .await?;
+            TotpRepo::confirm_credential_on(&mut *connection, user_id, credential_id).await?;
+            TotpRepo::log_audit(
+                &mut *connection,
+                user_id,
+                Some(credential_id),
+                "confirm",
+                ip,
+                ua,
+            )
+            .await?;
             Ok(true)
         } else {
             TotpRepo::log_audit(
-                &self.pool,
+                &mut *connection,
                 user_id,
                 Some(credential_id),
                 "confirm_fail",
@@ -145,7 +195,28 @@ impl TotpService {
         ip: Option<&str>,
         ua: Option<&str>,
     ) -> Result<bool> {
-        let Some(cred) = TotpRepo::get_active_credential(&self.pool, user_id).await? else {
+        let mut transaction = self.pool.begin().await?;
+        let result = self
+            .verify_on(&mut transaction, user_id, code, ip, ua)
+            .await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    /// Verifies/mutates the factor on the caller's current-session guarded connection.
+    /// No nested pool acquisition occurs; failure rolls back protected state.
+    ///
+    /// # Errors
+    /// Returns factor, encryption-key or storage errors without publishing authority.
+    pub async fn verify_on(
+        &self,
+        connection: &mut PgConnection,
+        user_id: Uuid,
+        code: &str,
+        ip: Option<&str>,
+        ua: Option<&str>,
+    ) -> Result<bool> {
+        let Some(cred) = TotpRepo::get_active_credential(&mut *connection, user_id).await? else {
             return Ok(false);
         };
 
@@ -167,9 +238,9 @@ impl TotpService {
         let valid = check_current_totp(&totp, code)?;
 
         if valid {
-            TotpRepo::touch_last_used(&self.pool, cred.credential_id).await?;
+            TotpRepo::touch_last_used(&mut *connection, cred.credential_id).await?;
             TotpRepo::log_audit(
-                &self.pool,
+                &mut *connection,
                 user_id,
                 Some(cred.credential_id),
                 "verify_success",
@@ -180,7 +251,7 @@ impl TotpService {
             Ok(true)
         } else {
             TotpRepo::log_audit(
-                &self.pool,
+                &mut *connection,
                 user_id,
                 Some(cred.credential_id),
                 "verify_failure",

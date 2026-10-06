@@ -188,7 +188,8 @@ async fn webauthn_security_key_ceremonies_are_shared_and_session_bound() -> Resu
     let proof = authenticator.authenticate(&challenge, user)?;
     assert_eq!(
         b.auth_finish(id, ORIGIN, proof.clone(), user, &[2; 32])
-            .await?,
+            .await?
+            .user,
         user
     );
     assert!(
@@ -200,6 +201,24 @@ async fn webauthn_security_key_ceremonies_are_shared_and_session_bound() -> Resu
     let proof = authenticator.authenticate(&challenge, user)?;
     assert!(
         b.auth_finish(id, ORIGIN, proof.clone(), user, &[3; 32])
+            .await
+            .is_err()
+    );
+    assert!(
+        a.auth_finish(id, ORIGIN, proof, user, &[2; 32])
+            .await
+            .is_err()
+    );
+    let (challenge, id) = a.auth_begin(user, ORIGIN, &[2; 32]).await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    // A credential replaced after challenge creation cannot validate the saved old key.
+    sqlx::query("UPDATE security_keys SET public_key=$1 WHERE user_id=$2")
+        .bind(b"{}".as_slice())
+        .bind(user)
+        .execute(&db.pool)
+        .await?;
+    assert!(
+        b.auth_finish(id, ORIGIN, proof.clone(), user, &[2; 32])
             .await
             .is_err()
     );
@@ -365,10 +384,15 @@ async fn webauthn_http_login_commits_authority_and_rejects_replay_or_disabled_us
     .await?;
     let (admission, signer, kid) = test_admission_context()?;
     let zero = issue_zero_token(&signer, &kid)?;
+    let single = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(1))
+        .connect_with(db.pool.connect_options().as_ref().clone())
+        .await?;
     let state = AppState {
         admission,
-        passkeys: Arc::new(self::passkeys(db.pool.clone(), 300, 100)?),
-        ..AppState::for_tests(db.pool.clone())?
+        passkeys: Arc::new(self::passkeys(single.clone(), 300, 100)?),
+        ..AppState::for_tests(single)?
     };
     let router = with_request_correlation(
         Router::new()
@@ -492,19 +516,250 @@ async fn webauthn_schema_reapplication_preserves_runtime_backstops() -> Result<(
     sqlx::query("CREATE ROLE permesi_runtime NOLOGIN")
         .execute(&mut *connection)
         .await?;
-    test_support::sql::execute_script(&mut *connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
+    test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
         .await?;
     let verify = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../db/sql/verify_permesi.sql"
     ));
-    test_support::sql::execute_script(&mut *connection, "verify_permesi.sql", verify).await?;
+    test_support::sql::execute_script(&mut connection, "verify_permesi.sql", verify).await?;
     // Reproduce the broad development bootstrap before the restrictive grants reapply.
     sqlx::query("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO permesi_runtime")
         .execute(&mut *connection)
         .await?;
-    test_support::sql::execute_script(&mut *connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
+    test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SCHEMA_SQL)
         .await?;
-    test_support::sql::execute_script(&mut *connection, "verify_permesi.sql", verify).await?;
+    test_support::sql::execute_script(&mut connection, "verify_permesi.sql", verify).await?;
+    Ok(())
+}
+
+/// Enrollment and challenge elevation replace exact limited cookies on a different replica.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn webauthn_http_mfa_elevation_is_single_session_and_rotation_safe() -> Result<()> {
+    use crate::api::{
+        handlers::auth::{mfa::webauthn, principal::require_auth, storage},
+        state::AppState,
+    };
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let user = insert_test_user(&db.pool).await?;
+    let single = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(1))
+        .connect_with(db.pool.connect_options().as_ref().clone())
+        .await?;
+    let a = SecurityKeyService::new(
+        db.pool.clone(),
+        "example.com",
+        &[ORIGIN.into()],
+        &[1; 32],
+        300,
+        100,
+        1000,
+    )?;
+    let b = Arc::new(SecurityKeyService::new(
+        single.clone(),
+        "example.com",
+        &[ORIGIN.into()],
+        &[1; 32],
+        300,
+        100,
+        1000,
+    )?);
+    let app = Router::new()
+        .route("/register", post(webauthn::register_finish))
+        .route("/authenticate", post(webauthn::authenticate_finish))
+        .with_state(AppState {
+            security_keys: b,
+            ..AppState::for_tests(single)?
+        });
+    let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
+    let (challenge, id) = a
+        .register_begin(
+            user,
+            "user@example.com",
+            ORIGIN,
+            &hash_session_token(&bootstrap),
+        )
+        .await?;
+    let mut authenticator = Authenticator::new()?;
+    let response = app.clone().oneshot(Request::builder().method("POST").uri("/register").header("Origin",ORIGIN).header(COOKIE,format!("permesi_session={bootstrap}")).header(CONTENT_TYPE,"application/json").body(Body::from(serde_json::to_vec(&json!({"reg_id":id,"label":"test","response":authenticator.register(&challenge)?}))?))?).await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        COOKIE,
+        response
+            .headers()
+            .get(SET_COOKIE)
+            .context("replacement cookie")?
+            .to_str()?
+            .split(';')
+            .next()
+            .context("cookie pair")?
+            .parse()?,
+    );
+    assert_eq!(
+        require_auth(&headers, &db.pool)
+            .await
+            .map_err(|_| anyhow!("full authority"))?
+            .user_id,
+        user
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM user_mfa_bootstrap_sessions WHERE user_id=$1"
+        )
+        .bind(user)
+        .fetch_one(&db.pool)
+        .await?,
+        0
+    );
+    let limited = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
+    let (challenge, id) = a
+        .auth_begin(user, ORIGIN, &hash_session_token(&limited))
+        .await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    let body = serde_json::to_vec(&json!({"auth_id":id,"response":proof}))?;
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/authenticate")
+            .header("Origin", ORIGIN)
+            .header(COOKIE, format!("permesi_session={limited}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.clone()))
+    };
+    let response = app.clone().oneshot(request()?).await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(response.headers().get(SET_COOKIE).is_some());
+    assert_eq!(
+        app.clone().oneshot(request()?).await?.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let limited = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
+    let (challenge, id) = a
+        .auth_begin(user, ORIGIN, &hash_session_token(&limited))
+        .await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    storage::rotate_password_and_clear_sessions(&db.pool, user, &[3; 32]).await?;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authenticate")
+                .header("Origin", ORIGIN)
+                .header(COOKIE, format!("permesi_session={limited}"))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(
+                    &json!({"auth_id":id,"response":proof}),
+                )?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(response.headers().get(SET_COOKIE).is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?,
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM security_keys WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?,
+        1
+    );
+    Ok(())
+}
+
+/// K valid concurrent finishes on K pooled connections never need a second checkout while locked.
+#[tokio::test]
+async fn webauthn_http_concurrent_logins_do_not_starve_the_issuance_pool() -> Result<()> {
+    use crate::api::{handlers::auth::passkeys, state::AppState};
+    use crate::webauthn::{PasskeyRepo, serialize_passkey};
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let a = self::passkeys(db.pool.clone(), 300, 100)?;
+    let (admission, signer, kid) = test_admission_context()?;
+    let zero = issue_zero_token(&signer, &kid)?;
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(Duration::from_secs(1))
+        .connect_with(db.pool.connect_options().as_ref().clone())
+        .await?;
+    let app = service_utils::request_id::with_request_correlation(
+        Router::new()
+            .route("/finish", post(passkeys::passkey_login_finish))
+            .with_state(AppState {
+                admission,
+                passkeys: Arc::new(self::passkeys(pool.clone(), 300, 100)?),
+                ..AppState::for_tests(pool)?
+            }),
+    );
+    let mut tasks = Vec::new();
+    for _ in 0..3 {
+        let user = insert_test_user(&db.pool).await?;
+        let mut authenticator = Authenticator::new()?;
+        let (id, options) = a
+            .register_begin(user, "test@example.com", "Test", vec![1; 32], ORIGIN)
+            .await?;
+        let key = a
+            .register_finish(
+                id,
+                user,
+                &[1; 32],
+                ORIGIN,
+                authenticator.register(&options)?,
+            )
+            .await
+            .map_err(|_| anyhow!("registration"))?;
+        PasskeyRepo::create_passkey(
+            &db.pool,
+            user,
+            &authenticator.id,
+            &serialize_passkey(&key)?,
+            None,
+        )
+        .await?;
+        let (id, options) = a.auth_begin(ORIGIN).await?;
+        let proof = authenticator.authenticate(&options, user)?;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/finish")
+            .header("Origin", ORIGIN)
+            .header("X-Permesi-Zero-Token", &zero)
+            .body(Body::from(serde_json::to_vec(
+                &json!({"auth_id":id,"response":proof}),
+            )?))?;
+        tasks.push((app.clone(), request));
+    }
+    let handles: Vec<_> = tasks
+        .into_iter()
+        .map(|(app, request)| tokio::spawn(app.oneshot(request)))
+        .collect();
+    for handle in handles {
+        let response = tokio::time::timeout(Duration::from_secs(5), handle).await???;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(response.headers().get(SET_COOKIE).is_some());
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions")
+            .fetch_one(&db.pool)
+            .await?,
+        3
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM webauthn_exchanges WHERE purpose='passkey_login'"
+        )
+        .fetch_one(&db.pool)
+        .await?,
+        0
+    );
     Ok(())
 }

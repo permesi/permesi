@@ -55,7 +55,7 @@ pub async fn session(headers: HeaderMap, pool: State<PgPool>) -> impl IntoRespon
         })) => {
             let is_operator = operator_enabled(&pool, user_id).await.unwrap_or(false);
 
-            let mfa_record = super::mfa::storage::load_mfa_state(&pool, user_id)
+            let mfa_record = super::mfa::storage::load_mfa_state(&*pool, user_id)
                 .await
                 .unwrap_or(None);
             let totp_enabled = mfa_record

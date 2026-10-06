@@ -1,6 +1,6 @@
 use crate::totp::models::TotpCredential;
 use anyhow::{Context, Result};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 pub struct TotpRepo;
@@ -18,12 +18,36 @@ impl TotpRepo {
         seed_ciphertext: &[u8],
         label: Option<&str>,
     ) -> Result<()> {
-        let mut tx = pool.begin().await?;
+        let mut transaction = pool.begin().await?;
+        Self::create_credential_on(
+            &mut transaction,
+            credential_id,
+            user_id,
+            dek_id,
+            seed_ciphertext,
+            label,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
 
+    /// Applies credential lifecycle changes through the caller's current-authority transaction.
+    ///
+    /// # Errors
+    /// Returns storage failure; the caller must roll back its transaction.
+    pub async fn create_credential_on(
+        connection: &mut PgConnection,
+        credential_id: Uuid,
+        user_id: Uuid,
+        dek_id: Uuid,
+        seed_ciphertext: &[u8],
+        label: Option<&str>,
+    ) -> Result<()> {
         // Remove any existing unconfirmed attempts for this user to keep the table clean.
         sqlx::query("DELETE FROM totp_credentials WHERE user_id = $1 AND confirmed_at IS NULL")
             .bind(user_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await?;
 
         sqlx::query(
@@ -38,11 +62,9 @@ impl TotpRepo {
         .bind(dek_id)
         .bind(seed_ciphertext)
         .bind(label)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await
         .context("Failed to insert TOTP credential")?;
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -51,15 +73,15 @@ impl TotpRepo {
     ///
     /// # Errors
     /// Returns an error if database query fails.
-    pub async fn get_credential(
-        pool: &PgPool,
+    pub async fn get_credential<'a>(
+        executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
         credential_id: Uuid,
     ) -> Result<Option<TotpCredential>> {
         sqlx::query_as::<_, TotpCredential>(
             "SELECT * FROM totp_credentials WHERE credential_id = $1",
         )
         .bind(credential_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("Failed to fetch credential")
     }
@@ -68,8 +90,8 @@ impl TotpRepo {
     ///
     /// # Errors
     /// Returns an error if database query fails.
-    pub async fn get_active_credential(
-        pool: &PgPool,
+    pub async fn get_active_credential<'a>(
+        executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
         user_id: Uuid,
     ) -> Result<Option<TotpCredential>> {
         sqlx::query_as::<_, TotpCredential>(
@@ -82,7 +104,7 @@ impl TotpRepo {
             ",
         )
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("Failed to fetch active credential")
     }
@@ -96,23 +118,35 @@ impl TotpRepo {
         user_id: Uuid,
         credential_id: Uuid,
     ) -> Result<()> {
-        let mut tx = pool.begin().await?;
+        let mut transaction = pool.begin().await?;
+        Self::confirm_credential_on(&mut transaction, user_id, credential_id).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
 
+    /// Applies credential lifecycle changes through the caller's current-authority transaction.
+    ///
+    /// # Errors
+    /// Returns storage failure; the caller must roll back its transaction.
+    pub async fn confirm_credential_on(
+        connection: &mut PgConnection,
+        user_id: Uuid,
+        credential_id: Uuid,
+    ) -> Result<()> {
         // 1. Hard delete all other credentials for this user (confirmed or otherwise)
         sqlx::query("DELETE FROM totp_credentials WHERE user_id = $1 AND credential_id != $2")
             .bind(user_id)
             .bind(credential_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await?;
 
         // 2. Confirm the target credential
         sqlx::query("UPDATE totp_credentials SET confirmed_at = NOW() WHERE credential_id = $1")
             .bind(credential_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await
             .context("Failed to confirm credential")?;
 
-        tx.commit().await?;
         Ok(())
     }
 
@@ -120,10 +154,13 @@ impl TotpRepo {
     ///
     /// # Errors
     /// Returns an error if database update fails.
-    pub async fn touch_last_used(pool: &PgPool, credential_id: Uuid) -> Result<()> {
+    pub async fn touch_last_used<'a>(
+        executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+        credential_id: Uuid,
+    ) -> Result<()> {
         sqlx::query("UPDATE totp_credentials SET last_used_at = NOW() WHERE credential_id = $1")
             .bind(credential_id)
-            .execute(pool)
+            .execute(executor)
             .await
             .context("Failed to touch last_used_at")?;
         Ok(())
@@ -146,8 +183,8 @@ impl TotpRepo {
     ///
     /// # Errors
     /// Returns an error if database insertion fails.
-    pub async fn log_audit(
-        pool: &PgPool,
+    pub async fn log_audit<'a>(
+        executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
         user_id: Uuid,
         credential_id: Option<Uuid>,
         action: &str,
@@ -165,7 +202,7 @@ impl TotpRepo {
         .bind(action)
         .bind(ip)
         .bind(ua)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("Failed to write audit log")?;
         Ok(())

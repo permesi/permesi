@@ -67,6 +67,7 @@ pub struct PasskeyLoginFinishRequest {
         ("X-Permesi-Zero-Token" = String, Header, description = "Genesis zero token")
     ),
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Passkey login started", body = PasskeyLoginStartResponse),
         (status = 400, description = "Invalid request"),
         (status = 429, description = "Rate limited")
@@ -150,9 +151,11 @@ pub async fn passkey_login_start(
         ("X-Permesi-Zero-Token" = String, Header, description = "Genesis zero token")
     ),
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Passkey login finished"),
         (status = 400, description = "Invalid request"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 429, description = "Rate limited")
     ),
     tag = "auth"
 )]
@@ -246,7 +249,7 @@ pub async fn passkey_login_finish(
         return *response;
     }
 
-    issue_session_for_user(&pool, &auth_state, user_id, &request_id, guard).await
+    issue_session_for_user(&auth_state, user_id, &request_id, guard).await
 }
 
 /// Resolve a discoverable credential and verify its proof before trusting its user handle.
@@ -263,11 +266,14 @@ async fn verify_passkey_assertion<'a>(
     request_id: &str,
     timeout_ms: i64,
 ) -> Result<(Uuid, AuthenticationResult, Transaction<'a, Postgres>), HandlerError> {
+    let authentication = passkey_service
+        .consume_authentication(auth_id, origin)
+        .await
+        .map_err(|_| Box::new(StatusCode::UNAUTHORIZED.into_response()))?;
     let (user_id, credential_id) =
         match passkey_service.identify_authentication(origin, &auth_response) {
             Ok(identifiers) => identifiers,
             Err(err) => {
-                passkey_service.discard_authentication(auth_id).await;
                 warn!(request_id = %request_id, "passkey identification failed: {err}");
                 return Err(Box::new(
                     (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response(),
@@ -298,20 +304,17 @@ async fn verify_passkey_assertion<'a>(
     .await
     .map_err(|_| Box::new(login_storage_error()))?;
     let Some(passkey_row) = row else {
-        passkey_service.discard_authentication(auth_id).await;
         return Err(Box::new(StatusCode::UNAUTHORIZED.into_response()));
     };
     let passkey = match decode_stored_passkey(user_id, request_id, &passkey_row.passkey_data) {
         Ok(passkey) => passkey,
         Err(response) => {
-            passkey_service.discard_authentication(auth_id).await;
             return Err(response);
         }
     };
     let credentials = [DiscoverableKey::from(&passkey)];
     let auth_result = passkey_service
-        .auth_finish(auth_id, origin, auth_response, &credentials)
-        .await
+        .verify_consumed_authentication(origin, &auth_response, authentication, &credentials)
         .map_err(|err| {
             warn!(request_id = %request_id, "passkey login failed: {err:?}");
             Box::new((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response())
@@ -462,27 +465,27 @@ async fn create_session_token(
 
 /// Commits credential usage and authority together while current user/credential locks remain held.
 async fn issue_session_for_user(
-    pool: &PgPool,
     auth_state: &AuthState,
     user_id: Uuid,
     request_id: &str,
     mut guard: Transaction<'_, Postgres>,
 ) -> axum::response::Response {
-    let mfa_state = match mfa::resolve_login_mfa_state(pool, user_id, auth_state.mfa()).await {
-        Ok(state) => state,
-        Err(err) => {
-            error!(
-                user_id = %user_id,
-                request_id = %request_id,
-                "failed to resolve MFA state: {err}"
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Login failed".to_string(),
-            )
-                .into_response();
-        }
-    };
+    let mfa_state =
+        match mfa::resolve_login_mfa_state_on(&mut guard, user_id, auth_state.mfa()).await {
+            Ok(state) => state,
+            Err(err) => {
+                error!(
+                    user_id = %user_id,
+                    request_id = %request_id,
+                    "failed to resolve MFA state: {err}"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Login failed".to_string(),
+                )
+                    .into_response();
+            }
+        };
 
     let (token, ttl_seconds) =
         match create_session_token(&mut guard, auth_state, user_id, mfa_state).await {

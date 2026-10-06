@@ -27,8 +27,10 @@ Passkey login holds current user/credential locks through credential updates and
 full or limited MFA-session issuance, committing authority and its audit together.
 Disabled accounts and deleted credentials cannot log in. Security-key counter updates
 reject stale or decreasing counters atomically; counterless authenticators require
-both stored and presented counters to be zero. Session-lifecycle hardening for all MFA
-elevation paths is tracked separately until the next release-batch milestone completes.
+both stored and presented counters to be zero. All MFA completion paths also use [current-session lifecycle guards](mfa-lifecycle.md).
+Hardware-key assertions bind the fingerprint of the credential offered at start;
+finish rechecks its owner and exact revision under a lock through session issuance.
+Deleting or replacing that credential cannot validate an outstanding old proof.
 
 ## Policy and operation
 
@@ -43,7 +45,11 @@ milestone; this capacity guarantee does not claim unlimited throughput.
 RP ID/name, allowed origins, challenge TTL and preview mode are clap configuration,
 then revalidated at dispatch. Use `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`,
 `PERMESI_PASSKEYS_ALLOWED_ORIGINS` and `PERMESI_PASSKEYS_PREVIEW_MODE=true|false`.
-Invalid values fail startup. Defaults derive from the configured frontend/CORS policy.
+Invalid values fail startup. Upgrade deployments that previously used empty RP values,
+trailing empty origin entries, silent invalid TTL fallbacks or preview aliases (`1`,
+`yes`, uppercase booleans): omit optional RP/origin overrides to use defaults, supply
+a valid TTL and use lowercase `true`/`false`. These formerly accepted forms now fail
+startup intentionally instead of silently substituting security policy. Defaults derive from the configured frontend/CORS policy.
 Apply `db/sql/02_permesi.sql` and its runtime grants before rolling out. In-flight
 ceremonies from the previous memory-backed implementation must restart. Rotating the
 Vault seed or changing origin/RP policy invalidates outstanding ceremonies; permanent

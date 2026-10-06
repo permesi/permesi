@@ -14,7 +14,10 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::FromRef,
-    http::{Request, StatusCode, header::COOKIE},
+    http::{
+        Request, StatusCode,
+        header::{COOKIE, SET_COOKIE},
+    },
     routing::{delete, get, post},
 };
 use secrecy::SecretString;
@@ -41,6 +44,11 @@ impl TestContext {
     /// Returns `None` only when no container runtime is available; any other setup
     /// failure is an error so a broken fixture fails the test instead of skipping it.
     async fn new() -> Result<Option<Self>> {
+        Self::with_capacity(5).await
+    }
+
+    /// Exercises guarded factor SQL even on a single shared connection.
+    async fn with_capacity(capacity: u32) -> Result<Option<Self>> {
         if let Err(err) = runtime::ensure_container_runtime() {
             eprintln!("Skipping integration test: {err}");
             return Ok(None);
@@ -76,7 +84,7 @@ impl TestContext {
         apply_schema(&postgres).await?;
 
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(capacity)
             .connect(&postgres.admin_dsn())
             .await
             .context("failed to connect test pool")?;
@@ -193,6 +201,8 @@ fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) ->
             "/v1/auth/mfa/totp/enroll/finish",
             post(super::totp_enroll_finish),
         )
+        .route("/v1/auth/mfa/totp/verify", post(super::totp_verify))
+        .route("/v1/auth/mfa/recovery", post(super::mfa_recovery))
         .route(
             "/v1/me/mfa/webauthn/{credential_id}",
             delete(super::webauthn::delete_key),
@@ -280,13 +290,33 @@ async fn mfa_enrollment_flow() -> Result<()> {
 
     assert_eq!(response.status(), StatusCode::OK);
 
+    let cookie = response
+        .headers()
+        .get(SET_COOKIE)
+        .context("replacement session cookie")?
+        .to_str()?
+        .split(';')
+        .next()
+        .context("cookie pair")?
+        .to_string();
+    // Enrollment consumes the original authority; only the replacement can access the profile.
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/me")
+                .header(COOKIE, format!("permesi_session={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
     // 4. Verify Profile State
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/v1/me")
-                .header(COOKIE, format!("permesi_session={token}"))
+                .header(COOKIE, &cookie)
                 .body(Body::empty())?,
         )
         .await?;
@@ -371,7 +401,9 @@ async fn security_key_preserves_totp() -> Result<()> {
     .execute(&ctx.pool)
     .await?;
 
-    // Enable MFA WITH recovery batch (simulating TOTP)
+    // A recovery batch alone is not a factor: persist an actual confirmed TOTP credential.
+    let (_, _, totp_id) = ctx.totp_service.enroll_begin(user_id, email, None).await?;
+    crate::totp::repo::TotpRepo::confirm_credential(&ctx.pool, user_id, totp_id).await?;
     let batch_id = Uuid::new_v4();
     super::storage::upsert_mfa_state(&ctx.pool, user_id, MfaState::Enabled, Some(batch_id)).await?;
 
@@ -572,5 +604,108 @@ async fn session_response_includes_mfa_flags() -> Result<()> {
     assert!(session.totp_enabled);
     assert!(session.webauthn_enabled);
 
+    Ok(())
+}
+
+/// A stored confirmed credential is never accepted as new proof, even with a valid bootstrap cookie.
+#[tokio::test]
+async fn mfa_enrollment_rejects_confirmed_credential_without_fresh_proof() -> Result<()> {
+    let Some(ctx) = TestContext::with_capacity(1).await? else {
+        return Ok(());
+    };
+    let user = insert_active_user(&ctx.pool, "confirmed@example.com").await?;
+    let (_secret, _qr, credential) = ctx
+        .totp_service
+        .enroll_begin(user, "confirmed@example.com", None)
+        .await?;
+    crate::totp::repo::TotpRepo::confirm_credential(&ctx.pool, user, credential).await?;
+    let bootstrap =
+        crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
+            .await?;
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/mfa/totp/enroll/finish")
+                .header(COOKIE, format!("permesi_session={bootstrap}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(
+                    &json!({"credential_id":credential,"code":"bogus"}),
+                )?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.headers().get(SET_COOKIE).is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&ctx.pool)
+            .await?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn password_rotation_blocks_revoked_mfa_routes_and_removes_unconfirmed_totp() -> Result<()> {
+    let Some(ctx) = TestContext::with_capacity(1).await? else {
+        return Ok(());
+    };
+    let user = insert_active_user(&ctx.pool, "rotation@example.com").await?;
+    let bootstrap =
+        crate::api::handlers::auth::storage::insert_mfa_bootstrap_session(&ctx.pool, user, 300)
+            .await?;
+    let challenge =
+        crate::api::handlers::auth::storage::insert_mfa_challenge_session(&ctx.pool, user, 300)
+            .await?;
+    let (_secret, _qr, credential) = ctx
+        .totp_service
+        .enroll_begin(user, "rotation@example.com", None)
+        .await?;
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    crate::api::handlers::auth::storage::rotate_password_and_clear_sessions(
+        &ctx.pool, user, &[2; 32],
+    )
+    .await?;
+    for (path, token, body) in [
+        ("/v1/auth/mfa/totp/enroll/start", &bootstrap, json!({})),
+        (
+            "/v1/auth/mfa/totp/enroll/finish",
+            &bootstrap,
+            json!({"credential_id":credential,"code":"123456"}),
+        ),
+        (
+            "/v1/auth/mfa/totp/verify",
+            &challenge,
+            json!({"code":"123456"}),
+        ),
+        (
+            "/v1/auth/mfa/recovery",
+            &challenge,
+            json!({"code":"old-code"}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(COOKIE, format!("permesi_session={token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body)?))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        assert!(response.headers().get(SET_COOKIE).is_none());
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM totp_credentials WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&ctx.pool)
+            .await?,
+        0
+    );
     Ok(())
 }

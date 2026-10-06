@@ -10,8 +10,8 @@ impl SecurityKeyRepo {
     ///
     /// # Errors
     /// Returns error if the database query fails.
-    pub async fn create_key(
-        pool: &PgPool,
+    pub async fn create_key<'a>(
+        executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
         user_id: Uuid,
         credential_id: &[u8],
         public_key: &[u8],
@@ -29,7 +29,7 @@ impl SecurityKeyRepo {
         .bind(label)
         .bind(public_key)
         .bind(sign_count)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("Failed to insert security key")?;
 

@@ -315,19 +315,6 @@ pub async fn opaque_login_finish(
     match (finish_result, login_state.identity) {
         (Ok(_), Some(identity)) => {
             let user_id = identity.user_id;
-            let mfa_state =
-                match mfa::resolve_login_mfa_state(&pool, user_id, auth_state.mfa()).await {
-                    Ok(state) => state,
-                    Err(err) => {
-                        error!("Failed to resolve MFA state: {err}");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Login failed".to_string(),
-                        )
-                            .into_response();
-                    }
-                };
-
             let mut tx = match lock_identity(
                 &pool,
                 &identity,
@@ -348,6 +335,19 @@ pub async fn opaque_login_finish(
                         .into_response();
                 }
             };
+            let mfa_state =
+                match mfa::resolve_login_mfa_state_on(&mut tx, user_id, auth_state.mfa()).await {
+                    Ok(state) => state,
+                    Err(err) => {
+                        error!("Failed to resolve MFA state: {err}");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Login failed".to_string(),
+                        )
+                            .into_response();
+                    }
+                };
+
             let (token, ttl_seconds) = match mfa_state {
                 MfaState::RequiredUnenrolled => {
                     if sqlx::query("DELETE FROM user_sessions WHERE user_id=$1")

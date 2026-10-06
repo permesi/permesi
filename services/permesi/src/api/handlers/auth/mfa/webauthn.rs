@@ -6,10 +6,10 @@
 use crate::{
     api::handlers::auth::{
         AuthState,
+        authority_guard::{AuthorityGuard, Policy},
         mfa::{MfaState, storage as mfa_storage},
         principal::{require_any_auth, require_mfa_challenge},
-        session::{extract_session_token, session_cookie_with_ttl},
-        storage::insert_session,
+        session::extract_session_token,
         types::{
             WebauthnAuthenticateFinishRequest, WebauthnAuthenticateStartResponse,
             WebauthnRegisterFinishRequest, WebauthnRegisterStartResponse,
@@ -25,6 +25,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use sha2::Digest;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::error;
@@ -38,6 +39,7 @@ type HandlerError = Box<axum::response::Response>;
     post,
     path = "/v1/auth/mfa/webauthn/register/start",
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Registration challenge generated", body = WebauthnRegisterStartResponse),
         (status = 401, description = "Unauthorized")
     ),
@@ -91,6 +93,7 @@ pub async fn register_start(
     path = "/v1/auth/mfa/webauthn/register/finish",
     request_body = WebauthnRegisterFinishRequest,
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Security key registered successfully"),
         (status = 400, description = "Invalid registration response"),
         (status = 401, description = "Unauthorized")
@@ -100,6 +103,7 @@ pub async fn register_start(
 pub async fn register_finish(
     headers: HeaderMap,
     pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
     webauthn_service: State<Arc<SecurityKeyService>>,
     payload: Option<Json<WebauthnRegisterFinishRequest>>,
 ) -> axum::response::Response {
@@ -139,52 +143,49 @@ pub async fn register_finish(
     let client_ip = extract_client_ip(&headers);
 
     match webauthn_service
-        .register_finish(
+        .verify_registration(
             reg_id,
             &origin,
             reg_response,
             principal.user_id,
-            &request.label,
             &session_hash,
         )
         .await
     {
-        Ok(()) => {
-            // Load existing MFA state to preserve recovery codes
-            let recovery_batch_id =
-                match mfa_storage::load_mfa_state(&pool, principal.user_id).await {
-                    Ok(Some(record)) => record.recovery_batch_id,
-                    Ok(None) => None,
-                    Err(err) => {
-                        error!("Failed to load MFA state: {err}");
-                        // Proceed with None (safe fallback, but risk losing recovery codes if DB is flaky)
-                        None
-                    }
-                };
-
-            // Enable MFA for the user
-            if let Err(err) = mfa_storage::upsert_mfa_state(
+        Ok(key) => {
+            let mut guard = match AuthorityGuard::acquire(
                 &pool,
+                &headers,
                 principal.user_id,
-                MfaState::Enabled,
-                recovery_batch_id,
+                Policy::Enrollment,
+                auth_state.config().opaque_exchange_timeout_ms(),
             )
             .await
             {
-                error!("Failed to enable MFA after security key registration: {err}");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
+                Ok(guard) => guard,
+                Err(status) => return status.into_response(),
+            };
 
-            let _ = SecurityKeyRepo::log_audit(
-                &pool,
+            if persist_registered_key(
+                guard.connection(),
                 principal.user_id,
-                None,
-                "register",
+                &key,
+                &request.label,
                 client_ip.as_deref(),
-                None,
             )
-            .await;
-            StatusCode::NO_CONTENT.into_response()
+            .await
+            .is_err()
+            {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            match guard.issue_full(&auth_state).await {
+                Ok(cookie) => (
+                    StatusCode::NO_CONTENT,
+                    [(axum::http::header::SET_COOKIE, cookie)],
+                )
+                    .into_response(),
+                Err(status) => status.into_response(),
+            }
         }
         Err(err) => {
             error!("Failed to finish WebAuthn registration: {err}");
@@ -193,14 +194,41 @@ pub async fn register_finish(
     }
 }
 
+/// Saves the verified key, preserved recovery batch and audit atomically with current session authority.
+async fn persist_registered_key(
+    connection: &mut sqlx::PgConnection,
+    user: Uuid,
+    key: &SecurityKey,
+    label: &str,
+    ip: Option<&str>,
+) -> anyhow::Result<()> {
+    SecurityKeyRepo::create_key(
+        &mut *connection,
+        user,
+        key.cred_id().as_slice(),
+        &serde_json::to_vec(key)?,
+        label,
+        0,
+    )
+    .await?;
+    let batch = mfa_storage::load_mfa_state(&mut *connection, user)
+        .await?
+        .and_then(|r| r.recovery_batch_id);
+    mfa_storage::upsert_mfa_state(&mut *connection, user, MfaState::Enabled, batch).await?;
+    sqlx::query("INSERT INTO security_key_audit_log (user_id,credential_id,action,ip_address) VALUES ($1,$2,'register',$3::inet)")
+        .bind(user).bind(key.cred_id().as_slice()).bind(ip).execute(&mut *connection).await?;
+    Ok(())
+}
+
 /// Starts the authentication flow for a `WebAuthn` security key.
 #[utoipa::path(
     post,
     path = "/v1/auth/mfa/webauthn/authenticate/start",
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 200, description = "Authentication challenge generated", body = WebauthnAuthenticateStartResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 404, description = "No security keys registered")
+        (status = 400, description = "Authentication unavailable")
     ),
     tag = "auth"
 )]
@@ -247,6 +275,7 @@ pub async fn authenticate_start(
     path = "/v1/auth/mfa/webauthn/authenticate/finish",
     request_body = WebauthnAuthenticateFinishRequest,
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Authentication successful"),
         (status = 400, description = "Invalid authentication response"),
         (status = 401, description = "Unauthorized")
@@ -305,42 +334,37 @@ pub async fn authenticate_finish(
         )
         .await
     {
-        Ok(_) => {
-            // Success: Upgrade to full session
-            let (token, ttl_seconds) = match insert_session(
+        Ok(proof) => {
+            let mut guard = match AuthorityGuard::acquire(
                 &pool,
+                &headers,
                 principal.user_id,
-                auth_state.config().session_ttl_seconds(),
+                Policy::Challenge,
+                auth_state.config().opaque_exchange_timeout_ms(),
             )
             .await
             {
-                Ok(token) => (token, auth_state.config().session_ttl_seconds()),
-                Err(err) => {
-                    error!("Failed to create full session after WebAuthn auth: {err}");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
+                Ok(guard) => guard,
+                Err(status) => return status.into_response(),
             };
 
-            let _ = SecurityKeyRepo::log_audit(
-                &pool,
-                principal.user_id,
-                None,
-                "verify_success",
-                client_ip.as_deref(),
-                None,
+            let current = sqlx::query_as::<_, (Uuid, Vec<u8>)>(
+                "SELECT user_id,public_key FROM security_keys WHERE credential_id=$1 FOR SHARE",
             )
+            .bind(&proof.id)
+            .fetch_optional(guard.connection())
             .await;
-
-            let mut response_headers = HeaderMap::new();
-            match session_cookie_with_ttl(&auth_state, &token, ttl_seconds) {
-                Ok(cookie) => {
-                    response_headers.insert(axum::http::header::SET_COOKIE, cookie);
-                    (StatusCode::NO_CONTENT, response_headers).into_response()
-                }
-                Err(err) => {
-                    error!("Failed to set session cookie: {err}");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+            if !matches!(current,Ok(Some((user,key))) if user==principal.user_id && user==proof.user && <[u8;32]>::from(sha2::Sha256::digest(&key))==proof.fingerprint)
+            {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            match guard.issue_full(&auth_state).await {
+                Ok(cookie) => (
+                    StatusCode::NO_CONTENT,
+                    [(axum::http::header::SET_COOKIE, cookie)],
+                )
+                    .into_response(),
+                Err(status) => status.into_response(),
             }
         }
         Err(err) => {
@@ -393,6 +417,7 @@ fn extract_origin(
         ("credential_id" = String, Path, description = "Hex-encoded credential ID")
     ),
     responses(
+        (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Security key deleted successfully"),
         (status = 400, description = "Invalid credential id"),
         (status = 401, description = "Unauthorized"),
@@ -404,6 +429,7 @@ pub async fn delete_key(
     Path(credential_id_hex): Path<String>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    auth_state: State<Arc<AuthState>>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,
@@ -414,52 +440,46 @@ pub async fn delete_key(
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    let client_ip = extract_client_ip(&headers);
-
-    match SecurityKeyRepo::delete_key(&pool, principal.user_id, &credential_id).await {
-        Ok(true) => {
-            let _ = SecurityKeyRepo::log_audit(
-                &pool,
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Enrollment,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    let result = sqlx::query("DELETE FROM security_keys WHERE user_id=$1 AND credential_id=$2")
+        .bind(principal.user_id)
+        .bind(&credential_id)
+        .execute(guard.connection())
+        .await;
+    match result {
+        Ok(result) if result.rows_affected() == 1 => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    let remaining = sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM security_keys WHERE user_id=$1) OR EXISTS(SELECT 1 FROM totp_credentials WHERE user_id=$1 AND confirmed_at IS NOT NULL)").bind(principal.user_id).fetch_one(guard.connection()).await;
+    match remaining {
+        Ok(true) => {}
+        Ok(false) => {
+            if mfa_storage::upsert_mfa_state(
+                guard.connection(),
                 principal.user_id,
-                Some(&credential_id),
-                "delete",
-                client_ip.as_deref(),
+                MfaState::Disabled,
                 None,
             )
-            .await;
-
-            // Check if we need to disable MFA
-            let remaining_keys = SecurityKeyRepo::list_user_keys(&pool, principal.user_id)
-                .await
-                .unwrap_or_default();
-
-            let mfa_record = mfa_storage::load_mfa_state(&pool, principal.user_id)
-                .await
-                .unwrap_or(None);
-
-            let has_totp = mfa_record
-                .as_ref()
-                .is_some_and(|r| r.recovery_batch_id.is_some());
-
-            if remaining_keys.is_empty()
-                && !has_totp
-                && let Err(e) = mfa_storage::upsert_mfa_state(
-                    &pool,
-                    principal.user_id,
-                    MfaState::Disabled,
-                    None,
-                )
-                .await
+            .await
+            .is_err()
             {
-                error!("Failed to disable MFA after last key deletion: {e}");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
-
-            StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to delete security key: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+    if sqlx::query("INSERT INTO security_key_audit_log (user_id,action,ip_address) VALUES ($1,'delete',$2::inet)").bind(principal.user_id).bind(extract_client_ip(&headers)).execute(guard.connection()).await.is_err() || guard.commit().await.is_err() { return StatusCode::SERVICE_UNAVAILABLE.into_response(); }
+    StatusCode::NO_CONTENT.into_response()
 }

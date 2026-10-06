@@ -343,8 +343,8 @@ publishing the alias. Ten fixture regressions cover selection, fallback, unavail
 or unusable browsers, unterminated port files, invalid ports, HTTP readiness and
 process/profile cleanup including delayed termination, and direct checks despite proxy
 configuration. Reinstating
-the original selector makes the readiness regression fail. The corrected hosted run
-remains pending; the TODO stays unchecked until it passes. Live checks cannot be repeated
+the original selector makes the readiness regression fail. The subsequent corrected hosted run
+37426417421 passes; the TODO now records that completed gate. Live checks cannot be repeated
 inside the primary session's current loopback-binding restriction; earlier full browser
 validation remains valid for the unchanged test scripts. Claude independently ran the
 live probe and console suite through the selected alias. Its startup review found four
@@ -386,5 +386,7 @@ publish-all bindings report an empty `HostIp`, which testcontainers 0.28 cannot 
 Podman 5.x supplies `0.0.0.0`, explaining the passing local tests. Fixtures now explicitly
 request a random `127.0.0.1` port for PostgreSQL and Vault; this is discoverable on both
 versions and avoids exposing test services to the LAN. A regression checks the requested
-binding and its discoverability. The corrected hosted gate remains pending; this evidence
-must not be described as a green run.
+binding and its discoverability on the actual PostgreSQL/Vault builders and both network modes.
+Claude independently ran all three browser stages on Podman 4.9.3 and 5.4.2; removing either
+explicit binding makes the regression fail. The [corrected hosted run](https://github.com/permesi/permesi/actions/runs/37426417421)
+on e78ae6f passes every required job, including browser and isolated OAuth scenarios.
