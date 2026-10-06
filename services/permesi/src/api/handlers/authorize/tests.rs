@@ -16,7 +16,10 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
-use test_support::{postgres::PostgresContainer, runtime};
+use test_support::{
+    postgres::{PostgresConfig, PostgresContainer},
+    runtime,
+};
 use tokio::time::{Duration, sleep, timeout};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -113,7 +116,12 @@ impl Fixture {
     /// Creates independent real storage and exercises the production `OpenAPI` router.
     async fn new() -> Result<Self> {
         runtime::ensure_container_runtime()?;
-        let postgres = PostgresContainer::start("bridge").await?;
+        // Canonical bootstrap grants target this database, including runtime-role regressions.
+        let postgres = PostgresContainer::start_with_config(
+            "bridge",
+            PostgresConfig::new().with_db_name("permesi"),
+        )
+        .await?;
         postgres.wait_until_ready().await?;
         let mut conn = PgConnection::connect(&postgres.admin_dsn()).await?;
         test_support::sql::execute_script(&mut conn, "schema", SCHEMA).await?;

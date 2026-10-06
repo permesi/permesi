@@ -187,7 +187,7 @@ async fn verify_permesi_runtime(
 
 /// Verifies the effective permissions inherited by an actual Vault-minted runtime identity.
 async fn verify_refresh_permissions(connection: &mut PgConnection) -> Result<()> {
-    let protected: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM unnest(ARRAY['oauth_refresh_families','oauth_refresh_tokens']) t, unnest(ARRAY['UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p WHERE has_table_privilege(current_user,t,p)) AND has_table_privilege(current_user,'oauth_refresh_families','SELECT,INSERT') AND has_table_privilege(current_user,'oauth_refresh_tokens','SELECT,INSERT') AND has_column_privilege(current_user,'oauth_refresh_families','revoked_at','UPDATE') AND has_column_privilege(current_user,'oauth_refresh_families','revocation_reason','UPDATE') AND has_column_privilege(current_user,'oauth_refresh_tokens','consumed_at','UPDATE')")
+    let protected: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM unnest(ARRAY['oauth_refresh_families','oauth_refresh_tokens']) t, unnest(ARRAY['UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p WHERE has_table_privilege(current_user,t,p)) AND NOT EXISTS(SELECT 1 FROM unnest(ARRAY['oauth_refresh_families','oauth_refresh_tokens']) t, unnest(ARRAY['SELECT','INSERT']) p WHERE NOT has_table_privilege(current_user,t,p)) AND has_column_privilege(current_user,'oauth_refresh_families','revoked_at','UPDATE') AND has_column_privilege(current_user,'oauth_refresh_families','revocation_reason','UPDATE') AND has_column_privilege(current_user,'oauth_refresh_tokens','consumed_at','UPDATE')")
         .fetch_one(&mut *connection).await?;
     ensure!(
         protected,

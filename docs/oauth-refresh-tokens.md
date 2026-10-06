@@ -96,6 +96,9 @@ ancestor rejection, explicit offline consent despite saved grants, confidential 
 overlap/revocation, separate idle/absolute TTL expiry, bearer-free tracing, signing
 and password rollback, recovery/code revision invalidation, code cleanup and schema/runtime
 history protection and real SQL lock ordering against password rotation.
+Authorization fixtures use a database named `permesi` so canonical bootstrap grants run
+without substitution. Password/issuance race observers recognize the revision-changing
+password write while still requiring a real database blocker before releasing issuance.
 Run `just oauth-scenario-build`, then
 `target/debug/permesi-oauth-scenario --suite refresh` for actual Web offline consent and
 runtime-role A/B rotation/replay/lifecycle cases. The full suite includes these cases.

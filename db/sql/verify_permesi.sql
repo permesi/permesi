@@ -13,10 +13,21 @@ BEGIN
         IF has_table_privilege('permesi_runtime','oauth_refresh_families','UPDATE')
             OR has_table_privilege('permesi_runtime','oauth_refresh_families','DELETE')
             OR has_table_privilege('permesi_runtime','oauth_refresh_families','TRUNCATE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_families','REFERENCES')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_families','TRIGGER')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_families','MAINTAIN')
             OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','UPDATE')
             OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','DELETE')
             OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','TRUNCATE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','REFERENCES')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','TRIGGER')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','MAINTAIN')
+            OR NOT has_table_privilege('permesi_runtime','oauth_refresh_families','SELECT')
+            OR NOT has_table_privilege('permesi_runtime','oauth_refresh_families','INSERT')
+            OR NOT has_table_privilege('permesi_runtime','oauth_refresh_tokens','SELECT')
+            OR NOT has_table_privilege('permesi_runtime','oauth_refresh_tokens','INSERT')
             OR NOT has_column_privilege('permesi_runtime','oauth_refresh_families','revoked_at','UPDATE')
+            OR NOT has_column_privilege('permesi_runtime','oauth_refresh_families','revocation_reason','UPDATE')
             OR NOT has_column_privilege('permesi_runtime','oauth_refresh_tokens','consumed_at','UPDATE') THEN
             RAISE EXCEPTION 'invalid runtime refresh privileges';
         END IF;

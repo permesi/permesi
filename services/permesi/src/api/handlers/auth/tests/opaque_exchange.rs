@@ -1571,7 +1571,7 @@ async fn opaque_identity_lock_prevents_password_rotation_from_racing_issuance() 
     });
     tokio::time::timeout(Duration::from_secs(3),async {
         loop {
-            let blocked:bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'UPDATE users SET opaque_registration_record = $1 WHERE id = $2%' AND cardinality(pg_blocking_pids(pid))>0)").fetch_one(&f.db.pool).await?;
+            let blocked:bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'UPDATE users SET opaque_registration_record = $1%WHERE id = $2%' AND cardinality(pg_blocking_pids(pid))>0)").fetch_one(&f.db.pool).await?;
             if blocked {return Ok::<_,anyhow::Error>(());}
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1599,7 +1599,7 @@ async fn opaque_identity_lock_prevents_password_rotation_from_racing_issuance() 
 async fn rotation_waits_for_http_identity(pool: &PgPool) -> Result<bool> {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            let blocked: (bool,bool) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'UPDATE users SET opaque_registration_record = $1 WHERE id = $2%' AND cardinality(pg_blocking_pids(pid))>0),EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'DELETE FROM user_sessions WHERE user_id = $1%' AND cardinality(pg_blocking_pids(pid))>0)").fetch_one(pool).await?;
+            let blocked: (bool,bool) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'UPDATE users SET opaque_registration_record = $1%WHERE id = $2%' AND cardinality(pg_blocking_pids(pid))>0),EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'DELETE FROM user_sessions WHERE user_id = $1%' AND cardinality(pg_blocking_pids(pid))>0)").fetch_one(pool).await?;
             if blocked.0 { return Ok(true); }
             if blocked.1 { return Ok(false); }
             tokio::time::sleep(Duration::from_millis(10)).await;
