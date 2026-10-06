@@ -62,6 +62,11 @@ Physical privileged grant/user deletion can still cascade; normal tenant lifecyc
 Both schema reapplication and the bootstrap's final grant segment enforce these restrictions.
 The isolated runner checks the transactional schema verifier after canonical bootstrap grants;
 Vault integration checks the effective permissions of minted and replacement runtime users.
+Owner-authorized cleanup resolves trusted `public` tables before explicitly searching
+`pg_temp`, preventing runtime-created temporary tables and triggers from crossing the
+function-owner boundary. Actual Vault credential tests exercise that rejection on both
+initial and replacement connections, following PostgreSQL's
+[security-definer search-path guidance](https://www.postgresql.org/docs/current/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY).
 
 ## Lifetimes and user lifecycle
 

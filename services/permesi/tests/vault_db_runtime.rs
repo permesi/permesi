@@ -141,6 +141,7 @@ async fn verify_permesi_runtime(
     .context("Failed to connect with permesi dynamic creds")?;
 
     verify_refresh_permissions(&mut connection).await?;
+    verify_cleanup_ignores_runtime_temporary_tables(&mut connection).await?;
 
     sqlx::query("INSERT INTO roles (name) VALUES ('auditor') ON CONFLICT DO NOTHING")
         .execute(&mut connection)
@@ -175,6 +176,7 @@ async fn verify_permesi_runtime(
     .context("Failed to connect with refreshed permesi creds")?;
 
     verify_refresh_permissions(&mut new_conn).await?;
+    verify_cleanup_ignores_runtime_temporary_tables(&mut new_conn).await?;
 
     let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles WHERE name = 'auditor'")
         .fetch_one(&mut new_conn)
@@ -206,6 +208,44 @@ async fn verify_refresh_permissions(connection: &mut PgConnection) -> Result<()>
             "runtime cannot rewrite refresh bindings or erase replay history",
         )?;
     }
+    Ok(())
+}
+
+/// Proves owner-authorized cleanup cannot execute a runtime-created temporary table's trigger.
+async fn verify_cleanup_ignores_runtime_temporary_tables(
+    connection: &mut PgConnection,
+) -> Result<()> {
+    sqlx::raw_sql(
+        "CREATE TEMP TABLE oauth_refresh_families (expires_at TIMESTAMPTZ NOT NULL);
+         CREATE TEMP TABLE cleanup_authority_probe (executor NAME NOT NULL);
+         GRANT SELECT, DELETE ON pg_temp.oauth_refresh_families TO PUBLIC;
+         GRANT INSERT ON pg_temp.cleanup_authority_probe TO PUBLIC;
+         CREATE FUNCTION pg_temp.capture_cleanup_authority() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+           BEGIN INSERT INTO pg_temp.cleanup_authority_probe VALUES (current_user); RETURN OLD; END;
+         $$;
+         CREATE TRIGGER capture_cleanup_authority BEFORE DELETE ON pg_temp.oauth_refresh_families
+           FOR EACH ROW EXECUTE FUNCTION pg_temp.capture_cleanup_authority();
+         INSERT INTO pg_temp.oauth_refresh_families VALUES (NOW() - INTERVAL '8 days');
+         SELECT public.cleanup_expired_tokens();",
+    )
+    .execute(&mut *connection)
+    .await?;
+    let (shadow_rows, trigger_calls): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM pg_temp.oauth_refresh_families),
+                (SELECT COUNT(*) FROM pg_temp.cleanup_authority_probe)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    ensure!(
+        shadow_rows == 1 && trigger_calls == 0,
+        "Privileged cleanup resolved a runtime temporary table or executed its trigger"
+    );
+    sqlx::raw_sql(
+        "DROP TABLE pg_temp.oauth_refresh_families, pg_temp.cleanup_authority_probe;
+         DROP FUNCTION pg_temp.capture_cleanup_authority();",
+    )
+    .execute(&mut *connection)
+    .await?;
     Ok(())
 }
 

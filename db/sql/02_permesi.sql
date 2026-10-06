@@ -938,7 +938,8 @@ CREATE OR REPLACE FUNCTION cleanup_expired_tokens()
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+-- Runtime sessions may create temporary objects; never resolve them before trusted tables.
+SET search_path = public, pg_temp
 AS $$
 BEGIN
     DELETE FROM webauthn_exchanges WHERE expires_at <= NOW();
