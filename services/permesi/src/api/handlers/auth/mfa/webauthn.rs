@@ -242,7 +242,7 @@ async fn persist_registered_key(
         (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Authentication challenge generated", body = WebauthnAuthenticateStartResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 400, description = "Authentication unavailable")
+        (status = 400, description = "Invalid authentication request or proof")
     ),
     tag = "auth"
 )]

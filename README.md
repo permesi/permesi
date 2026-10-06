@@ -274,6 +274,9 @@ single-use PostgreSQL tokens with atomic rotation, family revocation on reuse an
 tenant/consent checks. Initial offline access requires `openid` and explicit `prompt=consent`;
 other code exchanges return no refresh token. Password rotation/recovery revoke families
 and invalidate older codes. Immediate JWT revocation and UserInfo remain planned.
+The [authentication release validation record](docs/authentication-release-validation.md)
+tracks the completed shared-state, MFA, admission and refresh batch, independent review,
+regression evidence and remaining release boundaries.
 
 Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
 enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA versions;
@@ -391,11 +394,16 @@ Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 
 
 Unauthenticated authentication flows also use PostgreSQL-backed fixed-window
 limits shared across replicas. The defaults are 100 attempts per IP and 10 per
-normalized account identifier per action in 10 minutes. In-progress OPAQUE exchanges are bounded to 10,000 entries cluster-wide;
-WebAuthn protocol state uses a separate 10,000-entry per-purpose cluster-wide limit. Configure these with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+normalized account identifier per action in 10 minutes. Each shared exchange store applies
+independent cluster-wide purpose ceilings: 10,000 login, 1,000 reauthentication,
+1,000 per registration purpose and 1,000 MFA authentication, with 16 pending rows per
+subject/purpose. `PERMESI_AUTH_MAX_PENDING_STATES` defaults to 10,000 and supplies an
+additional ceiling for each purpose, rather than a combined login/reauthentication total.
+Configure rate limits with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
 `PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
-`PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, and
-`PERMESI_AUTH_MAX_PENDING_STATES`.
+and `PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`; use the `PERMESI_AUTH_PENDING_*`
+options described in [authentication operations](docs/authentication-operations.md)
+for purpose/subject ceilings and the shared admission policy.
 
 ### Auth endpoints (quick scan)
 | Method | Path | Notes |

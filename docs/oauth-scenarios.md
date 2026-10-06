@@ -132,7 +132,6 @@ repetitions and parallel isolation with
 | `redemption.client_disable_restore` | Initially usable code, committed disable/re-enable on B, revoked old grant remains unusable even after fresh consent |
 | `redemption.scope_remove_restore` | Scope removal/restoration cannot revive old code; fresh grant/code has exact bindings, commits once and rejects replay |
 | `redemption.redirect_remove_restore` | Callback removal/restoration cannot revive old code; fresh consent creates a different grant/code |
-
 | `refresh.rotation_reuse` | Actual offline consent, A/B runtime-role rotation, independently verified narrowed JWT/context, hashed lineage and replay-family revocation |
 | `refresh.replica_race` | Real A/B concurrent refresh, one committed issuance and losing-reuse revocation of the winning successor |
 | `refresh.lifecycle` | Scope removal/restoration through management APIs cannot revive the old refresh family |
@@ -151,10 +150,12 @@ repetitions and parallel isolation with
 | `interop.invalid_access_tokens` | Malformed/tampered/ID/algorithm/header/unknown-kid negatives, 16 concurrent unknown keys produce one refresh; client disable preserves issued JWT authority only until actual expiry |
 | `interop.signing_key_rotation` | Rotate actual Vault authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
 
-`smoke` selects the first three cases, `security` selects authorization/redemption
-negatives and failover, `lifecycle` selects credentials/deletion and the six lifecycle
-revalidation cases, `token` selects the five HTTP issuance cases, `interop` selects the six
-standard-client/resource cases, and `full` selects all twenty-eight cases.
+`smoke` selects provisioning, consent and login resume. `security` selects shared
+authentication exchanges, authorization/redemption negatives and failover. `lifecycle`
+selects credentials/deletion and the six lifecycle revalidation cases. `token` selects
+the five HTTP issuance cases and three refresh cases; `refresh` selects only those three
+refresh cases. `interop` selects the six standard-client/resource cases, and `full`
+selects all 32 cases.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
 Redemption is explicitly the existing transaction-owned internal domain API in the
 runner process, using an isolated administrator pool. It tests domain bindings and
@@ -238,18 +239,25 @@ coverage alongside its implementation. The six standard-library/resource scenari
 provide a narrow interoperability foundation; broader clients, formal OIDC conformance
 and production resource-server revocation policy remain separately tracked.
 
-Durable WebAuthn/passkey exchanges, MFA-required variants, richer consent/grants UX,
-Firefox/Safari, multi-host/load/fault tests, broader third-party OIDC clients, UserInfo,
-introspection/revocation, device flow and M2M remain in `TODO.md`. Current scenarios
+Broader scenario coverage for the implemented durable WebAuthn/passkey exchanges,
+MFA-required variants, richer consent/grants UX, Firefox/Safari, multi-host/load/fault
+tests, broader third-party OIDC clients, UserInfo, introspection/revocation, device flow
+and M2M remain in `TODO.md`. Current scenarios
 preserve default MFA policy and require a genuine full session; they do not establish
 the full MFA matrix or formal OIDC conformance.
 
 ## Validation and independent review
 
+The latest shared-authentication/refresh batch passes all 32 cases, including runtime-role
+refresh rotation, replay and lifecycle rejection across A/B. Its workspace, database,
+browser, hosted CI and corrected security review evidence is recorded in
+[authentication release validation](authentication-release-validation.md). The earlier
+milestone records below preserve their historical suite sizes and review boundaries.
+
 Local checks cover formatting, workspace Clippy, default/all-feature tests and builds,
 PostgreSQL bootstrap/schema verification, regenerated OpenAPI consistency, native Web and
 WASM builds, the broader Chromium console suite and both real PostgreSQL browser tests.
-The runner now includes twenty-eight cases; its seven process checks cover startup/deadline
+The runner now includes thirty-two cases; its seven process checks cover startup/deadline
 failure, repeated SIGTERM during cleanup, an injected removal failure, repetitions and
 simultaneous runs. The eight-case lifecycle suite also passes two fresh-stack repetitions
 from another working directory with explicit artifacts and an alternate manifest of

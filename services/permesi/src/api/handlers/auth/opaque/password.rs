@@ -16,18 +16,23 @@
 //!
 //! - **Plaintext Isolation**: Plaintext passwords (current or new) never touch the server.
 //! - **Session Gating**: Only the authenticated user can change their own password.
-//! - **Recent Re-auth**: The finish step requires that the user successfully proved knowledge
-//!   of their *current* password within `PASSWORD_RECENT_AUTH_SECONDS`.
+//!   The exact full session and recent authentication are rechecked under identity/session
+//!   locks immediately before rotation, so revocation during admission cannot authorize it.
+//! - **Recent Authentication**: The finish step requires the full session's server-stored
+//!   authentication time to be within `PASSWORD_RECENT_AUTH_SECONDS`. The Web password flow
+//!   obtains this through OPAQUE reauthentication; other genuine fresh full logins retain
+//!   the existing authentication policy.
 //! - **Global Revocation**: All active sessions for the user are revoked upon successful rotation.
 //! - **Zero Token Enforcement**: Every step is gated by a valid admission token.
 
 use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
+        authority_guard::{AuthorityGuard, Policy},
         principal::{Principal, require_auth},
         session::clear_session_cookie,
         state::{AuthState, OpaqueSuite},
-        storage::rotate_password_and_clear_sessions,
+        storage::rotate_password_and_clear_sessions_on,
         types::{
             OpaquePasswordFinishRequest, OpaquePasswordStartRequest, OpaquePasswordStartResponse,
         },
@@ -123,7 +128,8 @@ pub async fn opaque_password_start(
         .into_response()
 }
 
-/// Finish a password change by storing the new registration record and revoking sessions.
+/// Rotates on the exact current, recently authenticated full session's guarded transaction.
+/// All revocations and the password revision commit together; failures publish no change.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/password/finish",
@@ -134,6 +140,7 @@ pub async fn opaque_password_start(
     responses(
         (status = 204, description = "Password updated"),
         (status = 400, description = "Validation error", body = String),
+        (status = 503, description = "Authentication storage unavailable."),
         (status = 401, description = "Missing or invalid session cookie.")
     ),
     tag = "auth"
@@ -185,22 +192,51 @@ pub async fn opaque_password_finish(
     let password_file = ServerRegistration::finish(registration_upload);
     let opaque_record = password_file.serialize().to_vec();
 
-    match rotate_password_and_clear_sessions(&pool, principal.user_id, &opaque_record).await {
+    let mut guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Full,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    if let Err(status) = guard
+        .require_recent_auth(PASSWORD_RECENT_AUTH_SECONDS)
+        .await
+    {
+        return status.into_response();
+    }
+    let Ok(cookie) = clear_session_cookie(auth_state.config()) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match rotate_password_and_clear_sessions_on(
+        guard.connection(),
+        principal.user_id,
+        &opaque_record,
+    )
+    .await
+    {
         Ok(true) => {
-            let mut response_headers = HeaderMap::new();
-            if let Ok(cookie) = clear_session_cookie(auth_state.config()) {
-                response_headers.insert(SET_COOKIE, cookie);
+            if guard.commit().await.is_err() {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
+            let mut response_headers = HeaderMap::new();
+            response_headers.insert(SET_COOKIE, cookie);
             (StatusCode::NO_CONTENT, response_headers).into_response()
         }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to rotate password: {err}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        Err(_) => {
+            error!("Password rotation storage unavailable");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
 }
 
+/// Rejects stale full-session snapshots early; the guarded row supplies the final decision.
 fn recent_auth_ok(principal: &Principal) -> bool {
     let now = unix_now();
     let auth_time = principal

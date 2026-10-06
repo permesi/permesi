@@ -55,10 +55,16 @@ client's family. Verified current-authority loss permanently revokes the present
 Database constraints protect exact grant/tenant bindings, original consent provenance,
 positive/bounded lifetimes, one root and one unused token per family, unique predecessors,
 immutable family metadata and irreversible consumed/revoked transitions. Runtime grants
-permit only insertion/read and the transition columns; they forbid rewriting bindings or
-deleting/truncating replay history. Privileged cleanup removes a family's entire lineage
+permit only insertion/read and the transition columns on refresh tables; they forbid
+rewriting bindings or directly deleting/truncating replay history. Privileged cleanup removes a family's entire lineage
 seven days after its absolute expiration, retaining spent tokens while the family can live.
-Physical privileged grant/user deletion can still cascade; normal tenant lifecycle is soft deletion.
+Existing broader runtime grants still permit physical deletion of grants, users and other
+parents, which can indirectly cascade through a family and erase its history. OAuth
+management revokes grants and tenant management soft-deletes resources. The existing
+internal user-management `DELETE /v1/users/{id}` physically deletes users and cascades
+their authority/history; this refresh milestone does not change that endpoint's policy.
+Protecting history against arbitrary parent deletion by a compromised database runtime
+requires the separately tracked least-privilege/foreign-key hardening work.
 Both schema reapplication and the bootstrap's final grant segment enforce these restrictions.
 The isolated runner checks the transactional schema verifier after canonical bootstrap grants;
 Vault integration checks the effective permissions of minted and replacement runtime users.
@@ -67,6 +73,11 @@ Owner-authorized cleanup resolves trusted `public` tables before explicitly sear
 function-owner boundary. Actual Vault credential tests exercise that rejection on both
 initial and replacement connections, following PostgreSQL's
 [security-definer search-path guidance](https://www.postgresql.org/docs/current/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY).
+The local bootstrap can retain the bootstrap user's function ownership when its broad
+`REASSIGN OWNED` attempt fails. The pinned search path closes temporary-object execution;
+cleanup remains limited to its fixed expiration and retention predicates. Explicit
+non-superuser schema ownership and narrower bootstrap privileges remain a separate
+database hardening task, rather than a claim of this refresh-token milestone.
 
 ## Lifetimes and user lifecycle
 
@@ -107,5 +118,6 @@ password write while still requiring a real database blocker before releasing is
 Run `just oauth-scenario-build`, then
 `target/debug/permesi-oauth-scenario --suite refresh` for actual Web offline consent and
 runtime-role A/B rotation/replay/lifecycle cases. The full suite includes these cases.
-Independent review and complete gate results are recorded once completed in TODO.md and
-the scenario validation record; passing isolated cases alone is not a release assertion.
+Independent review and complete gate results are recorded in
+[authentication release validation](authentication-release-validation.md) and
+[TODO.md](../TODO.md). Passing isolated cases alone is not a release assertion.

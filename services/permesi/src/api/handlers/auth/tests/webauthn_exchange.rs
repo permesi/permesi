@@ -763,6 +763,114 @@ async fn webauthn_http_login_commits_authority_and_rejects_replay_or_disabled_us
     Ok(())
 }
 
+/// A real verified proof must not publish credential usage or sessions when MFA storage is unavailable.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn webauthn_http_passkey_mfa_storage_failure_returns_unavailable_and_rolls_back() -> Result<()>
+{
+    use crate::api::{handlers::auth::passkeys, state::AppState};
+    use crate::webauthn::{PasskeyRepo, serialize_passkey};
+    use service_utils::request_id::with_request_correlation;
+    let db = TestDb::new()
+        .await?
+        .context("Passkey HTTP regression requires PostgreSQL")?;
+    let user = insert_test_user(&db.pool).await?;
+    let service = self::passkeys(db.pool.clone(), 300, 100)?;
+    let mut authenticator = Authenticator::new()?;
+    let (id, challenge) = service
+        .register_begin(user, "user@example.com", "User", vec![1; 32], ORIGIN)
+        .await?;
+    let key = service
+        .register_finish(
+            id,
+            user,
+            &[1; 32],
+            ORIGIN,
+            authenticator.register(&challenge)?,
+        )
+        .await
+        .map_err(|_| anyhow!("registration"))?;
+    let before = serialize_passkey(&key)?;
+    PasskeyRepo::create_passkey(&db.pool, user, &authenticator.id, &before, None).await?;
+    let (admission, signer, kid) = test_admission_context()?;
+    let zero = issue_zero_token(&signer, &kid)?;
+    let router = with_request_correlation(
+        Router::new()
+            .route("/finish", post(passkeys::passkey_login_finish))
+            .with_state(AppState {
+                admission,
+                passkeys: Arc::new(self::passkeys(db.pool.clone(), 300, 100)?),
+                ..AppState::for_tests(db.pool.clone())?
+            }),
+    );
+    let (id, challenge) = service.auth_begin(ORIGIN).await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    sqlx::query("ALTER TABLE user_mfa_state RENAME TO unavailable_mfa_state")
+        .execute(&db.pool)
+        .await?;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/finish")
+                .header("Origin", ORIGIN)
+                .header("X-Permesi-Zero-Token", &zero)
+                .body(Body::from(serde_json::to_vec(
+                    &json!({"auth_id":id,"response":proof}),
+                )?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!response.headers().contains_key(SET_COOKIE));
+    let body = to_bytes(response.into_body(), 4096).await?;
+    assert!(!String::from_utf8_lossy(&body).contains("user_mfa_state"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?,
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM passkey_audit_log WHERE user_id=$1 AND action='verify_success'"
+        )
+        .bind(user)
+        .fetch_one(&db.pool)
+        .await?,
+        0
+    );
+    let after: Vec<u8> = sqlx::query_scalar("SELECT passkey_data FROM passkeys WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(&db.pool)
+        .await?;
+    assert!(
+        after == before,
+        "Failed issuance committed credential usage"
+    );
+    sqlx::query("ALTER TABLE unavailable_mfa_state RENAME TO user_mfa_state")
+        .execute(&db.pool)
+        .await?;
+    let (id, challenge) = service.auth_begin(ORIGIN).await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/finish")
+                .header("Origin", ORIGIN)
+                .header("X-Permesi-Zero-Token", &zero)
+                .body(Body::from(serde_json::to_vec(
+                    &json!({"auth_id":id,"response":proof}),
+                )?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(response.headers().contains_key(SET_COOKIE));
+    Ok(())
+}
+
 #[tokio::test]
 async fn webauthn_current_security_key_counter_never_regresses() -> Result<()> {
     let Some(db) = TestDb::new().await? else {

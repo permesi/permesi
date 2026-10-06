@@ -7,6 +7,10 @@ revokes [refresh families](oauth-refresh-tokens.md) and advances the authorizati
 so older codes cannot issue fresh delegated authority. Permanent
 confirmed TOTP credentials, passkeys and hardware keys remain registered. Recovery
 codes and MFA policy remain unchanged; a fresh primary login still must satisfy MFA.
+The password finish route rechecks the exact full session, expiry and recent-authentication
+time after admission verification and identity/session lock waits. Rotation and revocation
+use that same guarded connection, so a stale principal snapshot cannot change the password
+after logout, recovery or another rotation.
 
 ## Flow and concurrency
 
@@ -28,6 +32,9 @@ bootstrap session in the same transaction. Recovery likewise revokes refresh fam
 and advances the user revision. Recovery batch regeneration and factor/passkey
 mutation also recheck current authority under lifecycle locks. Internal roles/scopes
 remain server-resolved and never become delegated OAuth scopes.
+Recovery batch regeneration and TOTP disabling also recheck their existing recent-authentication
+requirement from the locked session row. Their storage failures and password/passkey MFA-state
+failures return generic 503 without publishing partial authority or new recovery codes.
 
 No guarded path acquires another connection from its own pool. TOTP state/audit changes
 use the guard's connection. WebAuthn proof state is consumed before opening the guard;
@@ -56,6 +63,7 @@ recovery routes, removed pending TOTP credentials and the confirmed-credential b
 regression. Existing MFA deletion/state tests stay enabled.
 
 Run `cargo test --locked -p permesi mfa_lifecycle --lib`,
+`cargo test --locked -p permesi password_lifecycle --lib`,
 `cargo test --locked -p permesi webauthn_http --lib` and
 `cargo test --locked -p permesi mfa::integration_tests --lib`.
 Broader browser MFA/account-switching scenarios and multi-host fault/load tests remain
@@ -69,3 +77,5 @@ or remove them. Recent authentication remains required for TOTP disable and reco
 regeneration; extending that policy to every factor mutation is tracked separately.
 Shared account/IP budgets now limit enrollment and verification attempts; a separate
 per-challenge terminal attempt counter remains a follow-up rather than an implemented claim.
+Completed workspace, real-dependency and independent review results are recorded in
+[authentication release validation](authentication-release-validation.md).

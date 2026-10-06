@@ -509,8 +509,8 @@ pub(super) async fn update_session_auth_time<'e>(
     Ok(row.is_some())
 }
 
-/// Replaces the password record and atomically revokes full/limited sessions and pending proofs.
-/// The user-row writer lock serializes this security event against guarded authority issuance.
+/// Exercises the lifecycle writer independently of HTTP session authorization in database tests.
+#[cfg(test)]
 pub(super) async fn rotate_password_and_clear_sessions(
     pool: &PgPool,
     user_id: Uuid,
@@ -520,7 +520,20 @@ pub(super) async fn rotate_password_and_clear_sessions(
         .begin()
         .await
         .context("begin password rotation transaction")?;
+    let changed = rotate_password_and_clear_sessions_on(&mut tx, user_id, opaque_record).await?;
+    tx.commit()
+        .await
+        .context("commit password rotation transaction")?;
+    Ok(changed)
+}
 
+/// Replaces the password and revokes sessions/proofs/refresh families on the caller's transaction.
+/// Production callers must hold current identity and recent full-session authority until commit.
+pub(super) async fn rotate_password_and_clear_sessions_on(
+    connection: &mut PgConnection,
+    user_id: Uuid,
+    opaque_record: &[u8],
+) -> Result<bool> {
     let query = "UPDATE users SET opaque_registration_record = $1, authorization_revision = uuidv4() WHERE id = $2";
     let span = tracing::info_span!(
         "db.query",
@@ -531,17 +544,16 @@ pub(super) async fn rotate_password_and_clear_sessions(
     let result = sqlx::query(query)
         .bind(opaque_record)
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .instrument(span)
         .await
         .context("failed to update registration record")?;
     if result.rows_affected() == 0 {
-        let _ = tx.rollback().await;
         return Ok(false);
     }
 
     crate::oauth::tokens::revoke_user_authority(
-        &mut tx,
+        &mut *connection,
         user_id,
         crate::oauth::tokens::UserRevocation::Password,
     )
@@ -556,7 +568,7 @@ pub(super) async fn rotate_password_and_clear_sessions(
     );
     sqlx::query(query)
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .instrument(span)
         .await
         .context("failed to delete user sessions")?;
@@ -570,14 +582,11 @@ pub(super) async fn rotate_password_and_clear_sessions(
     ] {
         sqlx::query(query)
             .bind(user_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await
             .context("failed to revoke pending authentication authority")?;
     }
 
-    tx.commit()
-        .await
-        .context("commit password rotation transaction")?;
     Ok(true)
 }
 

@@ -47,6 +47,10 @@ absolute family expiry plus seven days. Reapply the schema and canonical runtime
 before rollout: runtime users can insert/read families and tokens, revoke families and
 consume tokens, but cannot rewrite bindings or directly erase replay history. See
 [refresh policy](../../docs/oauth-refresh-tokens.md) for rotation, consent and revision invalidation.
+Broader existing parent-table DELETE grants can still erase family history indirectly
+through foreign-key cascades. OAuth/tenant handlers use revocation/soft deletion; existing
+internal user management still physically deletes users. Closing arbitrary runtime parent
+deletion remains part of the least-privilege follow-up.
 
 Both `cleanup_expired_tokens()` and `genesis_tokens_rollover()` explicitly search trusted
 `public` objects before `pg_temp`, with PostgreSQL's implicit trusted catalog search.

@@ -463,6 +463,8 @@ describe its limits. [WebAuthn/passkey ceremony state](webauthn-exchanges.md) al
 shared PostgreSQL, eliminating challenge replica affinity. [MFA lifecycle](mfa-lifecycle.md)
 and [authentication admission](authentication-operations.md) guard current sessions and
 shared capacity; broader operational/browser follow-ups remain tracked.
+The completed batch's checks, corrected security findings and coverage limits are recorded
+in [authentication release validation](authentication-release-validation.md).
 
 The implemented [token exchange](oauth-token-exchange.md) owns authentication/redemption/
 signing/persistence through commit and is tested through the isolated runtime-role HTTP

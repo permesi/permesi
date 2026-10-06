@@ -69,3 +69,5 @@ runtime privileges. Hosted browser CI uses the normal project fixture/build work
 Pending admission, transport trust, generic 429/503 responses and outcome/timing events
 follow [authentication operations](authentication-operations.md). Apply its transient-format
 upgrade/drain guidance together with this schema.
+Completed workspace, real-dependency and independent review results are recorded in
+[authentication release validation](authentication-release-validation.md).

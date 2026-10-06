@@ -2,6 +2,7 @@
 
 mod mfa_lifecycle;
 mod opaque_exchange;
+mod password_lifecycle;
 mod tenant_deletion;
 mod webauthn_exchange;
 

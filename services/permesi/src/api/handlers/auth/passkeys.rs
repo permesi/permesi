@@ -484,11 +484,7 @@ async fn issue_session_for_user(
                     request_id = %request_id,
                     "failed to resolve MFA state: {err}"
                 );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Login failed".to_string(),
-                )
-                    .into_response();
+                return login_storage_error();
             }
         };
 

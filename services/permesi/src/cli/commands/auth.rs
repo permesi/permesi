@@ -289,7 +289,7 @@ fn with_auth_opaque_args(command: Command) -> Command {
         .arg(
             Arg::new(ARG_AUTH_MAX_PENDING_STATES)
                 .long(ARG_AUTH_MAX_PENDING_STATES)
-                .help("Maximum pending OPAQUE exchanges cluster-wide and WebAuthn exchanges per flow cluster-wide")
+                .help("Additional per-purpose cluster-wide ceiling for pending OPAQUE and WebAuthn exchanges")
                 .env("PERMESI_AUTH_MAX_PENDING_STATES")
                 .default_value("10000")
                 .value_parser(clap::value_parser!(u64).range(1..)),

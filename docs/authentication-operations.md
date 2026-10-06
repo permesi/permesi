@@ -107,3 +107,5 @@ explicit policy and reject invalid limits/networks. Run
 Advisory locking still serializes starts within each store. Contention regressions
 prove safety and bounded waits, not production throughput. Multi-host load/fault
 exercises and independent exchange-key rotation remain tracked follow-ups.
+Completed workspace, real-dependency and independent review results are recorded in
+[authentication release validation](authentication-release-validation.md).

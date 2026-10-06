@@ -1,4 +1,4 @@
-//! Transactional session authority for MFA enrollment, recovery and elevation.
+//! Transactional session authority for password rotation and MFA lifecycle mutations.
 //!
 //! Flow Overview: after ordinary principal authentication, lock the current user
 //! and exact original session again, verify the factor, mutate MFA state and issue
@@ -107,6 +107,31 @@ impl AuthorityGuard {
     /// The connection on which protected state changes and replacement sessions must run.
     pub(crate) fn connection(&mut self) -> &mut PgConnection {
         &mut self.transaction
+    }
+
+    /// Authorizes recent full-session authentication from the exact locked database row.
+    /// Rechecks expiry and auth time after lock waits; principal snapshots confer no authority.
+    pub(crate) async fn require_recent_auth(
+        &mut self,
+        max_age_seconds: i64,
+    ) -> Result<(), StatusCode> {
+        if self.kind != SessionKind::Full {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let recent: Option<bool> = sqlx::query_scalar(
+            "SELECT expires_at>clock_timestamp() AND auth_time>=clock_timestamp()-$3::bigint*INTERVAL '1 second'
+             FROM user_sessions WHERE user_id=$1 AND session_hash=$2",
+        )
+        .bind(self.user)
+        .bind(&self.hash)
+        .bind(max_age_seconds)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        if recent != Some(true) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        Ok(())
     }
 
     /// Consumes the exact verified original session; failure rolls back replacement authority.

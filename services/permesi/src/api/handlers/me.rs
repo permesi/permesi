@@ -253,6 +253,8 @@ pub async fn revoke_session(
     }
 }
 
+/// Replaces recovery authority only after locking the exact current, recently authenticated session.
+/// Code and batch writes commit together; dependency failures disclose no new recovery codes.
 #[utoipa::path(
     post,
     path = "/v1/me/mfa/recovery-codes",
@@ -285,7 +287,7 @@ pub async fn regenerate_recovery_codes(
     let Some(pepper) = auth_state.mfa().recovery_pepper() else {
         error!("MFA recovery codes requested without pepper configured");
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
             "Recovery unavailable.".to_string(),
         )
             .into_response();
@@ -303,11 +305,17 @@ pub async fn regenerate_recovery_codes(
         Ok(guard) => guard,
         Err(status) => return status.into_response(),
     };
+    if let Err(status) = guard
+        .require_recent_auth(RECOVERY_RECENT_AUTH_SECONDS)
+        .await
+    {
+        return status.into_response();
+    }
     let state = match mfa::storage::load_mfa_state(guard.connection(), principal.user_id).await {
         Ok(state) => state,
         Err(err) => {
             error!("Failed to load MFA state: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
 
@@ -322,7 +330,7 @@ pub async fn regenerate_recovery_codes(
         Ok(batch) => batch,
         Err(err) => {
             error!("Failed to generate recovery codes: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
 
@@ -335,7 +343,7 @@ pub async fn regenerate_recovery_codes(
     .await
     {
         error!("Failed to insert recovery codes: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     if let Err(err) = mfa::storage::upsert_mfa_state(
@@ -347,7 +355,7 @@ pub async fn regenerate_recovery_codes(
     .await
     {
         error!("Failed to update recovery batch id: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     if guard.commit().await.is_err() {
@@ -360,6 +368,8 @@ pub async fn regenerate_recovery_codes(
         .into_response()
 }
 
+/// Removes TOTP under current identity/session locks and a fresh database recency check.
+/// Storage failures roll back factor and MFA-state changes and return generic 503.
 #[utoipa::path(
     delete,
     path = "/v1/me/mfa/totp",
@@ -400,6 +410,12 @@ pub async fn disable_totp(
         Ok(guard) => guard,
         Err(status) => return status.into_response(),
     };
+    if let Err(status) = guard
+        .require_recent_auth(RECOVERY_RECENT_AUTH_SECONDS)
+        .await
+    {
+        return status.into_response();
+    }
     if sqlx::query("DELETE FROM totp_credentials WHERE user_id=$1")
         .bind(principal.user_id)
         .execute(guard.connection())

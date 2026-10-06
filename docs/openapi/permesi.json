@@ -1142,7 +1142,7 @@
             }
           },
           "400": {
-            "description": "Authentication unavailable",
+            "description": "Invalid authentication request or proof",
             "content": {
               "application/json": {
                 "schema": {
@@ -1432,7 +1432,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Finish a password change by storing the new registration record and revoking sessions.",
+        "summary": "Rotates on the exact current, recently authenticated full session's guarded transaction.\nAll revocations and the password revision commit together; failures publish no change.",
         "operationId": "opaque_password_finish",
         "parameters": [
           {
@@ -1471,6 +1471,16 @@
           },
           "401": {
             "description": "Missing or invalid session cookie.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication storage unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2166,6 +2176,7 @@
         "tags": [
           "me"
         ],
+        "summary": "Replaces recovery authority only after locking the exact current, recently authenticated session.\nCode and batch writes commit together; dependency failures disclose no new recovery codes.",
         "operationId": "regenerate_recovery_codes",
         "responses": {
           "200": {
@@ -2249,6 +2260,7 @@
         "tags": [
           "me"
         ],
+        "summary": "Removes TOTP under current identity/session locks and a fresh database recency check.\nStorage failures roll back factor and MFA-state changes and return generic 503.",
         "operationId": "disable_totp",
         "responses": {
           "204": {
