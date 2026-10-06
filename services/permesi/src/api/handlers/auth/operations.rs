@@ -83,7 +83,7 @@ impl OperationsConfig {
             || peer.is_some_and(|ip| {
                 self.trusted_proxies
                     .iter()
-                    .any(|network| network.contains(ip))
+                    .any(|network| network.contains(ip.to_canonical()))
             })
     }
 }
@@ -185,7 +185,7 @@ pub(crate) async fn verified_peer(
     let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|info| info.0.ip());
+        .map(|info| info.0.ip().to_canonical());
     let trusted = config.trusts(peer, request.extensions().get::<UnixPeer>().is_some());
     sanitize(request.headers_mut(), peer, trusted);
     next.run(request).await
@@ -198,6 +198,7 @@ fn sanitize(headers: &mut axum::http::HeaderMap, peer: Option<IpAddr>, trusted: 
             .get("x-real-ip")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<IpAddr>().ok())
+            .map(|ip| ip.to_canonical())
     } else {
         None
     };
@@ -246,6 +247,7 @@ mod tests {
         let mut config = OperationsConfig::defaults();
         config.trusted_proxies.push("192.0.2.0/24".parse()?);
         assert!(config.trusts(Some("192.0.2.1".parse()?), false));
+        assert!(config.trusts(Some("::ffff:192.0.2.1".parse()?), false));
         assert!(!config.trusts(Some("198.51.100.1".parse()?), false));
         assert!(!config.trusts(None, true));
         let mut headers = axum::http::HeaderMap::new();
@@ -302,6 +304,141 @@ mod tests {
         assert_eq!(config.login_limit, 3);
         assert!(config.trusts(None, true));
         assert!(config.trusts(Some("192.0.2.7".parse()?), false));
+        Ok(())
+    }
+    /// Exercises the actual middleware trust decision, rather than only its pure helpers.
+    #[tokio::test]
+    async fn verified_peer_router_accepts_forwarding_only_from_explicit_transport() -> Result<()> {
+        use axum::{
+            Router,
+            body::{Body, to_bytes},
+            http::{HeaderMap, Request as HttpRequest},
+            middleware,
+            routing::get,
+        };
+        use tower::ServiceExt;
+        for (trusted, peer, unix, forwarded, expected) in [
+            (
+                false,
+                Some("192.0.2.1:443"),
+                false,
+                "198.51.100.1",
+                "192.0.2.1",
+            ),
+            (
+                true,
+                Some("192.0.2.1:443"),
+                false,
+                "198.51.100.1",
+                "198.51.100.1",
+            ),
+            (
+                true,
+                Some("203.0.113.1:443"),
+                false,
+                "198.51.100.1",
+                "203.0.113.1",
+            ),
+            (true, None, false, "198.51.100.1", ""),
+            (true, None, true, "198.51.100.1", ""),
+            (
+                true,
+                Some("[::ffff:192.0.2.1]:443"),
+                false,
+                "::ffff:198.51.100.1",
+                "198.51.100.1",
+            ),
+            (
+                false,
+                Some("[::ffff:192.0.2.1]:443"),
+                false,
+                "198.51.100.1",
+                "192.0.2.1",
+            ),
+        ] {
+            let mut config = OperationsConfig::defaults();
+            if trusted {
+                config.trusted_proxies.push("192.0.2.0/24".parse()?);
+            }
+            let router = Router::new()
+                .route(
+                    "/",
+                    get(|headers: HeaderMap| async move {
+                        headers
+                            .get("x-permesi-client-ip")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned()
+                    }),
+                )
+                .layer(middleware::from_fn_with_state(config, verified_peer));
+            let mut request = HttpRequest::builder()
+                .uri("/")
+                .header("x-real-ip", forwarded)
+                .header("x-permesi-client-ip", "198.51.100.200")
+                .body(Body::empty())?;
+            if let Some(peer) = peer {
+                request
+                    .extensions_mut()
+                    .insert(ConnectInfo(peer.parse::<SocketAddr>()?));
+            }
+            if unix {
+                request.extensions_mut().insert(UnixPeer);
+            }
+            let response = router.oneshot(request).await?;
+            assert_eq!(
+                to_bytes(response.into_body(), 1024).await?.as_ref(),
+                expected.as_bytes()
+            );
+        }
+        Ok(())
+    }
+
+    /// Exercises IPv4 connect metadata from the same dual-stack listener used by production TLS.
+    #[tokio::test]
+    async fn verified_peer_dual_stack_listener_matches_ipv4_proxy_cidrs() -> Result<()> {
+        use axum::{Router, http::HeaderMap, middleware, routing::get};
+        for trusted in [false, true] {
+            let mut config = OperationsConfig::defaults();
+            if trusted {
+                config.trusted_proxies.push("127.0.0.0/8".parse()?);
+            }
+            let app = Router::new()
+                .route(
+                    "/",
+                    get(|headers: HeaderMap| async move {
+                        headers
+                            .get("x-permesi-client-ip")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned()
+                    }),
+                )
+                .layer(middleware::from_fn_with_state(config, verified_peer));
+            let (listener, _) = service_utils::tls::bind_dual_stack_listener(0)?;
+            let port = listener.local_addr()?.port();
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            let server = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+            });
+            let result = async {
+                reqwest::Client::new()
+                    .get(format!("http://127.0.0.1:{port}/"))
+                    .header("X-Real-IP", "::ffff:203.0.113.9")
+                    .send()
+                    .await?
+                    .text()
+                    .await
+            }
+            .await;
+            server.abort();
+            let body = result?;
+            assert_eq!(body, if trusted { "203.0.113.9" } else { "127.0.0.1" });
+        }
         Ok(())
     }
 }

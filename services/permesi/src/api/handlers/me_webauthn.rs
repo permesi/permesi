@@ -157,7 +157,7 @@ pub async fn register_options(
                 request_id = %request_id,
                 "failed to load display name for passkey options: {err}"
             );
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
 

@@ -1,5 +1,5 @@
 use crate::webauthn::models::SecurityKey;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -81,7 +81,7 @@ impl SecurityKeyRepo {
         .await
         .context("Failed to update security key usage")?;
         if result.rows_affected() != 1 {
-            return Err(anyhow!("Security key unavailable"));
+            return Err(super::exchange::ExchangeError::Invalid.into());
         }
         Ok(())
     }

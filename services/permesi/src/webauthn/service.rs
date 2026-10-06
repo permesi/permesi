@@ -303,16 +303,16 @@ impl SecurityKeyService {
             .credentials
             .iter()
             .find(|binding| binding.id.as_slice() == auth_result.cred_id().as_slice())
-            .ok_or_else(|| anyhow!("Security key unavailable"))?;
+            .ok_or(super::exchange::ExchangeError::Invalid)?;
 
         // Recheck the current credential owner before any session authority is issued.
         let key = SecurityKeyRepo::get_key(&self.pool, auth_result.cred_id().as_slice())
             .await?
-            .ok_or_else(|| anyhow!("Security key unavailable"))?;
+            .ok_or(super::exchange::ExchangeError::Invalid)?;
         if key.user_id != user_id
             || <[u8; 32]>::from(Sha256::digest(&key.public_key)) != binding.fingerprint
         {
-            return Err(anyhow!("Security key unavailable"));
+            return Err(super::exchange::ExchangeError::Invalid.into());
         }
         SecurityKeyRepo::update_key_usage(
             &self.pool,

@@ -30,6 +30,9 @@ TCP listeners supply their real peer address. The router removes incoming
 `X-Permesi-Client-IP`, `X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP` and
 `X-Real-IP` before installing its own canonical address. Browser forwarding headers
 cannot change throttling identity. Country hints from untrusted peers are removed.
+IPv4-mapped IPv6 peers and forwarded addresses are canonicalized to IPv4, so IPv4
+CIDRs match correctly on the production dual-stack listener and share the same
+address identity as native IPv4 connections.
 
 Only peers inside explicit `--auth-trusted-proxy CIDR` networks
 (`PERMESI_AUTH_TRUSTED_PROXIES`, comma-separated) may supply one valid `X-Real-IP`.
@@ -43,6 +46,9 @@ Unix listeners accept forwarded identity only with `--auth-trust-unix-proxy`
 (`PERMESI_AUTH_TRUST_UNIX_PROXY=true`). Restricted socket permissions and the
 same-host edge are the trust boundary. Missing TCP connection metadata never
 implicitly grants Unix trust. Deployment upgrades must configure the actual edge.
+The local `just permesi` recipe explicitly trusts only loopback CIDRs for its
+HAProxy; `just permesi-socket` explicitly enables the local Unix edge. Environment
+overrides remain available; service defaults do not trust proxies.
 
 ## Outcomes and deadlines
 

@@ -290,11 +290,7 @@ async fn verify_passkey_assertion<'a>(
             }
         };
 
-    let mut guard = pool
-        .begin()
-        .await
-        .map_err(|_| Box::new(login_storage_error()))?;
-    crate::oauth::locking::deadline(&mut guard, timeout_ms)
+    let mut guard = super::operations::begin(pool, timeout_ms)
         .await
         .map_err(|_| Box::new(login_storage_error()))?;
     // Lock identity before credential, consistently with password/status mutation paths.

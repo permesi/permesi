@@ -219,6 +219,98 @@ fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) ->
         })
 }
 
+/// Uses the real shared limiter while preserving the normal session, factor and Vault dependencies.
+fn limited_auth(limiter: crate::api::handlers::auth::RateLimiter) -> AuthState {
+    let base = auth_state();
+    AuthState::new(
+        base.config().clone(),
+        OpaqueState::from_seed(
+            [0; 32],
+            "api.permesi.dev".into(),
+            Duration::from_secs(300),
+            10000,
+        ),
+        Arc::new(limiter),
+        base.mfa().clone(),
+    )
+}
+
+/// Both factor routes enforce independent account/IP budgets and distinguish dependency failures.
+#[tokio::test]
+async fn mfa_http_verification_and_enrollment_enforce_shared_admission() -> Result<()> {
+    use crate::api::handlers::auth::{RateLimitConfig, RateLimiter, SubjectKey, storage};
+    let ctx = TestContext::new()
+        .await?
+        .context("MFA admission integration requires a container runtime")?;
+    for (ip_limit, account_limit) in [(100, 1), (1, 100)] {
+        for enrolling in [false, true] {
+            sqlx::query("TRUNCATE auth_rate_limits")
+                .execute(&ctx.pool)
+                .await?;
+            let email = format!("{}@example.com", Uuid::new_v4());
+            let user = insert_active_user(&ctx.pool, &email).await?;
+            let token = if enrolling {
+                insert_session(&ctx.pool, user).await?
+            } else {
+                super::storage::upsert_mfa_state(&ctx.pool, user, MfaState::Enabled, None).await?;
+                storage::insert_mfa_challenge_session(&ctx.pool, user, 300).await?
+            };
+            let app = app_router(
+                limited_auth(RateLimiter::postgres(
+                    ctx.pool.clone(),
+                    RateLimitConfig::new(600, ip_limit, account_limit),
+                    SubjectKey::derive(&[1; 32])?,
+                )),
+                ctx.pool.clone(),
+                ctx.totp_service.clone(),
+            );
+            let uri = if enrolling {
+                "/v1/auth/mfa/totp/enroll/start"
+            } else {
+                "/v1/auth/mfa/totp/verify"
+            };
+            let request = || {
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(COOKIE, format!("permesi_session={token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({"code":"bogus"}).to_string()))
+            };
+            let first = app.clone().oneshot(request()?).await?;
+            assert_eq!(
+                first.status(),
+                if enrolling {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
+            );
+            let rejected = app.oneshot(request()?).await?;
+            assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert!(rejected.headers().get(SET_COOKIE).is_none());
+            let unavailable = PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(ctx.pool.connect_options().as_ref().clone())
+                .await?;
+            unavailable.close().await;
+            let app = app_router(
+                limited_auth(RateLimiter::postgres(
+                    unavailable,
+                    RateLimitConfig::new(600, 100, 100),
+                    SubjectKey::derive(&[1; 32])?,
+                )),
+                ctx.pool.clone(),
+                ctx.totp_service.clone(),
+            );
+            let response = app.oneshot(request()?).await?;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert!(response.headers().get(SET_COOKIE).is_none());
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn mfa_enrollment_flow() -> Result<()> {
     let Some(ctx) = TestContext::new().await? else {

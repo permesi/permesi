@@ -16,6 +16,8 @@ permesi:
   if [[ -f {{root}}/.envrc ]]; then
     source {{root}}/.envrc
   fi
+  # The local HAProxy overwrites forwarding headers; explicit trust is limited to loopback.
+  export PERMESI_AUTH_TRUSTED_PROXIES="${PERMESI_AUTH_TRUSTED_PROXIES:-127.0.0.1/32,::1/128}"
   if [[ -n "${PERMESI_SOCKET_MODE:-}" ]]; then
     https_port="${PERMESI_HTTPS_PORT:-443}"
     https_suffix=""
@@ -94,6 +96,8 @@ permesi-socket:
     source {{root}}/.envrc
   fi
   export PERMESI_SOCKET_MODE=1
+  # This opt-in local socket recipe uses the same trusted HAProxy boundary.
+  export PERMESI_AUTH_TRUST_UNIX_PROXY="${PERMESI_AUTH_TRUST_UNIX_PROXY:-true}"
   # Unset TLS bundle to avoid conflict with --socket-path
   unset PERMESI_TLS_PEM_BUNDLE
   # Override PASERK URL to go through HAProxy (HTTPS on PERMESI_HTTPS_PORT, baked

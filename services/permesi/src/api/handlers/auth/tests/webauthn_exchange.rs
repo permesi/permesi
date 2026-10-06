@@ -1014,6 +1014,120 @@ async fn webauthn_http_mfa_elevation_is_single_session_and_rotation_safe() -> Re
     Ok(())
 }
 
+/// Replaced/deleted keys and stale counters are proof rejections, never dependency outages.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn webauthn_http_rejected_current_key_proofs_are_400_without_session_authority() -> Result<()>
+{
+    use crate::api::{
+        handlers::auth::{mfa::webauthn, storage},
+        state::AppState,
+    };
+    let db = TestDb::new()
+        .await?
+        .context("key rejection integration requires a container runtime")?;
+    let service = Arc::new(SecurityKeyService::new(
+        db.pool.clone(),
+        "example.com",
+        &[ORIGIN.into()],
+        &[1; 32],
+        300,
+        100,
+        1000,
+    )?);
+    let app = Router::new()
+        .route("/authenticate", post(webauthn::authenticate_finish))
+        .with_state(AppState {
+            security_keys: service.clone(),
+            ..AppState::for_tests(db.pool.clone())?
+        });
+    for mutation in ["replacement", "deleted", "counter", "valid"] {
+        let user = insert_test_user(&db.pool).await?;
+        let mut authenticator = Authenticator::new()?;
+        let (challenge, id) = service
+            .register_begin(user, "user@example.com", ORIGIN, &[1; 32])
+            .await?;
+        service
+            .register_finish(
+                id,
+                ORIGIN,
+                authenticator.register(&challenge)?,
+                user,
+                "Key",
+                &[1; 32],
+            )
+            .await?;
+        super::super::mfa::storage::upsert_mfa_state(
+            &db.pool,
+            user,
+            super::super::mfa::MfaState::Enabled,
+            None,
+        )
+        .await?;
+        let token = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
+        let (challenge, id) = service
+            .auth_begin(user, ORIGIN, &hash_session_token(&token))
+            .await?;
+        let proof = authenticator.authenticate(&challenge, user)?;
+        let mutation = match mutation {
+            "replacement" => {
+                Some("UPDATE security_keys SET public_key=decode('00','hex') WHERE user_id=$1")
+            }
+            "deleted" => Some("DELETE FROM security_keys WHERE user_id=$1"),
+            "counter" => Some("UPDATE security_keys SET sign_count=100 WHERE user_id=$1"),
+            _ => None,
+        };
+        if let Some(query) = mutation {
+            sqlx::query(query).bind(user).execute(&db.pool).await?;
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/authenticate")
+                    .header("Origin", ORIGIN)
+                    .header(COOKIE, format!("permesi_session={token}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(
+                        &json!({"auth_id":id,"response":proof}),
+                    )?))?,
+            )
+            .await?;
+        assert_eq!(
+            response.status(),
+            if mutation.is_some() {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::NO_CONTENT
+            }
+        );
+        assert_eq!(
+            response.headers().get(SET_COOKIE).is_some(),
+            mutation.is_none()
+        );
+        if mutation.is_some() {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+                    .bind(user)
+                    .fetch_one(&db.pool)
+                    .await?,
+                0
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM user_mfa_challenge_sessions WHERE user_id=$1"
+                )
+                .bind(user)
+                .fetch_one(&db.pool)
+                .await?,
+                1
+            );
+        }
+    }
+    Ok(())
+}
+
 /// K valid concurrent finishes on K pooled connections never need a second checkout while locked.
 #[tokio::test]
 async fn webauthn_http_concurrent_logins_do_not_starve_the_issuance_pool() -> Result<()> {
