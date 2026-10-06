@@ -11,6 +11,7 @@ pub enum Suite {
     Lifecycle,
     Token,
     Interop,
+    Refresh,
     #[default]
     Full,
 }
@@ -24,6 +25,21 @@ pub struct Case {
 }
 
 pub const CASES: &[Case] = &[
+    Case {
+        id: "refresh.rotation_reuse",
+        description: "Explicit browser offline consent, cross-replica rotation, narrow JWT claims and family replay revocation",
+        group: "refresh",
+    },
+    Case {
+        id: "refresh.replica_race",
+        description: "Concurrent runtime-role A/B refresh has one winner and commits reuse-family revocation",
+        group: "refresh",
+    },
+    Case {
+        id: "refresh.lifecycle",
+        description: "Client scope removal/restoration cannot revive the original refresh family",
+        group: "refresh",
+    },
     Case {
         id: "authentication.shared_exchanges",
         description: "Real OPAQUE login/reauth start on A, finish on B, replay and same-user session isolation",
@@ -189,8 +205,9 @@ pub fn select(suite: Suite, ids: &[String]) -> Result<Vec<Case>> {
                 Suite::Smoke => c.group == "smoke",
                 Suite::Security => c.group == "security",
                 Suite::Lifecycle => c.group == "lifecycle",
-                Suite::Token => c.group == "token",
+                Suite::Token => c.group == "token" || c.group == "refresh",
                 Suite::Interop => c.group == "interop",
+                Suite::Refresh => c.group == "refresh",
             }
         })
         .collect::<Vec<_>>();
@@ -209,6 +226,7 @@ mod tests {
         assert_eq!(select(Suite::Smoke, &[])?.len(), 3);
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
         assert_eq!(select(Suite::Interop, &[])?.len(), 6);
+        assert_eq!(select(Suite::Refresh, &[])?.len(), 3);
         assert!(
             select(Suite::Interop, &[])?
                 .iter()

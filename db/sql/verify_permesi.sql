@@ -3,6 +3,26 @@
 
 BEGIN;
 
+-- Refresh history and only the irreversible transition columns survive bootstrap grants.
+DO $$
+BEGIN
+    IF to_regclass('oauth_refresh_tokens_active_idx') IS NULL OR to_regclass('oauth_refresh_tokens_root_idx') IS NULL THEN
+        RAISE EXCEPTION 'missing refresh lineage uniqueness';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') THEN
+        IF has_table_privilege('permesi_runtime','oauth_refresh_families','UPDATE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_families','DELETE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_families','TRUNCATE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','UPDATE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','DELETE')
+            OR has_table_privilege('permesi_runtime','oauth_refresh_tokens','TRUNCATE')
+            OR NOT has_column_privilege('permesi_runtime','oauth_refresh_families','revoked_at','UPDATE')
+            OR NOT has_column_privilege('permesi_runtime','oauth_refresh_tokens','consumed_at','UPDATE') THEN
+            RAISE EXCEPTION 'invalid runtime refresh privileges';
+        END IF;
+    END IF;
+END $$;
+
 -- Shared pending admission metadata must remain hash-only and indexed after upgrades.
 DO $$
 BEGIN
@@ -88,7 +108,7 @@ DECLARE
     identifier bytea := decode(repeat('a1',32),'hex');
 BEGIN
     INSERT INTO opaque_exchanges (id_hash,purpose,sealed_state,created_at,expires_at)
-    VALUES (identifier,'login',decode(repeat('00',29),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
+    VALUES (identifier,'login',decode(repeat('00',41),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
     BEGIN
         UPDATE opaque_exchanges SET expires_at=created_at WHERE id_hash=identifier;
         RAISE EXCEPTION 'expected positive exchange TTL constraint';
@@ -110,8 +130,12 @@ BEGIN
         RAISE EXCEPTION 'expected sealed state length constraint';
     EXCEPTION WHEN check_violation THEN NULL; END;
     BEGIN
+        UPDATE opaque_exchanges SET sealed_state=decode(repeat('00',40),'hex') WHERE id_hash=identifier;
+        RAISE EXCEPTION 'expected v2 nonce/tag/nonempty ciphertext constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
         INSERT INTO opaque_exchanges (id_hash,purpose,sealed_state,created_at,expires_at)
-        VALUES (decode('00','hex'),'login',decode(repeat('00',29),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
+        VALUES (decode('00','hex'),'login',decode(repeat('00',41),'hex'),NOW(),NOW()+INTERVAL '5 minutes');
         RAISE EXCEPTION 'expected reference hash length constraint';
     EXCEPTION WHEN check_violation THEN NULL; END;
     DELETE FROM opaque_exchanges WHERE id_hash=identifier;

@@ -279,4 +279,33 @@ mod cli_tests {
             },
         )
     }
+    /// Independently checks both numeric limits and the idle/absolute lifetime relationship.
+    #[test]
+    fn refresh_policy_clap_and_dispatch_reject_unsafe_lifetimes() -> Result<()> {
+        let command = || crate::cli::commands::new().mut_args(|arg| arg.env(None::<&str>));
+        for (option, value) in [
+            ("--oauth-refresh-absolute-ttl-seconds", "0"),
+            ("--oauth-refresh-absolute-ttl-seconds", "7776001"),
+            ("--oauth-refresh-idle-ttl-seconds", "0"),
+            ("--oauth-refresh-idle-ttl-seconds", "7776001"),
+        ] {
+            let mut args = arguments();
+            args.extend([option, value]);
+            assert!(command().try_get_matches_from(args).is_err());
+        }
+        let mut args = arguments();
+        args.extend([
+            "--oauth-refresh-absolute-ttl-seconds",
+            "1",
+            "--oauth-refresh-idle-ttl-seconds",
+            "2",
+        ]);
+        let matches = command().try_get_matches_from(args)?;
+        assert!(super::super::tokens::TokenConfig::from_matches(&matches).is_err());
+        let matches = command().try_get_matches_from(arguments())?;
+        let config = super::super::tokens::TokenConfig::from_matches(&matches)?;
+        assert_eq!(config.refresh_absolute_ttl, 2_592_000);
+        assert_eq!(config.refresh_idle_ttl, 604_800);
+        Ok(())
+    }
 }

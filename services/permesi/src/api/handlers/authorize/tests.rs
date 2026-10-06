@@ -1171,7 +1171,7 @@ async fn authorization_discovery_advertises_only_implemented_token_methods() -> 
     );
     assert_eq!(
         metadata["grant_types_supported"],
-        json!(["authorization_code"])
+        json!(["authorization_code", "refresh_token"])
     );
     assert_eq!(
         metadata["token_endpoint_auth_methods_supported"],

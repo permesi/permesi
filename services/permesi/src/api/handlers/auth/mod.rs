@@ -60,3 +60,22 @@ pub(crate) use utils::{extract_client_ip, hash_session_token};
 
 #[cfg(test)]
 mod tests;
+
+/// Exercises the production atomic password lifecycle from cross-domain integration tests only.
+#[cfg(test)]
+pub(crate) async fn rotate_password_for_test(
+    pool: &sqlx::PgPool,
+    user: uuid::Uuid,
+    record: &[u8],
+) -> anyhow::Result<bool> {
+    storage::rotate_password_and_clear_sessions(pool, user, record).await
+}
+
+/// Seeds a real limited session for cross-domain HTTP recovery regressions only.
+#[cfg(test)]
+pub(crate) async fn challenge_session_for_test(
+    pool: &sqlx::PgPool,
+    user: uuid::Uuid,
+) -> anyhow::Result<String> {
+    storage::insert_mfa_challenge_session(pool, user, 300).await
+}

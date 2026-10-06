@@ -521,7 +521,7 @@ pub(super) async fn rotate_password_and_clear_sessions(
         .await
         .context("begin password rotation transaction")?;
 
-    let query = "UPDATE users SET opaque_registration_record = $1 WHERE id = $2";
+    let query = "UPDATE users SET opaque_registration_record = $1, authorization_revision = uuidv4() WHERE id = $2";
     let span = tracing::info_span!(
         "db.query",
         db.system = "postgresql",
@@ -539,6 +539,13 @@ pub(super) async fn rotate_password_and_clear_sessions(
         let _ = tx.rollback().await;
         return Ok(false);
     }
+
+    crate::oauth::tokens::revoke_user_authority(
+        &mut tx,
+        user_id,
+        crate::oauth::tokens::UserRevocation::Password,
+    )
+    .await?;
 
     let query = "DELETE FROM user_sessions WHERE user_id = $1";
     let span = tracing::info_span!(

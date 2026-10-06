@@ -71,14 +71,14 @@ impl Report {
             infrastructure_failure: None,
             cleanup_failures: Vec::new(),
             planned: [
-                "Refresh-token rotation/reuse detection",
+                "Broader OIDC conformance/client coverage",
                 "UserInfo/introspection/revocation",
                 "Client credentials/M2M grant",
             ],
             limitations: [
-                "WebAuthn/passkey challenge state remains process-local; OPAQUE exchanges use shared PostgreSQL.",
+                "OPAQUE and WebAuthn/passkey ceremony state uses shared PostgreSQL; browser factor/account-switching scenarios remain a follow-up.",
                 "Lifecycle diagnostics include internal rollback controls; token cases exercise real runtime-role HTTP issuance.",
-                "JWT authority expires at its bounded TTL; immediate resource-server revocation/UserInfo/refresh tokens are not implemented.",
+                "JWT authority expires at its bounded TTL; immediate resource-server revocation and UserInfo are not implemented; refresh-family revocation does not retract an issued JWT.",
             ],
         }
     }

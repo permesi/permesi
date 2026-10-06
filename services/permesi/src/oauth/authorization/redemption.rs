@@ -93,8 +93,8 @@ async fn redeem(
     }
     let user_id: Uuid = row.try_get("user_id")?;
     let grant_id: Uuid = row.try_get("grant_id")?;
-    let grant = sqlx::query_scalar::<_, Uuid>("SELECT g.id FROM oauth_grants g JOIN users u ON u.id=g.user_id JOIN org_memberships m ON m.user_id=g.user_id AND m.org_id=g.organization_id WHERE g.id=$1 AND g.user_id=$2 AND g.client_id=$3 AND g.application_id=$4 AND g.organization_id=$5 AND g.revoked_at IS NULL AND u.status='active' AND m.status='active' FOR SHARE OF g,u,m")
-        .bind(grant_id).bind(user_id).bind(context.id).bind(context.application_id).bind(context.organization_id)
+    let grant = sqlx::query_scalar::<_, Uuid>("SELECT g.id FROM oauth_grants g JOIN users u ON u.id=g.user_id JOIN org_memberships m ON m.user_id=g.user_id AND m.org_id=g.organization_id WHERE g.id=$1 AND g.user_id=$2 AND g.client_id=$3 AND g.application_id=$4 AND g.organization_id=$5 AND g.revoked_at IS NULL AND u.status='active' AND m.status='active' AND u.authorization_revision=$6 FOR SHARE OF g,u,m")
+        .bind(grant_id).bind(user_id).bind(context.id).bind(context.application_id).bind(context.organization_id).bind(row.try_get::<Option<Uuid>,_>("authorization_revision")?)
         .fetch_optional(&mut **tx).await?;
     if grant.is_none() {
         return Err(invalid());

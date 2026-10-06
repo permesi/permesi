@@ -28,6 +28,7 @@ use uuid::Uuid;
 mod authentication;
 mod interop;
 mod lifecycle;
+mod refresh;
 mod token;
 
 /// Already authenticated actors and owned infrastructure; no case shares another case's tenant.
@@ -131,6 +132,9 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
         "interop.resource_scope_tenant" => interop::resource(context, fixture).await,
         "interop.invalid_access_tokens" => interop::invalid_access(context, fixture).await,
         "interop.signing_key_rotation" => interop::rotation(context, fixture).await,
+        "refresh.rotation_reuse" => refresh::rotation(context, fixture).await,
+        "refresh.replica_race" => refresh::race(context, fixture).await,
+        "refresh.lifecycle" => refresh::lifecycle(context, fixture).await,
         "token.public_claims" => token::public_claims(context, fixture).await,
         "token.confidential_credentials" => token::confidential(context, fixture).await,
         "token.validation" => token::validation(context, fixture).await,

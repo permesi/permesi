@@ -130,7 +130,8 @@ including fresh-consent recovery without reviving an old grant/code.
 standard `openidconnect-rs` public/confidential clients and an owned HTTPS jobs API,
 including tenant/scopes, strict JWT rejection, real expiration and signing-key rotation.
 The full suite includes these cases; this coverage does not claim OIDC certification
-or immediate bearer-token revocation. Refresh-token issuance remains planned.
+or immediate bearer-token revocation. `--suite refresh` covers explicit offline consent,
+cross-replica rotation/reuse, concurrency and current-grant lifecycle rejection.
 
 The `Test & Build` workflow also runs `just web-test-browser-built` against its own
 frontend artifact, covering console fixtures and real PostgreSQL authorization/OPAQUE
@@ -154,7 +155,7 @@ permesi employs a **Split-Trust Architecture** to separate network noise from co
 * **Role:** The OIDC Authority.
 * **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, OAuth client/scope management, and Authorization Code + S256 PKCE with tenant-bound consent and signed access/ID-token issuance.
 * **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Validates short-lived **Zero Tokens** offline using the PASERK keyset for auth POSTs.
-* **Output:** Authenticated sessions, tenant-scoped management APIs, single-use authorization codes, RS256 access tokens and OIDC ID tokens. Refresh tokens remain planned.
+* **Output:** Authenticated sessions, tenant-scoped management APIs, single-use authorization codes, RS256 access/ID tokens and hashed rotating refresh families after explicit offline consent.
 
 #### 3. Database
 * **Role:** System of Record.
@@ -258,7 +259,7 @@ transactional race protection and OAuth effects; populated parents never silentl
 OPAQUE login/reauthentication exchanges use bounded, encrypted, single-attempt PostgreSQL
 state across replicas, including original-session binding for reauthentication. See
 [shared OPAQUE exchanges](docs/opaque-exchanges.md) for migration, expiry, retention and
-regression checks. Passkey and hardware-key ceremonies also use [shared sealed PostgreSQL state](docs/webauthn-exchanges.md); the remaining MFA lifecycle and quota milestones are tracked in TODO.
+regression checks. Passkey and hardware-key ceremonies also use [shared sealed PostgreSQL state](docs/webauthn-exchanges.md); [MFA lifecycle](docs/mfa-lifecycle.md) and [shared admission policy](docs/authentication-operations.md) guard current authority and bounded authentication capacity.
 
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
@@ -268,14 +269,18 @@ issuance receipts in one PostgreSQL transaction. Public clients supply their ID;
 confidential clients use HTTP Basic with bounded Argon2id current/retiring credentials.
 Access tokens bind the explicit resource audience and tenant/application/grant; OIDC
 ID tokens bind client audience, nonce and original authentication time. Both default
-to a five-minute TTL. `offline_access` stays rejected until refresh policy exists.
+to a five-minute TTL. [Refresh families](docs/oauth-refresh-tokens.md) use hashed,
+single-use PostgreSQL tokens with atomic rotation, family revocation on reuse and current
+tenant/consent checks. Initial offline access requires `openid` and explicit `prompt=consent`;
+other code exchanges return no refresh token. Password rotation/recovery revoke families
+and invalidate older codes. Immediate JWT revocation and UserInfo remain planned.
 
 Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
 enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA versions;
 discovery advertises the implemented code/token endpoints, S256, Basic/public-none
 methods and issuer response identification. Runtime signs but cannot rotate/export/retire
 keys. Confidential secret management includes one-time creation, overlap rotation and
-revocation at commit. Refresh rotation/reuse detection, UserInfo/introspection/revocation,
+revocation at commit. UserInfo/introspection/public token revocation,
 the `client_credentials` machine grant and OIDC conformance testing remain planned.
 See [token exchange](docs/oauth-token-exchange.md) for claims, configuration, rollout,
 cache/rotation behavior and finite-lifetime JWT revocation limits. Follow [TODO](TODO.md)

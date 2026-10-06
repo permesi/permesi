@@ -37,6 +37,22 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_status ON users (status);
 
+-- An authentication revision invalidates pending delegated authority after password/recovery changes.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS authorization_revision UUID NOT NULL DEFAULT uuidv4();
+CREATE OR REPLACE FUNCTION advance_user_authorization_revision() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.opaque_registration_record IS DISTINCT FROM OLD.opaque_registration_record
+        OR NEW.authorization_revision IS DISTINCT FROM OLD.authorization_revision THEN
+        NEW.authorization_revision := uuidv4();
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS advance_user_authorization_revision ON users;
+CREATE TRIGGER advance_user_authorization_revision BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION advance_user_authorization_revision();
+
+
 CREATE TABLE IF NOT EXISTS roles (
     name TEXT PRIMARY KEY CHECK (name = LOWER(name))
 );
@@ -479,6 +495,8 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
     FOREIGN KEY (client_id, redirect_uri) REFERENCES oauth_client_redirect_uris(client_id, redirect_uri) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS oauth_authorization_codes_expiry_idx ON oauth_authorization_codes(expires_at);
+-- Pre-upgrade codes have no revision and fail closed; fresh inserts bind the locked user revision.
+ALTER TABLE oauth_authorization_codes ADD COLUMN IF NOT EXISTS authorization_revision UUID;
 
 -- Browser handles cannot rewrite validated authority or switch the bound full session.
 CREATE OR REPLACE FUNCTION protect_oauth_authorization_request()
@@ -511,6 +529,7 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Invalid authorization code binding' USING ERRCODE = '23514';
     END IF;
+    SELECT authorization_revision INTO NEW.authorization_revision FROM users WHERE id=NEW.user_id FOR SHARE;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -558,14 +577,137 @@ CREATE TABLE IF NOT EXISTS oauth_token_issuances (
 );
 CREATE INDEX IF NOT EXISTS oauth_token_issuances_expiry_idx ON oauth_token_issuances(access_expires_at);
 
+-- Refresh families outlive their original short-lived authorization code. All bearer material is hashed.
+CREATE TABLE IF NOT EXISTS oauth_refresh_families (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    source_code_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(source_code_hash)=32),
+    client_id UUID NOT NULL,
+    application_id UUID NOT NULL,
+    organization_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    grant_id UUID NOT NULL,
+    authorization_revision UUID NOT NULL,
+    scope_ids UUID[] NOT NULL CHECK (oauth_scope_ids_valid(scope_ids)),
+    scope_names TEXT[] NOT NULL CHECK (oauth_scope_names_valid(scope_names) AND cardinality(scope_names)=cardinality(scope_ids)),
+    issuer TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    auth_time TIMESTAMPTZ NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at>issued_at AND expires_at<=issued_at+INTERVAL '90 days'),
+    idle_ttl_seconds BIGINT NOT NULL CHECK (idle_ttl_seconds BETWEEN 1 AND 7776000),
+    revoked_at TIMESTAMPTZ CHECK (revoked_at>=issued_at),
+    revocation_reason TEXT CHECK (revocation_reason IN ('reuse','authority','password','recovery')),
+    CHECK ((revoked_at IS NULL)=(revocation_reason IS NULL)),
+    CHECK ('openid'=ANY(scope_names) AND 'offline_access'=ANY(scope_names)),
+    FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
+        REFERENCES oauth_grants(id,client_id,application_id,organization_id,user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS oauth_refresh_families_user_idx ON oauth_refresh_families(user_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS oauth_refresh_families_expiry_idx ON oauth_refresh_families(expires_at);
+
+CREATE OR REPLACE FUNCTION validate_oauth_refresh_family() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1 FROM oauth_authorization_codes c JOIN oauth_authorization_requests r ON r.id=c.request_id
+        JOIN users u ON u.id=c.user_id
+        WHERE c.code_hash=NEW.source_code_hash AND c.consumed_at IS NOT NULL AND c.expires_at>clock_timestamp() AND r.prompt='consent'
+        AND NEW.issued_at>=c.consumed_at AND NEW.issued_at<=clock_timestamp() AND NEW.auth_time<=NEW.issued_at
+        AND (c.client_id,c.application_id,c.organization_id,c.user_id,c.grant_id,c.authorization_revision,
+             c.scope_ids,c.scope_names,c.issuer,c.audience,c.auth_time)
+        IS NOT DISTINCT FROM (NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.grant_id,NEW.authorization_revision,
+             NEW.scope_ids,NEW.scope_names,NEW.issuer,NEW.audience,NEW.auth_time)
+        AND c.authorization_revision=u.authorization_revision AND NEW.revoked_at IS NULL
+        AND NEW.expires_at>clock_timestamp() FOR SHARE OF c,r,u;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Invalid refresh family binding' USING ERRCODE='23514'; END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS validate_oauth_refresh_family ON oauth_refresh_families;
+CREATE TRIGGER validate_oauth_refresh_family BEFORE INSERT ON oauth_refresh_families
+    FOR EACH ROW EXECUTE FUNCTION validate_oauth_refresh_family();
+
+CREATE OR REPLACE FUNCTION protect_oauth_refresh_family() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (to_jsonb(NEW)-ARRAY['revoked_at','revocation_reason']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['revoked_at','revocation_reason'])
+        OR (OLD.revoked_at IS NOT NULL AND NEW IS DISTINCT FROM OLD) THEN
+        RAISE EXCEPTION 'Refresh family is immutable' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS protect_oauth_refresh_family ON oauth_refresh_families;
+CREATE TRIGGER protect_oauth_refresh_family BEFORE UPDATE ON oauth_refresh_families
+    FOR EACH ROW EXECUTE FUNCTION protect_oauth_refresh_family();
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    token_hash BYTEA PRIMARY KEY CHECK (octet_length(token_hash)=32),
+    family_id UUID NOT NULL REFERENCES oauth_refresh_families(id) ON DELETE CASCADE,
+    previous_hash BYTEA UNIQUE CHECK (octet_length(previous_hash)=32 AND previous_hash<>token_hash),
+    issued_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at>issued_at AND expires_at<=issued_at+INTERVAL '90 days'),
+    consumed_at TIMESTAMPTZ CHECK (consumed_at>=issued_at AND consumed_at<expires_at),
+    UNIQUE (token_hash,family_id),
+    FOREIGN KEY (previous_hash,family_id) REFERENCES oauth_refresh_tokens(token_hash,family_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_refresh_tokens_active_idx ON oauth_refresh_tokens(family_id) WHERE consumed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_refresh_tokens_root_idx ON oauth_refresh_tokens(family_id) WHERE previous_hash IS NULL;
+
+CREATE OR REPLACE FUNCTION validate_oauth_refresh_token() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1 FROM oauth_refresh_families f WHERE f.id=NEW.family_id AND f.revoked_at IS NULL
+        AND NEW.expires_at<=f.expires_at AND NEW.expires_at<=NEW.issued_at+f.idle_ttl_seconds*INTERVAL '1 second'
+        AND NEW.expires_at>clock_timestamp() AND NEW.consumed_at IS NULL FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Invalid refresh token lifetime' USING ERRCODE='23514'; END IF;
+    IF NEW.previous_hash IS NOT NULL THEN
+        PERFORM 1 FROM oauth_refresh_tokens t WHERE t.token_hash=NEW.previous_hash AND t.family_id=NEW.family_id
+            AND t.consumed_at IS NOT NULL AND t.expires_at>NEW.issued_at FOR SHARE;
+        IF NOT FOUND THEN RAISE EXCEPTION 'Invalid refresh token lineage' USING ERRCODE='23514'; END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS validate_oauth_refresh_token ON oauth_refresh_tokens;
+CREATE TRIGGER validate_oauth_refresh_token BEFORE INSERT ON oauth_refresh_tokens
+    FOR EACH ROW EXECUTE FUNCTION validate_oauth_refresh_token();
+CREATE OR REPLACE FUNCTION protect_oauth_refresh_token() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (to_jsonb(NEW)-'consumed_at') IS DISTINCT FROM (to_jsonb(OLD)-'consumed_at')
+        OR (OLD.consumed_at IS NOT NULL AND NEW.consumed_at IS DISTINCT FROM OLD.consumed_at) THEN
+        RAISE EXCEPTION 'Refresh token is immutable' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS protect_oauth_refresh_token ON oauth_refresh_tokens;
+CREATE TRIGGER protect_oauth_refresh_token BEFORE UPDATE ON oauth_refresh_tokens
+    FOR EACH ROW EXECUTE FUNCTION protect_oauth_refresh_token();
+
+-- One immutable receipt per consumed code OR refresh token; neither source is bearer plaintext.
+ALTER TABLE oauth_token_issuances ALTER COLUMN code_hash DROP NOT NULL;
+ALTER TABLE oauth_token_issuances ADD COLUMN IF NOT EXISTS refresh_hash BYTEA;
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_token_issuances_refresh_idx ON oauth_token_issuances(refresh_hash) WHERE refresh_hash IS NOT NULL;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='oauth_token_issuances'::regclass AND conname='oauth_token_issuances_source_check') THEN
+        ALTER TABLE oauth_token_issuances ADD CONSTRAINT oauth_token_issuances_source_check
+            CHECK ((code_hash IS NULL)<>(refresh_hash IS NULL) AND (refresh_hash IS NULL OR octet_length(refresh_hash)=32));
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION validate_oauth_token_issuance()
 RETURNS TRIGGER AS $$
 BEGIN
-    PERFORM 1 FROM oauth_authorization_codes c
-        WHERE c.code_hash=NEW.code_hash AND c.consumed_at IS NOT NULL
-        AND (c.grant_id,c.client_id,c.application_id,c.organization_id,c.user_id,c.issuer,c.audience)
-        IS NOT DISTINCT FROM (NEW.grant_id,NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.issuer,NEW.audience)
-        AND (c.nonce IS NOT NULL)=(NEW.id_token_hash IS NOT NULL) FOR SHARE;
+    IF NEW.code_hash IS NOT NULL THEN
+        PERFORM 1 FROM oauth_authorization_codes c
+            WHERE c.code_hash=NEW.code_hash AND c.consumed_at IS NOT NULL
+            AND (c.grant_id,c.client_id,c.application_id,c.organization_id,c.user_id,c.issuer,c.audience)
+            IS NOT DISTINCT FROM (NEW.grant_id,NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.issuer,NEW.audience)
+            AND (c.nonce IS NOT NULL)=(NEW.id_token_hash IS NOT NULL) FOR SHARE;
+    ELSE
+        PERFORM 1 FROM oauth_refresh_tokens t JOIN oauth_refresh_families f ON f.id=t.family_id
+            WHERE t.token_hash=NEW.refresh_hash AND t.consumed_at IS NOT NULL AND f.revoked_at IS NULL
+            AND f.expires_at>clock_timestamp() AND NEW.id_token_hash IS NULL
+            AND (f.grant_id,f.client_id,f.application_id,f.organization_id,f.user_id,f.issuer,f.audience)
+            IS NOT DISTINCT FROM (NEW.grant_id,NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.issuer,NEW.audience)
+            FOR SHARE OF t,f;
+    END IF;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Invalid token issuance binding' USING ERRCODE='23514';
     END IF;
@@ -696,7 +838,7 @@ CREATE TABLE IF NOT EXISTS opaque_exchanges (
     credential_hash BYTEA,
     session_hash BYTEA REFERENCES user_sessions(session_hash) ON DELETE CASCADE
         CHECK (session_hash IS NULL OR octet_length(session_hash) = 32),
-    sealed_state BYTEA NOT NULL CHECK (octet_length(sealed_state) BETWEEN 29 AND 4096),
+    sealed_state BYTEA NOT NULL CHECK (octet_length(sealed_state) BETWEEN 41 AND 4096),
     created_at TIMESTAMPTZ NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL CHECK (
         expires_at > created_at AND expires_at <= created_at + INTERVAL '1 hour'
@@ -707,6 +849,11 @@ CREATE TABLE IF NOT EXISTS opaque_exchanges (
         (purpose = 'reauth' AND user_id IS NOT NULL AND session_hash IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS opaque_exchanges_expires_idx ON opaque_exchanges (expires_at);
+-- Older short ciphertext cannot contain the v2 nonce/tag/payload; restart those pending exchanges.
+DELETE FROM opaque_exchanges WHERE octet_length(sealed_state)<41;
+ALTER TABLE opaque_exchanges DROP CONSTRAINT IF EXISTS opaque_exchanges_sealed_state_check;
+ALTER TABLE opaque_exchanges ADD CONSTRAINT opaque_exchanges_sealed_state_check
+    CHECK (octet_length(sealed_state) BETWEEN 41 AND 4096);
 ALTER TABLE opaque_exchanges ADD COLUMN IF NOT EXISTS subject_tag BYTEA CHECK (subject_tag IS NULL OR octet_length(subject_tag)=32);
 CREATE INDEX IF NOT EXISTS opaque_exchanges_subject_idx ON opaque_exchanges (purpose,subject_tag);
 ALTER TABLE webauthn_exchanges ADD COLUMN IF NOT EXISTS subject_tag BYTEA CHECK (subject_tag IS NULL OR octet_length(subject_tag)=32);
@@ -800,6 +947,7 @@ BEGIN
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
     DELETE FROM auth_rate_limits WHERE expires_at < NOW();
+    DELETE FROM oauth_refresh_families WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM oauth_token_issuances WHERE GREATEST(access_expires_at,id_expires_at) < NOW() - INTERVAL '7 days';
     DELETE FROM oauth_authorization_codes WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM oauth_authorization_requests WHERE expires_at < NOW() - INTERVAL '7 days';
@@ -969,6 +1117,10 @@ BEGIN
             oauth_client_scopes, oauth_grants, oauth_grant_scopes,
             oauth_authorization_requests, oauth_authorization_codes TO permesi_runtime;
         GRANT SELECT, INSERT, UPDATE ON TABLE oauth_client_secrets TO permesi_runtime;
+        REVOKE ALL ON TABLE oauth_refresh_families, oauth_refresh_tokens FROM permesi_runtime;
+        GRANT SELECT, INSERT ON TABLE oauth_refresh_families, oauth_refresh_tokens TO permesi_runtime;
+        GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
+        GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;
         GRANT SELECT, INSERT ON TABLE oauth_token_issuances TO permesi_runtime;
         REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
         REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;

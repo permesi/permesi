@@ -100,7 +100,8 @@ deadline; the UI never retries issuance automatically or stores plaintext in bro
 
 Minimal authorization consent is rendered by the backend and login/MFA resume is supported.
 Authorization-code token exchange and signed access/ID tokens are implemented by the service;
-broader grants management and refresh tokens remain planned. [TODO](../../TODO.md) tracks
+hashed rotating refresh families require explicit offline consent. Broader grants and
+refresh-family management screens remain planned. [TODO](../../TODO.md) tracks
 completion; the [OAuth roadmap](../../docs/oauth-foundation.md#roadmap) describes dependencies.
 Confidential secret management does not implement the OAuth `client_credentials` M2M grant.
 

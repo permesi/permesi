@@ -358,7 +358,7 @@ pub(super) async fn registered_redirect(
 
 /// Rechecks all scope IDs/names and locks registry and client edges against removal.
 /// This verifies configured authority only; consent and membership are separate checks.
-pub(super) async fn current_scopes(
+pub(crate) async fn current_scopes(
     tx: &mut Transaction<'_, Postgres>,
     client_id: Uuid,
     application_id: Uuid,
@@ -411,7 +411,7 @@ async fn active_grant(
 
 /// Authorizes skipping consent only when the locked saved grant covers every requested
 /// registry ID. This is a server-side upper-bound intersection, never a browser flag.
-pub(super) async fn grant_covers(
+pub(crate) async fn grant_covers(
     tx: &mut Transaction<'_, Postgres>,
     grant: Uuid,
     scopes: &[Uuid],

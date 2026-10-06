@@ -1,10 +1,11 @@
 # Authorization-code token exchange
 
 `POST /token` exchanges an issued authorization code for a Vault-signed RS256 access
-token and, when `openid` was granted, an OIDC ID token. It implements only
-`grant_type=authorization_code`. Refresh tokens, UserInfo, introspection, revocation
-and the client-credentials machine grant remain separate milestones. `offline_access`
-continues to be rejected. This implementation does not claim OIDC certification.
+token and, when `openid` was granted, an OIDC ID token. It also implements
+`grant_type=refresh_token` with [hashed rotating families](oauth-refresh-tokens.md) after
+explicit offline consent. UserInfo, introspection, a public revocation endpoint and the
+client-credentials machine grant remain separate milestones. This implementation does
+not claim OIDC certification.
 
 Send `application/x-www-form-urlencoded` with `grant_type`, `code`, the exact original
 `redirect_uri` and `code_verifier`. Public clients also send their public `client_id`.
@@ -13,7 +14,7 @@ secret separately, join them with a colon, and standard-base64 encode the result
 as specified by [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749.html#section-2.3.1).
 A repeated nonempty body ID must match the Basic ID. Empty parameters are absent;
 unrecognized extensions are ignored as RFC 6749 requires. Body client secrets,
-duplicate parameters, multiple authentication headers, ambiguous encoding, scope,
+duplicate parameters, multiple authentication headers, ambiguous encoding, scope on code exchange,
 and tenant overrides are rejected. Unimplemented resource/audience extensions are ignored;
 the issuer's configured resource audience always applies. Ignored extensions never affect
 the code's saved authority. Session cookies and internal Principal permissions confer no token authority.
@@ -26,7 +27,7 @@ redemption, signing, hash-only receipt insertion and commit. Current/retiring se
 verification is bounded Argon2id, followed by shared client/credential/ancestor locks
 and an expiration check. The code redeemer locks its hash row, verifies exact client,
 redirect, S256, expiry, unused state, configured issuer/audience, active user/membership,
-tenant ancestry, original grant and current scope edges. The HTTP form never selects
+tenant ancestry, original grant, current user authorization revision and scope edges. The HTTP form never selects
 the organization. Those locks remain held through signing and commit, coordinating
 with management revocation and lifecycle changes across replicas. A private transaction
 guard prevents detaching or substituting authentication proofs.

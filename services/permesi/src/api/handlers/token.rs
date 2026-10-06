@@ -30,8 +30,8 @@ struct TokenFailure {
     error: &'static str,
 }
 
-#[utoipa::path(post,path="/token",request_body(content=String,content_type="application/x-www-form-urlencoded",description="grant_type=authorization_code, code, redirect_uri, code_verifier; public clients supply client_id, confidential clients use HTTP Basic"),responses((status=200,description="Committed RS256 access token and optional OIDC ID token",body=TokenResponse),(status=400,description="Invalid request, client, grant or unsupported grant type",body=TokenFailure),(status=401,description="Invalid HTTP Basic client authentication",body=TokenFailure),(status=429,description="Shared token exchange budget exhausted",body=TokenFailure),(status=503,description="Issuer or exchange dependency unavailable",body=TokenFailure)),tag="oauth")]
-/// Exchanges only authorization codes with S256; failures before commit roll back the owned transaction.
+#[utoipa::path(post,path="/token",request_body(content=String,content_type="application/x-www-form-urlencoded",description="grant_type=authorization_code with code, redirect_uri, code_verifier; or grant_type=refresh_token with refresh_token and optional narrowing scope. Public clients supply client_id; confidential clients use HTTP Basic"),responses((status=200,description="Committed RS256 access token, optional initial OIDC ID token and rotating refresh token after explicit offline consent",body=TokenResponse),(status=400,description="Invalid request, client, grant, scope or unsupported grant type",body=TokenFailure),(status=401,description="Invalid HTTP Basic client authentication",body=TokenFailure),(status=429,description="Shared token exchange budget exhausted",body=TokenFailure),(status=503,description="Issuer or exchange dependency unavailable",body=TokenFailure)),tag="oauth")]
+/// Exchanges S256 codes or single-use refresh tokens; failures before commit roll back the owned transaction.
 pub(crate) async fn token(
     State(pool): State<PgPool>,
     State(oauth): State<Arc<OAuthState>>,

@@ -28,19 +28,26 @@ pub(crate) struct TokenResponse {
     pub scope: String,
     #[schema(value_type=Option<String>)]
     pub id_token: Option<SecretString>,
+    #[schema(value_type=Option<String>)]
+    pub refresh_token: Option<SecretString>,
 }
 
 impl Serialize for TokenResponse {
     /// Exposes bearer material exclusively at the response encoder; omits absent ID tokens.
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut output = serializer
-            .serialize_struct("TokenResponse", if self.id_token.is_some() { 5 } else { 4 })?;
+        let mut output = serializer.serialize_struct(
+            "TokenResponse",
+            4 + usize::from(self.id_token.is_some()) + usize::from(self.refresh_token.is_some()),
+        )?;
         output.serialize_field("access_token", self.access_token.expose_secret())?;
         output.serialize_field("token_type", self.token_type)?;
         output.serialize_field("expires_in", &self.expires_in)?;
         output.serialize_field("scope", &self.scope)?;
         if let Some(token) = &self.id_token {
             output.serialize_field("id_token", token.expose_secret())?;
+        }
+        if let Some(token) = &self.refresh_token {
+            output.serialize_field("refresh_token", token.expose_secret())?;
         }
         output.end()
     }
@@ -89,6 +96,7 @@ pub(super) async fn issue(
     oauth: &OAuthState,
     tx: &mut Transaction<'_, Postgres>,
     code: &RedeemedCode,
+    include_id: bool,
 ) -> Result<Issued, TokenError> {
     let issued_at: DateTime<Utc> =
         sqlx::query_scalar("SELECT date_trunc('second',clock_timestamp())")
@@ -128,32 +136,33 @@ pub(super) async fn issue(
         )
         .await
         .map_err(|_| TokenError::Unavailable)?;
-    let (id_token, id_expires_at) = if code.scopes.iter().any(|s| s.as_str() == "openid") {
-        let nonce = code.nonce.as_deref().ok_or(TokenError::InvalidGrant)?;
-        let expires = issued_at + Duration::seconds(oauth.config.tokens.id_ttl);
-        let digest = Sha256::digest(access_token.expose_secret().as_bytes());
-        let token = oauth
-            .sign_jwt(
-                &key,
-                "JWT",
-                &IdClaims {
-                    iss: &code.issuer,
-                    sub: code.user_id,
-                    aud: code.client_id,
-                    iat: issued_at.timestamp(),
-                    exp: expires.timestamp(),
-                    auth_time: code.auth_time.timestamp(),
-                    nonce,
-                    at_hash: URL_SAFE_NO_PAD
-                        .encode(digest.get(..16).ok_or(TokenError::Unavailable)?),
-                },
-            )
-            .await
-            .map_err(|_| TokenError::Unavailable)?;
-        (Some(token), Some(expires))
-    } else {
-        (None, None)
-    };
+    let (id_token, id_expires_at) =
+        if include_id && code.scopes.iter().any(|s| s.as_str() == "openid") {
+            let nonce = code.nonce.as_deref().ok_or(TokenError::InvalidGrant)?;
+            let expires = issued_at + Duration::seconds(oauth.config.tokens.id_ttl);
+            let digest = Sha256::digest(access_token.expose_secret().as_bytes());
+            let token = oauth
+                .sign_jwt(
+                    &key,
+                    "JWT",
+                    &IdClaims {
+                        iss: &code.issuer,
+                        sub: code.user_id,
+                        aud: code.client_id,
+                        iat: issued_at.timestamp(),
+                        exp: expires.timestamp(),
+                        auth_time: code.auth_time.timestamp(),
+                        nonce,
+                        at_hash: URL_SAFE_NO_PAD
+                            .encode(digest.get(..16).ok_or(TokenError::Unavailable)?),
+                    },
+                )
+                .await
+                .map_err(|_| TokenError::Unavailable)?;
+            (Some(token), Some(expires))
+        } else {
+            (None, None)
+        };
     Ok(Issued {
         response: TokenResponse {
             access_token,
@@ -161,6 +170,7 @@ pub(super) async fn issue(
             expires_in: oauth.config.tokens.access_ttl,
             scope,
             id_token,
+            refresh_token: None,
         },
         jti,
         created_at: issued_at,

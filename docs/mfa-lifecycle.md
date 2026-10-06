@@ -2,7 +2,9 @@
 
 Password rotation replaces the OPAQUE registration record and revokes all full,
 MFA bootstrap and MFA challenge sessions in one PostgreSQL transaction. It removes
-that user's pending OPAQUE/WebAuthn proofs and unconfirmed TOTP enrollments. Permanent
+that user's pending OPAQUE/WebAuthn proofs and unconfirmed TOTP enrollments. It also
+revokes [refresh families](oauth-refresh-tokens.md) and advances the authorization revision
+so older codes cannot issue fresh delegated authority. Permanent
 confirmed TOTP credentials, passkeys and hardware keys remain registered. Recovery
 codes and MFA policy remain unchanged; a fresh primary login still must satisfy MFA.
 
@@ -22,7 +24,8 @@ TOTP enrollment/verification, hardware-key enrollment/verification and recovery 
 this guard. Successful factor completion consumes the exact original cookie and commits
 replacement authority before returning `Set-Cookie`. Recovery consumes its code, changes
 MFA to required enrollment, revokes full/challenge/older bootstrap sessions and issues only a limited
-bootstrap session in the same transaction. Recovery batch regeneration and factor/passkey
+bootstrap session in the same transaction. Recovery likewise revokes refresh families
+and advances the user revision. Recovery batch regeneration and factor/passkey
 mutation also recheck current authority under lifecycle locks. Internal roles/scopes
 remain server-resolved and never become delegated OAuth scopes.
 

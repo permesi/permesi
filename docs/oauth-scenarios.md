@@ -16,6 +16,7 @@ target/debug/permesi-oauth-scenario --list
 target/debug/permesi-oauth-scenario --suite smoke
 target/debug/permesi-oauth-scenario --suite full
 target/debug/permesi-oauth-scenario --suite token
+target/debug/permesi-oauth-scenario --suite refresh
 target/debug/permesi-oauth-scenario --suite interop --access-token-ttl-seconds 10
 target/debug/permesi-oauth-scenario --case redemption.bindings
 target/debug/permesi-oauth-scenario --case authentication.shared_exchanges
@@ -29,7 +30,8 @@ version-one JSON manifest; the embedded default is
 Development and Production environments, one application in each, four custom scopes
 and public/confidential clients with different allow-lists. Public clients allow
 `openid`, `profile` and one custom scope; requests use only `openid` and that custom
-scope, proving the allow-list does not become consent. Every case creates a fresh
+scope, proving the allow-list does not become consent. Refresh cases explicitly add
+`offline_access` through management APIs and require visible `prompt=consent` approval. Every case creates a fresh
 tenant; logged-in owner and non-member actors are shared within a repetition.
 Repetitions start fresh stacks. No case depends on another case's grants or tenant mutations. Traffic resets to A
 for every case; the topology-changing failover case always runs last in a repetition.
@@ -120,6 +122,9 @@ repetitions and parallel isolation with
 | `redemption.scope_remove_restore` | Scope removal/restoration cannot revive old code; fresh grant/code has exact bindings, commits once and rejects replay |
 | `redemption.redirect_remove_restore` | Callback removal/restoration cannot revive old code; fresh consent creates a different grant/code |
 
+| `refresh.rotation_reuse` | Actual offline consent, A/B runtime-role rotation, independently verified narrowed JWT/context, hashed lineage and replay-family revocation |
+| `refresh.replica_race` | Real A/B concurrent refresh, one committed issuance and losing-reuse revocation of the winning successor |
+| `refresh.lifecycle` | Scope removal/restoration through management APIs cannot revive the old refresh family |
 | `token.public_claims` | Browser code on A, runtime-role HTTP exchange on B, ignored extensions cannot replace saved nonce, independently verified signatures/issuer/audiences/nonce/auth_time/at_hash/tenant/scopes, committed hashes and internal-session rejection |
 | `token.confidential_credentials` | HTTP Basic current/retiring credentials, missing/wrong/revoked secrets, mandatory S256 and valid retry controls |
 | `token.validation` | Wrong verifier/redirect/client, duplicate and browser authority fields, valid retry, no ID token without openid |
@@ -217,7 +222,7 @@ bounded waits and secret-free reporting intact as scenarios grow.
 
 [Token exchange](oauth-token-exchange.md) now has real runtime-role HTTP scenarios,
 independent RS256/claim verification, current/retiring credentials, rollback, replay,
-concurrency and shared rotation. Next add refresh-family rotation/reuse/concurrency
+concurrency and shared rotation. Refresh-family rotation/reuse/concurrency are now covered; next add broader MFA/account-switching
 coverage alongside its implementation. The six standard-library/resource scenarios
 provide a narrow interoperability foundation; broader clients, formal OIDC conformance
 and production resource-server revocation policy remain separately tracked.

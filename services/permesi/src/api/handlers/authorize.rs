@@ -56,7 +56,7 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
             subject_types_supported: vec!["public"],
             id_token_signing_alg_values_supported: vec!["RS256"],
             code_challenge_methods_supported: vec!["S256"],
-            grant_types_supported: vec!["authorization_code"],
+            grant_types_supported: vec!["authorization_code", "refresh_token"],
             token_security: TokenSecurityMetadata {
                 token_endpoint_auth_methods_supported: vec!["client_secret_basic", "none"],
                 authorization_response_iss_parameter_supported: true,
@@ -444,6 +444,7 @@ fn consent_page(
             "email" => "Read your verified email address",
             "address" => "Read your address",
             "phone" => "Read your phone number",
+            "offline_access" => "Maintain access while you are offline",
             _ => {
                 if scope.description.is_empty() {
                     &scope.name

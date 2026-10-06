@@ -3,7 +3,7 @@
 The standalone [OAuth scenario runner](oauth-scenarios.md) exercises real services,
 Web login/consent, shared PostgreSQL code state and tenant/credential lifecycles on a
 disposable stack. Its coverage matrix distinguishes browser/HTTP checks from internal
-redemption and runtime-role HTTP token issuance; refresh and broader token services remain deferred.
+redemption, runtime-role HTTP issuance and rotating refresh families; broader token services remain deferred.
 
 Permesi implements identity/authentication, sessions, organization authorization,
 OAuth registration management, Authorization Code + S256 PKCE, and [transactional
@@ -71,7 +71,7 @@ membership in several organizations never expands one grant to all of them. The
 chosen resource context is the exact client application within its owning organization;
 cross-organization/resource delegation is intentionally unsupported by this phase.
 Authorization and transactional code redemption recheck active membership,
-resource ancestry, all lifecycle states, and consent. Token issuance preserves those checks; future refresh must do so too. Parent resources have no move API;
+resource ancestry, all lifecycle states, and consent. Code and refresh-token issuance preserve those checks. Parent resources have no move API;
 any future hierarchy move must invalidate grants and enforce their tenant context.
 Persisted membership or consent alone never proves current authorization.
 
@@ -96,7 +96,7 @@ see [shared authentication exchanges](opaque-exchanges.md).
 Creation and deletion coordinate through transaction-owned PostgreSQL parent locks.
 Deleted ancestry cannot authorize outstanding requests or redeem old codes.
 Future token revocation and cache policy must account for these configuration changes;
-signed-token revocation limits are documented in [token exchange](oauth-token-exchange.md); refresh remains deferred.
+signed-token revocation limits are documented in [token exchange](oauth-token-exchange.md); refresh uses [rotating tenant-bound families](oauth-refresh-tokens.md).
 
 Apply the additive canonical `db/sql/02_permesi.sql` script to an existing database
 as the role that owns its existing tables with `ON_ERROR_STOP=1` before deploying the
@@ -210,8 +210,8 @@ redirect before it trusts any redirect destination. It supports `response_type=c
 and query responses. Scopes are explicit, space-delimited, case-sensitive registry
 names; empty tokens and duplicates fail. Each requested token must be in the client's
 allow-list. OIDC claim scopes require `openid`; this phase requires a nonempty nonce
-with `openid` and rejects a nonce without it. `offline_access` is rejected because
-refresh issuance/consent policy is not implemented. S256 is mandatory for both public
+with `openid` and rejects a nonce without it. `offline_access` requires `openid` and
+explicit `prompt=consent`, even when saved consent exists; it enables a hashed refresh family. S256 is mandatory for both public
 and confidential clients, with canonical 43-character base64url SHA-256 challenges.
 There is no plain fallback or omitted-method downgrade. Verifiers must have 43–128
 ASCII unreserved characters and their S256 result is compared in constant time,
@@ -365,8 +365,8 @@ Admission-token PASERK keys and internal admin signing keys remain separate trus
 
 `/.well-known/openid-configuration` advertises explicit issuer, working authorization/token
 endpoints, JWKS, code/query/S256/RS256/public-subject support, `client_secret_basic` and
-public `none`, plus RFC 9207 issuer response identification. It does not advertise UserInfo,
-refresh, implicit or machine grants. OIDC conformance and additional claim disclosure
+public `none`, authorization-code and refresh grants, plus RFC 9207 issuer response
+identification. It does not advertise UserInfo, implicit or machine grants. OIDC conformance and additional claim disclosure
 remain separately tracked; protocol metadata does not claim certification.
 
 ## Confidential-client credentials
@@ -453,29 +453,31 @@ transaction until their operation completes. Credentials establish no user conse
 [TODO.md](../TODO.md) is the authoritative completion checklist. This document explains
 boundaries and dependencies; README and the frontend documentation link back to it.
 A milestone is complete only after its implementation, required checks and independent
-review pass. Token exchange, signed access/ID tokens and accurate code-flow discovery are implemented; refresh, UserInfo and conformance remain pending.
+review pass. Token exchange, signed access/ID tokens and accurate code-flow discovery are implemented; refresh families are implemented; UserInfo and conformance remain pending.
 
 Tenant deletion polish adds permission-aware controls and inline password reauthentication
 with an explicit final confirmation. Durable OPAQUE login/reauthentication is implemented in a separate shared PostgreSQL
 exchange store with AEAD, single-attempt consumption, exact original-session binding
 and cross-replica expiry/replay/race tests. [Deployment and retention](opaque-exchanges.md)
 describe its limits. [WebAuthn/passkey ceremony state](webauthn-exchanges.md) also uses
-shared PostgreSQL, eliminating challenge replica affinity. MFA lifecycle and quota
-hardening remain separately tracked release milestones.
+shared PostgreSQL, eliminating challenge replica affinity. [MFA lifecycle](mfa-lifecycle.md)
+and [authentication admission](authentication-operations.md) guard current sessions and
+shared capacity; broader operational/browser follow-ups remain tracked.
 
 The implemented [token exchange](oauth-token-exchange.md) owns authentication/redemption/
 signing/persistence through commit and is tested through the isolated runtime-role HTTP
 stack. It includes current/retiring credentials, failure rollback, claim/signature checks,
-replay/concurrency, issuer identification and shared signing-key rotation. The next token
-milestone is refresh families with strict scope/tenant revalidation. The isolated runner's
+replay/concurrency, issuer identification, shared signing-key rotation and refresh-family
+rotation/reuse with strict current scope/tenant revalidation. The isolated runner's
 standard `openidconnect-rs` client and protected HTTPS jobs fixture exercise public and
 confidential code flow, callback/ID rejection, exact resource scopes/tenants, real expiry
 and public-key rotation. This is a narrow interoperability foundation, not OIDC
 certification. Broader client/conformance coverage and production revocation/resource
 policy remain separate work; see [scenario coverage](oauth-scenarios.md).
-Refresh tokens follow separately with hashed storage, rotation/reuse detection,
-grant-family revocation and current tenant/consent revalidation. `offline_access` stays
-rejected until refresh policy and issuance are implemented.
+[Refresh families](oauth-refresh-tokens.md) persist hashed lineage, detect reuse, revoke
+families, recheck current tenant/consent and require explicit offline consent. UserInfo,
+introspection and public token revocation follow separately, with authenticated caller
+and disclosure policy. Family revocation does not retract an already signed JWT.
 
 Authorization UX should show the signed-in account and callback host and provide a safe
 restart path for expired requests, with account-switching policy and browser regressions.

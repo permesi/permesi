@@ -15,11 +15,23 @@ use uuid::Uuid;
 
 use super::TokenError;
 
-/// Validated exchange inputs; deliberately cannot be formatted or serialized.
-pub(crate) struct TokenRequest {
+/// Disjoint supported grants; bearer values deliberately cannot be formatted or serialized.
+pub(crate) enum TokenRequest {
+    Code(CodeRequest),
+    Refresh(RefreshRequest),
+}
+
+/// Exact code/redirect/S256 inputs, independent of refresh-family authority.
+pub(crate) struct CodeRequest {
     pub code: SecretString,
     pub redirect_uri: String,
     pub verifier: SecretString,
+}
+
+/// Refresh scope may only narrow the server-stored family; no tenant inputs are accepted.
+pub(crate) struct RefreshRequest {
+    pub token: SecretString,
+    pub scopes: Option<Vec<crate::oauth::scope::OAuthScope>>,
 }
 
 /// Exclusive authentication choice, independent of internal authenticated sessions.
@@ -69,27 +81,72 @@ pub(crate) fn parse(
             return Err(TokenError::InvalidRequest);
         }
     }
-    if ["client_secret", "scope", "organization_id"]
+    if ["client_secret", "organization_id"]
         .iter()
         .any(|key| fields.get(*key).is_some_and(|value| !value.is_empty()))
     {
         return Err(TokenError::InvalidRequest);
     }
-    if take(&mut fields, "grant_type")? != "authorization_code" {
-        return Err(TokenError::UnsupportedGrant);
-    }
+    let grant = take(&mut fields, "grant_type")?;
     let client = fields
         .remove("client_id")
         .filter(|s| !s.is_empty())
         .map(|s| client_id(&s))
         .transpose()?;
     let auth = authentication(headers, client)?;
-    let request = TokenRequest {
-        code: take(&mut fields, "code")?.into(),
-        redirect_uri: take(&mut fields, "redirect_uri")?,
-        verifier: take(&mut fields, "code_verifier")?.into(),
-    };
+    let request = grant_request(&mut fields, &grant)?;
     Ok((request, auth))
+}
+
+/// Parses only inputs belonging to the selected grant and rejects mixed authority fields.
+fn grant_request(
+    fields: &mut BTreeMap<String, String>,
+    grant: &str,
+) -> Result<TokenRequest, TokenError> {
+    match grant {
+        "authorization_code" => {
+            if ["scope", "refresh_token"]
+                .iter()
+                .any(|k| fields.get(*k).is_some_and(|v| !v.is_empty()))
+            {
+                return Err(TokenError::InvalidRequest);
+            }
+            Ok(TokenRequest::Code(CodeRequest {
+                code: take(fields, "code")?.into(),
+                redirect_uri: take(fields, "redirect_uri")?,
+                verifier: take(fields, "code_verifier")?.into(),
+            }))
+        }
+        "refresh_token" => {
+            if ["code", "redirect_uri", "code_verifier"]
+                .iter()
+                .any(|k| fields.get(*k).is_some_and(|v| !v.is_empty()))
+            {
+                return Err(TokenError::InvalidRequest);
+            }
+            let scopes = fields
+                .remove("scope")
+                .map(|s| {
+                    if s.is_empty() || s.len() > 8192 {
+                        return Err(TokenError::InvalidScope);
+                    }
+                    let scopes = crate::oauth::scope::OAuthScope::validate_list(
+                        s.split(' ').map(str::to_owned).collect(),
+                    )
+                    .map_err(|_| TokenError::InvalidScope)?;
+                    if scopes.len() > 64 {
+                        return Err(TokenError::InvalidScope);
+                    }
+                    Ok(scopes)
+                })
+                .transpose()?;
+            Ok(TokenRequest::Refresh(RefreshRequest {
+                token: take(fields, "refresh_token")?.into(),
+                scopes,
+            }))
+        }
+        _ => Err(TokenError::UnsupportedGrant),
+    }
 }
 
 /// Requires a nonempty, single form value; no implicit defaults widen authority.
@@ -213,6 +270,9 @@ mod tests {
         let (request, auth) =
             parse(&headers(), body(&format!("client_id={id}")).as_bytes()).unwrap();
         assert_eq!(auth.client_id().to_string(), id);
+        let TokenRequest::Code(request) = request else {
+            panic!("wrong grant")
+        };
         assert_eq!(request.code.expose_secret(), "opaque");
         let mut headers = headers();
         headers.insert(
@@ -324,5 +384,33 @@ mod tests {
             parse(&headers, body(&format!("client_id={id}")).as_bytes()),
             Err(TokenError::InvalidRequest)
         ));
+    }
+    /// Refresh parses a distinct grant, retaining only redacted token and exact optional scopes.
+    #[test]
+    fn token_parser_refresh_rejects_mixed_grants_and_scope_ambiguity() {
+        let base = "grant_type=refresh_token&client_id=00000000-0000-4000-8000-000000000001&refresh_token=opaque";
+        assert!(matches!(
+            parse(&headers(), base.as_bytes()),
+            Ok((TokenRequest::Refresh(_), _))
+        ));
+        for extra in [
+            "scope=",
+            "scope=jobs%3Aread+jobs%3Aread",
+            "scope=jobs%3Aread++runs%3Aread",
+            "code=other",
+            "redirect_uri=https%3A%2F%2Fclient.example",
+            "code_verifier=verifier",
+            "refresh_token=second",
+            "organization_id=tenant",
+        ] {
+            assert!(parse(&headers(), format!("{base}&{extra}").as_bytes()).is_err());
+        }
+        assert!(
+            parse(
+                &headers(),
+                format!("{base}&scope=openid+offline_access+jobs%3Aread").as_bytes()
+            )
+            .is_ok()
+        );
     }
 }

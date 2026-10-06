@@ -9,6 +9,7 @@
 //! JWTs carry delegated tenant authority; they never authenticate Permesi sessions.
 
 mod claims;
+mod refresh;
 pub(crate) mod request;
 mod storage;
 
@@ -28,7 +29,7 @@ use super::{
     oidc::OAuthState,
 };
 pub(crate) use claims::TokenResponse;
-use request::{ClientAuthentication, TokenRequest};
+use request::{ClientAuthentication, CodeRequest, TokenRequest};
 
 /// Dispatch-validated token lifetimes and complete-request resource limits.
 #[derive(Clone, Debug)]
@@ -38,6 +39,8 @@ pub struct TokenConfig {
     pub(crate) client_ip_attempts: i64,
     pub(crate) access_ttl: i64,
     pub(crate) id_ttl: i64,
+    pub(crate) refresh_absolute_ttl: i64,
+    pub(crate) refresh_idle_ttl: i64,
     pub(crate) timeout_ms: u64,
     pub(crate) max_body_bytes: usize,
 }
@@ -61,6 +64,12 @@ impl TokenConfig {
             id_ttl: *matches
                 .get_one::<i64>("oidc-id-token-ttl-seconds")
                 .context("missing ID TTL")?,
+            refresh_absolute_ttl: *matches
+                .get_one::<i64>("oauth-refresh-absolute-ttl-seconds")
+                .context("missing refresh absolute TTL")?,
+            refresh_idle_ttl: *matches
+                .get_one::<i64>("oauth-refresh-idle-ttl-seconds")
+                .context("missing refresh idle TTL")?,
             timeout_ms: *matches
                 .get_one::<u64>("oauth-token-timeout-ms")
                 .context("missing token deadline")?,
@@ -76,6 +85,8 @@ impl TokenConfig {
                 && (1..=100_000).contains(&policy.client_ip_attempts)
                 && (1..=3600).contains(&policy.access_ttl)
                 && (1..=3600).contains(&policy.id_ttl)
+                && (1..=7_776_000).contains(&policy.refresh_absolute_ttl)
+                && (1..=policy.refresh_absolute_ttl).contains(&policy.refresh_idle_ttl)
                 && (1..=30000).contains(&policy.timeout_ms)
                 && (1024..=65536).contains(&policy.max_body_bytes),
             "invalid token policy"
@@ -92,6 +103,8 @@ impl TokenConfig {
             client_ip_attempts: 30,
             access_ttl: 300,
             id_ttl: 300,
+            refresh_absolute_ttl: 2_592_000,
+            refresh_idle_ttl: 604_800,
             timeout_ms: 5000,
             max_body_bytes: 8192,
         }
@@ -104,6 +117,7 @@ pub(crate) enum TokenError {
     InvalidRequest,
     InvalidClient,
     InvalidGrant,
+    InvalidScope,
     UnsupportedGrant,
     Unavailable,
     Limited,
@@ -116,6 +130,7 @@ impl TokenError {
             Self::InvalidRequest => "invalid_request",
             Self::InvalidClient => "invalid_client",
             Self::InvalidGrant => "invalid_grant",
+            Self::InvalidScope => "invalid_scope",
             Self::UnsupportedGrant => "unsupported_grant_type",
             Self::Unavailable | Self::Limited => "temporarily_unavailable",
         }
@@ -192,7 +207,7 @@ impl<'a> AuthenticatedExchange<'a> {
     async fn redeem(
         &mut self,
         oauth: &OAuthState,
-        request: &TokenRequest,
+        request: &CodeRequest,
     ) -> std::result::Result<RedeemedCode, TokenError> {
         let code = redeem_authorization_code(
             &mut self.tx,
@@ -227,9 +242,51 @@ pub(crate) async fn exchange(
     auth: ClientAuthentication,
 ) -> std::result::Result<TokenResponse, TokenError> {
     let mut guard = AuthenticatedExchange::authenticate(pool, oauth, auth).await?;
-    let code = guard.redeem(oauth, &request).await?;
-    let issued = claims::issue(oauth, &mut guard.tx, &code).await?;
-    storage::record(&mut guard.tx, &request, &issued).await?;
+    let issued = match request {
+        TokenRequest::Code(request) => {
+            let code = guard.redeem(oauth, &request).await?;
+            let mut issued = claims::issue(oauth, &mut guard.tx, &code, true).await?;
+            if code.scopes.iter().any(|s| s.as_str() == "offline_access") {
+                issued.response.refresh_token =
+                    Some(refresh::create(&mut guard.tx, oauth, &request).await?);
+            }
+            storage::record(&mut guard.tx, &request, &issued).await?;
+            issued
+        }
+        TokenRequest::Refresh(request) => {
+            let outcome = refresh::rotate(&mut guard.tx, oauth, guard.client, &request).await?;
+            let refresh::Outcome::Ready { code, replacement } = outcome else {
+                guard.tx.commit().await?;
+                return Err(TokenError::InvalidGrant);
+            };
+            let mut issued = claims::issue(oauth, &mut guard.tx, &code, false).await?;
+            issued.response.refresh_token = Some(replacement);
+            storage::record_refresh(&mut guard.tx, &request, &issued).await?;
+            issued
+        }
+    };
+    refresh::check_output(&mut guard.tx, &issued.response).await?;
     guard.tx.commit().await?;
     Ok(issued.response)
+}
+
+/// User lifecycle transitions that revoke every existing refresh family.
+pub(crate) enum UserRevocation {
+    Password,
+    Recovery,
+}
+
+/// Revokes user refresh authority on the caller's identity-locked transaction; never commits separately.
+pub(crate) async fn revoke_user_authority(
+    connection: &mut sqlx::PgConnection,
+    user: Uuid,
+    cause: UserRevocation,
+) -> Result<(), sqlx::Error> {
+    let reason = match cause {
+        UserRevocation::Password => "password",
+        UserRevocation::Recovery => "recovery",
+    };
+    sqlx::query("UPDATE oauth_refresh_families SET revoked_at=clock_timestamp(),revocation_reason=$2 WHERE user_id=$1 AND revoked_at IS NULL")
+        .bind(user).bind(reason).execute(connection).await?;
+    Ok(())
 }

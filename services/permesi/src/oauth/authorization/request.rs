@@ -153,6 +153,11 @@ impl AuthorizationInput {
             .ok_or_else(|| Error::protocol(ProtocolError::InvalidScope))?;
         let scopes = requested_scopes(tx, &context, names).await?;
         let openid = scopes.iter().any(|scope| scope.name == "openid");
+        if scopes.iter().any(|scope| scope.name == "offline_access")
+            && (!openid || prompt != "consent")
+        {
+            return Err(Error::protocol(ProtocolError::InvalidScope));
+        }
         let nonce_valid = self
             .nonce
             .as_ref()
@@ -172,8 +177,8 @@ impl AuthorizationInput {
     }
 }
 
-/// Parses exact space-delimited scopes, rejecting duplicates, unsupported offline access,
-/// claim scopes without openid, and every token outside the client's registry allow-list.
+/// Parses exact space-delimited scopes, rejecting duplicates,
+/// claim scopes without `openid`, and every token outside the client's registry allow-list.
 async fn requested_scopes(
     tx: &mut Transaction<'_, Postgres>,
     context: &ClientContext,
@@ -184,7 +189,7 @@ async fn requested_scopes(
     }
     let scopes = OAuthScope::validate_list(names.split(' ').map(str::to_owned).collect())
         .map_err(|_| Error::protocol(ProtocolError::InvalidScope))?;
-    if scopes.len() > 64 || scopes.iter().any(|s| s.as_str() == "offline_access") {
+    if scopes.len() > 64 {
         return Err(Error::protocol(ProtocolError::InvalidScope));
     }
     let openid = scopes.iter().any(|s| s.as_str() == "openid");

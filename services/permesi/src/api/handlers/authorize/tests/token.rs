@@ -14,6 +14,8 @@ use test_support::vault::VaultContainer;
 use vault_client::{VaultTarget, VaultTransport};
 
 /// Combines a production-router fixture with real nonexportable transit signing.
+mod refresh;
+
 struct TokenFixture {
     f: Fixture,
     vault: VaultContainer,
@@ -98,8 +100,11 @@ async fn exchange(
     fields: &[(&str, &str)],
     basic: Option<&str>,
 ) -> Result<(StatusCode, Value)> {
-    let mut form = url::form_urlencoded::Serializer::new(String::new());
-    form.extend_pairs(fields.iter().copied());
+    let form = {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer.extend_pairs(fields.iter().copied());
+        serializer.finish()
+    };
     let mut request = Request::builder()
         .method("POST")
         .uri("/token")
@@ -109,7 +114,7 @@ async fn exchange(
     }
     let response = router
         .clone()
-        .oneshot(request.body(Body::from(form.finish()))?)
+        .oneshot(request.body(Body::from(form))?)
         .await?;
     let status = response.status();
     ensure!(

@@ -679,6 +679,21 @@ pub async fn mfa_recovery(
             .into_response();
     }
 
+    if sqlx::query("UPDATE users SET authorization_revision=uuidv4() WHERE id=$1")
+        .bind(principal.user_id)
+        .execute(guard.connection())
+        .await
+        .is_err()
+        || crate::oauth::tokens::revoke_user_authority(
+            guard.connection(),
+            principal.user_id,
+            crate::oauth::tokens::UserRevocation::Recovery,
+        )
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     if let Err(err) = storage::delete_full_sessions(guard.connection(), principal.user_id).await {
         error!("Failed to revoke full sessions after recovery: {err}");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

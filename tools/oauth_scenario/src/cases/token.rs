@@ -31,7 +31,7 @@ fn fields<'a>(
 }
 
 /// Validates protocol/caching/redirect behavior without echoing secret-bearing responses.
-async fn response(reply: reqwest::Response, status: StatusCode) -> Result<Value> {
+pub(super) async fn response(reply: reqwest::Response, status: StatusCode) -> Result<Value> {
     check(
         reply.status() == status,
         "Token endpoint returned an unexpected status.",
@@ -64,7 +64,11 @@ async fn response(reply: reqwest::Response, status: StatusCode) -> Result<Value>
 }
 
 /// Requires a single value-free OAuth error, without envelope/diagnostic leaks.
-async fn failure(reply: reqwest::Response, status: StatusCode, error: &str) -> Result<()> {
+pub(super) async fn failure(
+    reply: reqwest::Response,
+    status: StatusCode,
+    error: &str,
+) -> Result<()> {
     check(
         response(reply, status).await? == json!({"error":error}),
         "Token error leaked details or used incorrect protocol semantics.",
@@ -72,7 +76,7 @@ async fn failure(reply: reqwest::Response, status: StatusCode, error: &str) -> R
 }
 
 /// Verifies fixed RS256/type/key and a signature using published unsigned RSA integers.
-fn verify(token: &str, keys: &Value, typ: &str) -> Result<(Value, Value)> {
+pub(super) fn verify(token: &str, keys: &Value, typ: &str) -> Result<(Value, Value)> {
     let mut parts = token.split('.');
     let header = parts
         .next()
@@ -144,7 +148,7 @@ async fn keys(api: &Api, refresh: bool) -> Result<Value> {
 
 /// Refreshes once on an unknown kid; token exchange is never retried or relaxed.
 /// Unverified header data selects only a lookup in this issuer's fixed public JWKS URL.
-async fn verification_keys(api: &Api, token: &str) -> Result<Value> {
+pub(super) async fn verification_keys(api: &Api, token: &str) -> Result<Value> {
     let header = token
         .split('.')
         .next()
