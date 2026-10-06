@@ -47,6 +47,8 @@ pub struct Report {
     pub version: &'static str,
     pub commit: &'static str,
     pub fixture_seed: u64,
+    /// Effective product-parsed fixture budget; absent when startup never established policy.
+    pub auth_rate_limit_ip_attempts: Option<i64>,
     pub manifest_sha256: String,
     pub components: Components,
     pub cases: Vec<CaseReport>,
@@ -65,6 +67,7 @@ impl Report {
             version: env!("CARGO_PKG_VERSION"),
             commit: permesi::GIT_COMMIT_HASH,
             fixture_seed: seed,
+            auth_rate_limit_ip_attempts: None,
             manifest_sha256,
             components: Components::default(),
             cases: Vec::new(),

@@ -76,6 +76,15 @@ It passes the existing Permesi CLI/dispatch validation on both replicas. Use 10 
 for the interoperability/full suite's real expiration case, as CI does; very short
 lifetimes may expire positive controls during browser/network work. ID-token and
 authorization-code lifetimes retain product defaults. No test changes stored timestamps.
+`--auth-rate-limit-ip-attempts` defaults to 1,000 and accepts 1–100,000. It configures
+the existing product CLI on both disposable replicas and the effective value appears
+in `report.json`. The full suite makes more than the production default's 100
+authorization requests per window through one fixture identity, so it needs an explicit
+bulk-test IP budget. Production defaults, account/action separation, token budgets and
+pending-state quotas stay unchanged; rate limiting remains PostgreSQL-backed and enabled.
+Use `--auth-rate-limit-ip-attempts 100` to reproduce the full suite's 429 negative control.
+Dedicated product HTTP/database regressions independently verify rejection and outage
+behavior with low budgets. The runner never resets counters or retries denied assertions.
 Only readiness polls retry; assertions, secret issuance and mutations do not retry.
 Startup failure, timeout, SIGINT and SIGTERM enter cleanup. Owned processes have
 kill-on-drop fallback. SIGKILL or host failure cannot run destructors; use the

@@ -44,6 +44,9 @@ pub struct Options {
     /// Overrides the owned issuer through its existing clap/dispatch policy, including real expiry tests.
     #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(i64).range(1..=3600))]
     pub access_token_ttl_seconds: i64,
+    /// Gives bulk fixture traffic a finite shared budget without changing product defaults.
+    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(i64).range(1..=100_000))]
+    pub auth_rate_limit_ip_attempts: i64,
     #[arg(long, default_value = "localhost/permesi-scenario-browser:1")]
     pub browser_image: String,
 }

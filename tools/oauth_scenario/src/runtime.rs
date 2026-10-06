@@ -104,8 +104,9 @@ impl Runtime {
             infra,
             &gateway.origin,
             &tls.ca,
-            options.access_token_ttl_seconds,
+            options,
         )?;
+        report.auth_rate_limit_ip_attempts = Some(policy.auth_rate_limit_ip_attempts);
         self.resource = Some(
             ResourceServer::start(
                 &tls,

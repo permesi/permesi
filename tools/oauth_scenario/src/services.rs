@@ -5,6 +5,7 @@
 //! through existing clap/dispatch inputs, with inherited deployment settings removed.
 
 use crate::{
+    cli::Options,
     error::{Result, Safe},
     infrastructure::Infrastructure,
     process::Process,
@@ -20,6 +21,7 @@ pub struct Policy {
     pub oauth: OAuthConfig,
     pub credential_grace_seconds: i64,
     pub access_token_ttl_seconds: i64,
+    pub auth_rate_limit_ip_attempts: i64,
 }
 
 /// Child processes are stored immediately after spawn, including during partial startup.
@@ -51,7 +53,7 @@ impl Services {
             .collect()
     }
 
-    /// Starts actual binaries against shared isolated authority; OPAQUE policy remains at product defaults.
+    /// Starts actual binaries with bounded bulk-fixture admission and otherwise normal authentication policy.
     pub fn start(
         &mut self,
         binaries: [&Path; 2],
@@ -59,7 +61,7 @@ impl Services {
         infra: &Infrastructure,
         origin: &str,
         ca: &Path,
-        access_token_ttl_seconds: i64,
+        options: &Options,
     ) -> Result<Policy> {
         let [permesi, genesis] = binaries;
         let genesis_args = vec![
@@ -95,7 +97,9 @@ impl Services {
                 "--oauth-audience".into(),
                 "scenario-api".into(),
                 "--oauth-access-token-ttl-seconds".into(),
-                access_token_ttl_seconds.to_string(),
+                options.access_token_ttl_seconds.to_string(),
+                "--auth-rate-limit-ip-attempts".into(),
+                options.auth_rate_limit_ip_attempts.to_string(),
                 "--frontend-base-url".into(),
                 origin.into(),
                 "--admission-paserk-url".into(),
@@ -116,7 +120,7 @@ impl Services {
         ];
         self.a = Some(Process::service(permesi, &a_args, &secrets)?);
         self.b = Some(Process::service(permesi, &b_args, &secrets)?);
-        // Domain tests use the same product parser/defaults, with env sources removed.
+        // Domain tests use the same explicit product policy, with env sources removed.
         let mut args = vec!["permesi".to_owned()];
         args.extend(a_args);
         args.extend([
@@ -133,6 +137,7 @@ impl Services {
             .safe("Cannot validate isolated service policy.")?;
         Ok(Policy {
             oauth: args.oauth,
+            auth_rate_limit_ip_attempts: args.auth_rate_limit_ip_attempts,
             access_token_ttl_seconds: *matches
                 .get_one::<i64>("oauth-access-token-ttl-seconds")
                 .ok_or_else(|| crate::error::Failure::harness("Missing access lifetime policy."))?,
