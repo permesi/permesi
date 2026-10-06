@@ -379,8 +379,9 @@ async fn issue_for(
 /// Shares real browser consent assertions with the standard relying-party callback parser.
 async fn consent_callback(context: &mut Context<'_>, request: &Request) -> Result<Value> {
     let page = begin(context, request, "owner").await?;
-    check(
-        page.get("stage").and_then(Value::as_str) == Some("consent"),
+    crate::browser::expect_stage(
+        &page,
+        "consent",
         "Fresh client unexpectedly skipped user consent.",
     )?;
     let mut displayed = page
@@ -405,8 +406,9 @@ async fn consent_callback(context: &mut Context<'_>, request: &Request) -> Resul
         .browser
         .call(json!({"action":"decision","actor":"owner","decision":"allow"}))
         .await?;
-    check(
-        result.get("stage").and_then(Value::as_str) != Some("consent_incomplete"),
+    crate::browser::expect_stage(
+        &result,
+        "callback",
         match result.get("status").and_then(Value::as_u64) {
             Some(400) => "Consent POST returned a protocol error (400).",
             Some(403) => "Consent POST rejected browser origin (403).",
@@ -1214,8 +1216,9 @@ async fn failover(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
         .use_b
         .store(false, std::sync::atomic::Ordering::SeqCst);
     let page = begin(context, &request, "owner").await?;
-    check(
-        page.get("stage").and_then(Value::as_str) == Some("consent"),
+    crate::browser::expect_stage(
+        &page,
+        "consent",
         "Replica A did not persist consent request.",
     )?;
     context

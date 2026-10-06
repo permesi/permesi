@@ -22,6 +22,22 @@ pub struct Browser {
     seconds: u64,
 }
 
+/// Checks positive navigation with static status diagnostics, never echoing URLs or browser data.
+pub fn expect_stage(result: &Value, expected: &str, fallback: &'static str) -> Result<()> {
+    check(
+        result.get("stage").and_then(Value::as_str) == Some(expected),
+        match result.get("status").and_then(Value::as_u64) {
+            Some(400) => "Browser authorization returned a protocol error (400).",
+            Some(401) => "Browser authorization requires authentication (401).",
+            Some(403) => "Browser authorization rejected the request (403).",
+            Some(429) => "Browser authorization exceeded the shared rate limit (429).",
+            Some(500) => "Browser authorization failed internally (500).",
+            Some(503) => "Browser authorization dependency is unavailable (503).",
+            _ => fallback,
+        },
+    )
+}
+
 impl Browser {
     /// Uses host networking to reach owned loopback listeners; mounts the public CA, never keys.
     pub async fn start(engine: &mut Podman, image: &str, ca: &Path, seconds: u64) -> Result<Self> {
@@ -141,5 +157,48 @@ impl Browser {
             .await
             .safe("Cannot reap browser process.")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_diagnostics_distinguish_status_without_disclosing_browser_values() {
+        let fallback = "Unexpected navigation stage.";
+        assert!(
+            expect_stage(
+                &json!({"stage":"consent","status":200}),
+                "consent",
+                fallback
+            )
+            .is_ok()
+        );
+        for (status, expected) in [
+            (
+                429,
+                "Browser authorization exceeded the shared rate limit (429).",
+            ),
+            (500, "Browser authorization failed internally (500)."),
+            (
+                503,
+                "Browser authorization dependency is unavailable (503).",
+            ),
+        ] {
+            let result = json!({"stage":"protocol_error","status":status,"url":"https://issuer.invalid/authorize?secret=do-not-disclose","error":"private database diagnostic"});
+            let failure = expect_stage(&result, "callback", fallback).err();
+            assert_eq!(failure.map(|error| error.message), Some(expected));
+        }
+        assert_eq!(
+            expect_stage(
+                &json!({"stage":"protocol_error","status":"private-value"}),
+                "consent",
+                fallback
+            )
+            .err()
+            .map(|error| error.message),
+            Some(fallback)
+        );
     }
 }

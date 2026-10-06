@@ -92,7 +92,9 @@ repetitions, assertion/infrastructure/harness/cleanup classifications, fixture/b
 identities, resolved image IDs and explicit planned capabilities. Failure, blocked
 selected cases or cleanup errors return nonzero. Screenshots, traces, browser logs,
 HTTP payloads/headers and callback query strings are excluded. Errors use curated
-static messages; third-party diagnostic strings are discarded. Podman logging is
+static messages; third-party diagnostic strings are discarded. Positive browser
+navigation failures distinguish protocol, rate-limit and dependency HTTP statuses
+using fixed messages, without reporting URLs, request values or response bodies. Podman logging is
 disabled and checked for every run container, including private browser IPC and Vault
 dev output. Chromium CDP uses inherited pipes, with no host debugging TCP listener. Validate runner
 ownership, startup failure, interruption, deadline expiry, injected cleanup failure,

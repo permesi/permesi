@@ -68,6 +68,7 @@ async function evaluate(page, expression) {
 }
 
 async function navigate(page, url, seconds) {
+  page.status = null; page.hasLocation = null; page.hadRedirect = false;
   const previous = await evaluate(page, 'performance.timeOrigin');
   await call('Page.navigate', {url}, page.session);
   await wait(() => evaluate(page, `performance.timeOrigin !== ${JSON.stringify(previous)} && document.readyState === 'complete'`), seconds);
@@ -85,7 +86,7 @@ async function newPage(input) {
 }
 
 async function stage(page) {
-  return evaluate(page, `(() => {
+  const result = await evaluate(page, `(() => {
     if (location.origin === ${JSON.stringify(new URL(page.callback).origin)} && location.pathname === '/callback') return {stage:'callback',url:location.href};
     if (location.origin === ${JSON.stringify(page.origin)} && location.pathname === '/client-callback') return {stage:'callback',url:location.href};
     if (location.origin !== ${JSON.stringify(page.origin)}) return {stage:'unexpected_origin'};
@@ -94,6 +95,7 @@ async function stage(page) {
     if (document.contentType === 'application/json') return {stage:'protocol_error',url:location.href};
     return null;
   })()`);
+  return result ? {...result, status:page.status} : null;
 }
 
 async function login(page, input) {
