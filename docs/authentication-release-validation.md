@@ -157,8 +157,12 @@ The independent review evidence above is from Grok and Claude.
 
 The subsequent [database hardening phase](database-hardening.md) implements
 non-superuser ownership, explicit runtime grants and parent-delete history restrictions.
-Independent Claude/Herdr source-review corrections are applied and database/workspace
-regressions pass; final browser, harness and three-replica gates remain pending.
+Independent Claude/Herdr source-review corrections are applied. The refreshed graph
+passes 655 default/685 all-feature workspace tests, database/Vault and browser checks,
+all 32 three-replica scenarios and seven harness checks in
+[run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785).
+The separate Rust security audit also passes; rollout details and remaining limits
+are recorded in the database hardening document.
 The completed results above apply to the
 preceding release batch. HAProxy scripts
 and real transport/proxy tests were reviewed; an end-to-end HAProxy stack, multi-host

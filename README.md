@@ -188,10 +188,9 @@ schedule pg_cron jobs directly.
 The [database hardening phase](docs/database-hardening.md) adds verified non-superuser
 schema ownership, explicit runtime grants and retained-history parent-deletion restrictions.
 Independent Claude/Herdr source review has identified and corrected bootstrap and test
-issues; database regressions and both workspace test variants passed before the
-compatible dependency refresh. Final dependency, browser, harness and three-replica
-validation remain pending. See the linked
-validation status and rollout instructions.
+issues. The refreshed dependency graph passes database/Vault regressions, both
+workspace test variants, browser checks, all 32 three-replica scenarios and seven
+harness checks on CI. See the linked validation evidence and rollout instructions.
 
 ## Cryptography
 

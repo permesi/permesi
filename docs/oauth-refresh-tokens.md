@@ -63,8 +63,9 @@ foreign keys use immediate RESTRICT, so the administrative user-delete API canno
 cascade into a live family or retained receipt; dependent users produce a generic 409.
 Schema reapplication upgrades the constraints without deleting existing rows and resets
 legacy broad grants. See [database hardening](database-hardening.md) for migration,
-independent source-review corrections, passing PostgreSQL regressions and pending
-three-replica validation.
+independent source-review corrections and passing PostgreSQL, refreshed dependency
+and three-replica validation. Live A/B/C races require one committed issuance and
+reject reuse of the successor on every replica after losing requests revoke its family.
 Owner-authorized cleanup resolves trusted `public` tables before explicitly searching
 `pg_temp`, preventing runtime-created temporary tables and triggers from crossing the
 function-owner boundary. Actual Vault credential tests exercise that rejection on both

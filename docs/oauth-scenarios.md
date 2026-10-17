@@ -60,7 +60,7 @@ identities are required; code and refresh races pin requests to all three socket
 require one committed winner and two protocol rejections. Offline authorization starts
 on A, code exchange uses B and refresh rotation uses C. Both service databases use
 non-superuser schema ownership and canonical runtime policies; see
-[database hardening](database-hardening.md) for rollout and pending validation.
+[database hardening](database-hardening.md) for rollout and validation evidence.
 This is multi-process state
 coverage, not a claim of multi-host transport/load testing.
 
@@ -255,9 +255,14 @@ the full MFA matrix or formal OIDC conformance.
 
 ## Validation and independent review
 
-The records below describe the earlier A/B milestones. They do not validate the
-subsequent three-replica extension; its current gates and source reviews are recorded
-in [database hardening](database-hardening.md).
+The A/B/C extension passed all 32 cases with zero cleanup errors and all seven
+harness checks in
+[run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785),
+alongside the browser, database, dependency and default/all-feature workspace gates.
+Its Claude/Herdr source reviews and rollout boundary are recorded in
+[database hardening](database-hardening.md). Three same-host processes do not
+establish multi-host load or network-failure behavior.
+The records below preserve the earlier A/B milestones and their suite sizes.
 
 The earlier shared-authentication/refresh batch passed all 32 cases, including runtime-role
 refresh rotation, replay and lifecycle rejection across A/B. Its workspace, database,

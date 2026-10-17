@@ -110,42 +110,48 @@ INHERIT/SET grant on created logins is intentionally rejected during reapplicati
 
 ## Verification status
 
-The final HA and hosted gates remain pending. Seven real PostgreSQL privilege tests and
-the actual Vault credential test now pass, including hostile-owner, failed-bootstrap,
-legacy repair, three independent runtime identities, immutable consent and live-lease
-reapplication. The local test fixtures can reach their configured container API, while
-direct Podman CLI runtime writes and Node listener binding remain denied. The standalone
-scenario preflight is still blocked at 0/32 and browser/harness gates remain open.
-Setup failures are not coverage. Before the compatible dependency refresh described
-below, both complete default and all-feature workspace suites passed, including real
-PostgreSQL/Vault integration and runner routing tests. The two additional runtime-login
-HTTP regressions also passed. Final checks against the refreshed lockfiles remain pending.
-Five initial Claude/Herdr source-review rounds reported no remaining actionable
-findings. Two later reviews checked the runtime correction and its regressions;
-all implementation findings are resolved, and the final documentation correction
-records their scope and the remaining hosted validation.
-Source review does not establish live database or HA behavior.
-The three hermetic bootstrap-diagnostic tests pass. Temporarily removing SQLSTATE validation
-makes the negative test fail at its assertion; restoring it returns the tests to green.
-That mutation establishes diagnostic classification only, not live database security.
-Before the dependency refresh, compilation, strict workspace Clippy, OpenAPI
-generation, Web native tests and the WASM build passed. These results do not
-complete this milestone or establish compatibility with the refreshed lockfiles.
+The completed implementation and refreshed lockfiles at `bc8a402` pass
+[Test & Build run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785)
+and the separate Rust security audit. The default workspace coverage run passed 655
+tests; the complete all-feature workspace run passed 685. Both include the real
+PostgreSQL/Vault regressions. The two browser tests ignored in ordinary workspace
+runs passed in the dedicated browser job, alongside the console smoke suite.
+All 32 isolated scenarios passed with actual A/B/C processes, including cross-replica
+OPAQUE exchanges, code and refresh races, failover and replay rejection. All seven
+harness checks passed, with zero cleanup errors in the full protocol report.
+
+Seven database privilege tests and the actual Vault credential test cover hostile
+owners, failed bootstrap, legacy repair, three independent runtime identities,
+immutable consent and live-lease reapplication. Two runtime-login HTTP regressions
+also pass in both workspace variants. Claude/Herdr review corrections are applied,
+and the final source review reported no remaining actionable findings. Source review
+and execution evidence are distinct; the reviewer did not independently run the
+live dependency tests.
+
+Local fixtures can reach their configured container API, but direct Podman CLI
+runtime writes, Node listener binding and registry downloads remain blocked in this
+agent session. Its local standalone preflight result of 0/32 is not coverage; the
+successful hosted A/B/C run supplies the full protocol evidence. No environment
+restriction was bypassed or test weakened to obtain a local pass.
 
 The current validation record is:
 
 | Gate | Result |
 | --- | --- |
-| Formatting and diff checks | Pass |
-| Strict all-target/all-feature Clippy and workspace test compilation | Pass before dependency refresh; refreshed graph awaits hosted validation |
-| Admission-token, Web native and test-support tests | 51 pass before dependency refresh |
+| Formatting and diff checks | Pass locally; formatting also passes in CI |
+| Strict all-target/all-feature Clippy and workspace compilation | Pass in CI against refreshed lockfiles |
+| Admission-token, Web native and test-support tests | 51 pass in both workspace variants |
 | Bootstrap diagnostic mutation | Assertion fails with SQLSTATE check removed; passes after restoration |
-| OpenAPI generation, WASM/Web and native scenario builds | Pass before dependency refresh |
-| Seven database privilege tests and actual Vault runtime test | Eight pass against real disposable dependencies before dependency refresh |
-| Canonical schema verifier | Passes locally through bootstrap and on hosted CI |
-| Default/all-feature workspace tests | Pre-refresh pass; Permesi library 425/440 pass, two later HTTP regressions pass separately; final lockfile rerun pending |
+| OpenAPI generation | Local generation before dependency refresh reproduces committed artifacts |
+| Native release, WASM/Web release and exact scenario binaries | Pass in CI against refreshed lockfiles |
+| Seven database privilege tests and actual Vault runtime test | Eight pass against real disposable dependencies, including refreshed default/all-feature CI runs |
+| Canonical schema verifier | Corrected verifier passes locally and in CI |
+| Default/all-feature workspace tests | 655/685 pass; Permesi library 427/442 pass; two browser tests run separately |
 | Database safeguard mutations | Consent rewrites, administrator-session restoration and skipped global preflight each fail at their intended assertion; restored sources and all eight database/Vault tests pass |
-| Browser, harness and full three-replica scenario suite | Blocked by local listener/Podman permissions; protocol suite 0/32 |
+| Browser | Console smoke suite and both real PostgreSQL browser tests pass in CI |
+| Full three-replica scenario suite | 32/32 pass; zero cleanup errors |
+| Harness cleanup and isolation | All seven checks pass, including repetitions and concurrent stacks |
+| Rust and full Web dependency audits | Pass under existing policy; maintenance warnings described below |
 
 The first pushed commit, `259b53d`, passed hosted formatting, Clippy, compilation,
 production Web audit and canonical PostgreSQL schema verification in
@@ -160,17 +166,18 @@ denied. The verifier checks the enabled row-level BEFORE UPDATE trigger, its exa
 function, all-column coverage and absence of a WHEN condition or arguments.
 Two production-router regressions authenticate through a real non-superuser runtime
 login, covering code exchange/replay and saved-consent skipping with exact requested
-scopes. They passed separately after the full workspace runs; final aggregate counts
-against the refreshed graph remain pending. Three temporary SQL mutations removed
+scopes. They passed separately locally and in both refreshed hosted workspace runs.
+Three temporary SQL mutations removed
 the consent guard, restored an administrator session, or skipped global preflight.
 Each failed at the intended security assertion. Sources were restored byte-for-byte,
 and all seven database tests plus the Vault test returned to green.
-Corrected hosted protocol validation remains pending. The integration job separately timed out starting
+The corrected hosted protocol suite passes. The initial integration job separately timed out starting
 PostgreSQL containers for existing Genesis tests and stopped before the Permesi
 database/Vault targets. Its new `--no-fail-fast` flag preserves later test-binary results
 when an earlier dependency fails. The unit job also recorded three PostgreSQL startup
 timeouts alongside the refresh assertion; its final result was 421 pass, four fail.
-The complete local Genesis integration target subsequently passed both tests.
+The complete local Genesis integration target and the corrected hosted default and
+all-feature integration runs subsequently passed both tests without retry.
 A hostile-owner fixture also found ambiguous resolution of an unqualified `format()`
 call during schema reapplication. Canonical Genesis and Permesi grant/migration calls
 now use `pg_catalog.format`, and protocol-scope seeding uses `pg_catalog.unnest`.
@@ -188,10 +195,20 @@ update from [PR 15](https://github.com/permesi/permesi/pull/15). It addresses th
 indexed-source-map denial of service. The npm audit gate now includes build dependencies.
 
 Local registry resolution/downloads fail for `registry.npmjs.org` and `static.crates.io`;
-npm installation and refreshed Rust builds/audits therefore lack a local pass. The
-existing CI unit job now runs the full all-feature workspace suite, alongside the
-separate default unit/integration jobs, so hosted validation covers the refreshed graph.
+npm installation and refreshed Rust builds/audits therefore lack a local pass. Hosted
+installation, audits, builds and both workspace variants pass with those lockfiles.
+The existing CI unit job runs the full all-feature workspace suite after its default
+unit step, alongside the separate default integration job. This repeats database work
+across feature sets to validate the refreshed graph; a failed default unit step stops
+that job before its all-feature step. Container startup timeouts require diagnosis or
+a retry, and a skipped step cannot establish all-feature coverage.
 No new audit exclusions or weakened checks are used.
+The hosted Rust audit passed for `bc8a402` in
+[run 39028187792](https://github.com/permesi/permesi/actions/runs/39028187792).
+It retains the existing reviewed RSA private-key timing exception and reports two
+unmaintained-crate warnings: direct `rustls-pemfile` usage and Leptos' transitive
+`paste` dependency. Their replacement/upstream tracking remains in TODO; this refresh
+does not claim those maintenance risks are resolved.
 
 ## Independent review
 
@@ -222,7 +239,11 @@ preflight. The latest Claude review confirmed the two runtime-router tests, exac
 trigger metadata, UPSERT/MERGE negatives, integration continuation and catalog helper
 qualification. Its sole remaining finding was stale documentation, corrected here.
 The reviewer reran formatting/diff checks but did not independently execute the live
-database tests. No review finding was rejected as a false positive.
+database tests. A final review verified the documentation corrections and approved
+the source, regressions, CI wiring and documentation, conditional on completing the
+hosted validation, which subsequently passed. Its owned Herdr pane was closed.
+No review finding was rejected
+as a false positive.
 
 The schema owner is trusted to define its own schema and policy; the verifier cannot
 prove safety after that owner is compromised. Genesis-specific hostile-owner and

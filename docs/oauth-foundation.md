@@ -407,10 +407,13 @@ PostgreSQL time determines expiration, not the browser clock. Identity/hash/crea
 fields are immutable under updates, revocation cannot be undone by updates, and an
 existing deadline may only shorten. New records start live with database-assigned creation
 time; the first retirement cannot exceed the 3600-second policy ceiling. Runtime roles
-cannot directly delete or truncate credential history; parent-row FK cascades still remove
-it, including through the role's broader existing privileges.
-This is defense in depth, not protection against a compromised schema owner or the
-runtime role's broader existing write privileges; least-privilege/RLS work remains pending.
+cannot directly delete or truncate credential history, or physically delete its client
+and tenant parents. Parent-row foreign keys retain their physical-deletion semantics
+for privileged maintenance. The [database hardening phase](database-hardening.md)
+defines the canonical service-role privileges and their validation status.
+These controls do not protect against a compromised schema owner or turn shared
+service credentials into tenant-specific authority. Tenant RLS remains separate work;
+handlers must still enforce current user, role and tenant authorization.
 
 The overlap default is 900 seconds, configurable from 1 to 3600 with
 `--oauth-client-secret-grace-seconds` / `PERMESI_OAUTH_CLIENT_SECRET_GRACE_SECONDS`.
@@ -498,7 +501,9 @@ local Chromium tests do not establish cross-browser or production load behavior.
 Broader tenant-bound grants/consent management, UserInfo, introspection, token revocation,
 device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
 and resource policy; possession of a confidential credential must not manufacture a user
-grant. Audit UI and database least-privilege/RLS remain tracked separately in TODO.md.
+grant. Audit UI and tenant RLS remain tracked separately in TODO.md; the implemented
+service-role ownership/privilege policy and its validation record are described in
+[database hardening](database-hardening.md).
 
 ## Review boundaries and deferred policy
 

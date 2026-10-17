@@ -52,7 +52,7 @@ Retained-family and issuance foreign keys now reject grant deletion, including c
 from a user's physical deletion. The existing administrative user-delete endpoint returns
 409 for dependent records and still deletes unreferenced users. Tenant lifecycle remains
 explicit bottom-up soft deletion. See [database hardening](../../docs/database-hardening.md)
-for the privilege matrix, migration boundary and pending validation.
+for the privilege matrix, migration boundary and completed validation evidence.
 
 Both `cleanup_expired_tokens()` and `genesis_tokens_rollover()` explicitly search trusted
 `public` objects before `pg_temp`, with PostgreSQL's implicit trusted catalog search.
@@ -68,7 +68,8 @@ owner connections apply schemas, seeds and transactional verification. `SET ROLE
 inside an administrator connection is not an owner security boundary. Catalogs and extension-managed members retain their
 own ownership. Future tables/sequences require explicit runtime grants; broad legacy
 default grants are removed. Independent Claude/Herdr source-review corrections are
-applied and PostgreSQL regressions pass; final HA validation remains tracked in
+applied. PostgreSQL/Vault regressions, refreshed dependency checks and all 32
+three-replica scenarios pass on CI; the completed milestone is recorded in
 [TODO.md](../../TODO.md).
 
 ## Runtime role & grant checks
