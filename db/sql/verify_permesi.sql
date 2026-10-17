@@ -3,6 +3,26 @@
 
 BEGIN;
 
+-- Tenant parents cannot physically cascade-delete retained authority. User deletion
+-- remains available, but both retained-history foreign keys must reject its cascade.
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM pg_catalog.pg_constraint
+        WHERE conrelid IN ('public.oauth_refresh_families'::regclass,'public.oauth_token_issuances'::regclass)
+            AND confrelid='public.oauth_grants'::regclass AND contype='f' AND confdeltype='r')<>2 THEN
+        RAISE EXCEPTION 'missing retained-history parent deletion restrictions';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') THEN
+        IF EXISTS (SELECT 1 FROM unnest(ARRAY['organizations','projects','environments','applications','oauth_clients','oauth_grants']) relation
+                WHERE has_table_privilege('permesi_runtime',relation,'DELETE'))
+            OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c,unnest(ARRAY['TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) privilege
+                WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p')
+                    AND has_table_privilege('permesi_runtime',c.oid,privilege)) THEN
+            RAISE EXCEPTION 'runtime role retains destructive parent or maintenance privileges';
+        END IF;
+    END IF;
+END $$;
+
 -- Refresh history and only the irreversible transition columns survive bootstrap grants.
 DO $$
 BEGIN

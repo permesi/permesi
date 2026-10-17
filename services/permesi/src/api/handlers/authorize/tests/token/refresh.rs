@@ -406,16 +406,8 @@ async fn refresh_schema_reapplication_preserves_bindings_history_and_runtime_per
     sqlx::query("INSERT INTO opaque_exchanges(id_hash,purpose,sealed_state,created_at,expires_at) VALUES($1,'login',$2,clock_timestamp(),clock_timestamp()+INTERVAL '5 minutes')").bind(&legacy).bind(vec![0u8;40]).execute(&t.f.pool).await?;
     let mut conn = t.f.pool.acquire().await?;
     test_support::sql::execute_script(&mut conn, "02_permesi.sql", SCHEMA).await?;
-    let bootstrap = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../db/sql/00_init.sql"
-    ));
-    let marker = "GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;";
-    let (_, grants) = bootstrap
-        .split_once(marker)
-        .context("canonical runtime grants")?;
-    test_support::sql::execute_script(&mut conn, "bootstrap grants", &format!("{marker}{grants}"))
-        .await?;
+    // The canonical runtime policy is now part of SCHEMA itself. Reapplication above
+    // repairs the deliberately broad legacy grants; the psql bootstrap uses the same policy.
     test_support::sql::execute_script(
         &mut conn,
         "verify_permesi.sql",

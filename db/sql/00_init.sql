@@ -6,8 +6,17 @@
 -- `CREATE DATABASE` can't run inside a transaction block, so we use `psql`'s `\gexec` to
 -- conditionally emit and execute the statement.
 
+\set ON_ERROR_STOP on
+\set bootstrap_admin :USER
+SET search_path = pg_catalog, pg_temp;
+DO $$ BEGIN
+    IF pg_catalog.current_database()<>'postgres' THEN
+        RAISE EXCEPTION 'Start canonical bootstrap in the postgres maintenance database';
+    END IF;
+END $$;
+
 -- Guard against concurrent init runs (entrypoint + `just postgres`).
-SELECT pg_advisory_lock(hashtext('permesi-initdb'));
+SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtext('permesi-initdb')::bigint);
 
 -- -----------------------------------------------------------------------------
 -- Vault database root users (dev defaults).
@@ -19,28 +28,35 @@ SELECT pg_advisory_lock(hashtext('permesi-initdb'));
 -- security-sensitive. In production, create equivalent roles with strong
 -- passwords and do not rely on this dev bootstrap.
 -- -----------------------------------------------------------------------------
-SELECT format(
+SELECT pg_catalog.format(
     'CREATE ROLE %I WITH LOGIN PASSWORD %L CREATEROLE',
     'vault_permesi',
     'change-me'
 )
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_permesi')\gexec
 
-SELECT format(
+SELECT pg_catalog.format(
     'CREATE ROLE %I WITH LOGIN PASSWORD %L CREATEROLE',
     'vault_genesis',
     'change-me'
 )
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_genesis')\gexec
 
+-- Validate roles before any membership or database-ownership mutation.
+SELECT pg_catalog.format('CREATE ROLE %I NOLOGIN', 'genesis_runtime')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'genesis_runtime')\gexec
+SELECT pg_catalog.format('CREATE ROLE %I NOLOGIN', 'permesi_runtime')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime')\gexec
+\ir bootstrap_ownership.sql
+
 -- Allow Vault to terminate sessions during lease revocation (non-superuser).
 GRANT pg_signal_backend TO vault_permesi;
 GRANT pg_signal_backend TO vault_genesis;
 
-SELECT format('CREATE DATABASE %I', 'genesis')
+SELECT pg_catalog.format('CREATE DATABASE %I', 'genesis')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'genesis')\gexec
 
-SELECT format('CREATE DATABASE %I', 'permesi')
+SELECT pg_catalog.format('CREATE DATABASE %I', 'permesi')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'permesi')\gexec
 
 -- Ensure the databases are owned by the Vault root users.
@@ -53,100 +69,54 @@ REVOKE ALL ON DATABASE permesi FROM PUBLIC;
 GRANT CONNECT ON DATABASE genesis TO vault_genesis;
 GRANT CONNECT ON DATABASE permesi TO vault_permesi;
 
-SELECT pg_advisory_unlock(hashtext('permesi-initdb'));
+SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtext('permesi-initdb')::bigint);
 
--- Bootstrap genesis schema (idempotent, safe to re-run).
-\connect genesis
+-- Administrator passes only inspect catalogs and transfer ownership under a pinned path.
+-- Application DDL/DML runs in a fresh owner-authenticated connection: SET ROLE would
+-- retain an administrator session identity that an owner-controlled trigger could restore.
+\connect genesis :bootstrap_admin
+SET search_path = pg_catalog, pg_temp;
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('genesis-schema-bootstrap')::bigint);
+\ir bootstrap_ownership.sql
+GRANT genesis_runtime TO vault_genesis WITH ADMIN OPTION;
+COMMIT;
+
+\connect genesis vault_genesis
+SET search_path = public, pg_temp;
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('genesis-schema-bootstrap')::bigint);
 \ir 01_genesis.sql
 \ir seed_test_client.sql
+COMMIT;
 
--- Lock down the default schema so dynamic Vault users can't create objects.
-REVOKE USAGE ON SCHEMA public FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-ALTER SCHEMA public OWNER TO vault_genesis;
-DO $$
-BEGIN
-    REASSIGN OWNED BY postgres TO vault_genesis;
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE NOTICE 'Skipping REASSIGN OWNED in genesis: %', SQLERRM;
-END $$;
+\connect genesis :bootstrap_admin
+SET search_path = pg_catalog, pg_temp;
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('genesis-schema-bootstrap')::bigint);
+\ir bootstrap_ownership.sql
+COMMIT;
 
--- -----------------------------------------------------------------------------
--- Genesis runtime role
---
--- Vault-minted DB users only get membership in this role, so we can manage
--- least-privilege grants centrally (and avoid expired users owning objects).
--- -----------------------------------------------------------------------------
-SELECT format('CREATE ROLE %I NOLOGIN', 'genesis_runtime')
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'genesis_runtime')\gexec
-
-GRANT genesis_runtime TO vault_genesis WITH ADMIN OPTION;
-
-GRANT CONNECT, TEMPORARY ON DATABASE genesis TO genesis_runtime;
-GRANT USAGE ON SCHEMA public TO genesis_runtime;
-
-GRANT SELECT ON TABLE clients TO genesis_runtime;
--- Genesis inserts with `RETURNING`, so SELECT is required alongside INSERT.
-GRANT SELECT, INSERT ON TABLE tokens TO genesis_runtime;
-GRANT SELECT, INSERT ON TABLE tokens_default TO genesis_runtime;
-
--- Partitions (tables) created by the schema owner should inherit runtime grants.
-ALTER DEFAULT PRIVILEGES FOR ROLE vault_genesis IN SCHEMA public
-    GRANT SELECT, INSERT ON TABLES TO genesis_runtime;
-
--- Bootstrap permesi schema.
-\connect permesi
-\ir 02_permesi.sql
-
--- Lock down the default schema so dynamic Vault users can't create objects.
-REVOKE USAGE ON SCHEMA public FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-ALTER SCHEMA public OWNER TO vault_permesi;
-DO $$
-BEGIN
-    REASSIGN OWNED BY postgres TO vault_permesi;
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE NOTICE 'Skipping REASSIGN OWNED in permesi: %', SQLERRM;
-END $$;
-
--- -----------------------------------------------------------------------------
--- Permesi runtime role
---
--- Vault-minted DB users only get membership in this role, so we can manage
--- grants centrally (and avoid expired users owning objects).
--- -----------------------------------------------------------------------------
-SELECT format('CREATE ROLE %I NOLOGIN', 'permesi_runtime')
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime')\gexec
-
+\connect permesi :bootstrap_admin
+SET search_path = pg_catalog, pg_temp;
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('permesi-schema-bootstrap')::bigint);
+\ir bootstrap_ownership.sql
 GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;
+COMMIT;
 
-GRANT CONNECT, TEMPORARY ON DATABASE permesi TO permesi_runtime;
-GRANT USAGE ON SCHEMA public TO permesi_runtime;
--- Postgres does not support `GRANT USAGE ON ALL TYPES`, so enumerate enum types.
-GRANT USAGE ON TYPE user_status TO permesi_runtime;
-GRANT USAGE ON TYPE email_outbox_status TO permesi_runtime;
-GRANT USAGE ON TYPE environment_tier TO permesi_runtime;
-GRANT USAGE ON TYPE org_membership_status TO permesi_runtime;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO permesi_runtime;
--- Deny direct runtime deletion/truncation of credential history. Owner FK cascades still work.
-REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
--- Token receipt history is immutable for runtime roles, including bootstrap-wide grants.
-REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
-REVOKE UPDATE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE opaque_exchanges, webauthn_exchanges FROM permesi_runtime;
--- Refresh replay evidence and immutable bindings must survive the bootstrap-wide grant above.
-REVOKE ALL ON TABLE oauth_refresh_families, oauth_refresh_tokens FROM permesi_runtime;
-GRANT SELECT, INSERT ON TABLE oauth_refresh_families, oauth_refresh_tokens TO permesi_runtime;
-GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
-GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO permesi_runtime;
+\connect permesi vault_permesi
+SET search_path = public, pg_temp;
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('permesi-schema-bootstrap')::bigint);
+\ir 02_permesi.sql
+COMMIT;
+-- Verification exercises application code, so it also runs as the authenticated owner.
+\ir verify_permesi.sql
 
-ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public
-    GRANT ALL PRIVILEGES ON TABLES TO permesi_runtime;
-
-ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public
-    GRANT ALL PRIVILEGES ON SEQUENCES TO permesi_runtime;
-
-ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public
-    GRANT USAGE ON TYPES TO permesi_runtime;
+\connect permesi :bootstrap_admin
+SET search_path = pg_catalog, pg_temp;
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('permesi-schema-bootstrap')::bigint);
+\ir bootstrap_ownership.sql
+COMMIT;

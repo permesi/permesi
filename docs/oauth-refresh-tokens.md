@@ -58,26 +58,20 @@ immutable family metadata and irreversible consumed/revoked transitions. Runtime
 permit only insertion/read and the transition columns on refresh tables; they forbid
 rewriting bindings or directly deleting/truncating replay history. Privileged cleanup removes a family's entire lineage
 seven days after its absolute expiration, retaining spent tokens while the family can live.
-Existing broader runtime grants still permit physical deletion of grants, users and other
-parents, which can indirectly cascade through a family and erase its history. OAuth
-management revokes grants and tenant management soft-deletes resources. The existing
-internal user-management `DELETE /v1/users/{id}` physically deletes users and cascades
-their authority/history; this refresh milestone does not change that endpoint's policy.
-Protecting history against arbitrary parent deletion by a compromised database runtime
-requires the separately tracked least-privilege/foreign-key hardening work.
-Both schema reapplication and the bootstrap's final grant segment enforce these restrictions.
-The isolated runner checks the transactional schema verifier after canonical bootstrap grants;
-Vault integration checks the effective permissions of minted and replacement runtime users.
+Runtime tenant-parent and grant DELETE privileges are removed. Composite retained-history
+foreign keys use immediate RESTRICT, so the administrative user-delete API cannot
+cascade into a live family or retained receipt; dependent users produce a generic 409.
+Schema reapplication upgrades the constraints without deleting existing rows and resets
+legacy broad grants. See [database hardening](database-hardening.md) for migration,
+independent source-review corrections and pending PostgreSQL/three-replica validation.
 Owner-authorized cleanup resolves trusted `public` tables before explicitly searching
 `pg_temp`, preventing runtime-created temporary tables and triggers from crossing the
 function-owner boundary. Actual Vault credential tests exercise that rejection on both
 initial and replacement connections, following PostgreSQL's
 [security-definer search-path guidance](https://www.postgresql.org/docs/current/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY).
-The local bootstrap can retain the bootstrap user's function ownership when its broad
-`REASSIGN OWNED` attempt fails. The pinned search path closes temporary-object execution;
-cleanup remains limited to its fixed expiration and retention predicates. Explicit
-non-superuser schema ownership and narrower bootstrap privileges remain a separate
-database hardening task, rather than a claim of this refresh-token milestone.
+Canonical bootstrap now requires verified non-superuser application ownership and stops
+on ownership errors. Cleanup remains limited to its fixed expiration and retention
+predicates; the runtime role cannot replace it or alter its protected tables.
 
 ## Lifetimes and user lifecycle
 

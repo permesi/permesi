@@ -167,6 +167,7 @@ pub async fn patch_user(
         (status = 401, description = "Missing or invalid session cookie."),
         (status = 403, description = "Forbidden."),
         (status = 404, description = "User not found."),
+        (status = 409, description = "User has dependent records or retained authorization history."),
     ),
     tag = "users"
 )]
@@ -237,6 +238,7 @@ enum ServiceError {
     Forbidden,
     BadRequest(&'static str),
     NotFound,
+    Conflict,
     Database(sqlx::Error),
 }
 
@@ -245,6 +247,7 @@ impl IntoResponse for ServiceError {
         match self {
             Self::Forbidden => StatusCode::FORBIDDEN.into_response(),
             Self::NotFound => StatusCode::NOT_FOUND.into_response(),
+            Self::Conflict => (StatusCode::CONFLICT, "User has dependent records.").into_response(),
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
             Self::Database(err) => {
                 error!("Failed to handle user request: {err}");
@@ -375,6 +378,8 @@ async fn update_user_profile(
     }))
 }
 
+/// Deletes only after global delete authorization; dependent history blocks deletion atomically.
+/// Foreign-key conflicts disclose no tenant, grant or token identifiers.
 async fn delete_user_record(
     pool: &PgPool,
     principal: &Principal,
@@ -386,7 +391,15 @@ async fn delete_user_record(
         .bind(user_id)
         .execute(pool)
         .await
-        .map_err(ServiceError::Database)?;
+        .map_err(|error| {
+            if error.as_database_error().is_some_and(|database| {
+                database.is_foreign_key_violation() || database.code().as_deref() == Some("23001")
+            }) {
+                ServiceError::Conflict
+            } else {
+                ServiceError::Database(error)
+            }
+        })?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -521,6 +534,78 @@ mod tests {
             .max_connections(1)
             .connect_lazy("postgres://postgres@localhost/postgres")
             .map_err(Into::into)
+    }
+
+    /// Exercises actual PostgreSQL RESTRICT and authorization before the generic HTTP conflict.
+    #[tokio::test]
+    async fn user_delete_restrict_conflict_is_authorized_and_sanitized() -> Result<()> {
+        use sha2::{Digest as _, Sha256};
+        use test_support::{postgres::PostgresContainer, runtime};
+
+        runtime::ensure_container_runtime()?;
+        let postgres = PostgresContainer::start("bridge").await?;
+        postgres.wait_until_ready().await?;
+        postgres.bootstrap().await?;
+        let admin = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&postgres.admin_dsn_for_db("permesi"))
+            .await?;
+        let user = Uuid::new_v4();
+        let token = format!("retention-session-{}", Uuid::new_v4());
+        sqlx::query("INSERT INTO users(id,email,opaque_registration_record,status,email_verified_at) VALUES($1,$2,$3,'active',NOW())")
+            .bind(user).bind(format!("retention-{user}@example.test")).bind(vec![1_u8]).execute(&admin).await?;
+        sqlx::query("INSERT INTO user_roles(user_id,role) VALUES($1,'admin')")
+            .bind(user)
+            .execute(&admin)
+            .await?;
+        sqlx::query("CREATE TABLE public.user_delete_retention_probe(user_id UUID REFERENCES users(id) ON DELETE RESTRICT)").execute(&admin).await?;
+        sqlx::query("INSERT INTO user_delete_retention_probe(user_id) VALUES($1)")
+            .bind(user)
+            .execute(&admin)
+            .await?;
+        sqlx::query("INSERT INTO user_sessions(user_id,session_hash,expires_at) VALUES($1,$2,NOW()+INTERVAL '1 hour')")
+            .bind(user).bind(Sha256::digest(token.as_bytes()).to_vec()).execute(&admin).await?;
+        let name = format!("delete_test_{}", Uuid::new_v4().simple());
+        let password = Uuid::new_v4().simple().to_string();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE ROLE {name} LOGIN PASSWORD '{password}'; GRANT permesi_runtime TO {name};"
+        )))
+        .execute(&admin)
+        .await?;
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&format!(
+                "postgres://{name}:{password}@127.0.0.1:{}/permesi?sslmode=disable",
+                postgres.host_port()
+            ))
+            .await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("permesi_session={token}").parse()?,
+        );
+        let reply = delete_user(headers.clone(), Path(user.to_string()), State(pool.clone()))
+            .await
+            .into_response();
+        assert_eq!(reply.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(reply.into_body(), 1024).await?;
+        assert_eq!(body.as_ref(), b"User has dependent records.");
+        let intact: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
+            .bind(user)
+            .fetch_one(&admin)
+            .await?;
+        assert!(intact, "Failed deletion must preserve the user");
+        sqlx::query("DELETE FROM user_roles WHERE user_id=$1")
+            .bind(user)
+            .execute(&admin)
+            .await?;
+        let reply = delete_user(headers, Path(user.to_string()), State(pool.clone()))
+            .await
+            .into_response();
+        assert_eq!(reply.status(), StatusCode::FORBIDDEN);
+        pool.close().await;
+        admin.close().await;
+        Ok(())
     }
 
     #[tokio::test]

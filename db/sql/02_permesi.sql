@@ -573,7 +573,7 @@ CREATE TABLE IF NOT EXISTS oauth_token_issuances (
         (id_expires_at>issued_at AND id_expires_at<=issued_at+INTERVAL '1 hour'),
     CHECK ((id_token_hash IS NULL)=(id_expires_at IS NULL)),
     FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
-        REFERENCES oauth_grants(id,client_id,application_id,organization_id,user_id) ON DELETE CASCADE
+        REFERENCES oauth_grants(id,client_id,application_id,organization_id,user_id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS oauth_token_issuances_expiry_idx ON oauth_token_issuances(access_expires_at);
 
@@ -600,7 +600,7 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_families (
     CHECK ((revoked_at IS NULL)=(revocation_reason IS NULL)),
     CHECK ('openid'=ANY(scope_names) AND 'offline_access'=ANY(scope_names)),
     FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
-        REFERENCES oauth_grants(id,client_id,application_id,organization_id,user_id) ON DELETE CASCADE
+        REFERENCES oauth_grants(id,client_id,application_id,organization_id,user_id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS oauth_refresh_families_user_idx ON oauth_refresh_families(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS oauth_refresh_families_expiry_idx ON oauth_refresh_families(expires_at);
@@ -680,6 +680,27 @@ END $$;
 DROP TRIGGER IF EXISTS protect_oauth_refresh_token ON oauth_refresh_tokens;
 CREATE TRIGGER protect_oauth_refresh_token BEFORE UPDATE ON oauth_refresh_tokens
     FOR EACH ROW EXECUTE FUNCTION protect_oauth_refresh_token();
+
+-- Upgrade the two retained-history FKs without deleting or rewriting existing rows.
+-- RESTRICT is immediate and also blocks cascades initiated by a runtime user's DELETE.
+DO $$
+DECLARE
+    history text;
+    binding record;
+BEGIN
+    FOREACH history IN ARRAY ARRAY['oauth_token_issuances','oauth_refresh_families'] LOOP
+        FOR binding IN SELECT conname FROM pg_catalog.pg_constraint
+            WHERE conrelid=format('public.%I',history)::regclass
+                AND confrelid='public.oauth_grants'::regclass AND contype='f' AND confdeltype<>'r'
+        LOOP
+            EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I',history,binding.conname);
+            EXECUTE format('ALTER TABLE public.%I ADD CONSTRAINT %I
+                FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
+                REFERENCES public.oauth_grants(id,client_id,application_id,organization_id,user_id)
+                ON DELETE RESTRICT',history,binding.conname);
+        END LOOP;
+    END LOOP;
+END $$;
 
 -- One immutable receipt per consumed code OR refresh token; neither source is bearer plaintext.
 ALTER TABLE oauth_token_issuances ALTER COLUMN code_hash DROP NOT NULL;
@@ -1109,33 +1130,53 @@ CREATE TABLE IF NOT EXISTS passkey_audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_passkey_audit_user_time ON passkey_audit_log (user_id, created_at);
 
--- Grant permissions to permesi_runtime
+-- Runtime privilege policy. Reapplication removes legacy broad table and column grants.
+-- Only actual service operations are granted; new tables/sequences require an explicit migration.
+-- Users retain their existing administrative DELETE API, but retained-history RESTRICT
+-- constraints stop it from cascading into OAuth evidence. Tenant parents are soft-delete only.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
-        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
-            oauth_clients, oauth_client_redirect_uris, oauth_scopes,
-            oauth_client_scopes, oauth_grants, oauth_grant_scopes,
-            oauth_authorization_requests, oauth_authorization_codes TO permesi_runtime;
-        GRANT SELECT, INSERT, UPDATE ON TABLE oauth_client_secrets TO permesi_runtime;
-        REVOKE ALL ON TABLE oauth_refresh_families, oauth_refresh_tokens FROM permesi_runtime;
-        GRANT SELECT, INSERT ON TABLE oauth_refresh_families, oauth_refresh_tokens TO permesi_runtime;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime'
+            AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls OR rolcanlogin))
+            OR EXISTS (SELECT 1 FROM pg_auth_members WHERE member='permesi_runtime'::regrole) THEN
+            RAISE EXCEPTION 'Runtime role has unexpected attributes or role memberships';
+        END IF;
+        REVOKE ALL ON ALL TABLES IN SCHEMA public FROM permesi_runtime, PUBLIC;
+        REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM permesi_runtime, PUBLIC;
+        REVOKE CREATE ON SCHEMA public FROM permesi_runtime, PUBLIC;
+        GRANT USAGE ON SCHEMA public TO permesi_runtime;
+        EXECUTE format('REVOKE ALL ON DATABASE %I FROM permesi_runtime',current_database());
+        EXECUTE format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO permesi_runtime',current_database());
+        GRANT USAGE ON TYPE user_status,email_outbox_status,environment_tier,org_membership_status TO permesi_runtime;
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO permesi_runtime;
+        GRANT INSERT, UPDATE ON TABLE
+            users,user_roles,organizations,org_memberships,org_roles,org_member_roles,
+            projects,environments,applications,oauth_clients,oauth_client_redirect_uris,
+            oauth_scopes,oauth_client_scopes,oauth_grants,oauth_authorization_requests,
+            oauth_authorization_codes,user_sessions,email_verification_tokens,email_outbox,
+            auth_rate_limits,user_mfa_state,user_mfa_recovery_codes,user_mfa_bootstrap_sessions,
+            user_mfa_challenge_sessions,totp_deks,totp_credentials,security_keys,passkeys
+            TO permesi_runtime;
+        GRANT INSERT ON TABLE platform_operators,role_audit_log,oauth_grant_scopes,
+            oauth_client_secrets,oauth_token_issuances,oauth_refresh_families,oauth_refresh_tokens,
+            opaque_exchanges,webauthn_exchanges,admin_attempts,totp_audit_log,
+            security_key_audit_log,passkey_audit_log TO permesi_runtime;
+        GRANT DELETE ON TABLE users,user_sessions,oauth_client_redirect_uris,oauth_client_scopes,
+            oauth_scopes,auth_rate_limits,opaque_exchanges,webauthn_exchanges,
+            user_mfa_bootstrap_sessions,user_mfa_challenge_sessions,totp_credentials,security_keys,passkeys
+            TO permesi_runtime;
+        GRANT UPDATE (expires_at,revoked_at) ON TABLE oauth_client_secrets TO permesi_runtime;
+        GRANT UPDATE (is_failure) ON TABLE admin_attempts TO permesi_runtime;
         GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
         GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;
-        GRANT SELECT, INSERT ON TABLE oauth_token_issuances TO permesi_runtime;
-        REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE oauth_token_issuances FROM permesi_runtime;
-        REVOKE DELETE, TRUNCATE ON TABLE oauth_client_secrets FROM permesi_runtime;
-        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limits TO permesi_runtime;
-        GRANT SELECT, INSERT, DELETE ON TABLE webauthn_exchanges TO permesi_runtime;
-        REVOKE UPDATE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE webauthn_exchanges FROM permesi_runtime;
-        GRANT SELECT, INSERT, DELETE ON TABLE opaque_exchanges TO permesi_runtime;
-        REVOKE UPDATE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE opaque_exchanges FROM permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE totp_deks TO permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE totp_credentials TO permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE totp_audit_log TO permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE security_keys TO permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE security_key_audit_log TO permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE passkeys TO permesi_runtime;
-        GRANT ALL PRIVILEGES ON TABLE passkey_audit_log TO permesi_runtime;
+        REVOKE ALL ON FUNCTION cleanup_expired_tokens() FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION cleanup_expired_tokens() TO permesi_runtime;
+        GRANT EXECUTE ON FUNCTION oauth_scope_ids_valid(UUID[]),oauth_scope_names_valid(TEXT[]) TO permesi_runtime;
+        ALTER DEFAULT PRIVILEGES REVOKE ALL ON TABLES FROM permesi_runtime, PUBLIC;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM permesi_runtime, PUBLIC;
+        ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM permesi_runtime, PUBLIC;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM permesi_runtime, PUBLIC;
+        ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
     END IF;
 END $$;

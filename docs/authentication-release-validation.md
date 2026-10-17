@@ -155,10 +155,11 @@ The independent review evidence above is from Grok and Claude.
 
 ## Remaining release and policy work
 
-Bootstrap ownership can remain with the bootstrap user when broad ownership reassignment
-fails. Verified non-superuser ownership and narrower existing identity-table grants remain
-an explicit database hardening task, including indirect parent-delete cascades, rather
-than a guarantee of this batch. HAProxy scripts
+The subsequent [database hardening phase](database-hardening.md) implements
+non-superuser ownership, explicit runtime grants and parent-delete history restrictions.
+Independent Claude/Herdr source-review corrections are applied; final live PostgreSQL
+and three-replica validation remain pending. The completed results above apply to the
+preceding release batch. HAProxy scripts
 and real transport/proxy tests were reviewed; an end-to-end HAProxy stack, multi-host
 load/fault benchmarks and Firefox/Safari were not exercised by this validation.
 

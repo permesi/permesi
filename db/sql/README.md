@@ -6,7 +6,8 @@
 
 - `00_init.sql` — creates databases, roles, grants, and loads service schemas.
 - `01_genesis.sql` — Genesis schema (includes `partitioning.sql`).
-- `02_permesi.sql` — Permesi schema (includes `cleanup_expired_tokens()`).
+- `02_permesi.sql` — Permesi schema, retained-history constraints and canonical runtime privilege policy.
+- `bootstrap_ownership.sql` — bounded application-object ownership transfer and runtime-role checks.
 - `seed_test_client.sql` — optional test-only seed client for Genesis.
 - `cron_jobs.sql` — **only place** where pg_cron jobs are registered (run against `postgres`).
 - `check.sql` — post-bootstrap verification (run against `postgres`).
@@ -18,8 +19,8 @@ existing Permesi database with the role that owns the existing Permesi tables an
 a binary that exposes OAuth management. It creates the OAuth tables, seeds fixed
 protocol scope entries for existing applications, and adds a trigger to seed new
 applications. Reapplying preserves client configuration and grants. Runtime table
-grants are applied when `permesi_runtime` already exists; normal bootstrap also
-grants all tables after creating that role. There is no RLS change. Authorization additionally creates
+grants are applied when `permesi_runtime` already exists. Normal bootstrap creates
+that role before loading the schema as its verified non-superuser owner. There is no RLS change. Authorization additionally creates
 `oauth_authorization_requests` and `oauth_authorization_codes`, with hash-only code/
 browser/CSRF storage, immutable snapshots, exact redirect/composite consent foreign
 keys, bounded TTLs and one-way consumption. Reapply as the existing table owner
@@ -36,8 +37,8 @@ imports must already satisfy the one-current invariant to create the new index.
 Credential APIs neither automatically delete history nor issue tokens. The schema also adds
 independent credential-management and revocation actions to the existing shared rate-limit table.
 Both schema reapplication and bootstrap revoke DELETE/TRUNCATE on credential history
-from the runtime role; schema-owner FK cleanup still cascades. This does not harden the
-role's broader existing identity-table privileges against database compromise.
+from the runtime role. Tenant parents and grants do not have runtime DELETE authority;
+retained issuance/refresh foreign keys restrict indirect parent deletion.
 Integration tests reapply the canonical script with an issued credential present,
 run `verify_permesi.sql`, and verify that authentication still works afterward.
 
@@ -47,19 +48,27 @@ absolute family expiry plus seven days. Reapply the schema and canonical runtime
 before rollout: runtime users can insert/read families and tokens, revoke families and
 consume tokens, but cannot rewrite bindings or directly erase replay history. See
 [refresh policy](../../docs/oauth-refresh-tokens.md) for rotation, consent and revision invalidation.
-Broader existing parent-table DELETE grants can still erase family history indirectly
-through foreign-key cascades. OAuth/tenant handlers use revocation/soft deletion; existing
-internal user management still physically deletes users. Closing arbitrary runtime parent
-deletion remains part of the least-privilege follow-up.
+Retained-family and issuance foreign keys now reject grant deletion, including cascades
+from a user's physical deletion. The existing administrative user-delete endpoint returns
+409 for dependent records and still deletes unreferenced users. Tenant lifecycle remains
+explicit bottom-up soft deletion. See [database hardening](../../docs/database-hardening.md)
+for the privilege matrix, migration boundary and pending validation.
 
 Both `cleanup_expired_tokens()` and `genesis_tokens_rollover()` explicitly search trusted
 `public` objects before `pg_temp`, with PostgreSQL's implicit trusted catalog search.
 Temporary tables/views must never execute caller-defined code under a function owner's
-authority. Vault integration tests load the Genesis partition helper and exercise harmless
-temporary-object rejection on initial and replacement runtime credentials for both services.
-Local bootstrap ownership can remain with the bootstrap user when broad reassignment
-fails; verified non-superuser ownership and broader least-privilege grants remain tracked
-in [TODO.md](../../TODO.md).
+authority. Vault integration tests exercise harmless temporary-object rejection on
+initial and replacement Permesi runtime credentials. Genesis runtime credentials are
+denied parameterized partition maintenance; the maintenance owner retains execution,
+including the temporary-catalog regression. Scheduled jobs already use `vault_genesis`.
+Bootstrap transfers only application objects in each dedicated service database and
+fails on unexpected owners, privileged runtime roles or unsafe owner memberships.
+Catalog-only administrator passes pin trusted lookup paths; separate authenticated
+owner connections apply schemas, seeds and transactional verification. `SET ROLE`
+inside an administrator connection is not an owner security boundary. Catalogs and extension-managed members retain their
+own ownership. Future tables/sequences require explicit runtime grants; broad legacy
+default grants are removed. Independent Claude/Herdr source-review corrections are
+applied; final live PostgreSQL/HA validation remains tracked in [TODO.md](../../TODO.md).
 
 ## Runtime role & grant checks
 

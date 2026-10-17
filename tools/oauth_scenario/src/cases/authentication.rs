@@ -24,25 +24,27 @@ pub async fn shared_exchanges(context: &mut Context<'_>) -> Result<()> {
         session.user_id == context.api.user_id,
         "Cross-replica login changed the verified user.",
     )?;
+    context.gateway.replica_c();
     check(
         login.finish(&anonymous).await?.status() == StatusCode::UNAUTHORIZED,
         "Cross-replica login replay issued authority.",
     )?;
-    context.gateway.replica_a();
+    context.gateway.replica_b();
     let elevation = context
         .owner
         .password_proof(&session, PasswordFlow::Reauthenticate)
         .await?;
-    context.gateway.replica_b();
+    context.gateway.replica_c();
     check(
         elevation.finish(&session).await?.status() == StatusCode::NO_CONTENT,
         "Cross-replica reauthentication failed.",
     )?;
+    context.gateway.replica_a();
     check(
         elevation.finish(&session).await?.status() == StatusCode::UNAUTHORIZED,
         "Cross-replica reauthentication replay succeeded.",
     )?;
-    context.gateway.replica_a();
+    context.gateway.replica_c();
     let bound = context
         .owner
         .password_proof(&session, PasswordFlow::Reauthenticate)
@@ -52,10 +54,12 @@ pub async fn shared_exchanges(context: &mut Context<'_>) -> Result<()> {
         bound.finish(context.api).await?.status() == StatusCode::UNAUTHORIZED,
         "A different session of the same user reused an elevation proof.",
     )?;
+    context.gateway.replica_a();
     check(
         bound.finish(&session).await?.status() == StatusCode::UNAUTHORIZED,
         "Rejected session binding did not consume the exchange.",
     )?;
+    context.gateway.replica_c();
     let current: Value = session
         .json(Method::GET, "/v1/auth/session", None, StatusCode::OK)
         .await?;

@@ -212,7 +212,8 @@ drop whole partitions instead of deleting rows to avoid bloat.
 Once that job is running in production, remove the `tokens_default` partition so all rows land in
 date partitions and retention is enforced by dropping old partitions.
 
-You can also run the maintenance manually (for system cron or ad-hoc runs):
+You can also run maintenance manually with the maintenance owner's DSN (for system cron
+or ad-hoc runs). Runtime service credentials and PUBLIC cannot execute this function:
 
 ```sh
 psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -c "SELECT genesis_tokens_rollover(7, 2);"

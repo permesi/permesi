@@ -59,7 +59,7 @@ fn fields<'a>(client: &'a str, token: &'a str) -> [(&'a str, &'a str); 3] {
     ]
 }
 
-/// Rotates across A/B, independently verifies narrow claims, then rejects every successor after replay.
+/// Issues on A/B and rotates on C, independently verifies claims, then rejects successors after replay.
 pub(super) async fn rotation(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let body = root(context, fixture).await?;
     let original = text_field(&body, "refresh_token")?;
@@ -72,10 +72,11 @@ pub(super) async fn rotation(context: &mut Context<'_>, fixture: &Fixture) -> Re
     let mut input = fields(&client, &original).to_vec();
     input.push(("scope", scope));
     let rotated = token::response(
-        context.gateway.token_replica(false, &input).await?,
+        context.gateway.token_on_replica(2, &input).await?,
         StatusCode::OK,
     )
     .await?;
+    context.gateway.replica_c();
     let access = text_field(&rotated, "access_token")?;
     let keys = token::verification_keys(context.api, &access).await?;
     let (_, claims) = token::verify(&access, &keys, "at+jwt")?;
@@ -112,40 +113,39 @@ pub(super) async fn rotation(context: &mut Context<'_>, fixture: &Fixture) -> Re
     .await
 }
 
-/// Two real socket backends share one winner; the losing reuse revokes the committed successor too.
+/// Three real socket backends share one winner; losing reuses revoke the committed successor too.
 pub(super) async fn race(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let body = root(context, fixture).await?;
     let original = text_field(&body, "refresh_token")?;
     let client = fixture.app()?.public.client_id.to_string();
     let input = fields(&client, &original);
-    let (a, b) = tokio::join!(
-        context.gateway.token_replica(false, &input),
-        context.gateway.token_replica(true, &input)
+    let (a, b, c) = tokio::join!(
+        context.gateway.token_on_replica(0, &input),
+        context.gateway.token_on_replica(1, &input),
+        context.gateway.token_on_replica(2, &input)
     );
-    let a = a?;
-    let b = b?;
-    check(
-        (a.status() == StatusCode::OK && b.status() == StatusCode::BAD_REQUEST)
-            || (b.status() == StatusCode::OK && a.status() == StatusCode::BAD_REQUEST),
-        "Refresh race did not have exactly one winner.",
-    )?;
-    let (winner, loser) = if a.status() == StatusCode::OK {
-        (a, b)
-    } else {
-        (b, a)
-    };
-    let winner = token::response(winner, StatusCode::OK).await?;
-    token::failure(loser, StatusCode::BAD_REQUEST, "invalid_grant").await?;
+    let winner = token::one_winner([a?, b?, c?]).await?;
     let next = text_field(&winner, "refresh_token")?;
-    token::failure(
-        context
-            .gateway
-            .token_replica(true, &fields(&client, &next))
-            .await?,
-        StatusCode::BAD_REQUEST,
-        "invalid_grant",
-    )
-    .await?;
+    let access = text_field(&winner, "access_token")?;
+    let keys = token::verification_keys(context.api, &access).await?;
+    let (_, claims) = token::verify(&access, &keys, "at+jwt")?;
+    check(
+        claims.get("organization_id") == Some(&json!(fixture.org.id))
+            && claims.get("application_id") == Some(&json!(fixture.app()?.resource.id))
+            && claims.get("sub") == Some(&json!(context.api.user_id)),
+        "Three-replica refresh winner changed tenant or user.",
+    )?;
+    for replica in 0..3 {
+        token::failure(
+            context
+                .gateway
+                .token_on_replica(replica, &fields(&client, &next))
+                .await?,
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+        )
+        .await?;
+    }
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM oauth_token_issuances WHERE refresh_hash=$1")
             .bind(Sha256::digest(original.as_bytes()).to_vec())

@@ -23,33 +23,10 @@ use test_support::{
 };
 use uuid::Uuid;
 
-const GENESIS_SCHEMA_SQL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../db/sql/01_genesis.sql"
-));
-const GENESIS_PARTITION_SQL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../db/sql/partitioning.sql"
-));
-const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../db/sql/02_permesi.sql"
-));
-const BOOTSTRAP_SQL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../db/sql/00_init.sql"
-));
-const GENESIS_SEED_SQL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../db/sql/seed_test_client.sql"
-));
-
 #[tokio::test]
 async fn vault_runtime_roles_survive_revocation() -> Result<()> {
-    if let Err(err) = runtime::ensure_container_runtime() {
-        eprintln!("Skipping integration test: {err}");
-        return Ok(());
-    }
+    runtime::ensure_container_runtime()
+        .context("Vault runtime privilege tests require local PostgreSQL and Vault containers")?;
 
     let network = TestNetwork::new("vault-db-runtime");
     let postgres = PostgresContainer::start(network.name()).await?;
@@ -144,13 +121,26 @@ async fn verify_permesi_runtime(
     .await
     .context("Failed to connect with permesi dynamic creds")?;
 
+    // Reapplication must accept the safe ADMIN-only memberships Vault gets for live logins.
+    postgres.bootstrap().await?;
+
     verify_refresh_permissions(&mut connection).await?;
     verify_cleanup_ignores_runtime_temporary_tables(&mut connection).await?;
 
-    sqlx::query("INSERT INTO roles (name) VALUES ('auditor') ON CONFLICT DO NOTHING")
+    let user = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,opaque_registration_record) VALUES($1,$2,$3)")
+        .bind(user)
+        .bind(format!("runtime-{user}@example.test"))
+        .bind(vec![0_u8])
         .execute(&mut connection)
         .await
-        .context("Failed to insert role with permesi runtime creds")?;
+        .context("Runtime account creation failed")?;
+    assert_permission_denied(
+        sqlx::query("INSERT INTO roles(name) VALUES('unexpected-role')")
+            .execute(&mut connection)
+            .await,
+        "runtime cannot redefine the fixed role registry",
+    )?;
 
     let create_result = sqlx::query("CREATE TABLE runtime_should_fail (id int)")
         .execute(&mut connection)
@@ -182,11 +172,14 @@ async fn verify_permesi_runtime(
     verify_refresh_permissions(&mut new_conn).await?;
     verify_cleanup_ignores_runtime_temporary_tables(&mut new_conn).await?;
 
-    let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles WHERE name = 'auditor'")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id=$1")
+        .bind(user)
         .fetch_one(&mut new_conn)
-        .await
-        .context("Failed to read roles with refreshed permesi creds")?;
-    ensure!(role_count == 1, "Expected auditor role to persist");
+        .await?;
+    ensure!(
+        count == 1,
+        "Runtime-created account must survive credential rotation"
+    );
 
     Ok(())
 }
@@ -267,7 +260,12 @@ async fn verify_genesis_runtime(
     .await
     .context("Failed to connect with genesis dynamic creds")?;
 
-    verify_rollover_ignores_runtime_temporary_views(&mut connection).await?;
+    assert_permission_denied(
+        sqlx::query("SELECT public.genesis_tokens_rollover(7,-1)")
+            .execute(&mut connection)
+            .await,
+        "runtime cannot invoke parameterized partition maintenance",
+    )?;
 
     let client_id: i16 = sqlx::query_scalar("SELECT id FROM clients WHERE id = 0")
         .fetch_one(&mut connection)
@@ -315,7 +313,12 @@ async fn verify_genesis_runtime(
     .await
     .context("Failed to connect with refreshed genesis creds")?;
 
-    verify_rollover_ignores_runtime_temporary_views(&mut new_conn).await?;
+    assert_permission_denied(
+        sqlx::query("SELECT public.genesis_tokens_rollover(7,-1)")
+            .execute(&mut new_conn)
+            .await,
+        "replacement runtime cannot invoke parameterized partition maintenance",
+    )?;
 
     let stored_id: Option<String> =
         sqlx::query_scalar("SELECT id::text FROM tokens WHERE id::text = $1 LIMIT 1")
@@ -331,12 +334,13 @@ async fn verify_genesis_runtime(
     Ok(())
 }
 
-/// Proves privileged catalog reads cannot execute a runtime-created temporary view's function.
+/// The maintenance owner must ignore temporary catalog views created under the runtime role.
 async fn verify_rollover_ignores_runtime_temporary_views(
     connection: &mut PgConnection,
 ) -> Result<()> {
     sqlx::raw_sql(
-        "CREATE TEMP TABLE rollover_authority_probe (executor NAME NOT NULL);
+        "SET ROLE genesis_runtime;
+         CREATE TEMP TABLE rollover_authority_probe (executor NAME NOT NULL);
          GRANT INSERT ON pg_temp.rollover_authority_probe TO PUBLIC;
          CREATE FUNCTION pg_temp.capture_rollover_authority(relation_name TEXT) RETURNS TEXT
          LANGUAGE plpgsql VOLATILE AS $$
@@ -347,6 +351,7 @@ async fn verify_rollover_ignores_runtime_temporary_views(
            SELECT oid,pg_temp.capture_rollover_authority(relname::TEXT) AS relname
            FROM pg_catalog.pg_class;
          GRANT SELECT ON pg_temp.pg_class TO PUBLIC;
+         RESET ROLE;
          -- An empty premake range avoids any partition DDL in this harmless authority probe.
          SELECT public.genesis_tokens_rollover(7,-1);",
     )
@@ -370,206 +375,40 @@ async fn verify_rollover_ignores_runtime_temporary_views(
     Ok(())
 }
 
+/// Tests the actual psql bootstrap; Vault connection passwords are replaced with per-run entropy.
 async fn bootstrap_database(
     postgres: &PostgresContainer,
     permesi_password: &str,
     genesis_password: &str,
 ) -> Result<()> {
-    let mut admin = PgConnection::connect(&postgres.admin_dsn())
-        .await
-        .context("Failed to connect to Postgres admin DB")?;
-
-    create_role_if_missing(&mut admin, "vault_permesi", permesi_password).await?;
-    create_role_if_missing(&mut admin, "vault_genesis", genesis_password).await?;
-
-    sqlx::query("GRANT pg_signal_backend TO vault_permesi")
+    postgres.bootstrap().await?;
+    let mut admin = PgConnection::connect(&postgres.admin_dsn()).await?;
+    for (role, password) in [
+        ("vault_permesi", permesi_password),
+        ("vault_genesis", genesis_password),
+    ] {
+        ensure!(
+            password.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "Invalid fixture password"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER ROLE {role} PASSWORD '{password}'"
+        )))
         .execute(&mut admin)
-        .await
-        .context("Failed to grant pg_signal_backend to vault_permesi")?;
-    sqlx::query("GRANT pg_signal_backend TO vault_genesis")
-        .execute(&mut admin)
-        .await
-        .context("Failed to grant pg_signal_backend to vault_genesis")?;
-
-    create_database_if_missing(&mut admin, "genesis").await?;
-    create_database_if_missing(&mut admin, "permesi").await?;
-
-    sqlx::query("ALTER DATABASE genesis OWNER TO vault_genesis")
-        .execute(&mut admin)
-        .await
-        .context("Failed to set genesis database owner")?;
-    sqlx::query("ALTER DATABASE permesi OWNER TO vault_permesi")
-        .execute(&mut admin)
-        .await
-        .context("Failed to set permesi database owner")?;
-
-    sqlx::query("REVOKE ALL ON DATABASE genesis FROM PUBLIC")
-        .execute(&mut admin)
-        .await
-        .context("Failed to revoke public access to genesis database")?;
-    sqlx::query("REVOKE ALL ON DATABASE permesi FROM PUBLIC")
-        .execute(&mut admin)
-        .await
-        .context("Failed to revoke public access to permesi database")?;
-
-    sqlx::query("GRANT CONNECT ON DATABASE genesis TO vault_genesis")
-        .execute(&mut admin)
-        .await
-        .context("Failed to grant genesis connect")?;
-    sqlx::query("GRANT CONNECT ON DATABASE permesi TO vault_permesi")
-        .execute(&mut admin)
-        .await
-        .context("Failed to grant permesi connect")?;
-
-    bootstrap_genesis(postgres).await?;
-    bootstrap_permesi(postgres).await?;
-
-    Ok(())
-}
-
-async fn bootstrap_genesis(postgres: &PostgresContainer) -> Result<()> {
-    let mut genesis = PgConnection::connect(&postgres.admin_dsn_for_db("genesis"))
-        .await
-        .context("Failed to connect to genesis DB for schema setup")?;
-    apply_schema(&mut genesis, GENESIS_SCHEMA_SQL).await?;
-    apply_schema(&mut genesis, GENESIS_PARTITION_SQL).await?;
-    apply_schema(&mut genesis, GENESIS_SEED_SQL).await?;
-    sqlx::query("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to revoke schema usage in genesis")?;
-    sqlx::query("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to revoke schema create in genesis")?;
-    sqlx::query("ALTER SCHEMA public OWNER TO vault_genesis")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to set genesis schema owner")?;
-    reassign_owned(&mut genesis, "postgres", "vault_genesis")
-        .await
-        .context("Failed to reassign genesis ownership")?;
-
-    create_runtime_role(&mut genesis, "genesis_runtime").await?;
-    sqlx::query("GRANT genesis_runtime TO vault_genesis WITH ADMIN OPTION")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to grant genesis_runtime admin option")?;
-    sqlx::query("GRANT CONNECT, TEMPORARY ON DATABASE genesis TO genesis_runtime")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to grant genesis runtime connect")?;
-    sqlx::query("GRANT USAGE ON SCHEMA public TO genesis_runtime")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to grant genesis runtime schema usage")?;
-    sqlx::query("GRANT SELECT ON TABLE clients TO genesis_runtime")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to grant genesis runtime clients select")?;
-    sqlx::query("GRANT SELECT, INSERT ON TABLE tokens TO genesis_runtime")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to grant genesis runtime tokens insert")?;
-    sqlx::query("GRANT SELECT, INSERT ON TABLE tokens_default TO genesis_runtime")
-        .execute(&mut genesis)
-        .await
-        .context("Failed to grant genesis runtime tokens_default insert")?;
-    sqlx::query(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE vault_genesis IN SCHEMA public \
-        GRANT SELECT, INSERT ON TABLES TO genesis_runtime",
-    )
-    .execute(&mut genesis)
-    .await
-    .context("Failed to set genesis default privileges")?;
-
-    Ok(())
-}
-
-async fn bootstrap_permesi(postgres: &PostgresContainer) -> Result<()> {
-    let mut permesi = PgConnection::connect(&postgres.admin_dsn_for_db("permesi"))
-        .await
-        .context("Failed to connect to permesi DB for schema setup")?;
-    apply_schema(&mut permesi, PERMESI_SCHEMA_SQL).await?;
-    sqlx::query("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to revoke schema usage in permesi")?;
-    sqlx::query("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to revoke schema create in permesi")?;
-    sqlx::query("ALTER SCHEMA public OWNER TO vault_permesi")
-        .execute(&mut permesi)
-        .await
-        .context("Failed to set permesi schema owner")?;
-    reassign_owned(&mut permesi, "postgres", "vault_permesi")
-        .await
-        .context("Failed to reassign permesi ownership")?;
-
-    create_runtime_role(&mut permesi, "permesi_runtime").await?;
-    let marker = "GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;";
-    let (_, grants) = BOOTSTRAP_SQL
-        .split_once(marker)
-        .context("Canonical runtime grants are missing")?;
-    test_support::sql::execute_script(
-        &mut permesi,
-        "canonical runtime grants",
-        &format!("{marker}{grants}"),
-    )
-    .await?;
-
-    Ok(())
-}
-
-async fn apply_schema(connection: &mut PgConnection, sql: &str) -> Result<()> {
-    test_support::sql::execute_script(&mut *connection, "schema", sql).await?;
-    Ok(())
-}
-
-async fn create_role_if_missing(
-    connection: &mut PgConnection,
-    role: &str,
-    password: &str,
-) -> Result<()> {
-    let statement = format!(
-        "DO $$ BEGIN \
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN \
-                CREATE ROLE {role} WITH LOGIN PASSWORD '{password}' CREATEROLE; \
-            END IF; \
-        END $$;"
-    );
-    sqlx::query(sqlx::AssertSqlSafe(statement))
-        .execute(connection)
-        .await
-        .with_context(|| format!("Failed to create role {role}"))?;
-    Ok(())
-}
-
-async fn create_runtime_role(connection: &mut PgConnection, role: &str) -> Result<()> {
-    let statement = format!(
-        "DO $$ BEGIN \
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN \
-                CREATE ROLE {role} NOLOGIN; \
-            END IF; \
-        END $$;"
-    );
-    sqlx::query(sqlx::AssertSqlSafe(statement))
-        .execute(connection)
-        .await
-        .with_context(|| format!("Failed to create runtime role {role}"))?;
-    Ok(())
-}
-
-async fn create_database_if_missing(connection: &mut PgConnection, db_name: &str) -> Result<()> {
-    let result = sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
-        .execute(connection)
-        .await;
-    match result {
-        Ok(_) => Ok(()),
-        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("42P04") => Ok(()),
-        Err(err) => Err(err).with_context(|| format!("Failed to create database {db_name}")),
+        .await?;
     }
+    let mut maintenance = PgConnection::connect(&format!(
+        "postgres://vault_genesis:{genesis_password}@127.0.0.1:{}/genesis?sslmode=disable",
+        postgres.host_port()
+    ))
+    .await?;
+    verify_rollover_ignores_runtime_temporary_views(&mut maintenance).await?;
+    Ok(())
+}
+
+/// Reapplies the same transactional ownership and privilege policy used by local bootstrap.
+async fn bootstrap_permesi(postgres: &PostgresContainer) -> Result<()> {
+    postgres.bootstrap().await
 }
 
 async fn assert_role_dropped(postgres: &PostgresContainer, role: &str) -> Result<()> {
@@ -583,26 +422,6 @@ async fn assert_role_dropped(postgres: &PostgresContainer, role: &str) -> Result
         .context("Failed to query pg_roles")?;
     ensure!(exists.is_none(), "Expected role {role} to be dropped");
     Ok(())
-}
-
-async fn reassign_owned(
-    connection: &mut PgConnection,
-    from_role: &str,
-    to_role: &str,
-) -> Result<()> {
-    let statement = format!("REASSIGN OWNED BY {from_role} TO {to_role}");
-    let result = sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
-        .execute(&mut *connection)
-        .await;
-    match result {
-        Ok(_) => Ok(()),
-        Err(sqlx::Error::Database(db_err))
-            if db_err.message().contains("required by the database system") =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(err).with_context(|| format!("Failed to {statement}")),
-    }
 }
 
 fn assert_permission_denied<T>(result: Result<T, sqlx::Error>, context: &str) -> Result<()> {

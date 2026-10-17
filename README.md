@@ -114,7 +114,7 @@ Note: service HTTP modules live under `src/api/` (previously `src/permesi/` and 
 ### Isolated OAuth scenarios
 
 `just oauth-scenario` builds and runs the full suite on fresh, disposable PostgreSQL
-and Vault containers, with real Genesis, two Permesi replicas, the compiled Web console
+and Vault containers, with real Genesis, three Permesi replicas, the compiled Web console
 and Chromium. It creates accounts and tenant fixtures through the APIs and cleans up
 its own resources. Linux and local Podman are required; the development stack and
 production endpoints are never used.
@@ -177,11 +177,19 @@ psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_i
 For production, update those passwords and remove the `seed_test_client.sql` include before
 running it, or use it as a template for your own bootstrap script. If you choose not to run
 `db/sql/00_init.sql`, load the service schemas directly with `db/sql/01_genesis.sql` and
-`db/sql/02_permesi.sql`.
+`db/sql/02_permesi.sql` as the dedicated non-superuser service owners, with runtime
+roles created first. Direct schema loading as `postgres` does not establish the
+ownership boundary; follow the [ownership and privilege rollout](docs/database-hardening.md).
 
 For scheduled maintenance, `db/sql/cron_jobs.sql` is the only place where pg_cron jobs are
 registered (run it against the `postgres` database). Application schemas never install or
 schedule pg_cron jobs directly.
+
+The [database hardening phase](docs/database-hardening.md) adds verified non-superuser
+schema ownership, explicit runtime grants and retained-history parent-deletion restrictions.
+Independent Claude/Herdr source review has identified and corrected bootstrap and test
+issues; final PostgreSQL/three-replica execution remains pending. See the linked
+validation status and rollout instructions.
 
 ## Cryptography
 

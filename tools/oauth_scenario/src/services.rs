@@ -1,4 +1,4 @@
-//! Real Genesis and two Permesi processes using the existing local Unix-socket mode.
+//! Real Genesis and three Permesi processes using the existing local Unix-socket mode.
 //!
 //! The issuer gateway terminates verified HTTPS. Backend sockets and TLS private
 //! keys live in the run's mode-0700 directory. Service configuration is supplied
@@ -30,12 +30,13 @@ pub struct Services {
     pub genesis: Option<Process>,
     pub a: Option<Process>,
     pub b: Option<Process>,
+    pub c: Option<Process>,
 }
 
 impl Services {
     /// Records only owned process IDs and Linux birth ticks for safe manual recovery after SIGKILL.
     pub fn identities(&self) -> Vec<serde_json::Value> {
-        [&self.genesis, &self.a, &self.b]
+        [&self.genesis, &self.a, &self.b, &self.c]
             .into_iter()
             .flatten()
             .filter_map(|child| {
@@ -57,7 +58,7 @@ impl Services {
     pub fn start(
         &mut self,
         binaries: [&Path; 2],
-        sockets: &[PathBuf; 3],
+        sockets: &[PathBuf; 4],
         infra: &Infrastructure,
         origin: &str,
         ca: &Path,
@@ -108,9 +109,10 @@ impl Services {
                 ca.display().to_string(),
             ]
         };
-        let [a_socket, b_socket, _] = sockets;
+        let [a_socket, b_socket, c_socket, _] = sockets;
         let a_args = make_args(a_socket);
         let b_args = make_args(b_socket);
+        let c_args = make_args(c_socket);
         let secrets = [
             ("PERMESI_VAULT_ROLE_ID", infra.permesi_role.role.as_str()),
             (
@@ -120,6 +122,7 @@ impl Services {
         ];
         self.a = Some(Process::service(permesi, &a_args, &secrets)?);
         self.b = Some(Process::service(permesi, &b_args, &secrets)?);
+        self.c = Some(Process::service(permesi, &c_args, &secrets)?);
         // Domain tests use the same explicit product policy, with env sources removed.
         let mut args = vec!["permesi".to_owned()];
         args.extend(a_args);
@@ -149,8 +152,8 @@ impl Services {
         })
     }
 
-    /// Verifies both replicas independently, rather than treating one healthy gateway as two replicas.
-    pub async fn ready(sockets: &[PathBuf; 3], seconds: u64) -> Result<()> {
+    /// Verifies all three replicas independently; gateway readiness cannot substitute for backend health.
+    pub async fn ready(sockets: &[PathBuf; 4], seconds: u64) -> Result<()> {
         for socket in sockets {
             let client = reqwest::Client::builder()
                 .unix_socket(socket.as_path())
@@ -177,7 +180,7 @@ impl Services {
     /// Stops all children despite individual errors; this runs before the database containers are removed.
     pub async fn stop(&mut self) -> Vec<crate::error::Failure> {
         let mut errors = Vec::new();
-        for child in [&mut self.a, &mut self.b, &mut self.genesis]
+        for child in [&mut self.a, &mut self.b, &mut self.c, &mut self.genesis]
             .into_iter()
             .flatten()
         {

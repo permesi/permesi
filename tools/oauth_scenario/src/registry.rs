@@ -32,7 +32,7 @@ pub const CASES: &[Case] = &[
     },
     Case {
         id: "refresh.replica_race",
-        description: "Concurrent runtime-role A/B refresh has one winner and commits reuse-family revocation",
+        description: "Concurrent runtime-role A/B/C refresh has one winner and commits reuse-family revocation",
         group: "refresh",
     },
     Case {
@@ -42,7 +42,7 @@ pub const CASES: &[Case] = &[
     },
     Case {
         id: "authentication.shared_exchanges",
-        description: "Real OPAQUE login/reauth start on A, finish on B, replay and same-user session isolation",
+        description: "Real OPAQUE login/reauth handoffs across A/B/C, replay and same-user session isolation",
         group: "security",
     },
     Case {
@@ -67,7 +67,7 @@ pub const CASES: &[Case] = &[
     },
     Case {
         id: "token.replica_replay_race",
-        description: "Authorization on A, exchange on B, exactly one concurrent committed winner and replay rejection",
+        description: "Authorization on A, three-process A/B/C exchange race, exactly one committed winner and replay rejection",
         group: "token",
     },
     Case {

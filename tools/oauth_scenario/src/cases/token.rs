@@ -642,37 +642,27 @@ fn confidential_request(
     Ok(request)
 }
 
-/// Races two actual processes using pinned private sockets, requiring one committed receipt.
+/// Races three actual processes using pinned private sockets, requiring one committed receipt.
 pub(super) async fn race(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let request = Request::new(context, fixture)?;
     let code = issue(context, &request).await?;
     let client = fixture.app()?.public.client_id.to_string();
     let input = fields(&code, &client, &context.gateway.callback, &request.verifier);
-    let (a, b) = tokio::join!(
-        context.gateway.token_replica(false, &input),
-        context.gateway.token_replica(true, &input)
+    let (a, b, c) = tokio::join!(
+        context.gateway.token_on_replica(0, &input),
+        context.gateway.token_on_replica(1, &input),
+        context.gateway.token_on_replica(2, &input)
     );
-    let a = a?;
-    let b = b?;
-    check(
-        (a.status() == StatusCode::OK && b.status() == StatusCode::BAD_REQUEST)
-            || (b.status() == StatusCode::OK && a.status() == StatusCode::BAD_REQUEST),
-        "Concurrent exchange lacked exactly one winner.",
-    )?;
-    let (winner, loser) = if a.status() == StatusCode::OK {
-        (a, b)
-    } else {
-        (b, a)
-    };
-    let body = response(winner, StatusCode::OK).await?;
-    failure(loser, StatusCode::BAD_REQUEST, "invalid_grant").await?;
+    let body = one_winner([a?, b?, c?]).await?;
     claims(context, fixture, &request, &code, &body).await?;
-    failure(
-        context.gateway.token_replica(true, &input).await?,
-        StatusCode::BAD_REQUEST,
-        "invalid_grant",
-    )
-    .await?;
+    for replica in 0..3 {
+        failure(
+            context.gateway.token_on_replica(replica, &input).await?,
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+        )
+        .await?;
+    }
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM oauth_token_issuances WHERE code_hash=$1")
             .bind(Sha256::digest(code.as_bytes()).to_vec())
@@ -683,6 +673,32 @@ pub(super) async fn race(context: &mut Context<'_>, fixture: &Fixture) -> Result
         count == 1,
         "Concurrent exchange committed duplicate receipts.",
     )
+}
+
+/// Requires one committed response and two actual protocol rejections from three independent sockets.
+pub(super) async fn one_winner(replies: [reqwest::Response; 3]) -> Result<Value> {
+    check(
+        replies
+            .iter()
+            .filter(|reply| reply.status() == StatusCode::OK)
+            .count()
+            == 1
+            && replies
+                .iter()
+                .filter(|reply| reply.status() == StatusCode::BAD_REQUEST)
+                .count()
+                == 2,
+        "Three-replica race did not have exactly one winner and two protocol rejections.",
+    )?;
+    let mut winner = None;
+    for reply in replies {
+        if reply.status() == StatusCode::OK {
+            winner = Some(response(reply, StatusCode::OK).await?);
+        } else {
+            failure(reply, StatusCode::BAD_REQUEST, "invalid_grant").await?;
+        }
+    }
+    winner.ok_or_else(|| Failure::harness("Three-replica winner is missing."))
 }
 
 /// Denies real transit signing, verifies rollback, restores permission, then rotates the shared key.

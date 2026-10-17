@@ -6162,6 +6162,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "User has dependent records or retained authorization history.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },

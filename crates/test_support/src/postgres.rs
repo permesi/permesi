@@ -1,14 +1,73 @@
-use anyhow::{Context, Result};
+//! Disposable PostgreSQL fixtures and canonical owner-authenticated bootstrap.
+//!
+//! Flow Overview: start an owned container, wait for PostgreSQL, then apply the
+//! repository's psql includes. Administrator ownership checks and actual owner
+//! schema sessions remain separate; setup errors never count as successful coverage.
+
+use anyhow::{Context, Result, ensure};
 use sqlx::{Connection, PgConnection};
+use std::fmt::Write as _;
 use testcontainers::{
     ContainerAsync, ContainerRequest, GenericImage, ImageExt,
-    core::{IntoContainerPort, WaitFor},
+    core::{ExecCommand, IntoContainerPort, WaitFor},
 };
 use tokio::time::{Duration, sleep};
 
 use crate::container::{start_with_port_retry, with_loopback_port};
 
 const POSTGRES_PORT: u16 = 5432;
+
+/// A verified, sanitized rejection from the canonical role-policy SQL, never a setup failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapPolicyViolation {
+    /// The service owner has unsafe role attributes.
+    OwnerAttributes,
+    /// The service owner has an unexpected role membership.
+    OwnerMemberships,
+    /// The runtime group has unsafe attributes or memberships.
+    RuntimeRole,
+}
+
+impl BootstrapPolicyViolation {
+    /// Matches only fixed messages emitted by the trusted role preflight.
+    fn message(self) -> &'static str {
+        match self {
+            Self::OwnerAttributes => {
+                "Vault database roles require non-superuser login and CREATEROLE attributes"
+            }
+            Self::OwnerMemberships => "Vault database owner has unexpected role memberships",
+            Self::RuntimeRole => "Runtime role has unexpected attributes or role memberships",
+        }
+    }
+
+    /// Requires the policy file, a real source line and P0001; raw diagnostics never leave this helper.
+    fn from_stderr(stderr: &[u8]) -> Option<Self> {
+        std::str::from_utf8(stderr).ok()?.lines().find_map(|line| {
+            let line = line.strip_prefix("psql:/tmp/permesi-bootstrap/bootstrap_ownership.sql:")?;
+            let (source_line, error) = line.split_once(": ERROR:")?;
+            if source_line.parse::<usize>().ok()? == 0 {
+                return None;
+            }
+            let message = error.trim().strip_prefix("P0001:")?.trim();
+            [
+                Self::OwnerAttributes,
+                Self::OwnerMemberships,
+                Self::RuntimeRole,
+            ]
+            .into_iter()
+            .find(|kind| message == kind.message())
+        })
+    }
+}
+
+impl std::fmt::Display for BootstrapPolicyViolation {
+    /// Displays a fixed policy message without SQL, identities or credentials.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl std::error::Error for BootstrapPolicyViolation {}
 
 #[derive(Debug, Clone)]
 pub struct PostgresConfig {
@@ -65,6 +124,70 @@ pub struct PostgresContainer {
 }
 
 impl PostgresContainer {
+    /// Runs the canonical psql bootstrap inside this owned container, including relative includes.
+    ///
+    /// # Errors
+    /// Fails on any schema, ownership or grant error; no database setup failure is a skip.
+    pub async fn bootstrap(&self) -> Result<()> {
+        let files = [
+            ("00_init.sql", include_str!("../../../db/sql/00_init.sql")),
+            (
+                "01_genesis.sql",
+                include_str!("../../../db/sql/01_genesis.sql"),
+            ),
+            (
+                "02_permesi.sql",
+                include_str!("../../../db/sql/02_permesi.sql"),
+            ),
+            (
+                "bootstrap_ownership.sql",
+                include_str!("../../../db/sql/bootstrap_ownership.sql"),
+            ),
+            (
+                "partitioning.sql",
+                include_str!("../../../db/sql/partitioning.sql"),
+            ),
+            (
+                "seed_test_client.sql",
+                include_str!("../../../db/sql/seed_test_client.sql"),
+            ),
+            (
+                "verify_permesi.sql",
+                include_str!("../../../db/sql/verify_permesi.sql"),
+            ),
+        ];
+        let mut script = String::from("set -eu\numask 077\nmkdir -p /tmp/permesi-bootstrap\n");
+        for (name, sql) in files {
+            writeln!(
+                script,
+                "cat > /tmp/permesi-bootstrap/{name} <<'PERMESI_SQL_END'\n{sql}\nPERMESI_SQL_END"
+            )?;
+        }
+        script.push_str("psql -X --no-password -U \"$BOOTSTRAP_USER\" -d postgres -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -f /tmp/permesi-bootstrap/00_init.sql >/dev/null\n");
+        let mut execution = self
+            .container
+            .exec(
+                ExecCommand::new(["sh", "-c", script.as_str()]).with_env_vars([
+                    ("BOOTSTRAP_USER", self.user()),
+                    ("PGPASSWORD", self.password()),
+                ]),
+            )
+            .await
+            .context("Canonical database bootstrap failed")?;
+        // An initial exec exit code does not establish that bootstrap completed.
+        // Drain the attached stream before checking status; retain diagnostics privately.
+        let _stdout = execution.stdout_to_vec().await?;
+        let stderr = execution.stderr_to_vec().await?;
+        let status = execution.exit_code().await?;
+        if status == Some(3)
+            && let Some(policy) = BootstrapPolicyViolation::from_stderr(&stderr)
+        {
+            return Err(policy.into());
+        }
+        ensure!(status == Some(0), "Canonical database bootstrap failed");
+        Ok(())
+    }
+
     /// Start a Postgres container in the specified network.
     ///
     /// # Errors
@@ -254,6 +377,33 @@ pub(crate) fn fixture_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const POLICY_ERROR: &str = "psql:/tmp/permesi-bootstrap/bootstrap_ownership.sql:21: ERROR:  P0001: Vault database owner has unexpected role memberships\nprivate diagnostic context\n";
+
+    #[test]
+    fn bootstrap_policy_rejection_requires_exact_diagnostic_and_sanitizes_context() {
+        let violation = BootstrapPolicyViolation::from_stderr(POLICY_ERROR.as_bytes());
+        assert_eq!(violation, Some(BootstrapPolicyViolation::OwnerMemberships));
+        assert!(
+            !BootstrapPolicyViolation::OwnerMemberships
+                .to_string()
+                .contains("private diagnostic")
+        );
+    }
+
+    #[test]
+    fn bootstrap_policy_rejection_rejects_setup_and_unrelated_sql_failures() {
+        for diagnostic in [
+            "connection failed".to_owned(),
+            POLICY_ERROR.replace("bootstrap_ownership.sql", "02_permesi.sql"),
+            POLICY_ERROR.replace("P0001:", "42501:"),
+            POLICY_ERROR.replace(":21:", ":unknown:"),
+            POLICY_ERROR.replace(":21:", ":0:"),
+            POLICY_ERROR.replace("ERROR:", "NOTICE:"),
+        ] {
+            assert!(BootstrapPolicyViolation::from_stderr(diagnostic.as_bytes()).is_none());
+        }
+    }
 
     #[test]
     fn postgres_config_defaults_are_expected() {

@@ -8,8 +8,9 @@
 //!
 //! Instead, meta-command lines are dropped and the rest is sent as one
 //! simple-query script, so PostgreSQL itself finds statement boundaries and
-//! handles dollar quoting. The script runs in a single implicit transaction per
-//! statement, exactly as `psql -f` would without `--single-transaction`.
+//! handles dollar quoting. Statements sent together use one implicit transaction
+//! unless the script supplies explicit transaction control. Callers load includes
+//! themselves because psql meta-commands are not sent to PostgreSQL.
 
 use anyhow::{Context, Result};
 use sqlx::{Executor, PgConnection};

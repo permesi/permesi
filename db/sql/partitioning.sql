@@ -59,3 +59,11 @@ BEGIN
     RAISE NOTICE 'genesis_tokens_rollover: completed';
 END;
 $$;
+
+-- Parameterized partition DDL and retention belong to the maintenance owner, never runtime.
+REVOKE ALL ON FUNCTION genesis_tokens_rollover(integer,integer) FROM PUBLIC;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='genesis_runtime') THEN
+        REVOKE ALL ON FUNCTION genesis_tokens_rollover(integer,integer) FROM genesis_runtime;
+    END IF;
+END $$;

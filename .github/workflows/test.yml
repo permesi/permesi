@@ -199,7 +199,7 @@ jobs:
           sleep 2
 
           ${CONTAINER_TOOL} exec -i "${CONTAINER_NAME}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
-          ${CONTAINER_TOOL} exec -i "${CONTAINER_NAME}" psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
+          ${CONTAINER_TOOL} exec -i "${CONTAINER_NAME}" psql -U vault_permesi -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
       - name: Stop postgres container
         if: always()

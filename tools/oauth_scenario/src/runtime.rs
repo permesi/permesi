@@ -85,19 +85,16 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| Failure::harness("Infrastructure state missing."))?;
         let tls = Tls::new(&self.private)?;
-        let sockets = [
-            self.private.0.join("a.sock"),
-            self.private.0.join("b.sock"),
-            self.private.0.join("genesis.sock"),
-        ];
-        let [a, b, g] = &sockets;
+        let sockets =
+            ["a.sock", "b.sock", "c.sock", "genesis.sock"].map(|name| self.private.0.join(name));
+        let [a, b, c, g] = &sockets;
         self.gateway =
-            Some(Gateway::start(&tls, inputs.web, [a, b, g], options.request_seconds).await?);
+            Some(Gateway::start(&tls, inputs.web, [a, b, c, g], options.request_seconds).await?);
         let gateway = self
             .gateway
             .as_ref()
             .ok_or_else(|| Failure::harness("Issuer state missing."))?;
-        println!("Starting real Genesis and Permesi replicas A/B.");
+        println!("Starting real Genesis and Permesi replicas A/B/C.");
         let policy = self.services.start(
             inputs.binaries,
             &sockets,

@@ -75,13 +75,12 @@ db-verify:
     echo "postgres-permesi is not running. Run: just postgres" >&2
     exit 1
   fi
-  podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
+  podman exec -i postgres-permesi psql -U vault_permesi -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
 db-bootstrap:
   #!/usr/bin/env zsh
   set -euo pipefail
   podman exec -i postgres-permesi psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
-  podman exec -i postgres-permesi psql -U postgres -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
 jaeger: setup-network
   #!/usr/bin/env zsh

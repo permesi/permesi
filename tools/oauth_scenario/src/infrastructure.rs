@@ -20,7 +20,8 @@ pub const VAULT_IMAGE: &str = "docker.io/hashicorp/vault:1.17.3";
 const GENESIS_SQL: &str = include_str!("../../../db/sql/01_genesis.sql");
 const GENESIS_CLIENT_SQL: &str = include_str!("../../../db/sql/seed_test_client.sql");
 const PERMESI_SQL: &str = include_str!("../../../db/sql/02_permesi.sql");
-const BOOTSTRAP_SQL: &str = include_str!("../../../db/sql/00_init.sql");
+const OWNERSHIP_SQL: &str = include_str!("../../../db/sql/bootstrap_ownership.sql");
+const GENESIS_PARTITION_SQL: &str = include_str!("../../../db/sql/partitioning.sql");
 const VERIFY_SQL: &str = include_str!("../../../db/sql/verify_permesi.sql");
 
 /// Dynamic service credentials never implement Debug or Serialize.
@@ -70,47 +71,22 @@ impl Infrastructure {
         let genesis_admin =
             format!("postgres://postgres:{password}@127.0.0.1:{pg_port}/postgres?sslmode=disable");
         let mut connection = wait_postgres(&genesis_admin, ready_seconds).await?;
-        test_support::sql::execute_script(&mut connection, "01_genesis.sql", GENESIS_SQL)
-            .await
-            .safe("Cannot apply Genesis schema.")?;
-        test_support::sql::execute_script(
-            &mut connection,
-            "seed_test_client.sql",
-            GENESIS_CLIENT_SQL,
-        )
-        .await
-        .safe("Cannot seed isolated admission client.")?;
-        let vault_password = Uuid::new_v4().simple().to_string();
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "CREATE ROLE vault_permesi WITH LOGIN PASSWORD '{vault_password}' CREATEROLE"
-        )))
-        .execute(&mut connection)
-        .await
-        .safe("Cannot bootstrap Vault database role.")?;
-        sqlx::query("GRANT pg_signal_backend TO vault_permesi")
-            .execute(&mut connection)
-            .await
-            .safe("Cannot grant isolated Vault role privileges.")?;
-        sqlx::query("CREATE DATABASE permesi OWNER vault_permesi")
-            .execute(&mut connection)
-            .await
-            .safe("Cannot create isolated IAM database.")?;
+        let (genesis_password, vault_password) =
+            bootstrap_service_schemas(&mut connection, &password, pg_port).await?;
         let admin_dsn =
             format!("postgres://postgres:{password}@127.0.0.1:{pg_port}/permesi?sslmode=disable");
-        let mut connection = PgConnection::connect(&admin_dsn)
-            .await
-            .safe("Cannot connect to isolated IAM database.")?;
-        sqlx::query("CREATE ROLE permesi_runtime NOLOGIN")
-            .execute(&mut connection)
-            .await
-            .safe("Cannot create isolated runtime role.")?;
-        test_support::sql::execute_script(&mut connection, "02_permesi.sql", PERMESI_SQL)
-            .await
-            .safe("Cannot apply Permesi schema.")?;
-        apply_runtime_grants(&mut connection).await?;
         let pool = PgPool::connect(&admin_dsn)
             .await
             .safe("Cannot open isolated assertion pool.")?;
+        let verification_dsn = format!(
+            "postgres://vault_permesi:{vault_password}@127.0.0.1:{pg_port}/permesi?sslmode=disable"
+        );
+        let mut verification = PgConnection::connect(&verification_dsn)
+            .await
+            .safe("Cannot connect to schema verification.")?;
+        test_support::sql::execute_script(&mut verification, "verify_permesi.sql", VERIFY_SQL)
+            .await
+            .safe("Canonical runtime grants violate schema protections.")?;
         let vault_base = format!("http://127.0.0.1:{vault_port}");
         let vault = Vault {
             base: vault_base.clone(),
@@ -123,12 +99,12 @@ impl Infrastructure {
         };
         vault.ready(ready_seconds).await?;
         let (genesis_role, permesi_role) = vault
-            .bootstrap(&postgres_name, &password, &vault_password)
+            .bootstrap(&postgres_name, &genesis_password, &vault_password)
             .await?;
         Ok(Self {
             vault,
             permesi_dsn: format!("postgres://127.0.0.1:{pg_port}/permesi?sslmode=disable"),
-            genesis_dsn: format!("postgres://127.0.0.1:{pg_port}/postgres?sslmode=disable"),
+            genesis_dsn: format!("postgres://127.0.0.1:{pg_port}/genesis?sslmode=disable"),
             admin_dsn,
             pool,
             vault_url: format!("{vault_base}/v1/auth/approle/login"),
@@ -178,30 +154,116 @@ impl Infrastructure {
     }
 }
 
+/// Applies the canonical schemas and ownership checks as the non-superuser service owners.
+/// Only this run's new databases and roles are accepted; no existing stack is adopted.
+async fn bootstrap_service_schemas(
+    connection: &mut PgConnection,
+    password: &str,
+    pg_port: u16,
+) -> Result<(String, String)> {
+    let vault_password = Uuid::new_v4().simple().to_string();
+    let genesis_password = Uuid::new_v4().simple().to_string();
+    for (database, owner, runtime, owner_password) in [
+        (
+            "genesis",
+            "vault_genesis",
+            "genesis_runtime",
+            &genesis_password,
+        ),
+        (
+            "permesi",
+            "vault_permesi",
+            "permesi_runtime",
+            &vault_password,
+        ),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE ROLE {owner} WITH LOGIN PASSWORD '{owner_password}' CREATEROLE;
+                 GRANT pg_signal_backend TO {owner};
+                 CREATE ROLE {runtime} NOLOGIN;
+                 GRANT {runtime} TO {owner} WITH ADMIN OPTION;"
+        )))
+        .execute(&mut *connection)
+        .await
+        .safe("Cannot bootstrap owned database roles.")?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE {database} OWNER {owner}"
+        )))
+        .execute(&mut *connection)
+        .await
+        .safe("Cannot create owned service database.")?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "REVOKE ALL ON DATABASE {database} FROM PUBLIC"
+        )))
+        .execute(&mut *connection)
+        .await
+        .safe("Cannot restrict service database access.")?;
+        let dsn = format!(
+            "postgres://postgres:{password}@127.0.0.1:{pg_port}/{database}?sslmode=disable"
+        );
+        let mut schema = PgConnection::connect(&dsn)
+            .await
+            .safe("Cannot connect to owned service database.")?;
+        ownership_pass(&mut schema).await?;
+        apply_owned_schema(database, owner, owner_password, pg_port).await?;
+        ownership_pass(&mut schema).await?;
+    }
+    Ok((genesis_password, vault_password))
+}
+
+/// Catalog-only administrator passes pin lookup before touching owner-controlled databases.
+async fn ownership_pass(connection: &mut PgConnection) -> Result<()> {
+    sqlx::raw_sql("BEGIN; SET LOCAL search_path = pg_catalog, pg_temp;")
+        .execute(&mut *connection)
+        .await
+        .safe("Cannot start ownership transaction.")?;
+    test_support::sql::execute_script(connection, "bootstrap ownership", OWNERSHIP_SQL)
+        .await
+        .safe("Cannot verify non-superuser ownership.")?;
+    sqlx::query("COMMIT")
+        .execute(connection)
+        .await
+        .safe("Cannot commit ownership transaction.")?;
+    Ok(())
+}
+
+/// Application schemas run in an actual owner login; RESET ROLE cannot restore an administrator.
+async fn apply_owned_schema(database: &str, owner: &str, password: &str, port: u16) -> Result<()> {
+    let dsn = format!("postgres://{owner}:{password}@127.0.0.1:{port}/{database}?sslmode=disable");
+    let mut schema = PgConnection::connect(&dsn)
+        .await
+        .safe("Cannot authenticate schema owner.")?;
+    sqlx::raw_sql("BEGIN; SET LOCAL search_path = public, pg_temp;")
+        .execute(&mut schema)
+        .await
+        .safe("Cannot start owner schema transaction.")?;
+    if database == "genesis" {
+        for (label, sql) in [
+            ("01_genesis.sql", GENESIS_SQL),
+            ("partitioning.sql", GENESIS_PARTITION_SQL),
+            ("seed_test_client.sql", GENESIS_CLIENT_SQL),
+        ] {
+            test_support::sql::execute_script(&mut schema, label, sql)
+                .await
+                .safe("Cannot apply owned Genesis schema.")?;
+        }
+    } else {
+        test_support::sql::execute_script(&mut schema, "02_permesi.sql", PERMESI_SQL)
+            .await
+            .safe("Cannot apply owned Permesi schema.")?;
+    }
+    sqlx::query("COMMIT")
+        .execute(&mut schema)
+        .await
+        .safe("Cannot commit owner schema transaction.")?;
+    Ok(())
+}
+
 /// Uses OS entropy only; fixture seed cannot influence passwords, PKCE, CA keys or Vault seeds.
 pub fn random() -> Result<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).safe("Operating-system entropy is unavailable.")?;
     Ok(STANDARD.encode(bytes))
-}
-
-/// Applies the canonical bootstrap exceptions and verifies that broad grants cannot erase replay history.
-async fn apply_runtime_grants(connection: &mut PgConnection) -> Result<()> {
-    let marker = "GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;";
-    let (_, grants) = BOOTSTRAP_SQL
-        .split_once(marker)
-        .ok_or_else(|| Failure::harness("Canonical runtime grants are missing."))?;
-    test_support::sql::execute_script(
-        &mut *connection,
-        "canonical runtime grants",
-        &format!("{marker}{grants}"),
-    )
-    .await
-    .safe("Cannot apply canonical runtime grants.")?;
-    test_support::sql::execute_script(&mut *connection, "verify_permesi.sql", VERIFY_SQL)
-        .await
-        .safe("Canonical runtime grants violate schema protections.")?;
-    Ok(())
 }
 
 /// Retries only dependency readiness; authentication and scenario mutations are never retried.
@@ -261,10 +323,9 @@ impl Vault {
             json!({"data":{"opaque_server_seed":random()?, "mfa_recovery_pepper":random()?}}),
         )
         .await?;
-        self.database("genesis", postgres_name, "postgres", "postgres", password, json!([
+        self.database("genesis", postgres_name, "genesis", "vault_genesis", password, json!([
             "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
-            "GRANT CONNECT ON DATABASE postgres TO \"{{name}}\";", "GRANT USAGE ON SCHEMA public TO \"{{name}}\";",
-            "GRANT SELECT ON TABLE clients TO \"{{name}}\";", "GRANT SELECT, INSERT ON TABLE tokens, tokens_default TO \"{{name}}\";"
+            "GRANT genesis_runtime TO \"{{name}}\";"
         ])).await?;
         self.database("permesi", postgres_name, "permesi", "vault_permesi", vault_password, json!([
             "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';", "GRANT permesi_runtime TO \"{{name}}\";"

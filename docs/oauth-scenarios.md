@@ -50,11 +50,18 @@ manifest inputs. `--seed` affects fixture naming only; security material uses OS
 Every run owns UUID-labeled Podman containers/network, random loopback ports, private
 files and fresh credentials. Dependency ports bind to `127.0.0.1`. Real service
 processes use the existing same-host Unix-socket mode in a mode-0700 directory. A
-test-only HTTPS gateway keeps one stable issuer while selecting actual replicas A/B.
+test-only HTTPS gateway keeps one stable issuer while selecting actual replicas A/B/C.
 OAuth requests, sessions, grants, codes and encrypted OPAQUE exchanges use shared
 PostgreSQL. Ordinary browser setup selects A; `authentication.shared_exchanges` deliberately
-starts native login/reauthentication on A and finishes on B using real runtime-role APIs. The failover case stops A
-after request persistence and completes consent on B. This is multi-process state
+hands native login from A to B, reauthentication from B to C and replay/session-binding
+rejections across all three using real runtime-role APIs. The failover case stops A
+after request persistence and completes consent on B. Three independently minted runtime
+identities are required; code and refresh races pin requests to all three sockets and
+require one committed winner and two protocol rejections. Offline authorization starts
+on A, code exchange uses B and refresh rotation uses C. Both service databases use
+non-superuser schema ownership and canonical runtime policies; see
+[database hardening](database-hardening.md) for rollout and pending validation.
+This is multi-process state
 coverage, not a claim of multi-host transport/load testing.
 
 Service children receive explicit existing CLI inputs and fresh private credential
@@ -72,12 +79,12 @@ worker content determines the image tag, preventing stale reuse between runner v
 Default deadlines are readiness 90 seconds, HTTP 10 seconds, browser actions 15 seconds,
 whole run 900 seconds and bounded cleanup. CLI ranges prevent unbounded configuration.
 `--access-token-ttl-seconds` defaults to the product's 300 seconds and accepts 1–3600.
-It passes the existing Permesi CLI/dispatch validation on both replicas. Use 10 seconds
+It passes the existing Permesi CLI/dispatch validation on all three replicas. Use 10 seconds
 for the interoperability/full suite's real expiration case, as CI does; very short
 lifetimes may expire positive controls during browser/network work. ID-token and
 authorization-code lifetimes retain product defaults. No test changes stored timestamps.
 `--auth-rate-limit-ip-attempts` defaults to 1,000 and accepts 1–100,000. It configures
-the existing product CLI on both disposable replicas and the effective value appears
+the existing product CLI on all three disposable replicas and the effective value appears
 in `report.json`. The full suite makes more than the production default's 100
 authorization requests per window through one fixture identity, so it needs an explicit
 bulk-test IP budget. Production defaults, account/action separation, token budgets and
@@ -116,7 +123,7 @@ repetitions and parallel isolation with
 | --- | --- |
 | `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, accurate code/token discovery and public JWKS |
 | `authorization.consent` | Real browser S256 consent, exact scopes/state/nonce/redirect/TTL, high-entropy code and hash-only row |
-| `authentication.shared_exchanges` | Real OPAQUE login/reauthentication start on A and finish on B, actual session verification, replay rejection and same-user session binding |
+| `authentication.shared_exchanges` | Real OPAQUE login A→B, reauthentication B→C, actual session verification and replay/same-user session-binding rejection across A/B/C |
 | `authorization.login_resume` | Anonymous durable request on A, actual Web login, resume/consent on B |
 | `authorization.cancel_saved` | Cancellation without code, fresh saved-consent code/nonce/bindings, exact saved scopes, forced consent and added browser scope-field rejection |
 | `authorization.validation` | Unknown/disabled/deleted clients; modified/prefix/foreign redirects; response type; unknown/disallowed/duplicate/internal scopes; missing/malformed/plain PKCE and missing nonce |
@@ -132,13 +139,13 @@ repetitions and parallel isolation with
 | `redemption.client_disable_restore` | Initially usable code, committed disable/re-enable on B, revoked old grant remains unusable even after fresh consent |
 | `redemption.scope_remove_restore` | Scope removal/restoration cannot revive old code; fresh grant/code has exact bindings, commits once and rejects replay |
 | `redemption.redirect_remove_restore` | Callback removal/restoration cannot revive old code; fresh consent creates a different grant/code |
-| `refresh.rotation_reuse` | Actual offline consent, A/B runtime-role rotation, independently verified narrowed JWT/context, hashed lineage and replay-family revocation |
-| `refresh.replica_race` | Real A/B concurrent refresh, one committed issuance and losing-reuse revocation of the winning successor |
+| `refresh.rotation_reuse` | Actual offline consent, A/B/C runtime-role rotation, independently verified narrowed JWT/context, hashed lineage and replay-family revocation |
+| `refresh.replica_race` | Real A/B/C concurrent refresh, one committed issuance and losing-reuse revocation of the winning successor |
 | `refresh.lifecycle` | Scope removal/restoration through management APIs cannot revive the old refresh family |
 | `token.public_claims` | Browser code on A, runtime-role HTTP exchange on B, ignored extensions cannot replace saved nonce, independently verified signatures/issuer/audiences/nonce/auth_time/at_hash/tenant/scopes, committed hashes and internal-session rejection |
 | `token.confidential_credentials` | HTTP Basic current/retiring credentials, missing/wrong/revoked secrets, mandatory S256 and valid retry controls |
 | `token.validation` | Wrong verifier/redirect/client, duplicate and browser authority fields, valid retry, no ID token without openid |
-| `token.replica_replay_race` | Real A/B process HTTP race on pinned private sockets, exactly one committed receipt, replay rejection and independently verified winner |
+| `token.replica_replay_race` | Real A/B/C process HTTP race on pinned private sockets, exactly one committed receipt, replay rejection and independently verified winner |
 | `token.signing_rollback_rotation` | Deny signing in owned Vault policy, code remains unconsumed/unexpired, restore and exchange; rotate actual shared key, forced B JWKS refresh verifies old/new tokens |
 
 | Case | Interoperability assertion |
@@ -248,7 +255,11 @@ the full MFA matrix or formal OIDC conformance.
 
 ## Validation and independent review
 
-The latest shared-authentication/refresh batch passes all 32 cases, including runtime-role
+The records below describe the earlier A/B milestones. They do not validate the
+subsequent three-replica extension; its current gates and source reviews are recorded
+in [database hardening](database-hardening.md).
+
+The earlier shared-authentication/refresh batch passed all 32 cases, including runtime-role
 refresh rotation, replay and lifecycle rejection across A/B. Its workspace, database,
 browser, hosted CI and corrected security review evidence is recorded in
 [authentication release validation](authentication-release-validation.md). The earlier

@@ -1,6 +1,6 @@
 //! Test-only HTTPS issuer gateway over real, private Unix-socket service listeners.
 //!
-//! The browser sees one stable issuer while the harness selects A or B. This is
+//! The browser sees one stable issuer while the harness selects A, B or C. This is
 //! equivalent to a load balancer, not a product test hook. OPAQUE, OAuth and
 //! management traffic all follow that selection and share PostgreSQL state.
 //! Genesis admission has its own fixed backend. No request or callback URL is logged.
@@ -22,7 +22,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -34,18 +34,19 @@ use tower_http::services::ServeDir;
 struct Proxy {
     a: reqwest::Client,
     b: reqwest::Client,
+    c: reqwest::Client,
     genesis: reqwest::Client,
-    use_b: Arc<AtomicBool>,
+    replica: Arc<AtomicUsize>,
     config: Arc<String>,
     assets: ServeDir<tower_http::services::ServeFile>,
 }
 
 /// Owned gateway and callback listeners, with explicit shutdown after every outcome.
 pub struct Gateway {
-    token_clients: [reqwest::Client; 2],
+    token_clients: [reqwest::Client; 3],
     pub origin: String,
     pub callback: String,
-    pub use_b: Arc<AtomicBool>,
+    replica: Arc<AtomicUsize>,
     handle: Handle<std::net::SocketAddr>,
     server: JoinHandle<std::io::Result<()>>,
     callback_server: JoinHandle<std::io::Result<()>>,
@@ -56,7 +57,7 @@ impl Gateway {
     pub async fn start(
         tls: &Tls,
         assets: &Path,
-        sockets: [&Path; 3],
+        sockets: [&Path; 4],
         seconds: u64,
     ) -> Result<Self> {
         let bound = listener()?;
@@ -72,7 +73,7 @@ impl Gateway {
                 .safe("Cannot read callback port.")?
                 .port()
         );
-        let use_b = Arc::new(AtomicBool::new(false));
+        let replica = Arc::new(AtomicUsize::new(0));
         let client = |socket: &Path| {
             reqwest::Client::builder()
                 .unix_socket(socket)
@@ -82,17 +83,18 @@ impl Gateway {
                 .build()
                 .safe("Cannot configure private service transport.")
         };
-        let [a, b, genesis] = sockets;
+        let [a, b, c, genesis] = sockets;
         let config = format!(
             "window.PERMESI_CONFIG = {};",
             json!({"api_base_url":origin,"token_base_url":format!("{origin}/admission"),"client_id":UuidString::ZERO,"opaque_server_id":"api.permesi.dev"})
         );
-        let token_clients = [client(a)?, client(b)?];
+        let token_clients = [client(a)?, client(b)?, client(c)?];
         let proxy = Proxy {
             a: client(a)?,
             b: client(b)?,
+            c: client(c)?,
             genesis: client(genesis)?,
-            use_b: use_b.clone(),
+            replica: replica.clone(),
             config: Arc::new(config),
             assets: ServeDir::new(assets).fallback(tower_http::services::ServeFile::new(
                 assets.join("index.html"),
@@ -121,7 +123,7 @@ impl Gateway {
             token_clients,
             origin,
             callback,
-            use_b,
+            replica,
             handle,
             server,
             callback_server,
@@ -130,12 +132,17 @@ impl Gateway {
 
     /// Restores all Permesi traffic, including password exchanges, to replica A.
     pub fn replica_a(&self) {
-        self.use_b.store(false, Ordering::SeqCst);
+        self.replica.store(0, Ordering::SeqCst);
     }
 
     /// Switches all Permesi traffic; no browser-controlled input can select a replica.
     pub fn replica_b(&self) {
-        self.use_b.store(true, Ordering::SeqCst);
+        self.replica.store(1, Ordering::SeqCst);
+    }
+
+    /// Selects the third independent runtime process under the same issuer.
+    pub fn replica_c(&self) {
+        self.replica.store(2, Ordering::SeqCst);
     }
 
     /// Pins one native token request to an owned private service socket for a real A/B race.
@@ -145,9 +152,18 @@ impl Gateway {
         second: bool,
         fields: &[(&str, &str)],
     ) -> Result<reqwest::Response> {
+        self.token_on_replica(usize::from(second), fields).await
+    }
+
+    /// Pins a cookie-free request to one of the three owned processes; the browser has no selector.
+    pub async fn token_on_replica(
+        &self,
+        replica: usize,
+        fields: &[(&str, &str)],
+    ) -> Result<reqwest::Response> {
         let client = self
             .token_clients
-            .get(usize::from(second))
+            .get(replica)
             .ok_or_else(|| crate::error::Failure::harness("Missing replica client."))?;
         let mut form = url::form_urlencoded::Serializer::new(String::new());
         form.extend_pairs(fields.iter().copied());
@@ -230,10 +246,13 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
     }
     let client = if is_genesis {
         &proxy.genesis
-    } else if !proxy.use_b.load(Ordering::SeqCst) {
-        &proxy.a
     } else {
-        &proxy.b
+        match proxy.replica.load(Ordering::SeqCst) {
+            0 => &proxy.a,
+            1 => &proxy.b,
+            2 => &proxy.c,
+            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
     };
     let uri = request
         .uri()
@@ -306,7 +325,7 @@ mod tests {
         let private = PrivateDir::new()?;
         let mut clients = Vec::new();
         let mut servers = Vec::new();
-        for label in ["replica-a", "replica-b", "genesis"] {
+        for label in ["replica-a", "replica-b", "replica-c", "genesis"] {
             let socket = private.0.join(format!("{label}.sock"));
             let listener =
                 tokio::net::UnixListener::bind(&socket).safe("Cannot bind test backend.")?;
@@ -333,18 +352,21 @@ mod tests {
             b: clients
                 .next()
                 .ok_or_else(|| crate::error::Failure::harness("Missing test replica B."))?,
+            c: clients
+                .next()
+                .ok_or_else(|| crate::error::Failure::harness("Missing test replica C."))?,
             genesis: clients
                 .next()
                 .ok_or_else(|| crate::error::Failure::harness("Missing test Genesis."))?,
-            use_b: Arc::new(AtomicBool::new(false)),
+            replica: Arc::new(AtomicUsize::new(0)),
             config: Arc::new(String::new()),
             assets: ServeDir::new(&private.0).fallback(tower_http::services::ServeFile::new(
                 private.0.join("index.html"),
             )),
         };
         let mut observed = Vec::new();
-        for second in [false, true] {
-            proxy.use_b.store(second, Ordering::SeqCst);
+        for selected in 0..3 {
+            proxy.replica.store(selected, Ordering::SeqCst);
             for path in [
                 "/v1/auth/opaque/login/start",
                 "/v1/auth/opaque/login/finish",
@@ -360,19 +382,21 @@ mod tests {
                 let bytes = to_bytes(response.into_body(), 1024)
                     .await
                     .safe("Cannot read test response.")?;
-                observed.push((second, path, bytes));
+                observed.push((selected, path, bytes));
             }
         }
         for server in servers {
             server.abort();
         }
-        for (second, path, bytes) in observed {
+        for (selected, path, bytes) in observed {
             let expected = if path.starts_with("/admission/") {
                 "genesis"
-            } else if second {
-                "replica-b"
             } else {
-                "replica-a"
+                match selected {
+                    0 => "replica-a",
+                    1 => "replica-b",
+                    _ => "replica-c",
+                }
             };
             assert_eq!(
                 bytes.as_ref(),
@@ -411,8 +435,9 @@ mod tests {
         let proxy = Proxy {
             a: client.clone(),
             b: client.clone(),
+            c: client.clone(),
             genesis: client,
-            use_b: Arc::new(AtomicBool::new(false)),
+            replica: Arc::new(AtomicUsize::new(0)),
             config: Arc::new(String::new()),
             assets: ServeDir::new(&private.0).fallback(tower_http::services::ServeFile::new(
                 private.0.join("index.html"),

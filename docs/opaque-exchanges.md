@@ -115,9 +115,10 @@ They do not claim complete multi-replica passkey/TOTP browser coverage.
 The isolated binary adds `authentication.shared_exchanges` to the full/security suites.
 Run `just oauth-scenario-build`, then
 `target/debug/permesi-oauth-scenario --case authentication.shared_exchanges`.
-It uses real Vault/Genesis/Permesi A/B and runtime-role PostgreSQL access: start on A,
-finish on B, verify a real session, reject replay, then repeat for reauthentication
-and reject another session of the same user. No exchange or session is seeded in SQL.
+It uses real Vault/Genesis/Permesi A/B/C and runtime-role PostgreSQL access: login on
+A→B, reauthenticate on B→C, and reject replay or another session of the same user
+across all three replicas. No exchange or session is seeded in SQL. The latest
+three-replica execution remains pending in [database hardening](database-hardening.md).
 See [scenario instructions](oauth-scenarios.md) and [TODO](../TODO.md) for validation
 status and remaining WebAuthn, multi-host/load/fault and operational work.
 

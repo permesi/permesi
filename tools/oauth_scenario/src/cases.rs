@@ -179,6 +179,12 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
 
 /// Checks real configuration reads and implemented discovery without overstating token support.
 async fn foundation(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
+    let replicas: i64 = sqlx::query_scalar("SELECT count(DISTINCT a.usesysid) FROM pg_catalog.pg_stat_activity a JOIN pg_catalog.pg_roles r ON r.oid=a.usesysid WHERE a.datname=current_database() AND r.rolcanlogin AND NOT r.rolsuper AND NOT r.rolcreaterole AND pg_has_role(r.oid,'permesi_runtime','MEMBER')")
+        .fetch_one(context.pool).await.safe("Cannot inspect runtime replica identities.")?;
+    check(
+        replicas >= 3,
+        "Three independent runtime database identities are required.",
+    )?;
     let orgs: Vec<Resource> = context
         .api
         .json(Method::GET, "/v1/orgs", None, StatusCode::OK)
@@ -1211,10 +1217,7 @@ async fn credentials(context: &mut Context<'_>, fixture: &Fixture) -> Result<()>
 async fn failover(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let request = Request::new(context, fixture)?;
     // Ensure this case starts on A even if an earlier independent login-resume selected B.
-    context
-        .gateway
-        .use_b
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    context.gateway.replica_a();
     let page = begin(context, &request, "owner").await?;
     crate::browser::expect_stage(
         &page,
