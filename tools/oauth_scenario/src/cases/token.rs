@@ -15,7 +15,7 @@ fn value(object: &Value, key: &str) -> Value {
 }
 
 /// Builds the entire supported form; tenant and scope authority are never submitted.
-fn fields<'a>(
+pub(super) fn fields<'a>(
     code: &'a str,
     client: &'a str,
     redirect: &'a str,
@@ -201,7 +201,7 @@ pub(super) async fn public_claims(context: &mut Context<'_>, fixture: &Fixture) 
 }
 
 /// Independently validates time/audiences/nonce/tenant/exact scopes and hash-only committed receipt.
-async fn claims(
+pub(super) async fn claims(
     context: &Context<'_>,
     fixture: &Fixture,
     request: &Request,
@@ -642,20 +642,16 @@ fn confidential_request(
     Ok(request)
 }
 
-/// Races three actual processes using pinned private sockets, requiring one committed receipt.
+/// Races every configured process on its private socket, requiring one committed receipt.
 pub(super) async fn race(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let request = Request::new(context, fixture)?;
     let code = issue(context, &request).await?;
     let client = fixture.app()?.public.client_id.to_string();
     let input = fields(&code, &client, &context.gateway.callback, &request.verifier);
-    let (a, b, c) = tokio::join!(
-        context.gateway.token_on_replica(0, &input),
-        context.gateway.token_on_replica(1, &input),
-        context.gateway.token_on_replica(2, &input)
-    );
-    let body = one_winner([a?, b?, c?]).await?;
+    let replicas = (0..context.gateway.replica_count()).collect::<Vec<_>>();
+    let body = one_winner(context.gateway.race_tokens(&replicas, &input).await?).await?;
     claims(context, fixture, &request, &code, &body).await?;
-    for replica in 0..3 {
+    for replica in replicas {
         failure(
             context.gateway.token_on_replica(replica, &input).await?,
             StatusCode::BAD_REQUEST,
@@ -675,20 +671,21 @@ pub(super) async fn race(context: &mut Context<'_>, fixture: &Fixture) -> Result
     )
 }
 
-/// Requires one committed response and two actual protocol rejections from three independent sockets.
-pub(super) async fn one_winner(replies: [reqwest::Response; 3]) -> Result<Value> {
+/// Requires one committed response and an actual `invalid_grant` rejection from every other socket.
+pub(super) async fn one_winner(replies: Vec<reqwest::Response>) -> Result<Value> {
     check(
-        replies
-            .iter()
-            .filter(|reply| reply.status() == StatusCode::OK)
-            .count()
-            == 1
+        replies.len() >= 2
+            && replies
+                .iter()
+                .filter(|reply| reply.status() == StatusCode::OK)
+                .count()
+                == 1
             && replies
                 .iter()
                 .filter(|reply| reply.status() == StatusCode::BAD_REQUEST)
                 .count()
-                == 2,
-        "Three-replica race did not have exactly one winner and two protocol rejections.",
+                == replies.len() - 1,
+        "Replica race did not have exactly one winner and all expected protocol rejections.",
     )?;
     let mut winner = None;
     for reply in replies {
@@ -698,7 +695,7 @@ pub(super) async fn one_winner(replies: [reqwest::Response; 3]) -> Result<Value>
             failure(reply, StatusCode::BAD_REQUEST, "invalid_grant").await?;
         }
     }
-    winner.ok_or_else(|| Failure::harness("Three-replica winner is missing."))
+    winner.ok_or_else(|| Failure::harness("Replica race winner is missing."))
 }
 
 /// Denies real transit signing, verifies rollback, restores permission, then rotates the shared key.
@@ -765,4 +762,75 @@ pub(super) async fn signing(context: &mut Context<'_>, fixture: &Fixture) -> Res
     let _ = verify(&old_access, &refreshed, "at+jwt")?;
     let _ = verify(&text_field(&body, "id_token")?, &refreshed, "JWT")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod race_tests {
+    use super::*;
+
+    /// Creates reachable-independent protocol responses for validating winner classification itself.
+    fn reply(status: StatusCode, body: &str) -> Result<reqwest::Response> {
+        Ok(axum::http::Response::builder()
+            .status(status)
+            .header("content-type", "application/json")
+            .header("cache-control", "no-store")
+            .header("pragma", "no-cache")
+            .body(body.to_owned())
+            .safe("Cannot create test race response.")?
+            .into())
+    }
+
+    /// Every non-winner must be an actual protocol rejection, including five-way and outage races.
+    #[tokio::test]
+    async fn race_winner_requires_complete_protocol_rejections() -> Result<()> {
+        for count in [2, 3, 4, 5] {
+            let mut replies = vec![reply(StatusCode::OK, "{}")?];
+            for _ in 1..count {
+                replies.push(reply(
+                    StatusCode::BAD_REQUEST,
+                    r#"{"error":"invalid_grant"}"#,
+                )?);
+            }
+            one_winner(replies).await?;
+        }
+        assert!(one_winner(Vec::new()).await.is_err());
+        assert!(
+            one_winner(vec![reply(StatusCode::OK, "{}")?])
+                .await
+                .is_err()
+        );
+        for status in [
+            StatusCode::OK,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::UNAUTHORIZED,
+        ] {
+            assert!(
+                one_winner(vec![reply(StatusCode::OK, "{}")?, reply(status, "{}")?])
+                    .await
+                    .is_err()
+            );
+        }
+        for body in [
+            r#"{"error":"invalid_client"}"#,
+            r#"{"error":"invalid_grant","detail":"unexpected"}"#,
+        ] {
+            assert!(
+                one_winner(vec![
+                    reply(StatusCode::OK, "{}")?,
+                    reply(StatusCode::BAD_REQUEST, body)?
+                ])
+                .await
+                .is_err()
+            );
+        }
+        assert!(
+            one_winner(vec![
+                reply(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#)?,
+                reply(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#)?
+            ])
+            .await
+            .is_err()
+        );
+        Ok(())
+    }
 }

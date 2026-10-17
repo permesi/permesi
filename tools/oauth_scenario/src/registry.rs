@@ -12,6 +12,7 @@ pub enum Suite {
     Token,
     Interop,
     Refresh,
+    Ha,
     #[default]
     Full,
 }
@@ -26,13 +27,23 @@ pub struct Case {
 
 pub const CASES: &[Case] = &[
     Case {
+        id: "ha.rolling_restart",
+        description: "Every replica is gracefully replaced; durable OPAQUE/code state, identity and replay protection survive new processes",
+        group: "ha",
+    },
+    Case {
+        id: "ha.replica_outage",
+        description: "Abrupt owned-backend loss fails closed; surviving replicas redeem codes and revoke refresh replay across recovery",
+        group: "ha",
+    },
+    Case {
         id: "refresh.rotation_reuse",
         description: "Explicit browser offline consent, cross-replica rotation, narrow JWT claims and family replay revocation",
         group: "refresh",
     },
     Case {
         id: "refresh.replica_race",
-        description: "Concurrent runtime-role A/B/C refresh has one winner and commits reuse-family revocation",
+        description: "Concurrent refresh across every configured replica has one winner and commits reuse-family revocation",
         group: "refresh",
     },
     Case {
@@ -67,7 +78,7 @@ pub const CASES: &[Case] = &[
     },
     Case {
         id: "token.replica_replay_race",
-        description: "Authorization on A, three-process A/B/C exchange race, exactly one committed winner and replay rejection",
+        description: "Authorization on A, exchange race across every configured process, exactly one committed winner and replay rejection",
         group: "token",
     },
     Case {
@@ -208,10 +219,21 @@ pub fn select(suite: Suite, ids: &[String]) -> Result<Vec<Case>> {
                 Suite::Token => c.group == "token" || c.group == "refresh",
                 Suite::Interop => c.group == "interop",
                 Suite::Refresh => c.group == "refresh",
+                Suite::Ha => {
+                    c.group == "ha"
+                        || matches!(
+                            c.id,
+                            "foundation.provisioning"
+                                | "authentication.shared_exchanges"
+                                | "token.replica_replay_race"
+                                | "refresh.replica_race"
+                                | "authorization.replica_failover"
+                        )
+                }
             }
         })
         .collect::<Vec<_>>();
-    // Destroying A is deliberate: always run that topology-changing case last, including future cases.
+    // Preserve the historical failover ordering; runtime restores stopped slots before advancing.
     chosen.sort_by_key(|case| case.id == "authorization.replica_failover");
     check(!chosen.is_empty(), "No scenario cases selected.")?;
     Ok(chosen)
@@ -227,6 +249,7 @@ mod tests {
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
         assert_eq!(select(Suite::Interop, &[])?.len(), 6);
         assert_eq!(select(Suite::Refresh, &[])?.len(), 3);
+        assert_eq!(select(Suite::Ha, &[])?.len(), 7);
         assert!(
             select(Suite::Interop, &[])?
                 .iter()

@@ -26,6 +26,7 @@ use url::Url;
 use uuid::Uuid;
 
 mod authentication;
+mod ha;
 mod interop;
 mod lifecycle;
 mod refresh;
@@ -47,6 +48,7 @@ pub struct Context<'a> {
     pub resource: &'a crate::resource::ResourceServer,
     pub infrastructure: &'a crate::infrastructure::Infrastructure,
     pub manifest: &'a crate::manifest::Manifest,
+    pub fixture_seed: u64,
 }
 
 /// Security-sensitive request material stays in memory and has no Debug/Serialize implementation.
@@ -125,6 +127,8 @@ impl Request {
 /// Dispatches stable case IDs; missing implementations are errors, not silently successful skips.
 pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     match id {
+        "ha.rolling_restart" => ha::rolling_restart(context, fixture).await,
+        "ha.replica_outage" => ha::replica_outage(context, fixture).await,
         "authentication.shared_exchanges" => authentication::shared_exchanges(context).await,
         "interop.public_client" => interop::public(context, fixture).await,
         "interop.confidential_client" => interop::confidential(context, fixture).await,
@@ -182,8 +186,9 @@ async fn foundation(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> 
     let replicas: i64 = sqlx::query_scalar("SELECT count(DISTINCT a.usesysid) FROM pg_catalog.pg_stat_activity a JOIN pg_catalog.pg_roles r ON r.oid=a.usesysid WHERE a.datname=current_database() AND r.rolcanlogin AND NOT r.rolsuper AND NOT r.rolcreaterole AND pg_has_role(r.oid,'permesi_runtime','MEMBER')")
         .fetch_one(context.pool).await.safe("Cannot inspect runtime replica identities.")?;
     check(
-        replicas >= 3,
-        "Three independent runtime database identities are required.",
+        replicas
+            >= i64::try_from(context.services.replica_count()).safe("Invalid replica count.")?,
+        "Every configured replica requires an independent runtime database identity.",
     )?;
     let orgs: Vec<Resource> = context
         .api
@@ -1226,10 +1231,7 @@ async fn failover(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     )?;
     context
         .services
-        .a
-        .as_mut()
-        .ok_or_else(|| Failure::harness("Replica A handle missing."))?
-        .stop()
+        .stop_replica(0, crate::services::StopMode::Abrupt)
         .await?;
     context.gateway.replica_b();
     let result = context

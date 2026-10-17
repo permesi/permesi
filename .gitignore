@@ -22,6 +22,7 @@ flycheck*.rs
 .flycheck_*
 
 # test artifacts
+__pycache__/
 /tests/tmp/
 .hypothesis/
 *.db

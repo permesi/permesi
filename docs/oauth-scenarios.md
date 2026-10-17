@@ -15,6 +15,8 @@ On Linux with working local Podman, run `just oauth-scenario-build`, then:
 target/debug/permesi-oauth-scenario --list
 target/debug/permesi-oauth-scenario --suite smoke
 target/debug/permesi-oauth-scenario --suite full
+target/debug/permesi-oauth-scenario --replicas 5 --suite full --access-token-ttl-seconds 10
+target/debug/permesi-oauth-scenario --replicas 5 --suite ha
 target/debug/permesi-oauth-scenario --suite token
 target/debug/permesi-oauth-scenario --suite refresh
 target/debug/permesi-oauth-scenario --suite interop --access-token-ttl-seconds 10
@@ -50,19 +52,22 @@ manifest inputs. `--seed` affects fixture naming only; security material uses OS
 Every run owns UUID-labeled Podman containers/network, random loopback ports, private
 files and fresh credentials. Dependency ports bind to `127.0.0.1`. Real service
 processes use the existing same-host Unix-socket mode in a mode-0700 directory. A
-test-only HTTPS gateway keeps one stable issuer while selecting actual replicas A/B/C.
+test-only HTTPS gateway keeps one stable issuer while selecting three to five actual
+replicas (`--replicas`, default three).
 OAuth requests, sessions, grants, codes and encrypted OPAQUE exchanges use shared
 PostgreSQL. Ordinary browser setup selects A; `authentication.shared_exchanges` deliberately
 hands native login from A to B, reauthentication from B to C and replay/session-binding
 rejections across all three using real runtime-role APIs. The failover case stops A
-after request persistence and completes consent on B. Three independently minted runtime
-identities are required; code and refresh races pin requests to all three sockets and
-require one committed winner and two protocol rejections. Offline authorization starts
+after request persistence and completes consent on B. At least as many independently
+minted runtime database identities as configured replicas are required. Code and refresh
+races synchronize requests across every configured socket and require exactly one
+committed winner plus `invalid_grant` from every other participant. Offline authorization starts
 on A, code exchange uses B and refresh rotation uses C. Both service databases use
 non-superuser schema ownership and canonical runtime policies; see
 [database hardening](database-hardening.md) for rollout and validation evidence.
-This is multi-process state
-coverage, not a claim of multi-host transport/load testing.
+This is multi-process state coverage on one host. The [HA extension](oauth-ha-validation.md)
+adds graceful rolling replacements, abrupt backend loss and journaled process recovery;
+multi-host transport/load testing remains separate.
 
 Service children receive explicit existing CLI inputs and fresh private credential
 environments, with inherited deployment/proxy/Vault settings cleared. The runner
@@ -79,12 +84,12 @@ worker content determines the image tag, preventing stale reuse between runner v
 Default deadlines are readiness 90 seconds, HTTP 10 seconds, browser actions 15 seconds,
 whole run 900 seconds and bounded cleanup. CLI ranges prevent unbounded configuration.
 `--access-token-ttl-seconds` defaults to the product's 300 seconds and accepts 1–3600.
-It passes the existing Permesi CLI/dispatch validation on all three replicas. Use 10 seconds
+It passes the existing Permesi CLI/dispatch validation on every replica. Use 10 seconds
 for the interoperability/full suite's real expiration case, as CI does; very short
 lifetimes may expire positive controls during browser/network work. ID-token and
 authorization-code lifetimes retain product defaults. No test changes stored timestamps.
 `--auth-rate-limit-ip-attempts` defaults to 1,000 and accepts 1–100,000. It configures
-the existing product CLI on all three disposable replicas and the effective value appears
+the existing product CLI on every disposable replica and the effective value appears
 in `report.json`. The full suite makes more than the production default's 100
 authorization requests per window through one fixture identity, so it needs an explicit
 bulk-test IP budget. Production defaults, account/action separation, token budgets and
@@ -96,15 +101,19 @@ Only readiness polls retry; assertions, secret issuance and mutations do not ret
 Startup failure, timeout, SIGINT and SIGTERM enter cleanup. Owned processes have
 kill-on-drop fallback. SIGKILL or host failure cannot run destructors; use the
 non-secret `ownership-<repetition>.json` to identify exact resources for recovery.
-It records labeled container/network names, the private directory, and started service
-PIDs with Linux birth ticks. Verify labels and PID birth ticks plus the private socket
-path before recovering a resource; a reused name or PID never establishes ownership.
+It records labeled container/network names, the private directory, and service/browser-controller
+PIDs with Linux birth ticks. Each child/replacement is retained and atomically journaled
+before awaiting readiness. Verify labels, PID birth ticks and the private socket path
+before recovering a process. Before removing private files, verify the directory is
+an owned mode-0700 directory under the temporary root with a matching `owner` marker.
+A reused name or PID never establishes ownership. Host failure cannot guarantee a
+last-write recovery record, and SIGKILL in the fork-to-journal interval remains a limitation.
 Never use shared-engine prune/reset for recovery.
 
 Reports default to `.tmp/oauth-scenarios/<run-id>/report.json` and `junit.xml`;
 `--report-dir` changes the parent. Artifacts are published atomically with private file permissions.
 JSON schema version one records case IDs, durations,
-repetitions, assertion/infrastructure/harness/cleanup classifications, fixture/build
+repetitions, configured replica count, assertion/infrastructure/harness/cleanup classifications, fixture/build
 identities, resolved image IDs and explicit planned capabilities. Failure, blocked
 selected cases or cleanup errors return nonzero. Screenshots, traces, browser logs,
 HTTP payloads/headers and callback query strings are excluded. Errors use curated
@@ -115,7 +124,8 @@ disabled and checked for every run container, including private browser IPC and 
 dev output. Chromium CDP uses inherited pipes, with no host debugging TCP listener. Validate runner
 ownership, startup failure, interruption, deadline expiry, injected cleanup failure,
 repetitions and parallel isolation with
-`just oauth-scenario-harness-test`.
+`just oauth-scenario-harness-test`, or select five replicas with
+`just oauth-scenario-harness-test --replicas 5`.
 
 ## Coverage
 
@@ -124,6 +134,8 @@ repetitions and parallel isolation with
 | `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, accurate code/token discovery and public JWKS |
 | `authorization.consent` | Real browser S256 consent, exact scopes/state/nonce/redirect/TTL, high-entropy code and hash-only row |
 | `authentication.shared_exchanges` | Real OPAQUE login A→B, reauthentication B→C, actual session verification and replay/same-user session-binding rejection across A/B/C |
+| `ha.rolling_restart` | Replace every configured process with SIGTERM and a clean exit; preserve pending code/reauthentication, session identity and cross-incarnation OPAQUE/code replay rejection |
+| `ha.replica_outage` | Abruptly stop the last backend; issuer returns 503 and direct exchange fails without consuming a code; surviving code/refresh races commit once and recovered replicas reject replay |
 | `authorization.login_resume` | Anonymous durable request on A, actual Web login, resume/consent on B |
 | `authorization.cancel_saved` | Cancellation without code, fresh saved-consent code/nonce/bindings, exact saved scopes, forced consent and added browser scope-field rejection |
 | `authorization.validation` | Unknown/disabled/deleted clients; modified/prefix/foreign redirects; response type; unknown/disallowed/duplicate/internal scopes; missing/malformed/plain PKCE and missing nonce |
@@ -140,12 +152,12 @@ repetitions and parallel isolation with
 | `redemption.scope_remove_restore` | Scope removal/restoration cannot revive old code; fresh grant/code has exact bindings, commits once and rejects replay |
 | `redemption.redirect_remove_restore` | Callback removal/restoration cannot revive old code; fresh consent creates a different grant/code |
 | `refresh.rotation_reuse` | Actual offline consent, A/B/C runtime-role rotation, independently verified narrowed JWT/context, hashed lineage and replay-family revocation |
-| `refresh.replica_race` | Real A/B/C concurrent refresh, one committed issuance and losing-reuse revocation of the winning successor |
+| `refresh.replica_race` | Concurrent refresh on every configured replica, one committed issuance and losing-reuse revocation of the winning successor |
 | `refresh.lifecycle` | Scope removal/restoration through management APIs cannot revive the old refresh family |
 | `token.public_claims` | Browser code on A, runtime-role HTTP exchange on B, ignored extensions cannot replace saved nonce, independently verified signatures/issuer/audiences/nonce/auth_time/at_hash/tenant/scopes, committed hashes and internal-session rejection |
 | `token.confidential_credentials` | HTTP Basic current/retiring credentials, missing/wrong/revoked secrets, mandatory S256 and valid retry controls |
 | `token.validation` | Wrong verifier/redirect/client, duplicate and browser authority fields, valid retry, no ID token without openid |
-| `token.replica_replay_race` | Real A/B/C process HTTP race on pinned private sockets, exactly one committed receipt, replay rejection and independently verified winner |
+| `token.replica_replay_race` | HTTP race on every configured private socket, exactly one committed receipt, replay rejection and independently verified winner |
 | `token.signing_rollback_rotation` | Deny signing in owned Vault policy, code remains unconsumed/unexpired, restore and exchange; rotate actual shared key, forced B JWKS refresh verifies old/new tokens |
 
 | Case | Interoperability assertion |
@@ -161,8 +173,11 @@ repetitions and parallel isolation with
 authentication exchanges, authorization/redemption negatives and failover. `lifecycle`
 selects credentials/deletion and the six lifecycle revalidation cases. `token` selects
 the five HTTP issuance cases and three refresh cases; `refresh` selects only those three
-refresh cases. `interop` selects the six standard-client/resource cases, and `full`
-selects all 32 cases.
+refresh cases. `interop` selects the six standard-client/resource cases. `ha` selects
+seven provisioning, OPAQUE, code/refresh race, restart, outage and failover cases.
+`full` selects all 34 cases. Every case restores explicitly stopped slots afterward,
+including after assertion failure. Unexpected exits remain failures; recovery failure
+blocks the remaining selection instead of silently testing a smaller topology.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
 Redemption is explicitly the existing transaction-owned internal domain API in the
 runner process, using an isolated administrator pool. It tests domain bindings and
@@ -192,9 +207,11 @@ once and rejects replay. Lifecycle rejection is also checked through `/token`; r
 first passes a rolled-back domain control, then actually issues signed tokens through the
 runtime HTTP service. Invalid/expired/foreign codes never consume the original authority. SQL does not seed or mutate authority in these cases.
 
-The CI `OAuth scenarios` job uses the same workflow's compiled Web artifact and native
-services/runner from the checked-out SHA, runs the full suite and harness checks,
-uploads sanitized reports and participates in `CI OK`. Existing database checks remain required in CI.
+The CI `OAuth scenarios` matrix uses the same workflow's compiled Web artifact and native
+services/runner from the checked-out SHA. Separate three- and five-replica jobs run the
+full suite and eight harness checks, upload distinct sanitized report artifacts, and
+both participate in `CI OK`. Matrix fail-fast is disabled so one result cannot hide
+the other. Existing database checks remain required in CI.
 The separate required `Browser tests` job downloads that same frontend artifact and runs
 `just web-test-browser-built`, covering the console fixtures and both real PostgreSQL
 authorization/OPAQUE browser tests through an owned Podman runtime on a fresh hosted

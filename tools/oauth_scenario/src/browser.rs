@@ -5,6 +5,7 @@
 
 use crate::{
     error::{Failure, Result, Safe, check},
+    journal::ProcessIdentity,
     podman::Podman,
 };
 use serde_json::{Value, json};
@@ -40,7 +41,8 @@ pub fn expect_stage(result: &Value, expected: &str, fallback: &'static str) -> R
 
 impl Browser {
     /// Uses host networking to reach owned loopback listeners; mounts the public CA, never keys.
-    pub async fn start(engine: &mut Podman, image: &str, ca: &Path, seconds: u64) -> Result<Self> {
+    /// Returns the owned host controller before any readiness await so the runtime can journal it.
+    pub fn spawn(engine: &mut Podman, image: &str, ca: &Path, seconds: u64) -> Result<Self> {
         let name = format!("ps-{}-browser", engine.run_id);
         engine.names.push(name.clone());
         let mut command = engine.command();
@@ -76,14 +78,23 @@ impl Browser {
                 .take()
                 .ok_or_else(|| Failure::harness("Missing browser output channel."))?,
         );
-        let mut browser = Self {
+        Ok(Self {
             child,
             input,
             output,
             seconds,
-        };
-        browser.read(45).await?;
-        Ok(browser)
+        })
+    }
+
+    /// Supplies only the owned controller's PID/birth ticks, never its arguments or IPC values.
+    pub fn identity(&self) -> Result<Option<ProcessIdentity>> {
+        ProcessIdentity::read(&self.child)
+    }
+
+    /// Reads the existing private startup handshake only after ownership has been retained and journaled.
+    pub async fn ready(&mut self) -> Result<()> {
+        self.read(45).await?;
+        Ok(())
     }
 
     /// Sends a private command; neither request nor response becomes a report diagnostic.

@@ -21,6 +21,9 @@ pub struct Options {
     pub scenario: Option<PathBuf>,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=100))]
     pub repeat: u32,
+    /// Starts only owned local processes; limits bound the runner's resource usage.
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u16).range(3..=5))]
+    pub replicas: u16,
     #[arg(long, default_value_t = 1)]
     pub seed: u64,
     #[arg(long)]
@@ -49,4 +52,26 @@ pub struct Options {
     pub auth_rate_limit_ip_attempts: i64,
     #[arg(long, default_value = "localhost/permesi-scenario-browser:1")]
     pub browser_image: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_bounds_replica_counts_before_startup() -> Result<(), clap::Error> {
+        assert_eq!(Options::try_parse_from(["scenario"])?.replicas, 3);
+        for count in ["3", "4", "5"] {
+            assert_eq!(
+                Options::try_parse_from(["scenario", "--replicas", count])?
+                    .replicas
+                    .to_string(),
+                count
+            );
+        }
+        for count in ["0", "1", "2", "6", "65536", "-1", "invalid"] {
+            assert!(Options::try_parse_from(["scenario", "--replicas", count]).is_err());
+        }
+        Ok(())
+    }
 }

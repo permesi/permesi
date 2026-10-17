@@ -56,6 +56,28 @@ impl Drop for PrivateDir {
     }
 }
 
+/// Publishes complete private report/journal bytes without exposing a truncated recovery record.
+/// Callers supply runner-authored basenames; arbitrary paths and private process state are not inputs.
+pub fn atomic_write(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    let temporary = directory.join(format!(".{name}-{}", Uuid::new_v4()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .safe("Cannot create report artifact.")?;
+        file.write_all(bytes)
+            .safe("Cannot write report artifact.")?;
+        file.sync_all().safe("Cannot sync report artifact.")?;
+        fs::rename(&temporary, directory.join(name)).safe("Cannot publish report artifact.")
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
 /// Hashes fixture/build identity only; never used to generate passwords or PKCE material.
 pub fn fingerprint(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))

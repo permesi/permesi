@@ -10,6 +10,7 @@ use crate::{
     gateway::Gateway,
     infrastructure::Infrastructure,
     interop::Transport,
+    journal::Journal,
     manifest::Manifest,
     podman::Podman,
     registry::Case,
@@ -17,8 +18,8 @@ use crate::{
     resource::ResourceServer,
     services::Services,
     tls::Tls,
+    topology::Topology,
 };
-use serde_json::json;
 use std::{path::Path, time::Instant};
 
 /// Validated immutable inputs, separate from mutable resources that must survive cancellation.
@@ -44,9 +45,12 @@ pub struct Runtime {
 impl Runtime {
     /// Performs read-only engine preflight; no container or network exists until execute begins.
     pub async fn new(id: String) -> Result<Self> {
+        let private = PrivateDir::new()?;
+        let engine = Podman::new(id).await?;
+        private.write("owner", engine.run_id.as_bytes())?;
         Ok(Self {
-            private: PrivateDir::new()?,
-            engine: Podman::new(id).await?,
+            private,
+            engine,
             services: Services::default(),
             gateway: None,
             browser: None,
@@ -56,13 +60,14 @@ impl Runtime {
     }
 
     /// Writes a non-secret ownership record before startup so interrupted runs can be recovered manually.
-    pub fn ownership(&self, directory: &Path, repetition: u32) -> Result<()> {
-        let ownership = json!({"schema_version":1,"run_id":self.engine.run_id,"engine":"local Podman","network":self.engine.network,"containers":[format!("ps-{}-postgres",self.engine.run_id),format!("ps-{}-vault",self.engine.run_id),format!("ps-{}-browser",self.engine.run_id)],"private_directory":self.private.0,"processes":self.services.identities(),"resource_origin":self.resource.as_ref().map(|resource| &resource.origin)});
-        std::fs::write(
-            directory.join(format!("ownership-{repetition}.json")),
-            serde_json::to_vec_pretty(&ownership).safe("Cannot encode ownership record.")?,
-        )
-        .safe("Cannot write ownership record.")
+    pub fn ownership(&mut self, directory: &Path, repetition: u32) -> Result<()> {
+        self.services.journal(Journal::new(
+            directory,
+            repetition,
+            &self.engine.run_id,
+            &self.engine.network,
+            &self.private.0,
+        ))
     }
 
     /// Starts the stack in recorded ownership order; partial startup always stays available for cleanup.
@@ -71,7 +76,6 @@ impl Runtime {
         inputs: &Inputs<'_>,
         repetition: u32,
         report: &mut Report,
-        directory: &Path,
     ) -> Result<()> {
         let options = inputs.options;
         self.engine.create_network().await?;
@@ -85,43 +89,45 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| Failure::harness("Infrastructure state missing."))?;
         let tls = Tls::new(&self.private)?;
-        let sockets =
-            ["a.sock", "b.sock", "c.sock", "genesis.sock"].map(|name| self.private.0.join(name));
-        let [a, b, c, g] = &sockets;
+        let topology = Topology::new(&self.private.0, options.replicas)?;
         self.gateway =
-            Some(Gateway::start(&tls, inputs.web, [a, b, c, g], options.request_seconds).await?);
+            Some(Gateway::start(&tls, inputs.web, &topology, options.request_seconds).await?);
         let gateway = self
             .gateway
             .as_ref()
             .ok_or_else(|| Failure::harness("Issuer state missing."))?;
-        println!("Starting real Genesis and Permesi replicas A/B/C.");
+        println!(
+            "Starting real Genesis and {} Permesi replicas.",
+            options.replicas
+        );
         let policy = self.services.start(
             inputs.binaries,
-            &sockets,
+            &topology,
             infra,
             &gateway.origin,
             &tls.ca,
             options,
         )?;
         report.auth_rate_limit_ip_attempts = Some(policy.auth_rate_limit_ip_attempts);
-        self.resource = Some(
-            ResourceServer::start(
-                &tls,
-                Transport {
-                    client: tls.client(options.request_seconds)?,
-                    issuer: gateway.origin.clone(),
-                },
-                policy
-                    .oauth
-                    .audience
-                    .clone()
-                    .ok_or_else(|| Failure::harness("Missing resource audience."))?,
-            )
-            .await?,
-        );
-        self.ownership(directory, repetition)?;
-        Services::ready(&sockets, options.readiness_seconds).await?;
-        start_browser(&mut self.engine, &mut self.browser, &tls, options, report).await?;
+        self.resource =
+            Some(start_resource(&tls, gateway, &policy.oauth, options.request_seconds).await?);
+        self.services.resource_origin(
+            &self
+                .resource
+                .as_ref()
+                .ok_or_else(|| Failure::harness("Resource server state missing."))?
+                .origin,
+        )?;
+        self.services.ready().await?;
+        start_browser(
+            &mut self.engine,
+            &mut self.browser,
+            &mut self.services,
+            &tls,
+            options,
+            report,
+        )
+        .await?;
         let browser = self
             .browser
             .as_mut()
@@ -129,14 +135,8 @@ impl Runtime {
         let anonymous =
             Api::anonymous(gateway.origin.clone(), tls.client(options.request_seconds)?);
         println!("Registering and authenticating real fixture accounts.");
-        let owner = Actor::signup(&anonymous, &infra.pool).await?;
-        let api = owner
-            .login(browser, &anonymous, &gateway.callback, "owner")
-            .await?;
-        let outsider = Actor::signup(&anonymous, &infra.pool).await?;
-        let outsider = outsider
-            .login(browser, &anonymous, &gateway.callback, "outsider")
-            .await?;
+        let (owner, api, outsider) =
+            fixture_actors(browser, &anonymous, &infra.pool, &gateway.callback).await?;
         for case in inputs.selected {
             gateway.replica_a();
             let started = Instant::now();
@@ -161,10 +161,15 @@ impl Runtime {
                         .ok_or_else(|| Failure::harness("Resource server state missing."))?,
                     infrastructure: infra,
                     manifest: inputs.manifest,
+                    fixture_seed: options.seed,
                 };
                 cases::execute(case.id, &mut context, &fixture).await
             }
             .await;
+            if let Err(error) = self.services.restore_stopped().await {
+                report.record(*case, repetition, started, result.and(Err(error.clone())));
+                return Err(error);
+            }
             report.record(*case, repetition, started, result);
         }
         Ok(())
@@ -179,6 +184,8 @@ impl Runtime {
                 .safe("Browser shutdown exceeded its deadline.")
                 .and_then(std::convert::identity);
             if let Err(error) = result {
+                errors.push(error);
+            } else if let Err(error) = self.services.browser_identity(None) {
                 errors.push(error);
             }
         }
@@ -222,10 +229,48 @@ impl Runtime {
     }
 }
 
+/// Creates both real accounts and browser sessions through the product; no session or role row is seeded.
+async fn fixture_actors(
+    browser: &mut Browser,
+    anonymous: &Api,
+    pool: &sqlx::PgPool,
+    callback: &str,
+) -> Result<(Actor, Api, Api)> {
+    let owner = Actor::signup(anonymous, pool).await?;
+    let api = owner.login(browser, anonymous, callback, "owner").await?;
+    let outsider = Actor::signup(anonymous, pool).await?;
+    let outsider = outsider
+        .login(browser, anonymous, callback, "outsider")
+        .await?;
+    Ok((owner, api, outsider))
+}
+
+/// Starts the owned TLS resource with the product-parsed issuer/audience and normal verification.
+async fn start_resource(
+    tls: &Tls,
+    gateway: &Gateway,
+    policy: &permesi::oauth::config::OAuthConfig,
+    seconds: u64,
+) -> Result<ResourceServer> {
+    ResourceServer::start(
+        tls,
+        Transport {
+            client: tls.client(seconds)?,
+            issuer: gateway.origin.clone(),
+        },
+        policy
+            .audience
+            .clone()
+            .ok_or_else(|| Failure::harness("Missing resource audience."))?,
+    )
+    .await
+}
+
 /// Builds/verifies the private browser worker and retains its handle across cancellation.
 async fn start_browser(
     engine: &mut Podman,
     browser: &mut Option<Browser>,
+    services: &mut Services,
     tls: &Tls,
     options: &Options,
     report: &mut Report,
@@ -245,7 +290,17 @@ async fn start_browser(
     report.components.vault_image = engine
         .image_identity(crate::infrastructure::VAULT_IMAGE)
         .await?;
-    *browser = Some(Browser::start(engine, &image, &tls.ca, options.browser_seconds).await?);
+    *browser = Some(Browser::spawn(
+        engine,
+        &image,
+        &tls.ca,
+        options.browser_seconds,
+    )?);
+    let browser = browser
+        .as_mut()
+        .ok_or_else(|| Failure::harness("Missing browser ownership."))?;
+    services.browser_identity(browser.identity()?)?;
+    browser.ready().await?;
     engine.verify_private_logs().await
 }
 
@@ -260,7 +315,7 @@ pub async fn repetition(
     let mut runtime = Runtime::new(format!("{}-{number}", report.run_id)).await?;
     runtime.ownership(directory, number)?;
     let result = tokio::select! {
-        result=tokio::time::timeout_at(deadline,runtime.execute(inputs,number,report,directory))=>result.safe("Scenario run exceeded its total deadline.").and_then(std::convert::identity),
+        result=tokio::time::timeout_at(deadline,runtime.execute(inputs,number,report))=>result.safe("Scenario run exceeded its total deadline.").and_then(std::convert::identity),
         ()=interrupted()=>Err(Failure::harness("Scenario run interrupted; owned resources are being removed.")),
     };
     println!("Cleaning up owned processes and containers.");

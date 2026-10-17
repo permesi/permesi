@@ -5,6 +5,7 @@
 
 use crate::{
     error::{Failure, Result, Safe},
+    files::atomic_write,
     registry::Case,
 };
 use serde::Serialize;
@@ -47,6 +48,8 @@ pub struct Report {
     pub version: &'static str,
     pub commit: &'static str,
     pub fixture_seed: u64,
+    /// Requested bounded process count, including when infrastructure setup fails.
+    pub replicas: u16,
     /// Effective product-parsed fixture budget; absent when startup never established policy.
     pub auth_rate_limit_ip_attempts: Option<i64>,
     pub manifest_sha256: String,
@@ -60,13 +63,14 @@ pub struct Report {
 
 impl Report {
     /// Creates the report before setup, keeping planned capabilities outside pass counts.
-    pub fn new(run_id: String, seed: u64, manifest_sha256: String) -> Self {
+    pub fn new(run_id: String, seed: u64, manifest_sha256: String, replicas: u16) -> Self {
         Self {
             schema_version: 1,
             run_id,
             version: env!("CARGO_PKG_VERSION"),
             commit: permesi::GIT_COMMIT_HASH,
             fixture_seed: seed,
+            replicas,
             auth_rate_limit_ip_attempts: None,
             manifest_sha256,
             components: Components::default(),
@@ -214,28 +218,6 @@ impl Report {
     }
 }
 
-/// Writes complete report bytes to a private fresh file before atomically replacing the final artifact.
-fn atomic_write(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
-    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
-    let temporary = directory.join(format!(".{}-{}", name, uuid::Uuid::new_v4()));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)
-            .safe("Cannot create report artifact.")?;
-        file.write_all(bytes)
-            .safe("Cannot write report artifact.")?;
-        file.sync_all().safe("Cannot sync report artifact.")?;
-        std::fs::rename(&temporary, directory.join(name)).safe("Cannot publish report artifact.")
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
-}
-
 /// Escapes report strings for XML attributes rather than trusting fixture or error formatting.
 fn escape(value: &str) -> String {
     value
@@ -256,7 +238,7 @@ mod tests {
 
     #[test]
     fn reports_fail_assertions_blocks_and_cleanup_without_leaking_external_errors() -> Result<()> {
-        let mut report = Report::new("run".into(), 7, "manifest".into());
+        let mut report = Report::new("run".into(), 7, "manifest".into(), 5);
         let case = *CASES
             .first()
             .ok_or_else(|| Failure::harness("Missing case."))?;
@@ -269,6 +251,7 @@ mod tests {
         );
         assert!(!report.success());
         let json = serde_json::to_string(&report).safe("Encode report.")?;
+        assert!(json.contains("\"replicas\":5"));
         assert!(!json.contains("SENTINEL"));
         assert!(report.junit()?.contains("<failure"));
         report.cases.clear();

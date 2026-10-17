@@ -114,7 +114,7 @@ Note: service HTTP modules live under `src/api/` (previously `src/permesi/` and 
 ### Isolated OAuth scenarios
 
 `just oauth-scenario` builds and runs the full suite on fresh, disposable PostgreSQL
-and Vault containers, with real Genesis, three Permesi replicas, the compiled Web console
+and Vault containers, with real Genesis, three Permesi replicas by default, the compiled Web console
 and Chromium. It creates accounts and tenant fixtures through the APIs and cleans up
 its own resources. Linux and local Podman are required; the development stack and
 production endpoints are never used.
@@ -126,6 +126,11 @@ for manifests, coverage, reports and cleanup recovery. The suite tests internal 
 and runtime-role HTTP exchange with independent access/ID-token signature and claim checks.
 Lifecycle cases exercise configuration changes during consent and after issuance,
 including fresh-consent recovery without reviving an old grant/code.
+Use `--replicas 5 --suite ha` for the focused availability suite, or `--replicas 5 --suite full`
+for every case. The runner accepts three through five replicas, exercises code/refresh
+races on every configured socket, and includes owned-process rolling replacements
+and abrupt backend loss. See [HA validation](docs/oauth-ha-validation.md) for the
+current checks, recovery boundary and remaining multi-host/load work.
 `--suite interop --access-token-ttl-seconds 10` tests
 standard `openidconnect-rs` public/confidential clients and an owned HTTPS jobs API,
 including tenant/scopes, strict JWT rejection, real expiration and signing-key rotation.

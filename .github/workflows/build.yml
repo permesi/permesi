@@ -147,10 +147,14 @@ jobs:
     secrets: inherit
 
   oauth-scenarios:
-    name: OAuth scenarios
+    name: OAuth scenarios (${{ matrix.replicas }} replicas)
     needs: [test, frontend-build]
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        replicas: [3, 5]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -168,14 +172,16 @@ jobs:
       - name: Build exact checked-out service and runner binaries
         run: cargo build --locked -p permesi -p genesis -p permesi-oauth-scenario
       - name: Run all real OAuth scenarios
-        run: target/debug/permesi-oauth-scenario --suite full --access-token-ttl-seconds 10 --report-dir .tmp/oauth-scenario-ci
+        run: target/debug/permesi-oauth-scenario --replicas ${{ matrix.replicas }} --suite full --access-token-ttl-seconds 10 --report-dir .tmp/oauth-scenario-ci
+      - name: Verify recovery ownership guards
+        run: python3 -m unittest discover -s tools/oauth_scenario/tests -p '*_test.py'
       - name: Verify harness cleanup and isolation
-        run: python3 tools/oauth_scenario/tests/harness.py
+        run: python3 tools/oauth_scenario/tests/harness.py --replicas ${{ matrix.replicas }}
       - name: Upload sanitized scenario reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: oauth-scenario-reports
+          name: oauth-scenario-reports-${{ matrix.replicas }}-replicas
           path: |
             .tmp/oauth-scenario-ci/**/report.json
             .tmp/oauth-scenario-ci/**/junit.xml

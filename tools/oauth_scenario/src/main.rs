@@ -14,6 +14,7 @@ mod files;
 mod gateway;
 mod infrastructure;
 mod interop;
+mod journal;
 mod manifest;
 mod podman;
 mod process;
@@ -23,6 +24,7 @@ mod resource;
 mod runtime;
 mod services;
 mod tls;
+mod topology;
 
 #[cfg(test)]
 mod test_http;
@@ -81,7 +83,7 @@ async fn run(options: &Options) -> Result<bool> {
     let run_id = Uuid::new_v4().simple().to_string();
     let directory = options.report_dir.join(&run_id);
     std::fs::create_dir_all(&directory).safe("Cannot create run report directory.")?;
-    let mut report = Report::new(run_id, options.seed, manifest_hash);
+    let mut report = Report::new(run_id, options.seed, manifest_hash, options.replicas);
     let artifacts = (|| {
         Ok((
             artifact(options.permesi_bin.as_deref(), "target/debug/permesi")?,

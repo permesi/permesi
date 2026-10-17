@@ -11,6 +11,7 @@ oauth-scenario *args: oauth-scenario-build
 oauth-scenario-list:
   cargo run --locked -p permesi-oauth-scenario -- --list
 
-[doc("Verify runner interruption, startup failure, deadlines, cleanup faults and concurrent isolation")]
-oauth-scenario-harness-test:
-  python3 "{{root}}/tools/oauth_scenario/tests/harness.py"
+[doc("Verify recovery guards, interruptions, restart SIGKILL, startup/deadline failures and isolation")]
+oauth-scenario-harness-test *args:
+  python3 -m unittest discover -s "{{root}}/tools/oauth_scenario/tests" -p '*_test.py'
+  python3 "{{root}}/tools/oauth_scenario/tests/harness.py" {{args}}

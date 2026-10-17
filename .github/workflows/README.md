@@ -57,6 +57,11 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   Browser profiles, credentials, request dumps and screenshots are not uploaded. `CI OK` depends on this job
   alongside tests, service/frontend builds and OAuth scenarios, so failure, cancellation or skipping
   the browser gate cannot produce a successful aggregate check.
+  OAuth scenarios run as a required three/five-replica matrix with fail-fast disabled.
+  Each matrix member runs all 34 cases, six recovery unit tests and eight harness checks, including rolling
+  replacements, backend loss and SIGKILL recovery of a replacement process. Sanitized
+  report artifact names include the replica count. This covers one-host process/state
+  availability and does not establish multi-host load or network-failure behavior.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
   It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed

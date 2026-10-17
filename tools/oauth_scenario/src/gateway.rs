@@ -1,6 +1,6 @@
 //! Test-only HTTPS issuer gateway over real, private Unix-socket service listeners.
 //!
-//! The browser sees one stable issuer while the harness selects A, B or C. This is
+//! The browser sees one stable issuer while the harness selects a bounded replica. This is
 //! equivalent to a load balancer, not a product test hook. OPAQUE, OAuth and
 //! management traffic all follow that selection and share PostgreSQL state.
 //! Genesis admission has its own fixed backend. No request or callback URL is logged.
@@ -8,6 +8,7 @@
 use crate::{
     error::{Result, Safe},
     tls::{Tls, listener},
+    topology::Topology,
 };
 use axum::{
     Router,
@@ -32,9 +33,7 @@ use tower_http::services::ServeDir;
 
 #[derive(Clone)]
 struct Proxy {
-    a: reqwest::Client,
-    b: reqwest::Client,
-    c: reqwest::Client,
+    replicas: Vec<reqwest::Client>,
     genesis: reqwest::Client,
     replica: Arc<AtomicUsize>,
     config: Arc<String>,
@@ -43,7 +42,7 @@ struct Proxy {
 
 /// Owned gateway and callback listeners, with explicit shutdown after every outcome.
 pub struct Gateway {
-    token_clients: [reqwest::Client; 3],
+    token_clients: Vec<reqwest::Client>,
     pub origin: String,
     pub callback: String,
     replica: Arc<AtomicUsize>,
@@ -57,7 +56,7 @@ impl Gateway {
     pub async fn start(
         tls: &Tls,
         assets: &Path,
-        sockets: [&Path; 4],
+        topology: &Topology,
         seconds: u64,
     ) -> Result<Self> {
         let bound = listener()?;
@@ -83,17 +82,18 @@ impl Gateway {
                 .build()
                 .safe("Cannot configure private service transport.")
         };
-        let [a, b, c, genesis] = sockets;
         let config = format!(
             "window.PERMESI_CONFIG = {};",
             json!({"api_base_url":origin,"token_base_url":format!("{origin}/admission"),"client_id":UuidString::ZERO,"opaque_server_id":"api.permesi.dev"})
         );
-        let token_clients = [client(a)?, client(b)?, client(c)?];
+        let token_clients = topology
+            .replicas
+            .iter()
+            .map(|socket| client(socket))
+            .collect::<Result<Vec<_>>>()?;
         let proxy = Proxy {
-            a: client(a)?,
-            b: client(b)?,
-            c: client(c)?,
-            genesis: client(genesis)?,
+            replicas: token_clients.clone(),
+            genesis: client(&topology.genesis)?,
             replica: replica.clone(),
             config: Arc::new(config),
             assets: ServeDir::new(assets).fallback(tower_http::services::ServeFile::new(
@@ -145,6 +145,18 @@ impl Gateway {
         self.replica.store(2, Ordering::SeqCst);
     }
 
+    /// Reports the configured owned sockets, including deliberately unavailable replicas.
+    pub fn replica_count(&self) -> usize {
+        self.token_clients.len()
+    }
+
+    /// Selects an owned backend; invalid indices fail without changing browser routing.
+    pub fn select_replica(&self, index: usize) -> Result<()> {
+        crate::error::check(index < self.replica_count(), "Unknown replica index.")?;
+        self.replica.store(index, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Pins one native token request to an owned private service socket for a real A/B race.
     /// Browser traffic has no replica selector; issuer and delegated state remain shared.
     pub async fn token_replica(
@@ -155,7 +167,7 @@ impl Gateway {
         self.token_on_replica(usize::from(second), fields).await
     }
 
-    /// Pins a cookie-free request to one of the three owned processes; the browser has no selector.
+    /// Pins a cookie-free request to one owned process; the browser has no selector.
     pub async fn token_on_replica(
         &self,
         replica: usize,
@@ -167,13 +179,49 @@ impl Gateway {
             .ok_or_else(|| crate::error::Failure::harness("Missing replica client."))?;
         let mut form = url::form_urlencoded::Serializer::new(String::new());
         form.extend_pairs(fields.iter().copied());
-        client
-            .post("http://localhost/token")
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(form.finish())
-            .send()
-            .await
-            .safe("Owned replica token request failed.")
+        token_request(client, form.finish()).await
+    }
+
+    /// Races exactly the distinct selected sockets and retains every protocol response.
+    /// Validate the complete selection before any authority-bearing request is sent;
+    /// dropping the join set aborts outstanding client tasks on cancellation or error.
+    pub async fn race_tokens(
+        &self,
+        replicas: &[usize],
+        fields: &[(&str, &str)],
+    ) -> Result<Vec<reqwest::Response>> {
+        let unique = replicas.iter().collect::<std::collections::HashSet<_>>();
+        crate::error::check(
+            replicas.len() >= 2 && unique.len() == replicas.len(),
+            "Token race requires distinct replicas.",
+        )?;
+        let clients = replicas
+            .iter()
+            .map(|index| {
+                self.token_clients
+                    .get(*index)
+                    .cloned()
+                    .ok_or_else(|| crate::error::Failure::harness("Missing replica client."))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.extend_pairs(fields.iter().copied());
+        let body = form.finish();
+        let mut tasks = tokio::task::JoinSet::new();
+        let start = Arc::new(tokio::sync::Barrier::new(clients.len()));
+        for client in clients {
+            let body = body.clone();
+            let start = start.clone();
+            tasks.spawn(async move {
+                start.wait().await;
+                token_request(&client, body).await
+            });
+        }
+        let mut responses = Vec::new();
+        while let Some(response) = tasks.join_next().await {
+            responses.push(response.safe("Owned token race task failed.")??);
+        }
+        Ok(responses)
     }
 
     /// Shuts down both listeners and waits for owned tasks; cancellation cannot leave detached servers.
@@ -187,6 +235,17 @@ impl Gateway {
         let _ = (&mut self.callback_server).await;
         Ok(())
     }
+}
+
+/// Sends private form bytes without cookies, redirects, retries or diagnostic formatting.
+async fn token_request(client: &reqwest::Client, body: String) -> Result<reqwest::Response> {
+    client
+        .post("http://localhost/token")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .safe("Owned replica token request failed.")
 }
 
 impl Drop for Gateway {
@@ -247,12 +306,10 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
     let client = if is_genesis {
         &proxy.genesis
     } else {
-        match proxy.replica.load(Ordering::SeqCst) {
-            0 => &proxy.a,
-            1 => &proxy.b,
-            2 => &proxy.c,
-            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        }
+        let Some(client) = proxy.replicas.get(proxy.replica.load(Ordering::SeqCst)) else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
+        client
     };
     let uri = request
         .uri()
@@ -319,13 +376,116 @@ mod tests {
         files::PrivateDir,
     };
 
+    /// Validate a complete race selection before sending anything, and reach each of five distinct sockets once.
+    #[tokio::test]
+    async fn native_races_validate_selection_and_reach_every_replica() -> Result<()> {
+        let private = PrivateDir::new()?;
+        let tls = Tls::new(&private)?;
+        let topology = Topology::new(&private.0, 5)?;
+        let counts = Arc::new((0..6).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
+        let mut servers = Vec::new();
+        for (index, socket) in topology
+            .replicas
+            .iter()
+            .chain([&topology.genesis])
+            .enumerate()
+        {
+            let listener =
+                tokio::net::UnixListener::bind(socket).safe("Cannot bind race test backend.")?;
+            let counts = counts.clone();
+            servers.push(tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().fallback(move |request: Request| {
+                        let counts = counts.clone();
+                        async move {
+                            if let Some(count) = counts.get(index) {
+                                count.fetch_add(1, Ordering::SeqCst);
+                            }
+                            let status = if request.headers().contains_key(header::COOKIE)
+                                || request.headers().contains_key(header::AUTHORIZATION)
+                            {
+                                StatusCode::BAD_REQUEST
+                            } else {
+                                StatusCode::OK
+                            };
+                            (status, index.to_string())
+                        }
+                    }),
+                )
+                .await
+            }));
+        }
+        let mut gateway = Gateway::start(&tls, &private.0, &topology, 2).await?;
+        let input = [
+            ("grant_type", "authorization_code"),
+            ("code", "private-fixture"),
+        ];
+        for indices in [Vec::new(), vec![0], vec![0, 0], vec![0, 5]] {
+            assert!(gateway.race_tokens(&indices, &input).await.is_err());
+        }
+        assert!(gateway.token_on_replica(5, &input).await.is_err());
+        assert!(counts.iter().all(|count| count.load(Ordering::SeqCst) == 0));
+        let responses = gateway.race_tokens(&[0, 1, 2, 3, 4], &input).await?;
+        assert_eq!(responses.len(), 5);
+        let mut labels = std::collections::HashSet::new();
+        for response in responses {
+            assert_eq!(response.status(), StatusCode::OK);
+            labels.insert(
+                response
+                    .text()
+                    .await
+                    .safe("Cannot read race test response.")?,
+            );
+        }
+        assert_eq!(labels, (0..5).map(|index| index.to_string()).collect());
+        assert!(
+            counts
+                .iter()
+                .take(5)
+                .all(|count| count.load(Ordering::SeqCst) == 1)
+        );
+        assert_eq!(
+            counts
+                .last()
+                .ok_or_else(|| crate::error::Failure::harness("Missing admission counter."))?
+                .load(Ordering::SeqCst),
+            0
+        );
+        gateway.select_replica(4)?;
+        assert!(gateway.select_replica(5).is_err());
+        let body = tls
+            .client(2)?
+            .get(format!("{}/v1/auth/session", gateway.origin))
+            .header("x-replica-index", "0")
+            .send()
+            .await
+            .safe("Cannot probe selected replica.")?
+            .text()
+            .await
+            .safe("Cannot read selected replica response.")?;
+        assert_eq!(body, "4");
+        gateway.stop().await?;
+        for server in servers {
+            server.abort();
+        }
+        Ok(())
+    }
+
     /// Real distinct backends must observe the selected replica for every OPAQUE phase.
     #[tokio::test]
     async fn proxy_routes_password_exchanges_to_selected_replica() -> Result<()> {
         let private = PrivateDir::new()?;
         let mut clients = Vec::new();
         let mut servers = Vec::new();
-        for label in ["replica-a", "replica-b", "replica-c", "genesis"] {
+        for label in [
+            "replica-a",
+            "replica-b",
+            "replica-c",
+            "replica-d",
+            "replica-e",
+            "genesis",
+        ] {
             let socket = private.0.join(format!("{label}.sock"));
             let listener =
                 tokio::net::UnixListener::bind(&socket).safe("Cannot bind test backend.")?;
@@ -344,20 +504,12 @@ mod tests {
                     .safe("Cannot build test transport.")?,
             );
         }
-        let mut clients = clients.into_iter();
+        let genesis = clients
+            .pop()
+            .ok_or_else(|| crate::error::Failure::harness("Missing test Genesis."))?;
         let proxy = Proxy {
-            a: clients
-                .next()
-                .ok_or_else(|| crate::error::Failure::harness("Missing test replica A."))?,
-            b: clients
-                .next()
-                .ok_or_else(|| crate::error::Failure::harness("Missing test replica B."))?,
-            c: clients
-                .next()
-                .ok_or_else(|| crate::error::Failure::harness("Missing test replica C."))?,
-            genesis: clients
-                .next()
-                .ok_or_else(|| crate::error::Failure::harness("Missing test Genesis."))?,
+            replicas: clients,
+            genesis,
             replica: Arc::new(AtomicUsize::new(0)),
             config: Arc::new(String::new()),
             assets: ServeDir::new(&private.0).fallback(tower_http::services::ServeFile::new(
@@ -365,7 +517,7 @@ mod tests {
             )),
         };
         let mut observed = Vec::new();
-        for selected in 0..3 {
+        for selected in 0..5 {
             proxy.replica.store(selected, Ordering::SeqCst);
             for path in [
                 "/v1/auth/opaque/login/start",
@@ -395,7 +547,9 @@ mod tests {
                 match selected {
                     0 => "replica-a",
                     1 => "replica-b",
-                    _ => "replica-c",
+                    2 => "replica-c",
+                    3 => "replica-d",
+                    _ => "replica-e",
                 }
             };
             assert_eq!(
@@ -433,9 +587,7 @@ mod tests {
             .build()
             .safe("Cannot build test transport.")?;
         let proxy = Proxy {
-            a: client.clone(),
-            b: client.clone(),
-            c: client.clone(),
+            replicas: vec![client.clone(); 3],
             genesis: client,
             replica: Arc::new(AtomicUsize::new(0)),
             config: Arc::new(String::new()),
