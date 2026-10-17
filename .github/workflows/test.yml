@@ -82,7 +82,7 @@ jobs:
 
       - name: NPM audit
         working-directory: apps/web
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --audit-level=high
 
   test:
     name: Unit Tests
@@ -110,8 +110,8 @@ jobs:
       - name: test
         run: cargo test --locked --workspace --lib --bins
 
-      - name: test (telemetry feature)
-        run: cargo test --locked -p permesi -p genesis --lib --features permesi/telemetry,genesis/telemetry cli::telemetry
+      - name: test (all features)
+        run: cargo test --locked --workspace --all-features --no-fail-fast
 
   integration:
     name: Integration Tests
@@ -131,7 +131,7 @@ jobs:
       - uses: ./.github/actions/ensure-container-runtime
 
       - name: integration
-        run: cargo test --locked --workspace --test '*'
+        run: cargo test --locked --workspace --test '*' --no-fail-fast
 
   db-schema:
     name: DB Schema

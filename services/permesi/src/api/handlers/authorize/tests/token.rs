@@ -94,6 +94,120 @@ fn router(state: &AppState) -> Router {
         .with_state(state.clone())
 }
 
+/// Reapplies canonical policy and routes through a real non-superuser runtime login, never SET ROLE.
+async fn runtime_router(fixture: &Fixture) -> Result<Router> {
+    fixture.postgres.bootstrap().await?;
+    let login = format!("oauth_runtime_{}", Uuid::new_v4().simple());
+    let password = Uuid::new_v4().simple().to_string();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {login} LOGIN PASSWORD '{password}'; GRANT permesi_runtime TO {login}"
+    )))
+    .execute(&fixture.pool)
+    .await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect_with(
+            sqlx::postgres::PgConnectOptions::new()
+                .host("127.0.0.1")
+                .port(fixture.postgres.host_port())
+                .database("permesi")
+                .username(&login)
+                .password(&password),
+        )
+        .await?;
+    let identity: (String, String, bool, bool) = sqlx::query_as(
+        "SELECT current_user::text,session_user::text,rolsuper,rolcreaterole
+         FROM pg_catalog.pg_roles WHERE rolname=current_user",
+    )
+    .fetch_one(&pool)
+    .await?;
+    ensure!(
+        identity.0 == login && identity.1 == login && !identity.2 && !identity.3,
+        "Router must use a non-superuser runtime login"
+    );
+    let mut state = fixture.state.clone();
+    state.pool = pool;
+    Ok(router(&state))
+}
+
+/// Current runtime grants permit committed code exchange, exact authority and single-use replay rejection.
+#[tokio::test]
+async fn token_exchange_runtime_login_preserves_authority_and_replay() -> Result<()> {
+    let t = TokenFixture::new().await?;
+    let code = t.f.issue().await?;
+    let replica = runtime_router(&t.f).await?;
+    let client = t.f.client.to_string();
+    let (status, body) =
+        exchange(&replica, &fields(&code, &client, REDIRECT, VERIFIER), None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let keys = serde_json::to_value(t.f.state.oauth.jwks().await?)?;
+    let claims = verify(
+        body["access_token"].as_str().context("access")?,
+        &keys,
+        "at+jwt",
+    )?;
+    ensure!(
+        claims["scope"] == "jobs:read runs:read"
+            && claims["sub"] == t.f.user.to_string()
+            && claims["client_id"] == client
+            && claims["organization_id"] == t.f.organization.to_string()
+            && claims["application_id"] == t.f.application.to_string(),
+        "Runtime exchange changed authority"
+    );
+    let receipts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM oauth_token_issuances WHERE code_hash=$1")
+            .bind(Sha256::digest(code.as_bytes()).to_vec())
+            .fetch_one(&t.f.pool)
+            .await?;
+    ensure!(receipts == 1, "Runtime exchange must commit one receipt");
+    let (status, body) =
+        exchange(&replica, &fields(&code, &client, REDIRECT, VERIFIER), None).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    ensure!(
+        body == json!({"error":"invalid_grant"}),
+        "Runtime replay must fail closed"
+    );
+    Ok(())
+}
+
+/// Saved consent is checked under current runtime privileges and grants only the requested subset.
+#[tokio::test]
+async fn authorize_runtime_login_skips_covered_consent_without_widening() -> Result<()> {
+    let mut t = TokenFixture::new().await?;
+    t.f.issue().await?;
+    t.f.router = runtime_router(&t.f).await?;
+    let reply =
+        t.f.start(&[
+            ("scope", Some("jobs:read".into())),
+            ("prompt", Some("none".into())),
+        ])
+        .await?;
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
+    let code = parameter(reply.location.as_deref().context("redirect")?, "code")?;
+    let stored: Vec<String> =
+        sqlx::query_scalar("SELECT scope_names FROM oauth_authorization_codes WHERE code_hash=$1")
+            .bind(Sha256::digest(code.as_bytes()).to_vec())
+            .fetch_one(&t.f.pool)
+            .await?;
+    ensure!(
+        stored == vec!["jobs:read"],
+        "Saved consent widened the requested authority"
+    );
+    let client = t.f.client.to_string();
+    let (status, body) = exchange(
+        &t.f.router,
+        &fields(&code, &client, REDIRECT, VERIFIER),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    ensure!(
+        body["scope"] == "jobs:read",
+        "Runtime redemption widened saved consent"
+    );
+    Ok(())
+}
+
 /// Strict native exchange with no session cookie. Error bodies and bearer strings are never printed.
 async fn exchange(
     router: &Router,

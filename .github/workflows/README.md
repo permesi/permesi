@@ -26,10 +26,12 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 ## Workflow Overview
 
 - **`test.yml`**: Handles formatting, linting (clippy), dependency auditing for the web app, and
-  unit/integration tests. The unit job runs every library and binary test, including
-  the database-backed handler suites. The integration job runs standalone `tests/`
-  targets with `--test '*'`; `--tests` would repeat the library and binary suites,
-  doubling database work on self-hosted runners. Coverage still runs the full workspace.
+  unit/integration tests. Web auditing includes development/build dependencies so
+  source-map and stylesheet-tooling advisories are covered. The unit job runs default
+  library/binary tests, then the complete all-feature workspace suite. The separate
+  default integration job selects standalone `tests/` targets with `--test '*'` and
+  continues across test binaries with `--no-fail-fast`, preserving Permesi results
+  when a Genesis dependency fails. Coverage still runs the full default workspace.
 - **`security-audit.yml`**: Audits the locked Rust dependency graph for vulnerabilities, unsound
   advisories, and yanked crates when Cargo dependency files change, on manual runs, and weekly so
   newly published RustSec advisories are detected without duplicating the normal test workflow.

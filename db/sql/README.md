@@ -68,7 +68,8 @@ owner connections apply schemas, seeds and transactional verification. `SET ROLE
 inside an administrator connection is not an owner security boundary. Catalogs and extension-managed members retain their
 own ownership. Future tables/sequences require explicit runtime grants; broad legacy
 default grants are removed. Independent Claude/Herdr source-review corrections are
-applied; final live PostgreSQL/HA validation remains tracked in [TODO.md](../../TODO.md).
+applied and PostgreSQL regressions pass; final HA validation remains tracked in
+[TODO.md](../../TODO.md).
 
 ## Runtime role & grant checks
 

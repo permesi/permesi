@@ -44,8 +44,8 @@ BEGIN
         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM genesis_runtime, PUBLIC;
         REVOKE CREATE ON SCHEMA public FROM genesis_runtime, PUBLIC;
         GRANT USAGE ON SCHEMA public TO genesis_runtime;
-        EXECUTE format('REVOKE ALL ON DATABASE %I FROM genesis_runtime',current_database());
-        EXECUTE format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO genesis_runtime',current_database());
+        EXECUTE pg_catalog.format('REVOKE ALL ON DATABASE %I FROM genesis_runtime',current_database());
+        EXECUTE pg_catalog.format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO genesis_runtime',current_database());
         GRANT SELECT ON clients TO genesis_runtime;
         GRANT SELECT, INSERT ON tokens,tokens_default TO genesis_runtime;
         ALTER DEFAULT PRIVILEGES REVOKE ALL ON TABLES FROM genesis_runtime, PUBLIC;

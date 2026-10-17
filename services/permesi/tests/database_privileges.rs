@@ -111,6 +111,20 @@ fn rejected<T>(result: std::result::Result<T, sqlx::Error>, code: &str) -> Resul
     Ok(())
 }
 
+/// Requires the immutable-binding guard itself, excluding unrelated check and FK failures.
+fn consent_rewrite_rejected<T>(result: std::result::Result<T, sqlx::Error>) -> Result<()> {
+    match result {
+        Err(sqlx::Error::Database(error)) => ensure!(
+            error.code().as_deref() == Some("23514")
+                && error.message() == "OAuth grant scope bindings are immutable",
+            "Expected the immutable consent binding guard"
+        ),
+        Err(error) => return Err(error.into()),
+        Ok(_) => anyhow::bail!("Consent binding rewrite unexpectedly succeeded"),
+    }
+    Ok(())
+}
+
 /// Creates a real login identity; session-user superuser rights cannot mask SET ROLE rejection.
 async fn runtime_options(
     postgres: &PostgresContainer,
@@ -427,6 +441,82 @@ async fn receipt_fixture(admin: &mut PgConnection) -> Result<(Uuid, Uuid)> {
     sqlx::query("INSERT INTO oauth_token_issuances(access_jti,code_hash,access_token_hash,id_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at,id_expires_at) VALUES(uuidv4(),decode(repeat('33',32),'hex'),decode(repeat('44',32),'hex'),decode(repeat('55',32),'hex'),$1,$2,$3,$4,$5,'https://issuer.example','resource',clock_timestamp(),clock_timestamp()+INTERVAL '5 minutes',clock_timestamp()+INTERVAL '5 minutes')")
         .bind(grant).bind(client).bind(app).bind(org).bind(user).execute(&mut *admin).await?;
     Ok((user, grant))
+}
+
+/// Real runtime logins can lock saved consent but cannot substitute an otherwise allowed scope.
+#[tokio::test]
+async fn runtime_consent_locks_preserve_immutable_scope_bindings() -> Result<()> {
+    let (postgres, mut admin) = database().await?;
+    let (_, grant) = receipt_fixture(&mut admin).await?;
+    sqlx::query(
+        "INSERT INTO oauth_client_scopes(client_id,application_id,scope_id)
+        SELECT g.client_id,g.application_id,s.id FROM oauth_grants g
+        JOIN oauth_scopes s ON s.application_id=g.application_id
+        WHERE g.id=$1 AND s.name IN ('openid','profile') ON CONFLICT DO NOTHING",
+    )
+    .bind(grant)
+    .execute(&mut admin)
+    .await?;
+    let original: Uuid = sqlx::query_scalar(
+        "INSERT INTO oauth_grant_scopes(grant_id,client_id,application_id,scope_id)
+        SELECT g.id,g.client_id,g.application_id,s.id FROM oauth_grants g
+        JOIN oauth_scopes s ON s.application_id=g.application_id
+        WHERE g.id=$1 AND s.name='openid' RETURNING scope_id",
+    )
+    .bind(grant)
+    .fetch_one(&mut admin)
+    .await?;
+    let replacement: Uuid = sqlx::query_scalar(
+        "SELECT cs.scope_id FROM oauth_client_scopes cs
+        JOIN oauth_grants g ON g.client_id=cs.client_id
+        JOIN oauth_scopes s ON s.id=cs.scope_id
+        WHERE g.id=$1 AND s.name='profile'",
+    )
+    .bind(grant)
+    .fetch_one(&mut admin)
+    .await?;
+    let mut runtime =
+        PgConnection::connect_with(&runtime_options(&postgres, &mut admin).await?).await?;
+    let locked: Uuid =
+        sqlx::query_scalar("SELECT scope_id FROM oauth_grant_scopes WHERE grant_id=$1 FOR SHARE")
+            .bind(grant)
+            .fetch_one(&mut runtime)
+            .await?;
+    ensure!(locked == original, "Consent lock changed its scope binding");
+    for statement in [
+        "UPDATE oauth_grant_scopes SET scope_id=$2 WHERE grant_id=$1",
+        "INSERT INTO oauth_grant_scopes SELECT * FROM oauth_grant_scopes WHERE grant_id=$1
+         ON CONFLICT(grant_id,scope_id) DO UPDATE SET scope_id=$2",
+        "MERGE INTO oauth_grant_scopes target USING (SELECT $1::uuid AS grant_id,$2::uuid AS scope_id) proposed
+         ON target.grant_id=proposed.grant_id WHEN MATCHED THEN UPDATE SET scope_id=proposed.scope_id",
+    ] {
+        consent_rewrite_rejected(sqlx::query(statement)
+            .bind(grant)
+            .bind(replacement)
+            .execute(&mut runtime)
+            .await)?;
+        let unchanged: Vec<Uuid> =
+            sqlx::query_scalar("SELECT scope_id FROM oauth_grant_scopes WHERE grant_id=$1")
+                .bind(grant)
+                .fetch_all(&mut runtime)
+                .await?;
+        ensure!(unchanged == vec![original], "Rejected rewrite changed the saved consent");
+    }
+    for statement in [
+        "UPDATE oauth_grant_scopes SET grant_id=grant_id WHERE grant_id=$1",
+        "UPDATE oauth_grant_scopes SET client_id=client_id WHERE grant_id=$1",
+        "UPDATE oauth_grant_scopes SET application_id=application_id WHERE grant_id=$1",
+        "DELETE FROM oauth_grant_scopes WHERE grant_id=$1",
+    ] {
+        rejected(
+            sqlx::query(statement)
+                .bind(grant)
+                .execute(&mut runtime)
+                .await,
+            "42501",
+        )?;
+    }
+    Ok(())
 }
 
 /// A grant-bound receipt prevents a user cascade even when the caller has legitimate users DELETE.

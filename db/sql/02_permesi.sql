@@ -331,7 +331,7 @@ RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO oauth_scopes (application_id, name, kind)
     SELECT NEW.id, name, 'protocol'
-    FROM unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS name
+    FROM pg_catalog.unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS name
     ON CONFLICT (application_id, name) DO NOTHING;
     RETURN NEW;
 END;
@@ -341,7 +341,7 @@ CREATE TRIGGER seed_application_oauth_scopes AFTER INSERT ON applications
     FOR EACH ROW EXECUTE FUNCTION seed_oauth_protocol_scopes();
 INSERT INTO oauth_scopes (application_id, name, kind)
 SELECT a.id, s.name, 'protocol' FROM applications a
-CROSS JOIN unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS s(name)
+CROSS JOIN pg_catalog.unnest(ARRAY['openid', 'profile', 'email', 'address', 'phone', 'offline_access']) AS s(name)
 ON CONFLICT (application_id, name) DO NOTHING;
 
 -- Authorization consent writes grants. Explicit organization/application context prevent
@@ -418,6 +418,21 @@ CREATE TABLE IF NOT EXISTS oauth_grant_scopes (
         REFERENCES oauth_client_scopes(client_id, application_id, scope_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS oauth_grant_scopes_client_scope_idx ON oauth_grant_scopes (client_id, scope_id);
+
+-- PostgreSQL row-share locks require UPDATE on at least one column. Grant that
+-- capability narrowly below, while keeping existing consent bindings immutable.
+CREATE OR REPLACE FUNCTION forbid_oauth_grant_scope_rewrite()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'OAuth grant scope bindings are immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS forbid_oauth_grant_scope_rewrite ON oauth_grant_scopes;
+CREATE TRIGGER forbid_oauth_grant_scope_rewrite BEFORE UPDATE ON oauth_grant_scopes
+    FOR EACH ROW EXECUTE FUNCTION forbid_oauth_grant_scope_rewrite();
 
 -- Snapshot arrays reject NULLs and duplicates even for direct SQL writes.
 CREATE OR REPLACE FUNCTION oauth_scope_ids_valid(ids UUID[]) RETURNS BOOLEAN
@@ -690,11 +705,11 @@ DECLARE
 BEGIN
     FOREACH history IN ARRAY ARRAY['oauth_token_issuances','oauth_refresh_families'] LOOP
         FOR binding IN SELECT conname FROM pg_catalog.pg_constraint
-            WHERE conrelid=format('public.%I',history)::regclass
+            WHERE conrelid=pg_catalog.format('public.%I',history)::regclass
                 AND confrelid='public.oauth_grants'::regclass AND contype='f' AND confdeltype<>'r'
         LOOP
-            EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I',history,binding.conname);
-            EXECUTE format('ALTER TABLE public.%I ADD CONSTRAINT %I
+            EXECUTE pg_catalog.format('ALTER TABLE public.%I DROP CONSTRAINT %I',history,binding.conname);
+            EXECUTE pg_catalog.format('ALTER TABLE public.%I ADD CONSTRAINT %I
                 FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
                 REFERENCES public.oauth_grants(id,client_id,application_id,organization_id,user_id)
                 ON DELETE RESTRICT',history,binding.conname);
@@ -1146,8 +1161,8 @@ BEGIN
         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM permesi_runtime, PUBLIC;
         REVOKE CREATE ON SCHEMA public FROM permesi_runtime, PUBLIC;
         GRANT USAGE ON SCHEMA public TO permesi_runtime;
-        EXECUTE format('REVOKE ALL ON DATABASE %I FROM permesi_runtime',current_database());
-        EXECUTE format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO permesi_runtime',current_database());
+        EXECUTE pg_catalog.format('REVOKE ALL ON DATABASE %I FROM permesi_runtime',current_database());
+        EXECUTE pg_catalog.format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO permesi_runtime',current_database());
         GRANT USAGE ON TYPE user_status,email_outbox_status,environment_tier,org_membership_status TO permesi_runtime;
         GRANT SELECT ON ALL TABLES IN SCHEMA public TO permesi_runtime;
         GRANT INSERT, UPDATE ON TABLE
@@ -1168,6 +1183,7 @@ BEGIN
             TO permesi_runtime;
         GRANT UPDATE (expires_at,revoked_at) ON TABLE oauth_client_secrets TO permesi_runtime;
         GRANT UPDATE (is_failure) ON TABLE admin_attempts TO permesi_runtime;
+        GRANT UPDATE (scope_id) ON TABLE oauth_grant_scopes TO permesi_runtime;
         GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
         GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;
         REVOKE ALL ON FUNCTION cleanup_expired_tokens() FROM PUBLIC;

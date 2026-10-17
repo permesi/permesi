@@ -36,6 +36,11 @@ immutable and one-way transition rules. New tables and sequences require explici
 runtime grants instead of inheriting broad default authority.
 Admin-attempt records permit only the existing `is_failure` success transition;
 runtime credentials cannot rewrite their identity or timestamps.
+Saved-consent checks retain PostgreSQL row-share locks. The runtime has UPDATE only on
+`oauth_grant_scopes.scope_id` to acquire those locks; an immutable-binding trigger rejects
+actual rewrites, including substitution with another registered, client-allowed scope.
+It has no direct DELETE privilege on those rows. Explicit consent can still append
+bindings, and existing client/scope retirement cascades still remove them.
 
 These are service-role privileges, not tenant-specific database credentials or RLS.
 Application handlers continue enforcing identity, tenant membership and delegated
@@ -105,40 +110,88 @@ INHERIT/SET grant on created logins is intentionally rejected during reapplicati
 
 ## Verification status
 
-The final live PostgreSQL/HA gates remain pending. Five independent Claude/Herdr source
-review rounds verified the corrected owner-session boundary, membership guard, diagnostic
-classification, direct-grant assertions and documentation. The final focused review
-reported no remaining actionable findings; source review does not establish live
-database or HA behavior.
-An earlier implementation passed four new PostgreSQL regressions, the actual Vault
-runtime test, the user-delete handler regression and gateway routing tests. Subsequent
-caller-audit and review fixes add the admin-success column grant, owner-only Genesis
-rollover, authenticated-owner bootstrap and strict owner memberships. The hostile-owner,
-failed-bootstrap and live-lease reapplication regressions have not executed against
-PostgreSQL. The primary agent's current session denies Podman runtime
-directory writes and loopback/Unix listener binding, so the latest dependency tests fail
-at setup and the full scenario suite is blocked at 0/32. Setup failures are not coverage.
-The user-delete handler, gateway-routing, browser and harness gates also lack a final
-live pass. Database mutation red/green validation must be completed when dependencies
-are available; a setup failure cannot establish a killed mutation.
-The two hermetic bootstrap-diagnostic tests pass. Temporarily removing SQLSTATE validation
+The final HA and hosted gates remain pending. Seven real PostgreSQL privilege tests and
+the actual Vault credential test now pass, including hostile-owner, failed-bootstrap,
+legacy repair, three independent runtime identities, immutable consent and live-lease
+reapplication. The local test fixtures can reach their configured container API, while
+direct Podman CLI runtime writes and Node listener binding remain denied. The standalone
+scenario preflight is still blocked at 0/32 and browser/harness gates remain open.
+Setup failures are not coverage. Before the compatible dependency refresh described
+below, both complete default and all-feature workspace suites passed, including real
+PostgreSQL/Vault integration and runner routing tests. The two additional runtime-login
+HTTP regressions also passed. Final checks against the refreshed lockfiles remain pending.
+Five initial Claude/Herdr source-review rounds reported no remaining actionable
+findings. Two later reviews checked the runtime correction and its regressions;
+all implementation findings are resolved, and the final documentation correction
+records their scope and the remaining hosted validation.
+Source review does not establish live database or HA behavior.
+The three hermetic bootstrap-diagnostic tests pass. Temporarily removing SQLSTATE validation
 makes the negative test fail at its assertion; restoring it returns the tests to green.
 That mutation establishes diagnostic classification only, not live database security.
-Compilation, strict workspace Clippy, OpenAPI generation, Web native tests and the
-WASM build pass, but do not complete this milestone.
+Before the dependency refresh, compilation, strict workspace Clippy, OpenAPI
+generation, Web native tests and the WASM build passed. These results do not
+complete this milestone or establish compatibility with the refreshed lockfiles.
 
 The current validation record is:
 
 | Gate | Result |
 | --- | --- |
-| Formatting, diff checks and strict all-target/all-feature Clippy | Pass |
-| Workspace all-feature test compilation | Pass |
-| Admission-token, Web native and test-support tests | 50 pass |
+| Formatting and diff checks | Pass |
+| Strict all-target/all-feature Clippy and workspace test compilation | Pass before dependency refresh; refreshed graph awaits hosted validation |
+| Admission-token, Web native and test-support tests | 51 pass before dependency refresh |
 | Bootstrap diagnostic mutation | Assertion fails with SQLSTATE check removed; passes after restoration |
-| OpenAPI generation, WASM/Web and native scenario builds | Pass |
-| Six database privilege tests, actual Vault runtime test and schema verifier | Blocked at dependency setup |
-| Default/all-feature workspace tests | Stop at Genesis Unix-listener permission failure |
+| OpenAPI generation, WASM/Web and native scenario builds | Pass before dependency refresh |
+| Seven database privilege tests and actual Vault runtime test | Eight pass against real disposable dependencies before dependency refresh |
+| Canonical schema verifier | Passes locally through bootstrap and on hosted CI |
+| Default/all-feature workspace tests | Pre-refresh pass; Permesi library 425/440 pass, two later HTTP regressions pass separately; final lockfile rerun pending |
+| Database safeguard mutations | Consent rewrites, administrator-session restoration and skipped global preflight each fail at their intended assertion; restored sources and all eight database/Vault tests pass |
 | Browser, harness and full three-replica scenario suite | Blocked by local listener/Podman permissions; protocol suite 0/32 |
+
+The first pushed commit, `259b53d`, passed hosted formatting, Clippy, compilation,
+production Web audit and canonical PostgreSQL schema verification in
+[run 39025398078](https://github.com/permesi/permesi/actions/runs/39025398078).
+Coverage then caught missing UPDATE authority required by PostgreSQL's saved-consent
+row locks: runtime refresh returned 503. The correction retains those locks, grants
+only `scope_id` UPDATE and rejects actual binding rewrites with a database trigger.
+A real-login regression substitutes another otherwise allowed scope through UPDATE,
+UPSERT and MERGE. Each must return 23514 with the immutable guard's exact message
+and leave consent unchanged; updates to the other binding columns and DELETE remain
+denied. The verifier checks the enabled row-level BEFORE UPDATE trigger, its exact
+function, all-column coverage and absence of a WHEN condition or arguments.
+Two production-router regressions authenticate through a real non-superuser runtime
+login, covering code exchange/replay and saved-consent skipping with exact requested
+scopes. They passed separately after the full workspace runs; final aggregate counts
+against the refreshed graph remain pending. Three temporary SQL mutations removed
+the consent guard, restored an administrator session, or skipped global preflight.
+Each failed at the intended security assertion. Sources were restored byte-for-byte,
+and all seven database tests plus the Vault test returned to green.
+Corrected hosted protocol validation remains pending. The integration job separately timed out starting
+PostgreSQL containers for existing Genesis tests and stopped before the Permesi
+database/Vault targets. Its new `--no-fail-fast` flag preserves later test-binary results
+when an earlier dependency fails. The unit job also recorded three PostgreSQL startup
+timeouts alongside the refresh assertion; its final result was 421 pass, four fail.
+The complete local Genesis integration target subsequently passed both tests.
+A hostile-owner fixture also found ambiguous resolution of an unqualified `format()`
+call during schema reapplication. Canonical Genesis and Permesi grant/migration calls
+now use `pg_catalog.format`, and protocol-scope seeding uses `pg_catalog.unnest`.
+Bootstrap failures report only an allow-listed SQL filename,
+numeric line and SQLSTATE; raw errors, SQL values and contexts remain private.
+
+## Compatible dependency refresh
+
+`cargo upgrade` raised the compatible UUID and libc manifest lower bounds, and
+`cargo update` refreshed the compatible dependency graph. The explicit OPAQUE protocol
+aliases retain their required older trait ecosystems; no protocol or serialized-state
+migration is introduced by changing those aliases.
+The Web lockfile includes exactly the `source-map-js` 1.2.2 version, URL and integrity
+update from [PR 15](https://github.com/permesi/permesi/pull/15). It addresses the reported
+indexed-source-map denial of service. The npm audit gate now includes build dependencies.
+
+Local registry resolution/downloads fail for `registry.npmjs.org` and `static.crates.io`;
+npm installation and refreshed Rust builds/audits therefore lack a local pass. The
+existing CI unit job now runs the full all-feature workspace suite, alongside the
+separate default unit/integration jobs, so hosted validation covers the refreshed graph.
+No new audit exclusions or weakened checks are used.
 
 ## Independent review
 
@@ -154,20 +207,27 @@ finding was reported. The confirmed findings and corrections are:
 | LOW | Negative bootstrap tests accepted unrelated setup errors | Typed exact policy diagnostics, private raw stderr and a mutation-tested SQLSTATE classifier |
 | LOW | Historical A/B results and review status could overstate final validation | Separate historical evidence from pending PostgreSQL/A/B/C gates |
 | LOW | A negative test used effective superuser membership rather than actual grants | Query direct `pg_auth_members` rows before restoring mutated attributes |
+| MEDIUM (test coverage) | Runtime grant drift was covered through refresh but lacked direct code-exchange and saved-consent route regressions | Real non-superuser runtime-login HTTP tests assert committed exchange/replay and exact subset consent |
+| LOW | Consent-trigger verifier accepted incomplete trigger metadata | Require row-level BEFORE UPDATE, every column, no WHEN condition and the expected function, with catalog-qualified checks |
+| LOW | New consent-lock privilege lacked UPSERT/MERGE and other-column negatives | Assert exact immutable-guard rejection and unchanged consent for all rewrite forms; other binding columns and DELETE remain denied |
+| LOW | Fail-fast integration execution hid later security results after a dependency failure | Continue all standalone integration binaries and document the missed hosted coverage |
+| LOW | Owner-phase helper qualification was inconsistent | Qualify Genesis formatting and protocol-scope seeding helpers as well as Permesi migration/grant formatting |
 
 All confirmed findings were accepted and corrected. The suggestion to expose raw psql
 stderr was replaced with typed, allow-listed diagnostics to preserve logging hygiene.
 Follow-up reviews also strengthened the global-preflight test: a rejected bootstrap
-must not grant `pg_signal_backend` before the per-database check. The final direct-grant
-assertions compile but have not executed against PostgreSQL in this session. Claude's
-final review confirmed those assertions and the historical-validation wording, reran
-formatting, strict Clippy and integration-test compilation, and reported no remaining
-actionable findings. No review finding was rejected as a false positive.
+must not grant `pg_signal_backend` before the per-database check. Those direct-grant
+assertions passed against PostgreSQL, including the mutation that deliberately skipped
+preflight. The latest Claude review confirmed the two runtime-router tests, exact
+trigger metadata, UPSERT/MERGE negatives, integration continuation and catalog helper
+qualification. Its sole remaining finding was stale documentation, corrected here.
+The reviewer reran formatting/diff checks but did not independently execute the live
+database tests. No review finding was rejected as a false positive.
 
 The schema owner is trusted to define its own schema and policy; the verifier cannot
 prove safety after that owner is compromised. Genesis-specific hostile-owner and
 live-lease reapplication cases remain additional coverage; the corresponding Permesi
-cases are implemented but await execution. The user-delete HTTP conflict test uses a
+cases passed against their disposable dependencies. The user-delete HTTP conflict test uses a
 synthetic restrictive dependency, while real receipt/family cascade retention is tested
 at the SQL boundary. The runner shares canonical SQL but has separate Rust bootstrap
 orchestration that must stay aligned. Distinct runtime-login counts supplement actual

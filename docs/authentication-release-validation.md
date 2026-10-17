@@ -157,8 +157,9 @@ The independent review evidence above is from Grok and Claude.
 
 The subsequent [database hardening phase](database-hardening.md) implements
 non-superuser ownership, explicit runtime grants and parent-delete history restrictions.
-Independent Claude/Herdr source-review corrections are applied; final live PostgreSQL
-and three-replica validation remain pending. The completed results above apply to the
+Independent Claude/Herdr source-review corrections are applied and database/workspace
+regressions pass; final browser, harness and three-replica gates remain pending.
+The completed results above apply to the
 preceding release batch. HAProxy scripts
 and real transport/proxy tests were reviewed; an end-to-end HAProxy stack, multi-host
 load/fault benchmarks and Firefox/Safari were not exercised by this validation.

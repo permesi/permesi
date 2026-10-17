@@ -69,6 +69,39 @@ impl std::fmt::Display for BootstrapPolicyViolation {
 
 impl std::error::Error for BootstrapPolicyViolation {}
 
+/// Reports only an allow-listed SQL filename, numeric line and SQLSTATE, never raw server diagnostics.
+fn bootstrap_failure_location(stderr: &[u8]) -> Option<String> {
+    std::str::from_utf8(stderr).ok()?.lines().find_map(|line| {
+        let location = line.strip_prefix("psql:/tmp/permesi-bootstrap/")?;
+        let (name, location) = location.split_once(':')?;
+        if ![
+            "00_init.sql",
+            "01_genesis.sql",
+            "02_permesi.sql",
+            "bootstrap_ownership.sql",
+            "partitioning.sql",
+            "seed_test_client.sql",
+            "verify_permesi.sql",
+        ]
+        .contains(&name)
+        {
+            return None;
+        }
+        let (line, error) = location.split_once(": ERROR:")?;
+        let line = line.parse::<usize>().ok()?;
+        let (code, _) = error.trim().split_once(':')?;
+        if line == 0
+            || code.len() != 5
+            || !code
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        {
+            return None;
+        }
+        Some(format!("{name}:{line} SQLSTATE {code}"))
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct PostgresConfig {
     image: String,
@@ -128,6 +161,7 @@ impl PostgresContainer {
     ///
     /// # Errors
     /// Fails on any schema, ownership or grant error; no database setup failure is a skip.
+    /// Diagnostics expose only verified policy messages or allow-listed SQL locations and SQLSTATE.
     pub async fn bootstrap(&self) -> Result<()> {
         let files = [
             ("00_init.sql", include_str!("../../../db/sql/00_init.sql")),
@@ -184,7 +218,13 @@ impl PostgresContainer {
         {
             return Err(policy.into());
         }
-        ensure!(status == Some(0), "Canonical database bootstrap failed");
+        ensure!(
+            status == Some(0),
+            "Canonical database bootstrap failed (exit {status:?}; {})",
+            bootstrap_failure_location(&stderr)
+                .as_deref()
+                .unwrap_or("unclassified diagnostic")
+        );
         Ok(())
     }
 
@@ -379,6 +419,22 @@ mod tests {
     use super::*;
 
     const POLICY_ERROR: &str = "psql:/tmp/permesi-bootstrap/bootstrap_ownership.sql:21: ERROR:  P0001: Vault database owner has unexpected role memberships\nprivate diagnostic context\n";
+
+    #[test]
+    fn bootstrap_failure_location_never_exposes_diagnostic_values() {
+        assert_eq!(
+            bootstrap_failure_location(POLICY_ERROR.as_bytes()).as_deref(),
+            Some("bootstrap_ownership.sql:21 SQLSTATE P0001")
+        );
+        for diagnostic in [
+            POLICY_ERROR.replace("bootstrap_ownership.sql", "secret-identifier.sql"),
+            POLICY_ERROR.replace(":21:", ":0:"),
+            POLICY_ERROR.replace("P0001:", "private-value:"),
+            "connection failed with private credentials".to_owned(),
+        ] {
+            assert!(bootstrap_failure_location(diagnostic.as_bytes()).is_none());
+        }
+    }
 
     #[test]
     fn bootstrap_policy_rejection_requires_exact_diagnostic_and_sanitizes_context() {

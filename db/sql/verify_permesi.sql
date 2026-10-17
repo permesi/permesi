@@ -23,6 +23,26 @@ BEGIN
     END IF;
 END $$;
 
+-- Saved consent remains lockable without permitting existing scope bindings to change.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+        WHERE tgrelid='public.oauth_grant_scopes'::pg_catalog.regclass
+        AND tgname='forbid_oauth_grant_scope_rewrite' AND tgenabled='O' AND NOT tgisinternal
+        AND tgtype=19 AND tgattr=''::pg_catalog.int2vector AND tgqual IS NULL AND tgnargs=0
+        AND tgfoid='public.forbid_oauth_grant_scope_rewrite()'::pg_catalog.regprocedure) THEN
+        RAISE EXCEPTION 'missing immutable consent bindings';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='permesi_runtime') AND (
+        NOT pg_catalog.has_column_privilege('permesi_runtime','public.oauth_grant_scopes','scope_id','UPDATE')
+        OR pg_catalog.has_column_privilege('permesi_runtime','public.oauth_grant_scopes','grant_id','UPDATE')
+        OR pg_catalog.has_column_privilege('permesi_runtime','public.oauth_grant_scopes','client_id','UPDATE')
+        OR pg_catalog.has_column_privilege('permesi_runtime','public.oauth_grant_scopes','application_id','UPDATE')
+        OR pg_catalog.has_table_privilege('permesi_runtime','public.oauth_grant_scopes','DELETE')) THEN
+        RAISE EXCEPTION 'invalid runtime consent-lock privileges';
+    END IF;
+END $$;
+
 -- Refresh history and only the irreversible transition columns survive bootstrap grants.
 DO $$
 BEGIN
