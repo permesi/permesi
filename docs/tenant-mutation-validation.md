@@ -1,6 +1,6 @@
 # Tenant mutation and HA follow-up validation
 
-This record covers the bounded tenant mutation working tree and the refresh-race oracle
+This record covers the bounded tenant mutation change and the refresh-race oracle
 correction following `d5548b2`. It separates source review, executed regression tests and
 live HA provisioning. Earlier release evidence is not evidence for this follow-up.
 
@@ -112,18 +112,28 @@ successfully without changing fixtures or assertions. Fresh console smoke uses t
 artifact, and that artifact was copied into the ordinary ignored `apps/web/dist` directory
 before the final successful PostgreSQL browser run.
 
-The rebuilt five-replica standalone HA runner still stops at provisioning, before any of
-its seven cases execute, with zero cleanup errors. Its local sanitized report is
-`.tmp/tenant-corrected-ha/3b1dfafc01c94a7398ee8797141f9541/report.json`. Earlier direct Podman
-checks identify the read-only `/run/user/1000/libpod` runtime as the environment limitation.
-This is not HA coverage. The old live three/five CI matrix reached 32/34 scenarios; its
-refresh-oracle correction still requires a successful fresh matrix and harness run.
+The initial five-replica standalone HA attempt stopped at provisioning because that
+session's Podman runtime was read-only. After resuming with a writable runtime, the
+corrected five-replica HA suite passed 7/7, and full three/five suites passed 34/34
+each with zero cleanup errors. Both topologies passed all eight recovery harness checks.
+The old hosted three/five matrix reached 32/34 scenarios. Corrected hosted run
+`39103751747` passed 34/34 cases and all eight harness checks for each topology.
 See [HA validation](oauth-ha-validation.md). CI also lacks an automated committed-versus-
 generated OpenAPI drift gate; the manual byte-for-byte check passes and the gate is in TODO.
 
 The first publication attempt was blocked by that session's protected Git directory:
 staging failed with `Unable to create .../.git/index.lock: Read-only file system`.
-At that time, local HEAD and remote `sandbox` were both
-`d5548b2d4ec06e2f43900bc87447f116da1b6b5c`. The signed publication and fresh
-hosted three/five matrix and harness checks follow this local validation; the earlier
-CI run does not establish the corrected oracle's live behavior.
+After resuming with writable Git metadata, commit `2be597f` was signed, pushed to
+`sandbox`, and verified by GitHub. Hosted run `39103751747` passed format, Web audit,
+check, Clippy, coverage and schema checks. Its first two attempts had PostgreSQL
+container-startup timeouts in concurrently running integration/unit jobs, without test
+assertion failures. The exact Genesis integration target passed locally; hosted integration
+passed on retry. Rerunning the unit job alone passed both workspace suites. The workflow
+now orders these database-heavy jobs instead of starting both on the same runner host.
+Hosted builds and browser checks passed. Both real scenario suites passed 34/34 on their
+first execution, with zero cleanup errors. The three-replica harness passed all eight
+checks; the five-replica harness failed its simultaneous-run check while both topology
+jobs overlapped on the same host, then passed all eight checks when rerun alone. The
+workflow follow-up serializes matrix members to reduce this host contention. Run
+`39103751747` finished green on attempt four; the separate workflow scheduling commit
+requires its own fresh CI result.

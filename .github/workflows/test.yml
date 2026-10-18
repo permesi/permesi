@@ -93,11 +93,14 @@ jobs:
         rust:
           - stable
     runs-on: ${{ matrix.os }}
+    # Both suites start many PostgreSQL/Vault fixtures on the same self-hosted host.
+    # Run integration first so their private Podman engines do not overload startup.
     needs:
       - format
       - lint
       - check
       - db-schema
+      - integration
     steps:
       - uses: actions/checkout@v7
         with:

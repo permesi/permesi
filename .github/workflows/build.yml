@@ -153,6 +153,9 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # Each topology runs several local PostgreSQL/Vault/service stacks, and the
+      # harness starts two more stacks concurrently. Share the host sequentially.
+      max-parallel: 1
       matrix:
         replicas: [3, 5]
     steps:

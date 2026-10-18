@@ -128,13 +128,12 @@ container cleanup relies on verified labels, and this harness does not certify a
 host-wide descendant-process audit. Shared engine helpers must never be pruned as
 part of an individual run's recovery.
 
-Direct local Podman fails because `/run/user/1000/libpod` is read-only; a five-replica
-HA attempt reports all seven cases blocked and zero passed. Initially npm DNS and
-localhost listeners were also denied. After command networking was enabled, a fresh
-Web release build and console browser smoke test pass. Both PostgreSQL browser tests
-subsequently pass through their direct Cargo gate, although the wrapped recipe still
-hits Podman setup restrictions. The standalone runner's setup failure is a validation
-limitation, not passing HA coverage. The earlier
+The first local validation session could not start Podman because
+`/run/user/1000/libpod` was read-only; its five-replica HA attempt executed zero cases.
+In the subsequent unrestricted local session, the corrected runner passes all 34 cases
+with three replicas and again with five, each with zero cleanup errors. Both topologies
+also pass all eight separate recovery harness checks. A fresh Web release build, console
+browser smoke and both actual PostgreSQL browser tests pass. The earlier
 [three-replica hardening record](database-hardening.md) validates the prior 32-case
 implementation and cannot establish the new restart/five-replica coverage.
 
@@ -144,15 +143,23 @@ refresh-lineage oracle: refresh families store the internal registration ID, whi
 the oracle compared it directly with the public protocol client ID. The correction
 resolves that ID through `oauth_clients` and retains every tenant, lineage and reuse
 predicate. A real PostgreSQL query regression deliberately uses distinct IDs and
-rejects substituted bindings/revocation state. Corrected matrix and harness runs remain pending; independent review of the correction
-is complete, and the first run is not a passing HA milestone.
+rejects substituted bindings/revocation state. The corrected local and hosted three/five
+full suites pass 34/34 cases and all eight harness checks per topology. Hosted run
+`39103751747` passed on its fourth attempt: integration and unit jobs needed isolated
+reruns after PostgreSQL container-startup timeouts, and the five-replica harness needed
+an isolated rerun after its simultaneous-run check failed while the three-replica harness
+was also active on the same host. Both hosted real suites passed on their first execution.
+The follow-up workflow serializes database-heavy test jobs and topology matrix members
+to reduce shared-host contention. Independent review of the correction is complete.
 
 The combined follow-up also bounds hierarchy mutation waits and corrects cancelled
 transaction startup. AGY/Gemini 4 Argon completed static Herdr review; Claude's independent
 review found additional transaction-cancellation and organization-update issues. Confirmed
 findings now have fixes and PostgreSQL regression evidence. The corrected Claude review
 reports no remaining actionable findings; 688 default/718 all-feature workspace tests
-and both PostgreSQL browser tests pass. The earlier staging attempt was blocked by protected
-Git metadata, and the rebuilt standalone runner still could not provision locally. Details are recorded
-in [the mutation validation record](tenant-mutation-validation.md).
-Neither source review nor workspace tests replace passing live matrix/harness validation.
+and both PostgreSQL browser tests pass. The signed correction was published as `2be597f`.
+Hosted builds, browser checks, both workspace suites and both three/five scenario suites
+passed in run `39103751747` after the isolated retries described above. Details are recorded in
+[the mutation validation record](tenant-mutation-validation.md).
+The validated topology remains single-host with a shared PostgreSQL/Vault stack; multi-host
+load, network partitions and in-flight response-loss ambiguity remain separate work.
