@@ -60,6 +60,20 @@ jobs:
       - name: Check
         run: cargo check --locked --workspace
 
+  openapi:
+    name: OpenAPI Drift
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-toolchain
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify committed OpenAPI artifacts
+        run: ./scripts/check-openapi
+
   npm-audit:
     name: Security Audit (Web)
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
@@ -86,6 +100,10 @@ jobs:
 
   test:
     name: Unit Tests
+    # Each test can start its own PostgreSQL/Vault fixture. Bound fixture pressure
+    # even when multiple branch workflows share the self-hosted machine.
+    env:
+      RUST_TEST_THREADS: '4'
     strategy:
       matrix:
         os:
@@ -118,6 +136,8 @@ jobs:
 
   integration:
     name: Integration Tests
+    env:
+      RUST_TEST_THREADS: '4'
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     needs:
       - format

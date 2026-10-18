@@ -18,6 +18,10 @@ docs-clean:
 
 openapi: openapi-permesi openapi-genesis
 
+# Check generated contracts without changing tracked artifacts.
+openapi-check:
+  ./scripts/check-openapi
+
 openapi-permesi:
   mkdir -p docs/openapi
   cargo run -p permesi --bin permesi-openapi > docs/openapi/permesi.json

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Regenerate both contracts outside the worktree and reject byte-for-byte drift.
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${repo_root}"
+generated_dir="$(mktemp -d)"
+trap 'rm -rf -- "${generated_dir}"' EXIT
+
+cargo run --locked -p permesi --bin permesi-openapi > "${generated_dir}/permesi.json"
+cargo run --locked -p genesis --bin genesis-openapi > "${generated_dir}/genesis.json"
+
+drift=0
+for service in permesi genesis; do
+  committed="docs/openapi/${service}.json"
+  if ! cmp -s -- "${committed}" "${generated_dir}/${service}.json"; then
+    echo "::error file=${committed}::Generated OpenAPI differs from the committed artifact. Run just openapi."
+    diff -u -- "${committed}" "${generated_dir}/${service}.json" | sed -n '1,100p' || true
+    drift=1
+  fi
+done
+exit "${drift}"

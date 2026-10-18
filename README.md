@@ -670,6 +670,10 @@ Regenerate them from code:
 - `cargo run -p permesi --bin permesi-openapi > docs/openapi/permesi.json`
 - `cargo run -p genesis --bin genesis-openapi > docs/openapi/genesis.json`
 
+Run `just openapi-check` to regenerate both contracts in a temporary directory and
+compare them byte-for-byte with the committed files. CI requires this check on
+pushes, pull requests and release candidates without rewriting the artifacts.
+
 ## Containers
 
 - `podman build -f services/permesi/Dockerfile -t permesi:dev .`

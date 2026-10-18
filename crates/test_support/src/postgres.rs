@@ -3,19 +3,36 @@
 //! Flow Overview: start an owned container, wait for PostgreSQL, then apply the
 //! repository's psql includes. Administrator ownership checks and actual owner
 //! schema sessions remain separate; setup errors never count as successful coverage.
+//! Startup slots remain held until the published TCP endpoint responds, limiting
+//! fixture bursts that otherwise overwhelm a shared CI container host.
 
 use anyhow::{Context, Result, ensure};
 use sqlx::{Connection, PgConnection};
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    sync::{Arc, OnceLock},
+};
 use testcontainers::{
     ContainerAsync, ContainerRequest, GenericImage, ImageExt,
     core::{ExecCommand, IntoContainerPort, WaitFor},
 };
-use tokio::time::{Duration, sleep};
+use tokio::{
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
+    time::{Duration, Instant, sleep, timeout},
+};
 
 use crate::container::{start_with_port_retry, with_loopback_port};
 
 const POSTGRES_PORT: u16 = 5432;
+const STARTUP_SLOTS: usize = 4;
+const READY_DEADLINE: Duration = Duration::from_secs(30);
+const CONNECT_DEADLINE: Duration = Duration::from_secs(3);
+static STARTUP_LIMIT: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+/// Bound simultaneous database bootstraps within a test process until TCP is usable.
+fn startup_limit() -> Arc<Semaphore> {
+    Arc::clone(STARTUP_LIMIT.get_or_init(|| Arc::new(Semaphore::new(STARTUP_SLOTS))))
+}
 
 /// A verified, sanitized rejection from the canonical role-policy SQL, never a setup failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +171,7 @@ pub struct PostgresContainer {
     host_port: u16,
     container_name: String,
     config: PostgresConfig,
+    startup_permit: Mutex<Option<OwnedSemaphorePermit>>,
 }
 
 impl PostgresContainer {
@@ -242,6 +260,13 @@ impl PostgresContainer {
     /// Returns an error if the container fails to start or the port cannot be resolved.
     pub async fn start_with_config(network: &str, config: PostgresConfig) -> Result<Self> {
         crate::runtime::ensure_container_runtime()?;
+        // A single cargo test binary can launch many fixtures at once. Keep the
+        // slot until the published TCP endpoint, not merely the container log,
+        // is ready so other tests cannot overload a starting database.
+        let startup_permit = startup_limit()
+            .acquire_owned()
+            .await
+            .context("Postgres fixture startup limit closed")?;
         let (container, container_name) =
             start_with_port_retry("Postgres", "postgres", |container_name| {
                 fixture_request(&config, container_name, network)
@@ -292,6 +317,7 @@ impl PostgresContainer {
             host_port,
             container_name,
             config,
+            startup_permit: Mutex::new(Some(startup_permit)),
         })
     }
 
@@ -365,28 +391,36 @@ impl PostgresContainer {
         &self.config.db_name
     }
 
-    /// Wait until Postgres accepts connections.
+    /// Wait up to 30 seconds for the published TCP endpoint, then release its startup slot.
     ///
     /// # Errors
     /// Returns an error if Postgres does not become ready after retries.
     pub async fn wait_until_ready(&self) -> Result<()> {
         let dsn = self.admin_dsn();
-        let mut attempts = 0;
+        let deadline = Instant::now() + READY_DEADLINE;
 
         loop {
-            match PgConnection::connect(&dsn).await {
-                Ok(connection) => {
+            let failure = match timeout(CONNECT_DEADLINE, PgConnection::connect(&dsn)).await {
+                Ok(Ok(connection)) => {
                     drop(connection);
+                    self.startup_permit.lock().await.take();
                     return Ok(());
                 }
-                Err(err) => {
-                    attempts += 1;
-                    if attempts >= 20 {
-                        return Err(err).context("Postgres did not become ready");
-                    }
-                    sleep(Duration::from_millis(250)).await;
+                Ok(Err(sqlx::Error::Io(_))) => "transport",
+                Ok(Err(sqlx::Error::Database(_))) => "database",
+                Ok(Err(_)) => "connection",
+                Err(_) => "timeout",
+            };
+            if Instant::now() >= deadline {
+                if matches!(
+                    timeout(CONNECT_DEADLINE, self.container.is_running()).await,
+                    Ok(Ok(false))
+                ) {
+                    anyhow::bail!("Postgres fixture container stopped before TCP readiness");
                 }
+                anyhow::bail!("Postgres did not become ready within 30 seconds ({failure})");
             }
+            sleep(Duration::from_millis(250)).await;
         }
     }
 }
@@ -417,6 +451,25 @@ pub(crate) fn fixture_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn postgres_startup_limit_queues_a_fifth_fixture_until_a_slot_is_released() -> Result<()>
+    {
+        let mut held = Vec::new();
+        for _ in 0..STARTUP_SLOTS {
+            held.push(startup_limit().acquire_owned().await?);
+        }
+        let mut waiting = tokio::spawn(async { startup_limit().acquire_owned().await });
+        assert!(
+            timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        drop(held.pop());
+        let acquired = timeout(Duration::from_secs(1), waiting).await???;
+        drop(acquired);
+        Ok(())
+    }
 
     const POLICY_ERROR: &str = "psql:/tmp/permesi-bootstrap/bootstrap_ownership.sql:21: ERROR:  P0001: Vault database owner has unexpected role memberships\nprivate diagnostic context\n";
 

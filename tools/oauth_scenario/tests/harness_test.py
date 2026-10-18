@@ -1,5 +1,6 @@
 """Verify recovery rejects foreign files/processes and reaps a failed observer's runner."""
 from pathlib import Path
+import inspect
 import os
 import shutil
 import signal
@@ -98,6 +99,23 @@ class RecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "observation failed"):
                 harness.kill_runner(process, self.private)
         self.assertIsNotNone(process.poll())
+
+    def test_failure_summary_identifies_check_without_exposing_private_output(self):
+        try:
+            harness.verify_journal({"processes": []}, [{"pid": 7, "start_ticks": 9}], set())
+        except RuntimeError as error:
+            summary = harness.failure_summary(error)
+        else:
+            self.fail("The failed invariant must raise")
+        self.assertRegex(summary, r"^FAIL scenario harness validation \(RuntimeError at harness\.py:[1-9][0-9]*\)$")
+        source, first_line = inspect.getsourcelines(harness.verify_journal)
+        self.assertTrue(any(f"harness.py:{line})" in summary for line in range(first_line, first_line + len(source))))
+
+        try:
+            raise RuntimeError("private-token-value")
+        except RuntimeError as error:
+            summary = harness.failure_summary(error)
+        self.assertNotIn("private-token-value", summary)
 
     @staticmethod
     def reap(process):

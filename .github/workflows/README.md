@@ -26,12 +26,18 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 ## Workflow Overview
 
 - **`test.yml`**: Handles formatting, linting (clippy), dependency auditing for the web app, and
-  unit/integration tests. Web auditing includes development/build dependencies so
+  unit/integration tests. A separate hosted OpenAPI drift job generates both service
+  contracts and compares them byte-for-byte with the committed artifacts; failure
+  blocks the reusable test workflow and `CI OK`. Web auditing includes development/build dependencies so
   source-map and stylesheet-tooling advisories are covered. The unit job runs default
   library/binary tests, then the complete all-feature workspace suite. The separate
   default integration job selects standalone `tests/` targets with `--test '*'` and
   continues across test binaries with `--no-fail-fast`, preserving Permesi results
-  when a Genesis dependency fails. Coverage still runs the full default workspace.
+  when a Genesis dependency fails. Both database-heavy test jobs cap Rust test threads
+  at four so concurrent fixtures do not saturate the shared self-hosted machine;
+  each test keeps its own race assertions. The shared PostgreSQL fixture also limits
+  simultaneous startup through TCP readiness and allows 30 seconds for a starting
+  container to accept connections. Coverage still runs the full default workspace.
 - **`security-audit.yml`**: Audits the locked Rust dependency graph for vulnerabilities, unsound
   advisories, and yanked crates when Cargo dependency files change, on manual runs, and weekly so
   newly published RustSec advisories are detected without duplicating the normal test workflow.
@@ -60,7 +66,8 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   OAuth scenarios run as a required three/five-replica matrix with fail-fast disabled.
   Each matrix member runs all 34 cases, six recovery unit tests and eight harness checks, including rolling
   replacements, backend loss and SIGKILL recovery of a replacement process. Sanitized
-  report artifact names include the replica count. This covers one-host process/state
+  report artifact names include the replica count. Harness failures identify the
+  source line and exception class without printing captured subprocess output. This covers one-host process/state
   availability and does not establish multi-host load or network-failure behavior.
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.

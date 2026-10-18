@@ -17,6 +17,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -31,6 +32,17 @@ ENGINE = [PODMAN, "--url", os.environ["DOCKER_HOST"]] if os.environ.get("DOCKER_
 def check(condition):
     if not condition:
         raise RuntimeError("Scenario harness invariant failed.")
+
+
+def failure_summary(error):
+    """Report a fixed source location and error class, never private subprocess output."""
+    frames = traceback.extract_tb(error.__traceback__)
+    location = next(
+        (frame.lineno for frame in reversed(frames) if frame.filename == __file__ and frame.name != "check"),
+        None,
+    )
+    kind = type(error).__name__ if type(error) in (RuntimeError, TimeoutError, OSError, ValueError) else "Exception"
+    return f"FAIL scenario harness validation ({kind} at harness.py:{location or 0})"
 
 
 def command(args, **kwargs):
@@ -357,6 +369,6 @@ if __name__ == "__main__":
     RUNNER_COMMAND = [str(RUNNER), "--replicas", str(REPLICAS)]
     try:
         main()
-    except Exception:
-        print("FAIL scenario harness validation")
+    except Exception as error:
+        print(failure_summary(error))
         raise SystemExit(1) from None

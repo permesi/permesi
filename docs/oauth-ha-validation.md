@@ -154,6 +154,14 @@ to reduce shared-host contention. Its fresh run `39110929583` passed both topolo
 their harnesses and the required `CI OK` gate on the first attempt. Independent review
 of the correction is complete.
 
+After the 0.4.1 release, simultaneous branch runs exposed more fixture contention:
+PostgreSQL startup failed after a five-second TCP probe, while the scenario harness
+reported only a generic failure. Unit and integration jobs now cap Rust test threads
+at four, and the shared fixture limits concurrent PostgreSQL startups through actual
+TCP readiness with a 30-second deadline. The harness still fails on any broken
+ownership or cleanup invariant, but reports its source line and exception class
+without disclosing captured process output.
+
 The combined follow-up also bounds hierarchy mutation waits and corrects cancelled
 transaction startup. AGY/Gemini 4 Argon completed static Herdr review; Claude's independent
 review found additional transaction-cancellation and organization-update issues. Confirmed
