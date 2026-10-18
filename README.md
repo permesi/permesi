@@ -281,8 +281,13 @@ regression checks. Passkey and hardware-key ceremonies also use [shared sealed P
 
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
-and hashed, single-use authorization codes (120-second default TTL). PKCE is required
-for public and confidential clients. `POST /token` owns client authentication, S256 redemption, Vault signing and hash-only
+and hashed, single-use authorization codes (120-second default TTL).
+The consent page shows the signed-in account and registered callback origin. Switching
+accounts requires cancelling, signing out of Permesi, and starting a new request in the
+application. Expired requests show a restart instruction without accepting a
+browser-supplied callback.
+PKCE is required for public and confidential clients. `POST /token` owns client
+authentication, S256 redemption, Vault signing and hash-only
 issuance receipts in one PostgreSQL transaction. Public clients supply their ID;
 confidential clients use HTTP Basic with bounded Argon2id current/retiring credentials.
 Access tokens bind the explicit resource audience and tenant/application/grant; OIDC

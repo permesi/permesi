@@ -236,9 +236,13 @@ redirects to the existing Web `/login?oauth_request=<opaque UUID>&oauth_expires=
 route. The frontend retains the locator and a nonauthoritative cleanup deadline in
 session storage across login/MFA, returning to `/authorize/resume` only from that flow
 when a full session exists. MFA enrollment and recovery-driven re-enrollment wait until
-users acknowledge their one-time recovery codes before resuming. Expired locators and navigation outside login/MFA clear both
-values, so an abandoned request cannot redirect a later ordinary console login. Changing
-the browser deadline never changes PostgreSQL expiry. The cookie and
+users acknowledge their one-time recovery codes before resuming. Expired locators on login
+show a restart notice and are removed from session storage; navigation outside login/MFA
+also clears them. If the local deadline passes during MFA, the frontend still asks
+`/authorize/resume` to decide. The backend shows a value-free restart page when the
+request is unavailable. Restart begins in the requesting application with a fresh
+authorization request and PKCE verifier; no browser-provided callback becomes a link.
+Changing the browser deadline never changes PostgreSQL expiry. The cookie and
 server snapshot enforce integrity; modifying the locator cannot change authority.
 Deploy the Web API base URL against the same issuer origin, over HTTPS. All replicas
 must share PostgreSQL, session/OPAQUE configuration and issuer/resource audience.
@@ -249,8 +253,13 @@ No OAuth request/code state depends on process-local state or requires sticky ro
 The first authorized full session is bound permanently by user and session hash.
 Resume and consent recheck an active user/session, active membership, every ancestor,
 redirect and every original registry ID. Deleting/recreating a scope cannot revive the
-snapshot. The minimal backend consent page shows the application/client, organization
-and registry descriptions, with readable system OIDC labels. Its scope set is read-only.
+snapshot. The minimal backend consent page shows the application/client, organization,
+current account email and registered callback origin alongside registry descriptions
+and readable system OIDC labels. The email comes from the active session/user lock;
+the origin comes from the exact registered redirect. Its scope set is read-only.
+To switch accounts after the first full-session binding, the user must cancel, sign
+out of Permesi, then restart from the application. A different user or session cannot
+inherit that request.
 The only form inputs are request locator, random CSRF capability and Allow/Cancel;
 unknown form fields fail, and CSRF is bound to that browser and full session. All display
 text is escaped and scripts, framing and external resources are prohibited. Consent
@@ -263,8 +272,9 @@ Metadata. Other responses use `no-referrer`, including every redirect, so client
 receive no issuer referrer. Opaque `Origin: null` posts still require browser-provided
 `Sec-Fetch-Site: same-origin` in addition to browser/session/CSRF proofs. Foreign and
 cross-site opaque origins are rejected; non-browser callers omitting Origin require all
-stored proofs. Repeated completed consent POSTs return a generic, friendly 400 page
-instructing the user to restart from the application, without reissuing a code.
+stored proofs. Repeated completed consent POSTs and unavailable resume locators return
+a generic, friendly 400 page instructing the user to restart from the application,
+without reissuing a code or reflecting a callback URL.
 `prompt=consent` requires a new explicit decision. `prompt=none` uses saved consent
 only and returns `login_required` or `consent_required` when interaction is needed.
 Other prompt values, response modes, Request Objects/URIs, claims requests, resource/
@@ -484,8 +494,10 @@ families, recheck current tenant/consent and require explicit offline consent. U
 introspection and public token revocation follow separately, with authenticated caller
 and disclosure policy. Family revocation does not retract an already signed JWT.
 
-Authorization UX should show the signed-in account and callback host and provide a safe
-restart path for expired requests, with account-switching policy and browser regressions.
+Authorization UX now shows the signed-in account and registered callback origin,
+explains the cancel-and-restart account-switch policy, and shows a value-free restart
+page for unavailable requests. Browser regressions cover the presentation, scope
+immutability and local-expiry behavior during MFA reloads.
 The required browser CI gate now exercises the existing console and real-database
 authorization/OPAQUE flows against the same commit's frontend artifact on an isolated
 hosted runner. Operational work still includes Firefox/Safari coverage, multi-replica load tests for shared
@@ -551,9 +563,8 @@ for code flow, trading compatibility for explicit ID-token replay binding. RFC 9
 issuer response parameters and accurate token metadata are now implemented by the token
 milestone; the standard-library interoperability fixture is now covered, while broader
 clients and formal conformance remain separately tracked.
-Account switching, consent account/callback-host presentation and broader grants UX remain
-separate work; inactive tenant membership fails closed now. Existing broad database runtime
-privileges are outside this change: SQL constraints defend normal writes and browser input,
+Broader grants UX remains separate work; inactive tenant membership fails closed now.
+Existing broad database runtime privileges are outside this change: SQL constraints defend normal writes and browser input,
 not an already compromised database runtime role. Least privilege/RLS need a workspace-wide
 review because that role can also write identity/session tables. Key retirement remains an
 operator decision using signed-token lifetimes and cache windows; no automatic destructive
@@ -580,7 +591,6 @@ Intermediate, uncommitted development schemas briefly supported an `oidc_metadat
 counter; a developer who applied that intermediate version must discard only those
 obsolete counters before reapplying the canonical action constraint. No committed schema
 or normal upgrade has that action, and canonical schema reapplication with live grants
-and codes passes. Invalid resume locators still show a generic value-free JSON 400,
-including browser-mismatched handles; consent replay already has a friendly HTML restart
-page. A unified resume/error presentation is deferred to the broader authorization UX
-milestone because it grants no authority and reveals no stored context.
+and codes passes. Browser-facing invalid or expired resume locators show the same
+value-free restart page as consent replay; malformed initial `/authorize` requests
+still fail directly without trusting a callback URL.

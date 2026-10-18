@@ -55,6 +55,8 @@ pub(crate) enum Outcome {
         client: String,
         application: String,
         organization: String,
+        account: String,
+        callback_origin: String,
         scopes: Vec<RequestedScope>,
     },
     Redirect {
@@ -237,7 +239,8 @@ impl AuthorizationService<'_> {
                 })
             };
         };
-        let auth_time = lock_session_membership(tx, context.organization_id, session).await?;
+        let (auth_time, account) =
+            lock_session_membership(tx, context.organization_id, session).await?;
         if request.user_id.is_some_and(|id| id != session.user_id)
             || request
                 .session_hash
@@ -286,6 +289,11 @@ impl AuthorizationService<'_> {
                 client: context.client_name.clone(),
                 application: context.application_name.clone(),
                 organization: context.organization_name.clone(),
+                account,
+                callback_origin: url::Url::parse(redirect.as_str())
+                    .map_err(|_| Error::protocol(ProtocolError::InvalidRequest))?
+                    .origin()
+                    .ascii_serialization(),
                 scopes,
             });
         }
@@ -394,8 +402,8 @@ async fn lock_session_membership(
     tx: &mut Transaction<'_, Postgres>,
     org: Uuid,
     session: &SessionBinding,
-) -> Result<DateTime<Utc>, Error> {
-    sqlx::query_scalar("SELECT s.auth_time FROM user_sessions s JOIN users u ON u.id=s.user_id JOIN org_memberships m ON m.user_id=u.id WHERE s.session_hash=$1 AND s.user_id=$2 AND m.org_id=$3 AND s.expires_at>clock_timestamp() AND u.status='active' AND m.status='active' FOR SHARE OF s,u,m")
+) -> Result<(DateTime<Utc>, String), Error> {
+    sqlx::query_as("SELECT s.auth_time,u.email::text FROM user_sessions s JOIN users u ON u.id=s.user_id JOIN org_memberships m ON m.user_id=u.id WHERE s.session_hash=$1 AND s.user_id=$2 AND m.org_id=$3 AND s.expires_at>clock_timestamp() AND u.status='active' AND m.status='active' FOR SHARE OF s,u,m")
         .bind(&session.hash).bind(session.user_id).bind(org).fetch_optional(&mut **tx).await?.ok_or_else(|| Error::protocol(ProtocolError::AccessDenied))
 }
 

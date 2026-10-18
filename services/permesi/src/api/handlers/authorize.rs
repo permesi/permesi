@@ -181,9 +181,9 @@ pub(crate) async fn resume(
         return secured(status.into_response());
     }
     let (Ok(Query(input)), Some(browser)) = (input, browser_token(&headers)) else {
-        return direct_invalid();
+        return authorization_unavailable();
     };
-    advance(
+    let response = advance(
         &AuthorizationService {
             pool: &pool,
             config: &oauth.config,
@@ -194,7 +194,11 @@ pub(crate) async fn resume(
         Decision::Resume,
         &auth,
     )
-    .await
+    .await;
+    if response.status() == StatusCode::BAD_REQUEST {
+        return authorization_unavailable();
+    }
+    response
 }
 
 /// Consent form accepts only a stored request, CSRF capability and binary decision.
@@ -249,7 +253,7 @@ pub(crate) async fn consent(
     )
     .await;
     if response.status() == StatusCode::BAD_REQUEST {
-        return secured((StatusCode::BAD_REQUEST, Html("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Authorization unavailable</title><h1>Authorization unavailable</h1><p>This request has expired or is no longer available. Return to the application and start sign-in again.</p></html>")).into_response());
+        return authorization_unavailable();
     }
     response
 }
@@ -334,15 +338,19 @@ async fn advance(
             client,
             application,
             organization,
+            account,
+            callback_origin,
             scopes,
-        }) => consent_page(
-            request_id,
-            &csrf,
-            &client,
-            &application,
-            &organization,
-            &scopes,
-        ),
+        }) => consent_page(&ConsentPage {
+            id: request_id,
+            csrf: &csrf,
+            client: &client,
+            application: &application,
+            organization: &organization,
+            account: &account,
+            callback_origin: &callback_origin,
+            scopes: &scopes,
+        }),
         Ok(Outcome::Redirect {
             redirect,
             code,
@@ -428,16 +436,21 @@ fn redirect_response(location: &str) -> Response {
 /// Renders stored scopes read-only with fully escaped display text and no script execution.
 /// Form navigation is unrestricted by CSP because browsers cannot match IPv6 callbacks;
 /// the state machine independently permits only the exact registered redirect URI.
-fn consent_page(
+struct ConsentPage<'a> {
     id: Uuid,
-    csrf: &SecretValue,
-    client: &str,
-    application: &str,
-    organization: &str,
-    scopes: &[RequestedScope],
-) -> Response {
+    csrf: &'a SecretValue,
+    client: &'a str,
+    application: &'a str,
+    organization: &'a str,
+    account: &'a str,
+    callback_origin: &'a str,
+    scopes: &'a [RequestedScope],
+}
+
+/// Renders only server-validated identity, callback origin and immutable requested scopes.
+fn consent_page(page: &ConsentPage<'_>) -> Response {
     let mut items = String::new();
-    for scope in scopes {
+    for scope in page.scopes {
         let label = match scope.name.as_str() {
             "openid" => "Sign in and identify your account",
             "profile" => "Read your profile",
@@ -455,7 +468,7 @@ fn consent_page(
         };
         let _ = write!(items, "<li>{}</li>", escape_html(label));
     }
-    let mut response = secured(Html(format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize access · Permesi</title><style>body{{font:18px system-ui;max-width:38rem;margin:4rem auto;padding:1rem}}button{{cursor:pointer;padding:.7rem 1.2rem;margin:.5rem}}button:hover{{background:#ddd}}button:focus-visible{{outline:3px solid #345}}</style></head><body><h1>Authorize access</h1><p>{} / {}</p><p>Organization: {}</p><h2>Requesting access to</h2><ul>{items}</ul><form method=\"post\" action=\"/authorize/consent\"><input type=\"hidden\" name=\"request_id\" value=\"{id}\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button class=\"cursor-pointer\" name=\"decision\" value=\"allow\">Allow</button><button class=\"cursor-pointer\" name=\"decision\" value=\"cancel\">Cancel</button></form></body></html>", escape_html(application), escape_html(client), escape_html(organization), csrf.expose())).into_response());
+    let mut response = secured(Html(format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize access · Permesi</title><style>body{{font:18px system-ui;max-width:38rem;margin:4rem auto;padding:1rem}}button{{cursor:pointer;padding:.7rem 1.2rem;margin:.5rem}}button:hover{{background:#ddd}}button:focus-visible{{outline:3px solid #345}}</style></head><body><h1>Authorize access</h1><p>{} / {}</p><p>Organization: {}</p><p>Signed in as: <strong>{}</strong></p><p>Return to: <strong>{}</strong></p><p>To use another account, cancel, sign out of Permesi, then start again from the application. This request cannot be transferred between accounts.</p><h2>Requesting access to</h2><ul>{items}</ul><form method=\"post\" action=\"/authorize/consent\"><input type=\"hidden\" name=\"request_id\" value=\"{}\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button class=\"cursor-pointer\" name=\"decision\" value=\"allow\">Allow</button><button class=\"cursor-pointer\" name=\"decision\" value=\"cancel\">Cancel</button></form></body></html>", escape_html(page.application), escape_html(page.client), escape_html(page.organization), escape_html(page.account), escape_html(page.callback_origin), page.id, page.csrf.expose())).into_response());
     response
         .headers_mut()
         .insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"));
@@ -484,6 +497,12 @@ fn direct_invalid() -> Response {
         )
             .into_response(),
     )
+}
+
+/// Explains an unavailable browser request without reconstructing OAuth authority
+/// from a stale locator or sending the user to an unverified application URL.
+fn authorization_unavailable() -> Response {
+    secured((StatusCode::BAD_REQUEST, Html("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorization unavailable · Permesi</title><h1>Authorization unavailable</h1><p>This authorization request has expired or is no longer available.</p><p>Open the application that requested access and start sign-in again. Do not reuse this page.</p></html>")).into_response())
 }
 
 /// Applies shared IP protection before OAuth transactions or Vault/cache work.

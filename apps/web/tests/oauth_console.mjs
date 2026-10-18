@@ -353,6 +353,7 @@ try {
  await goto('/login?oauth_request=33333333-3333-4333-8333-333333333333&oauth_expires=1');
  await wait("document.body.innerText.includes('Already Signed In')");
  assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),null,'Expired authorization locator must be discarded');
+ assert(await evaluate("document.body.innerText.includes('The authorization request expired.')"));
  // Only the opaque handle survives the existing restricted-session/MFA routes.
  const authorizationHandle='33333333-3333-4333-8333-333333333333';
  sessionKind='mfa_challenge';
@@ -364,6 +365,9 @@ try {
  await goto('/console/mfa/challenge');
  await wait("location.pathname==='/console/mfa/challenge' && document.body.innerText.includes('Two-factor check')");
  assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),authorizationHandle);
+ await evaluate("sessionStorage.setItem('permesi_oauth_expires','1')");
+ await goto('/console/mfa/challenge');await wait("document.body.innerText.includes('Two-factor check')");
+ assert.equal(await evaluate("sessionStorage.getItem('permesi_oauth_request')"),authorizationHandle,'MFA reload must retain the locator for server-side expiry handling');
  await evaluate("(()=>{const input=document.querySelector('input[type=text]');input.value='123456';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
  await click('Verify');
  await wait("document.body.innerText.includes('Authorization resume reached')");

@@ -75,6 +75,7 @@ pub fn LoginPage() -> impl IntoView {
     let (passkey_options, set_passkey_options) = signal::<Option<PasskeyLoginStartResponse>>(None);
     let (passkey_prepared_at, set_passkey_prepared_at) = signal::<Option<f64>>(None);
     let (show_password_fields, set_show_password_fields) = signal(false);
+    let expired_authorization = crate::features::auth::authorization::expired_request_hint();
 
     let login_action = Action::new_local(move |input: &LoginInput| {
         let input = input.clone();
@@ -194,7 +195,10 @@ pub fn LoginPage() -> impl IntoView {
                 let auth = auth.clone();
                 let navigate = navigate.clone();
                 if auth.is_authenticated.get() {
-                    view! { <AlreadySignedInPanel /> }.into_any()
+                    view! {
+                        {expired_authorization.then(|| view! { <Alert kind=AlertKind::Info message="The authorization request expired. Start sign-in again from the application; this login cannot resume it.".to_owned() /> })}
+                        <AlreadySignedInPanel />
+                    }.into_any()
                 } else {
                     view! {
                         <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
@@ -202,6 +206,7 @@ pub fn LoginPage() -> impl IntoView {
                                 class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
                                 on:submit=on_submit
                             >
+                                {expired_authorization.then(|| view! { <Alert kind=AlertKind::Info message="The authorization request expired. Start sign-in again from the application; this login cannot resume it.".to_owned() /> })}
                                 <div class="space-y-2">
                                     <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                                         "Sign in"

@@ -642,6 +642,18 @@ async fn authorize_consent_is_csrf_session_bound_single_use_and_cannot_widen_sco
     assert!(page.body.contains("Read execution history"));
     assert!(!page.body.contains("jobs:write"));
     assert!(
+        page.body
+            .contains("Signed in as: <strong>owner@authorization.test</strong>")
+    );
+    assert!(
+        page.body
+            .contains("Return to: <strong>https://client.test</strong>")
+    );
+    assert!(
+        page.body
+            .contains("cancel, sign out of Permesi, then start again")
+    );
+    assert!(
         page.headers
             .get(CACHE_CONTROL)
             .is_some_and(|v| v == "no-store")
@@ -707,6 +719,32 @@ async fn authorize_consent_is_csrf_session_bound_single_use_and_cannot_widen_sco
             Some(&second),
             Some(&f.browser),
             Some(&proper),
+        )
+        .await?,
+        "access_denied",
+    )?;
+    let other_user: Uuid = sqlx::query_scalar("INSERT INTO users (email,opaque_registration_record,status) VALUES ('other@authorization.test',$1,'active') RETURNING id")
+        .bind(vec![0u8; 16]).fetch_one(&f.pool).await?;
+    sqlx::query("INSERT INTO org_memberships (org_id,user_id,status) VALUES ($1,$2,'active')")
+        .bind(f.organization)
+        .bind(other_user)
+        .execute(&f.pool)
+        .await?;
+    let other_token = super::super::auth::generate_session_token()?;
+    sqlx::query("INSERT INTO user_sessions (user_id,session_hash,expires_at) VALUES ($1,$2,clock_timestamp()+INTERVAL '1 hour')")
+        .bind(other_user).bind(hash_session_token(&other_token)).execute(&f.pool).await?;
+    let resume = format!(
+        "/authorize/resume?request_id={}",
+        hidden(&page.body, "request_id")?
+    );
+    protocol_error(
+        &f.call(
+            &f.router,
+            "GET",
+            &resume,
+            Some(&other_token),
+            Some(&f.browser),
+            None,
         )
         .await?,
         "access_denied",
@@ -1376,6 +1414,16 @@ async fn browser_consent_flow(callback_bind: &str) -> Result<()> {
     let callback_listener = tokio::net::TcpListener::bind(callback_bind).await?;
     let callback_origin = format!("http://{}", callback_listener.local_addr()?);
     let callback = format!("{callback_origin}/callback?existing=%2f");
+    let other_user: Uuid = sqlx::query_scalar("INSERT INTO users (email,opaque_registration_record,status) VALUES ('browser-other@authorization.test',$1,'active') RETURNING id")
+        .bind(vec![0u8; 16]).fetch_one(&f.pool).await?;
+    sqlx::query("INSERT INTO org_memberships (org_id,user_id,status) VALUES ($1,$2,'active')")
+        .bind(f.organization)
+        .bind(other_user)
+        .execute(&f.pool)
+        .await?;
+    let other_session = super::super::auth::generate_session_token()?;
+    sqlx::query("INSERT INTO user_sessions (user_id,session_hash,expires_at) VALUES ($1,$2,clock_timestamp()+INTERVAL '1 hour')")
+        .bind(other_user).bind(hash_session_token(&other_session)).execute(&f.pool).await?;
     sqlx::query("UPDATE oauth_client_redirect_uris SET redirect_uri=$2 WHERE client_id=$1")
         .bind(f.client_internal)
         .bind(&callback)
@@ -1421,6 +1469,7 @@ async fn browser_consent_flow(callback_bind: &str) -> Result<()> {
             format!("{origin}{}", f.url(&[("redirect_uri", Some(callback))])),
         )
         .env("PERMESI_AUTHORIZE_TEST_SESSION", &f.token)
+        .env("PERMESI_AUTHORIZE_TEST_OTHER_SESSION", &other_session)
         .kill_on_drop(true)
         .output();
     let result = timeout(Duration::from_secs(60), output).await;
@@ -1481,18 +1530,20 @@ async fn authorize_consent_accepts_same_origin_opaque_origin_without_accepting_c
 async fn authorize_consent_display_cannot_inject_markup_or_navigation() -> Result<()> {
     let hostile = "<form action='https://evil.example/'><script>alert(1)</script>";
     let csrf = SecretValue::generate()?;
-    let response = consent_page(
-        Uuid::new_v4(),
-        &csrf,
-        hostile,
-        hostile,
-        hostile,
-        &[RequestedScope {
+    let response = consent_page(&ConsentPage {
+        id: Uuid::new_v4(),
+        csrf: &csrf,
+        client: hostile,
+        application: hostile,
+        organization: hostile,
+        account: hostile,
+        callback_origin: hostile,
+        scopes: &[RequestedScope {
             id: Uuid::new_v4(),
             name: "jobs:read".into(),
             description: hostile.into(),
         }],
-    );
+    });
     let policy = response
         .headers()
         .get(CONTENT_SECURITY_POLICY)
@@ -1512,6 +1563,63 @@ async fn authorize_consent_display_cannot_inject_markup_or_navigation() -> Resul
     assert!(!body.contains("<script>"));
     assert!(body.contains("&lt;script&gt;"));
     assert!(!body.contains("action='https://evil.example/'"));
+    Ok(())
+}
+
+/// Missing or expired browser locators show a restart instruction without redirecting
+/// to an untrusted callback or reconstructing authority from browser parameters.
+#[tokio::test]
+async fn authorize_resume_unavailable_request_requires_restart_without_redirect() -> Result<()> {
+    let f = Fixture::new().await?;
+    let reply = f
+        .call(
+            &f.router,
+            "GET",
+            &format!("/authorize/resume?request_id={}", Uuid::new_v4()),
+            Some(&f.token),
+            Some(&f.browser),
+            None,
+        )
+        .await?;
+    direct_rejection(&reply);
+    assert!(reply.body.contains("start sign-in again"));
+    assert!(!reply.body.contains("client.test"));
+    assert!(!reply.body.contains("<form"));
+    Ok(())
+}
+
+/// PostgreSQL expiry, not the browser's deadline hint, decides when a pending
+/// request can resume; an expired handle never redirects to a client.
+#[tokio::test]
+async fn authorize_expired_database_request_shows_restart_without_redirect() -> Result<()> {
+    let f = Fixture::new().await?;
+    let mut state = f.state.clone();
+    let mut oauth = (*state.oauth).clone();
+    oauth.config.request_ttl = 1;
+    state.oauth = Arc::new(oauth);
+    let router = crate::api::router().split_for_parts().0.with_state(state);
+    let started = f
+        .call(&router, "GET", &f.url(&[]), None, Some(&f.browser), None)
+        .await?;
+    assert_eq!(started.status, StatusCode::SEE_OTHER);
+    let id = parameter(
+        started.location.as_deref().context("login")?,
+        "oauth_request",
+    )?;
+    sleep(Duration::from_millis(1200)).await;
+    let reply = f
+        .call(
+            &router,
+            "GET",
+            &format!("/authorize/resume?request_id={id}"),
+            Some(&f.token),
+            Some(&f.browser),
+            None,
+        )
+        .await?;
+    direct_rejection(&reply);
+    assert!(reply.body.contains("start sign-in again"));
+    assert!(!reply.body.contains("client.test"));
     Ok(())
 }
 

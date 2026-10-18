@@ -10,7 +10,8 @@ const issuer=process.env.PERMESI_AUTHORIZE_TEST_ISSUER;
 const callbackOrigin=process.env.PERMESI_AUTHORIZE_TEST_CALLBACK_ORIGIN;
 const authorizationUrl=process.env.PERMESI_AUTHORIZE_TEST_URL;
 const session=process.env.PERMESI_AUTHORIZE_TEST_SESSION;
-assert(origin&&issuer&&callbackOrigin&&authorizationUrl&&session,'Run through just web-test-browser');
+const otherSession=process.env.PERMESI_AUTHORIZE_TEST_OTHER_SESSION;
+assert(origin&&issuer&&callbackOrigin&&authorizationUrl&&session&&otherSession,'Run through just web-test-browser');
 assert.notEqual(origin,callbackOrigin,'The registered client must use a distinct origin');
 const profile=path.resolve(import.meta.dirname,'../../../.tmp',`authorize-browser-${process.pid}`);
 fs.mkdirSync(profile,{recursive:true});
@@ -34,6 +35,9 @@ try {
  await call('Runtime.enable');await call('Page.enable');await call('Network.enable');
  await call('Network.setCookie',{name:'permesi_session',value:session,url:origin,httpOnly:true,sameSite:'Lax'});
  await navigate(authorizationUrl);await consentPage();
+ assert(await evaluate("document.body.innerText.includes('Signed in as: owner@authorization.test')"));
+ assert(await evaluate(`document.body.innerText.includes(${JSON.stringify(`Return to: ${callbackOrigin}`)})`));
+ assert(await evaluate("document.body.innerText.includes('cancel, sign out of Permesi, then start again')"));
  assert(await evaluate("document.body.innerText.includes('Read jobs') && document.body.innerText.includes('Read execution history')"));
  assert(!await evaluate("document.body.innerText.includes('platform:admin') || document.body.innerText.includes('users:write') || document.body.innerText.includes('jobs:write')"));
  assert.equal(await evaluate("getComputedStyle(document.querySelector('button[value=allow]')).cursor"),'pointer');
@@ -41,6 +45,14 @@ try {
  const binding=cookies.cookies.find(cookie=>cookie.name==='__Host-permesi_oauth');
  assert(binding&&binding.secure&&binding.httpOnly&&binding.sameSite==='Lax','OAuth browser binding must be Secure, HttpOnly and Lax');
  assert(!await evaluate("document.cookie.includes('__Host-permesi_oauth')"));
+ const handle=await evaluate("document.querySelector('input[name=request_id]').value");
+ await call('Network.setCookie',{name:'permesi_session',value:otherSession,url:origin,httpOnly:true,sameSite:'Lax'});
+ await navigate(`${origin}/authorize/resume?request_id=${handle}`);await callback();
+ assert.equal(await evaluate("new URLSearchParams(location.search).get('error')"),'access_denied');
+ assert.equal(await evaluate("new URLSearchParams(location.search).get('state')"),'opaque + / & = % ü');
+ assert(!await evaluate("new URLSearchParams(location.search).has('code')"));
+ await call('Network.setCookie',{name:'permesi_session',value:session,url:origin,httpOnly:true,sameSite:'Lax'});
+ await navigate(`${origin}/authorize/resume?request_id=${handle}`);await consentPage();
  // Browser-submitted extra authority is rejected by the actual form parser.
  await evaluate("(()=>{const extra=document.createElement('input');extra.name='scope';extra.value='jobs:write';document.querySelector('form').append(extra);document.querySelector('button[value=allow]').click();})()");
  await wait("document.body.innerText.includes('invalid_request')");
@@ -68,6 +80,10 @@ try {
  assert.equal(await evaluate("new URLSearchParams(location.search).get('error')"),'access_denied');
  assert.equal(await evaluate("new URLSearchParams(location.search).get('state')"),'opaque + / & = % ü');
  assert(!await evaluate("new URLSearchParams(location.search).has('code')"));
+ await navigate(`${origin}/authorize/resume?request_id=00000000-0000-4000-8000-000000000000`);
+ await wait("document.body.innerText.includes('Authorization unavailable')");
+ assert(await evaluate("document.body.innerText.includes('start sign-in again')"));
+ assert.equal(await evaluate("location.origin"),origin,'Unknown request must not redirect to a client');
  assert.deepEqual(exceptions,[]);
  console.log('Real PostgreSQL authorization browser passed: HttpOnly/Secure binding, read-only consent, scope injection rejection, cross-origin code/state redirect, form replay rejection, saved subset consent, cross-origin Cancel.');
 } finally {

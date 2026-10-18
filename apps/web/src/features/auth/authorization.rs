@@ -47,6 +47,37 @@ pub fn request_deadline(value: &str, now_ms: f64) -> bool {
         .is_ok_and(|deadline| deadline.is_finite() && now_ms.is_finite() && deadline > now_ms)
 }
 
+/// Signals that a login URL carried an unusable OAuth locator; the hint changes
+/// presentation only, and the server remains the sole authority for expiry.
+#[must_use]
+pub fn expired_request_hint() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(window) = web_sys::window() else {
+            return false;
+        };
+        let Some(params) = window
+            .location()
+            .search()
+            .ok()
+            .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
+        else {
+            return false;
+        };
+        let Some(request) = params.get("oauth_request") else {
+            return false;
+        };
+        request_handle(&request).is_some()
+            && !params
+                .get("oauth_expires")
+                .is_some_and(|expiry| request_deadline(&expiry, js_sys::Date::now()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 const STORAGE_KEY: &str = "permesi_oauth_request";
 #[cfg(target_arch = "wasm32")]
@@ -114,6 +145,17 @@ pub fn capture_request() {
             clear_request();
             return;
         }
+    } else if storage
+        .get_item(STORAGE_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        .and_then(request_handle)
+        .is_some()
+    {
+        // An MFA page can be reloaded after the browser hint expires. Preserve
+        // only the opaque locator so the server can reject it with restart UX.
+        return;
     }
     if !storage
         .get_item(DEADLINE_KEY)
@@ -148,15 +190,13 @@ pub fn resume_after_authentication(api_base_url: &str) -> bool {
     let Some(value) = storage.get_item(STORAGE_KEY).ok().flatten() else {
         return false;
     };
-    let expiry = storage.get_item(DEADLINE_KEY).ok().flatten();
-    let Some(id) = request_handle(&value).filter(|_| {
-        expiry
-            .as_deref()
-            .is_some_and(|expiry| request_deadline(expiry, js_sys::Date::now()))
-    }) else {
+    let Some(id) = request_handle(&value) else {
         clear_request();
         return false;
     };
+    // A deadline is only a cleanup hint. If it elapsed during MFA, ask the
+    // server to decide and show its restart page instead of silently opening
+    // the dashboard. A forged extended deadline cannot extend PostgreSQL state.
     let target = format!(
         "{}/authorize/resume?request_id={id}",
         api_base_url.trim_end_matches('/')
