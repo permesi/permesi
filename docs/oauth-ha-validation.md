@@ -150,7 +150,9 @@ reruns after PostgreSQL container-startup timeouts, and the five-replica harness
 an isolated rerun after its simultaneous-run check failed while the three-replica harness
 was also active on the same host. Both hosted real suites passed on their first execution.
 The follow-up workflow serializes database-heavy test jobs and topology matrix members
-to reduce shared-host contention. Independent review of the correction is complete.
+to reduce shared-host contention. Its fresh run `39110929583` passed both topologies,
+their harnesses and the required `CI OK` gate on the first attempt. Independent review
+of the correction is complete.
 
 The combined follow-up also bounds hierarchy mutation waits and corrects cancelled
 transaction startup. AGY/Gemini 4 Argon completed static Herdr review; Claude's independent

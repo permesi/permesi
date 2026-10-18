@@ -135,5 +135,7 @@ first execution, with zero cleanup errors. The three-replica harness passed all 
 checks; the five-replica harness failed its simultaneous-run check while both topology
 jobs overlapped on the same host, then passed all eight checks when rerun alone. The
 workflow follow-up serializes matrix members to reduce this host contention. Run
-`39103751747` finished green on attempt four; the separate workflow scheduling commit
-requires its own fresh CI result.
+`39103751747` finished green on attempt four. The separate scheduling commit `0875e70`
+passed fresh run `39110929583` on its first attempt: integration preceded unit tests,
+three replicas finished before five replicas started, and both full suites, harnesses,
+browser checks, builds and the required `CI OK` gate passed.
