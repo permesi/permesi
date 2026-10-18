@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.4.0"
+    "version": "0.4.1"
   },
   "paths": {
     "/.well-known/openid-configuration": {
@@ -2762,6 +2762,7 @@
           "orgs"
         ],
         "summary": "Creates a new organization for the authenticated user and returns an `OrgResponse`.\nOn success, the creator is enrolled as an active member and granted the `owner` role.\nThe slug is normalized and collision-resolved on insert; creator name conflicts return `409`.\nThe response intentionally omits membership state and roles.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "create_org",
         "requestBody": {
           "content": {
@@ -2805,7 +2806,17 @@
             }
           },
           "409": {
-            "description": "Organization with this name already exists for this user.",
+            "description": "Organization name or slug is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2873,6 +2884,7 @@
           "orgs"
         ],
         "summary": "Soft-deletes one owner-authorized tenant after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.\nA valid session needing recent authentication receives the stable reauthentication error code.\nAn optional expected UUID restricts deletion to the originally confirmed organization.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "delete_org",
         "parameters": [
           {
@@ -2941,6 +2953,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -2949,6 +2971,7 @@
           "orgs"
         ],
         "summary": "Updates an organization's name and/or slug and returns the updated `OrgResponse`.\nRequires `OrgContext::can_manage`; otherwise it returns `404` to avoid leaking org existence.\nThe slug is normalized and uniqueness conflicts map to `409`, and roles are never returned.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "patch_org",
         "parameters": [
           {
@@ -3004,6 +3027,26 @@
           },
           "404": {
             "description": "Organization not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Organization name or slug is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3136,6 +3179,7 @@
           "projects"
         ],
         "summary": "Creates a project under an organization and returns a `ProjectResponse`.\nCallers must pass `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\nThe slug is normalized and uniqueness violations are mapped to `409`.\nThe response omits any org membership or role information.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "create_project",
         "parameters": [
           {
@@ -3208,6 +3252,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -3218,6 +3272,7 @@
           "projects"
         ],
         "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "delete_project",
         "parameters": [
           {
@@ -3265,6 +3320,16 @@
           },
           "409": {
             "description": "Project contains active children.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3344,6 +3409,7 @@
           "environments"
         ],
         "summary": "Creates an environment within a project and returns an `EnvironmentResponse`.\nRequires `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.\nEither tier may be created first; the database enforces at most one active production per project.\nThe response includes only environment DTO fields.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "create_environment",
         "parameters": [
           {
@@ -3425,6 +3491,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -3435,6 +3511,7 @@
           "environments"
         ],
         "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate active children must be empty; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "delete_environment",
         "parameters": [
           {
@@ -3491,6 +3568,16 @@
           },
           "409": {
             "description": "Environment contains active children.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3579,6 +3666,7 @@
           "applications"
         ],
         "summary": "Creates an application within an environment and returns an `ApplicationResponse`.\nRequires `OrgContext::can_manage` and returns `404` when the org/project/env is inaccessible.\nThe response includes only app fields, not environment or membership details.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "create_application",
         "parameters": [
           {
@@ -3669,6 +3757,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -3679,6 +3777,7 @@
           "applications"
         ],
         "summary": "Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.\nImmediate OAuth clients must be explicitly deleted; no recursive deletion occurs.\nInaccessible and repeated targets return 404 without disclosing tenant information.",
+        "description": "Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.",
         "operationId": "delete_application",
         "parameters": [
           {
@@ -3754,6 +3853,16 @@
           },
           "409": {
             "description": "Application contains undeleted OAuth clients.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Tenant mutation budget exhausted; reconcile state before retrying.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6155,6 +6264,16 @@
           },
           "404": {
             "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "User has dependent records or retained authorization history.",
             "content": {
               "application/json": {
                 "schema": {
