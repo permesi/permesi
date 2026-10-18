@@ -141,7 +141,7 @@ impl DekManager {
         let new_dek_id = Uuid::new_v4();
 
         // 2. Transaction: Demote old active -> decrypt_only, Insert new active
-        let mut tx = pool.begin().await?;
+        let mut tx = service_utils::database::begin(pool).await?;
 
         // Demote current active
         sqlx::query(

@@ -115,7 +115,8 @@ pub(crate) async fn begin(
         "invalid authentication database deadline"
     );
     let duration = std::time::Duration::from_millis(u64::try_from(timeout_ms)?);
-    let mut transaction = tokio::time::timeout(duration, pool.begin()).await??;
+    let mut transaction =
+        tokio::time::timeout(duration, service_utils::database::begin(pool)).await??;
     crate::oauth::locking::deadline(&mut transaction, timeout_ms).await?;
     Ok(transaction)
 }

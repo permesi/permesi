@@ -32,6 +32,7 @@ use super::{
         ("env_slug" = String, Path, description = "Environment slug")
     ),
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 201, description = "Application created.", body = ApplicationResponse),
         (status = 400, description = "Invalid input.", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
@@ -43,57 +44,65 @@ use super::{
 /// Creates an application within an environment and returns an `ApplicationResponse`.
 /// Requires `OrgContext::can_manage` and returns `404` when the org/project/env is inaccessible.
 /// The response includes only app fields, not environment or membership details.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn create_application(
     Path((org_slug, project_slug, env_slug)): Path<(String, String, String)>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
     Json(payload): Json<CreateApplicationRequest>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
 
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Application name is required.").into_response();
-    }
+            let name = payload.name.trim();
+            if name.is_empty() {
+                return (StatusCode::BAD_REQUEST, "Application name is required.").into_response();
+            }
 
-    let context = match resolve_org_context(&pool, principal.user_id, &org_slug).await {
-        Ok(Some(context)) => context,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to resolve org for application: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            let context = match resolve_org_context(&pool, principal.user_id, &org_slug).await {
+                Ok(Some(context)) => context,
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(err) => {
+                    error!("Failed to resolve org for application: {err}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
-    if !context.can_manage() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+            if !context.can_manage() {
+                return StatusCode::NOT_FOUND.into_response();
+            }
 
-    let project = match resolve_project(&pool, context.id(), &project_slug).await {
-        Ok(Some(project)) => project,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to resolve project for application: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            let project = match resolve_project(&pool, context.id(), &project_slug).await {
+                Ok(Some(project)) => project,
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(err) => {
+                    error!("Failed to resolve project for application: {err}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
-    let env = match resolve_environment(&pool, project.id(), &env_slug).await {
-        Ok(Some(env)) => env,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to resolve environment for application: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            let env = match resolve_environment(&pool, project.id(), &env_slug).await {
+                Ok(Some(env)) => env,
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(err) => {
+                    error!("Failed to resolve environment for application: {err}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
-    match insert_application(&pool, env.id(), name).await {
-        Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-        Err(err) => err.into_response(),
-    }
+            match insert_application(&pool, env.id(), name, policy.0).await {
+                Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+                Err(err) => err.into_response(),
+            }
+        })
+        .await
 }
 
 #[utoipa::path(
@@ -168,6 +177,7 @@ pub async fn list_applications(
         ("env_slug" = String, Path, description = "env slug"),
         ("app_id" = String, Path, description = "Application UUID")),
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 204, description = "Application soft-deleted."),
         (status = 400, description = "Invalid application UUID."),
         (status = 401, description = "Full authenticated session required."),
@@ -179,24 +189,33 @@ pub async fn list_applications(
 /// Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.
 /// Immediate OAuth clients must be explicitly deleted; no recursive deletion occurs.
 /// Inaccessible and repeated targets return 404 without disclosing tenant information.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn delete_application(
     Path((org_slug, project_slug, env_slug, app_id)): Path<(String, String, String, uuid::Uuid)>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
-    match super::storage::delete_resource(
-        &pool,
-        principal.user_id,
-        &org_slug,
-        super::storage::Deletion::Application(&project_slug, &env_slug, app_id),
-    )
-    .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => error.into_response(),
-    }
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
+            match super::storage::delete_resource(
+                &pool,
+                principal.user_id,
+                &org_slug,
+                super::storage::Deletion::Application(&project_slug, &env_slug, app_id),
+                policy.0,
+            )
+            .await
+            {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => error.into_response(),
+            }
+        })
+        .await
 }

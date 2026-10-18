@@ -207,6 +207,15 @@ return 404s to avoid leaking resource existence.
 Soft deletes do not reserve slugs or names: uniqueness is enforced only for rows where
 `deleted_at` is null, so deleted orgs/projects/environments/apps can reuse identifiers.
 
+Hierarchy mutations use `PERMESI_TENANT_LOCK_TIMEOUT_MS` (default 1000 ms, 1–10000)
+and `PERMESI_TENANT_MUTATION_TIMEOUT_MS` (default 5000 ms, 1–30000); the lock budget
+cannot exceed the handler budget. `PERMESI_TENANT_SLUG_ATTEMPTS` defaults to 16
+organization slug candidates (1–128), with exhausted collisions returning 409.
+PostgreSQL limits are transaction-local and preserve
+stricter existing database limits. Exhaustion returns generic 503; reconcile ambiguous
+outcomes before deliberate retry. See [mutation deadlines](../../docs/tenant-mutation-deadlines.md)
+for coverage, cancellation and sustained-load limits.
+
 Tenant model overview:
 
 ```mermaid

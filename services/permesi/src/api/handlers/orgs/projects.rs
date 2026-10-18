@@ -26,6 +26,7 @@ use super::{
     request_body = CreateProjectRequest,
     params(("org_slug" = String, Path, description = "Organization slug")),
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 201, description = "Project created.", body = ProjectResponse),
         (status = 400, description = "Invalid input.", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
@@ -38,47 +39,55 @@ use super::{
 /// Callers must pass `OrgContext::can_manage`; unauthorized callers receive `404` to avoid leaking existence.
 /// The slug is normalized and uniqueness violations are mapped to `409`.
 /// The response omits any org membership or role information.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn create_project(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
     Json(payload): Json<CreateProjectRequest>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
 
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Project name is required.").into_response();
-    }
+            let name = payload.name.trim();
+            if name.is_empty() {
+                return (StatusCode::BAD_REQUEST, "Project name is required.").into_response();
+            }
 
-    let slug = match payload.slug.as_deref() {
-        Some(slug) => normalize_slug(slug, PROJECT_SLUG_MIN, PROJECT_SLUG_MAX),
-        None => normalize_slug(name, PROJECT_SLUG_MIN, PROJECT_SLUG_MAX),
-    };
-    let Some(slug) = slug else {
-        return (StatusCode::BAD_REQUEST, "Invalid project slug.").into_response();
-    };
+            let slug = match payload.slug.as_deref() {
+                Some(slug) => normalize_slug(slug, PROJECT_SLUG_MIN, PROJECT_SLUG_MAX),
+                None => normalize_slug(name, PROJECT_SLUG_MIN, PROJECT_SLUG_MAX),
+            };
+            let Some(slug) = slug else {
+                return (StatusCode::BAD_REQUEST, "Invalid project slug.").into_response();
+            };
 
-    let context = match resolve_org_context(&pool, principal.user_id, &org_slug).await {
-        Ok(Some(context)) => context,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to resolve org for project: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            let context = match resolve_org_context(&pool, principal.user_id, &org_slug).await {
+                Ok(Some(context)) => context,
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(err) => {
+                    error!("Failed to resolve org for project: {err}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
-    if !context.can_manage() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+            if !context.can_manage() {
+                return StatusCode::NOT_FOUND.into_response();
+            }
 
-    match insert_project(&pool, context.id(), name, &slug).await {
-        Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-        Err(err) => err.into_response(),
-    }
+            match insert_project(&pool, context.id(), name, &slug, policy.0).await {
+                Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+                Err(err) => err.into_response(),
+            }
+        })
+        .await
 }
 
 #[utoipa::path(
@@ -129,6 +138,7 @@ pub async fn list_projects(
     params(("org_slug" = String, Path, description = "org slug"),
         ("project_slug" = String, Path, description = "project slug")),
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 204, description = "Project soft-deleted."),
         (status = 401, description = "Full authenticated session required."),
         (status = 404, description = "Resource inaccessible or not found."),
@@ -139,24 +149,33 @@ pub async fn list_projects(
 /// Soft-deletes one owner/admin-authorized resource after locking current membership and ancestry.
 /// Immediate active children must be empty; no recursive deletion occurs.
 /// Inaccessible and repeated targets return 404 without disclosing tenant information.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn delete_project(
     Path((org_slug, project_slug)): Path<(String, String)>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
-    match super::storage::delete_resource(
-        &pool,
-        principal.user_id,
-        &org_slug,
-        super::storage::Deletion::Project(&project_slug),
-    )
-    .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => error.into_response(),
-    }
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
+            match super::storage::delete_resource(
+                &pool,
+                principal.user_id,
+                &org_slug,
+                super::storage::Deletion::Project(&project_slug),
+                policy.0,
+            )
+            .await
+            {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => error.into_response(),
+            }
+        })
+        .await
 }

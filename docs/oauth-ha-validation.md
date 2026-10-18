@@ -91,10 +91,10 @@ host-power-loss journal durability. There remains an unavoidable process-level
 SIGKILL window between spawning a child and publishing its identity; the recovery
 check deliberately kills only after a replacement is journaled and ready.
 
-Local default workspace checks pass; the final all-feature workspace run passes 702
+Before this follow-up, default workspace checks passed and the all-feature run passed 702
 tests (the two browser-only tests use their separate gate). Strict
 all-target/all-feature Clippy, workspace/native-WASM checks, formatting and unchanged
-OpenAPI regeneration pass. The corrected runner passes all 41 tests, and all six Python
+OpenAPI regeneration pass. The original HA implementation passed all 41 runner tests, and all six Python
 recovery tests pass. One intermediate runner repeat reported 22 passes and ten setup
 failures because Unix/localhost listener binds were denied in that invocation; the
 normal final runner check subsequently passed. This does not replace live CI validation.
@@ -120,7 +120,7 @@ coverage failure: the strict process oracle also observes the host browser contr
 It is now journaled before readiness and covered by two owned-child lifecycle tests.
 A third focused review accepted the correction, with no remaining critical, high,
 medium or low findings. All 41 runner tests and six Python tests were independently
-rerun by Claude. Live matrix execution remains pending. Expected refresh
+rerun by Claude. The subsequent live matrix and oracle correction are recorded below. Expected refresh
 scope is deliberately rebuilt from the fixture independently of the response; drift
 fails closed and is a maintenance coupling rather than delegated authority widening.
 Rootless Podman may manage helper descendants beyond the direct host controller;
@@ -129,9 +129,30 @@ host-wide descendant-process audit. Shared engine helpers must never be pruned a
 part of an individual run's recovery.
 
 Direct local Podman fails because `/run/user/1000/libpod` is read-only; a five-replica
-HA attempt reports all seven cases blocked and zero passed. The normal Web build
-cannot fetch `source-map-js` because npm DNS is unavailable, and browser smoke tests
-against the existing distribution cannot bind localhost (`EPERM`). These failures
-are validation limitations, not passing coverage. The earlier
+HA attempt reports all seven cases blocked and zero passed. Initially npm DNS and
+localhost listeners were also denied. After command networking was enabled, a fresh
+Web release build and console browser smoke test pass. Both PostgreSQL browser tests
+subsequently pass through their direct Cargo gate, although the wrapped recipe still
+hits Podman setup restrictions. The standalone runner's setup failure is a validation
+limitation, not passing HA coverage. The earlier
 [three-replica hardening record](database-hardening.md) validates the prior 32-case
 implementation and cannot establish the new restart/five-replica coverage.
+
+The first live three/five CI matrix on `d5548b2` passed 32/34 cases per member, including
+rolling replacement, code races and shared OPAQUE state. Both failed the same new
+refresh-lineage oracle: refresh families store the internal registration ID, while
+the oracle compared it directly with the public protocol client ID. The correction
+resolves that ID through `oauth_clients` and retains every tenant, lineage and reuse
+predicate. A real PostgreSQL query regression deliberately uses distinct IDs and
+rejects substituted bindings/revocation state. Corrected matrix and harness runs remain pending; independent review of the correction
+is complete, and the first run is not a passing HA milestone.
+
+The combined follow-up also bounds hierarchy mutation waits and corrects cancelled
+transaction startup. AGY/Gemini 4 Argon completed static Herdr review; Claude's independent
+review found additional transaction-cancellation and organization-update issues. Confirmed
+findings now have fixes and PostgreSQL regression evidence. The corrected Claude review
+reports no remaining actionable findings; 688 default/718 all-feature workspace tests
+and both PostgreSQL browser tests pass. The earlier staging attempt was blocked by protected
+Git metadata, and the rebuilt standalone runner still could not provision locally. Details are recorded
+in [the mutation validation record](tenant-mutation-validation.md).
+Neither source review nor workspace tests replace passing live matrix/harness validation.

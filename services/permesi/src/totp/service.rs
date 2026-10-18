@@ -33,7 +33,7 @@ impl TotpService {
         user_email: &str,
         label: Option<String>,
     ) -> Result<(String, String, Uuid)> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = service_utils::database::begin(&self.pool).await?;
         let result = self
             .enroll_begin_on(&mut transaction, user_id, user_email, label)
             .await?;
@@ -106,7 +106,7 @@ impl TotpService {
         ip: Option<&str>,
         ua: Option<&str>,
     ) -> Result<bool> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = service_utils::database::begin(&self.pool).await?;
         let result = self
             .enroll_confirm_on(&mut transaction, user_id, credential_id, code, ip, ua)
             .await?;
@@ -195,7 +195,7 @@ impl TotpService {
         ip: Option<&str>,
         ua: Option<&str>,
     ) -> Result<bool> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = service_utils::database::begin(&self.pool).await?;
         let result = self
             .verify_on(&mut transaction, user_id, code, ip, ua)
             .await?;

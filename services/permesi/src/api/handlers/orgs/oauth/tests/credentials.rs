@@ -463,9 +463,15 @@ async fn oauth_credentials_revalidate_each_ancestor_and_reject_other_organizatio
     let client = id(&f.client("ancestry").await?, "client_id")?;
     let suffix = format!("/clients/{client}/secrets");
     let (_, issued) = f.call("POST", &suffix, &f.token, Some(json!({}))).await?;
-    let other = create_org_with_roles(&f.db.pool, f.owner, "Other", "other-org")
-        .await
-        .map_err(|_| anyhow::anyhow!("other org setup"))?;
+    let other = create_org_with_roles(
+        &f.db.pool,
+        f.owner,
+        "Other",
+        "other-org",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("other org setup"))?;
     insert_application(&f.db.pool, Uuid::parse_str(&other.id)?).await?;
     let wrong = f.base.replace("oauth-org", "other-org");
     assert_eq!(
@@ -1063,9 +1069,15 @@ async fn oauth_credentials_foreign_management_never_queues_client_locks() -> Res
     let client = id(&f.client("foreign-lock-victim").await?, "client_id")?;
     let owner = insert_active_user(&f.db.pool, "foreign-owner@example.com").await?;
     let token = insert_session(&f.db.pool, owner).await?;
-    let org = create_org_with_roles(&f.db.pool, owner, "Foreign", "foreign-lock-org")
-        .await
-        .map_err(|_| anyhow::anyhow!("foreign org setup"))?;
+    let org = create_org_with_roles(
+        &f.db.pool,
+        owner,
+        "Foreign",
+        "foreign-lock-org",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("foreign org setup"))?;
     let (_, _, application) = insert_application(&f.db.pool, Uuid::parse_str(&org.id)?).await?;
     let foreign = f
         .base

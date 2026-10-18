@@ -410,7 +410,9 @@ async fn assign_user_role(
     role: String,
 ) -> Result<UserRoleResponse, ServiceError> {
     ensure_permission(principal, Permission::AssignRole)?;
-    let mut tx = pool.begin().await.map_err(ServiceError::Database)?;
+    let mut tx = service_utils::database::begin(pool)
+        .await
+        .map_err(ServiceError::Database)?;
 
     let target_exists = sqlx::query("SELECT 1 FROM users WHERE id = $1")
         .bind(user_id)

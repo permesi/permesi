@@ -172,9 +172,15 @@ impl Fixture {
         };
         let owner = insert_active_user(&db.pool, "oauth-owner@example.com").await?;
         let token = insert_session(&db.pool, owner).await?;
-        let org = create_org_with_roles(&db.pool, owner, "OAuth Org", "oauth-org")
-            .await
-            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let org = create_org_with_roles(
+            &db.pool,
+            owner,
+            "OAuth Org",
+            "oauth-org",
+            crate::api::tenant::MutationPolicy::for_tests(),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         let org_id = Uuid::parse_str(&org.id)?;
         let (project, environment, application) = insert_application(&db.pool, org_id).await?;
         let (router, _) = crate::api::router().split_for_parts();
@@ -431,9 +437,15 @@ async fn oauth_clients_and_scope_edges_cannot_cross_application_or_tenant() -> R
         return Ok(());
     };
     let client = f.client("tenant-client").await?;
-    let other = create_org_with_roles(&f.db.pool, f.owner, "Other", "other-org")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    let other = create_org_with_roles(
+        &f.db.pool,
+        f.owner,
+        "Other",
+        "other-org",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     let other_org = Uuid::parse_str(&other.id)?;
     let (_, _, other_app) = insert_application(&f.db.pool, other_org).await?;
     let wrong = f
@@ -1219,3 +1231,4 @@ async fn oauth_management_json_rejections_match_documented_status_codes() -> Res
 mod capabilities;
 mod credentials;
 mod lifecycle;
+mod mutation_deadlines;

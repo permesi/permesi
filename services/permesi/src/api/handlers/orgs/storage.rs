@@ -6,6 +6,7 @@
 //! commit; deletion exclusively locks the target and requires no immediate active
 //! children. Rows remain retained, and normal API resolution filters deleted ancestry.
 
+use crate::api::tenant::MutationPolicy;
 use axum::{http::StatusCode, response::IntoResponse};
 use sqlx::{PgPool, Row};
 use tracing::error;
@@ -95,17 +96,37 @@ pub(super) enum OrgError {
     NotFound,
     Conflict(&'static str),
     Database(sqlx::Error),
+    Unavailable,
+}
+
+impl From<sqlx::Error> for OrgError {
+    /// Converts bounded lock/statement waits, deadlocks and pool saturation to a generic 503.
+    /// Other database failures retain their type for sanitized server-side classification.
+    fn from(error: sqlx::Error) -> Self {
+        match error
+            .as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            .as_deref()
+        {
+            Some("55P03" | "57014" | "40P01") => Self::Unavailable,
+            _ if matches!(error, sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed) => {
+                Self::Unavailable
+            }
+            _ => Self::Database(error),
+        }
+    }
 }
 
 impl IntoResponse for OrgError {
     /// Maps storage-layer failures into stable HTTP responses for handlers.
-    /// Database errors are logged server-side and surfaced as `500` without leaking details.
+    /// Deadline failures return 503; other database failures log only SQLSTATE and return 500.
     fn into_response(self) -> axum::response::Response {
         match self {
             Self::NotFound => StatusCode::NOT_FOUND.into_response(),
             Self::Conflict(message) => (StatusCode::CONFLICT, message).into_response(),
+            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             Self::Database(err) => {
-                error!("Database error: {err}");
+                error!(code = ?err.as_database_error().and_then(sqlx::error::DatabaseError::code), "Tenant database operation failed");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         }
@@ -113,17 +134,21 @@ impl IntoResponse for OrgError {
 }
 
 /// Inserts a new organization and bootstraps default roles and creator membership.
-/// Runs as a transaction, granting the creator the `owner` role on success.
-/// Slug collisions are resolved by suffixing within `ORG_SLUG_MAX`; creator name conflicts map to `409`.
+/// Runs with local database deadlines, granting the creator the `owner` role on success.
+/// Slug candidates are bounded by policy; creator name conflicts and exhausted probes return `409`.
 /// Returns an `OrgResponse` without membership/role fields.
 pub(super) async fn create_org_with_roles(
     pool: &PgPool,
     user_id: Uuid,
     name: &str,
     base_slug: &str,
+    policy: MutationPolicy,
 ) -> Result<OrgResponse, OrgError> {
     let mut attempt = 0;
     loop {
+        if attempt >= usize::from(policy.slug_attempts()) {
+            return Err(OrgError::Conflict("Organization slug is unavailable."));
+        }
         let slug = if attempt == 0 {
             base_slug.to_string()
         } else {
@@ -134,7 +159,7 @@ pub(super) async fn create_org_with_roles(
             slug
         };
 
-        let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+        let mut tx = policy.begin(pool).await.map_err(OrgError::from)?;
         let insert = sqlx::query(
             r#"
             INSERT INTO organizations (slug, name, created_by)
@@ -154,16 +179,14 @@ pub(super) async fn create_org_with_roles(
             Err(err) => {
                 if is_name_unique_violation(&err) {
                     let _ = tx.rollback().await;
-                    return Err(OrgError::Conflict(
-                        "You already have an organization with this name.",
-                    ));
+                    return Err(OrgError::Conflict("Organization name is unavailable."));
                 }
-                if is_unique_violation(&err) {
+                if is_org_slug_unique_violation(&err) {
                     let _ = tx.rollback().await;
                     attempt += 1;
                     continue;
                 }
-                return Err(OrgError::Database(err));
+                return Err(OrgError::from(err));
             }
         };
 
@@ -181,7 +204,7 @@ pub(super) async fn create_org_with_roles(
         .bind(user_id)
         .execute(&mut *tx)
         .await
-        .map_err(OrgError::Database)?;
+        .map_err(OrgError::from)?;
         sqlx::query(
             r"
             INSERT INTO org_member_roles (org_id, user_id, role_name, assigned_by)
@@ -193,9 +216,9 @@ pub(super) async fn create_org_with_roles(
         .bind(ORG_ROLE_OWNER)
         .execute(&mut *tx)
         .await
-        .map_err(OrgError::Database)?;
+        .map_err(OrgError::from)?;
 
-        tx.commit().await.map_err(OrgError::Database)?;
+        tx.commit().await.map_err(OrgError::from)?;
 
         return Ok(OrgResponse {
             id: org_id.to_string(),
@@ -224,7 +247,7 @@ async fn insert_default_org_roles(
         .bind(role)
         .execute(&mut **tx)
         .await
-        .map_err(OrgError::Database)?;
+        .map_err(OrgError::from)?;
     }
     Ok(())
 }
@@ -308,34 +331,41 @@ pub(super) async fn resolve_org_context(
 }
 
 /// Updates an organization's name and/or slug and returns the latest `OrgResponse`.
-/// Assumes the caller already verified `context.can_manage()`; this function does no ACL checks.
-/// Slug collisions are resolved by suffixing within `ORG_SLUG_MAX`, mapping uniqueness failures to `409`.
+/// The caller must verify `context.can_manage()`; local deadlines bound each update attempt.
+/// Only slug collisions retry within the configured candidate cap; name conflicts return `409`.
+/// Omitted slugs preserve the current locked row value rather than stale preflight metadata.
 pub(super) async fn update_org_record(
     pool: &PgPool,
     context: &OrgContext,
     name: Option<&str>,
     slug: Option<&str>,
+    policy: MutationPolicy,
 ) -> Result<OrgResponse, OrgError> {
     let mut attempt = 0;
-    let base_slug = slug.unwrap_or(&context.slug);
-
     loop {
-        let candidate = if attempt == 0 {
-            base_slug.to_string()
+        if attempt >= usize::from(policy.slug_attempts()) {
+            return Err(OrgError::Conflict("Organization slug is unavailable."));
+        }
+        let candidate = if let Some(base) = slug {
+            if attempt == 0 {
+                Some(base.to_owned())
+            } else {
+                Some(
+                    with_suffix(base, attempt + 1, ORG_SLUG_MAX)
+                        .ok_or(OrgError::Conflict("Organization slug is unavailable."))?,
+                )
+            }
         } else {
-            let suffix = attempt + 1;
-            let Some(slug) = with_suffix(base_slug, suffix, ORG_SLUG_MAX) else {
-                return Err(OrgError::Conflict("Organization slug is unavailable."));
-            };
-            slug
+            None
         };
 
+        let mut tx = policy.begin(pool).await.map_err(OrgError::from)?;
         let update = sqlx::query(
             r#"
             UPDATE organizations
             SET
                 name = COALESCE($1, name),
-                slug = $2
+                slug = COALESCE($2, slug)
             WHERE id = $3 AND deleted_at IS NULL
             RETURNING
                 id::text AS id,
@@ -347,11 +377,12 @@ pub(super) async fn update_org_record(
         .bind(name)
         .bind(&candidate)
         .bind(context.id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await;
 
         match update {
             Ok(Some(row)) => {
+                tx.commit().await.map_err(OrgError::from)?;
                 return Ok(OrgResponse {
                     id: row.get("id"),
                     slug: row.get("slug"),
@@ -361,11 +392,15 @@ pub(super) async fn update_org_record(
             }
             Ok(None) => return Err(OrgError::NotFound),
             Err(err) => {
-                if is_unique_violation(&err) {
+                tx.rollback().await.map_err(OrgError::from)?;
+                if is_name_unique_violation(&err) {
+                    return Err(OrgError::Conflict("Organization name is unavailable."));
+                }
+                if slug.is_some() && is_org_slug_unique_violation(&err) {
                     attempt += 1;
                     continue;
                 }
-                return Err(OrgError::Database(err));
+                return Err(OrgError::from(err));
             }
         }
     }
@@ -373,15 +408,16 @@ pub(super) async fn update_org_record(
 
 /// Inserts a project under the given org id and returns a `ProjectResponse`.
 /// Caller must ensure the org id is authorized (typically via `OrgContext::can_manage`).
-/// Shared active-parent locks serialize insertion with organization deletion.
+/// Deadline-bound active-parent locks serialize insertion with organization deletion.
 /// Uniqueness violations on slug are mapped to `409` without exposing database details.
 pub(super) async fn insert_project(
     pool: &PgPool,
     org_id: Uuid,
     name: &str,
     slug: &str,
+    policy: MutationPolicy,
 ) -> Result<ProjectResponse, OrgError> {
-    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    let mut tx = policy.begin(pool).await.map_err(OrgError::from)?;
     lifecycle::lock_parent(&mut tx, lifecycle::Parent::Organization(org_id)).await?;
     let insert = sqlx::query(
         r#"
@@ -401,7 +437,7 @@ pub(super) async fn insert_project(
     .await;
 
     if insert.is_ok() {
-        tx.commit().await.map_err(OrgError::Database)?;
+        tx.commit().await.map_err(OrgError::from)?;
     }
 
     match insert {
@@ -415,7 +451,7 @@ pub(super) async fn insert_project(
             if is_unique_violation(&err) {
                 Err(OrgError::Conflict("Project slug already exists."))
             } else {
-                Err(OrgError::Database(err))
+                Err(OrgError::from(err))
             }
         }
     }
@@ -485,8 +521,9 @@ pub(super) async fn insert_environment(
     name: &str,
     slug: &str,
     tier: EnvironmentTier,
+    policy: MutationPolicy,
 ) -> Result<EnvironmentResponse, OrgError> {
-    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    let mut tx = policy.begin(pool).await.map_err(OrgError::from)?;
     lifecycle::lock_parent(&mut tx, lifecycle::Parent::Project(project_id)).await?;
     if matches!(tier, EnvironmentTier::Production) {
         let production_exists = sqlx::query_scalar::<_, bool>(
@@ -495,7 +532,7 @@ pub(super) async fn insert_environment(
         .bind(project_id)
         .fetch_one(&mut *tx)
         .await
-        .map_err(OrgError::Database)?;
+        .map_err(OrgError::from)?;
         if production_exists {
             return Err(OrgError::Conflict(
                 "A production environment already exists for this project.",
@@ -524,7 +561,7 @@ pub(super) async fn insert_environment(
 
     // Preserve the existing conflict mapping before committing an aborted insert.
     if insert.is_ok() {
-        tx.commit().await.map_err(OrgError::Database)?;
+        tx.commit().await.map_err(OrgError::from)?;
     }
 
     match insert {
@@ -546,7 +583,7 @@ pub(super) async fn insert_environment(
                 };
                 Err(OrgError::Conflict(message))
             } else {
-                Err(OrgError::Database(err))
+                Err(OrgError::from(err))
             }
         }
     }
@@ -608,14 +645,15 @@ pub(super) async fn resolve_environment(
 
 /// Inserts an application within an environment and returns an `ApplicationResponse`.
 /// Caller must have already verified org/project/environment access; active ancestors
-/// are share-locked through insertion commit so a deleted environment cannot gain a child.
+/// are share-locked with local deadlines through commit; a deleted parent cannot gain a child.
 /// Uniqueness violations are mapped to `409` without surfacing database details.
 pub(super) async fn insert_application(
     pool: &PgPool,
     environment_id: Uuid,
     name: &str,
+    policy: MutationPolicy,
 ) -> Result<ApplicationResponse, OrgError> {
-    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    let mut tx = policy.begin(pool).await.map_err(OrgError::from)?;
     lifecycle::lock_parent(&mut tx, lifecycle::Parent::Environment(environment_id)).await?;
     let insert = sqlx::query(
         r#"
@@ -633,7 +671,7 @@ pub(super) async fn insert_application(
     .await;
 
     if insert.is_ok() {
-        tx.commit().await.map_err(OrgError::Database)?;
+        tx.commit().await.map_err(OrgError::from)?;
     }
 
     match insert {
@@ -646,7 +684,7 @@ pub(super) async fn insert_application(
             if is_unique_violation(&err) {
                 Err(OrgError::Conflict("Application already exists."))
             } else {
-                Err(OrgError::Database(err))
+                Err(OrgError::from(err))
             }
         }
     }
@@ -689,6 +727,15 @@ fn is_unique_violation(err: &sqlx::Error) -> bool {
         sqlx::Error::Database(db_err) => db_err.code().as_deref() == Some("23505"),
         _ => false,
     }
+}
+
+/// Only the known slug constraint authorizes another organization suffix attempt.
+/// Other unique violations must fail rather than repeatedly retry an unrelated constraint.
+fn is_org_slug_unique_violation(err: &sqlx::Error) -> bool {
+    err.as_database_error().is_some_and(|error| {
+        error.code().as_deref() == Some("23505")
+            && error.constraint() == Some("organizations_slug_active_idx")
+    })
 }
 
 /// Returns `true` when `err` matches the organization-name uniqueness constraint for a creator.

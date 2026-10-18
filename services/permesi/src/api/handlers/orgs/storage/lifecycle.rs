@@ -10,7 +10,7 @@
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
-use super::{OrgContext, OrgError, resolve_org_context};
+use super::{MutationPolicy, OrgContext, OrgError, resolve_org_context};
 
 #[cfg(test)]
 mod tests;
@@ -43,13 +43,13 @@ pub(super) async fn lock_parent(
                 .bind(id)
                 .fetch_optional(&mut **tx)
                 .await
-                .map_err(OrgError::Database)?
+                .map_err(OrgError::from)?
                 .ok_or(OrgError::NotFound)?;
             (org, Some(id), None)
         }
         Parent::Environment(id) => {
             let row = sqlx::query("SELECT p.org_id,p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1")
-                .bind(id).fetch_optional(&mut **tx).await.map_err(OrgError::Database)?
+                .bind(id).fetch_optional(&mut **tx).await.map_err(OrgError::from)?
                 .ok_or(OrgError::NotFound)?;
             (row.get("org_id"), Some(row.get("id")), Some(id))
         }
@@ -89,7 +89,7 @@ async fn lock_id(
         .bind(id)
         .fetch_optional(&mut **tx)
         .await
-        .map_err(OrgError::Database)?
+        .map_err(OrgError::from)?
         .ok_or(OrgError::NotFound)
 }
 
@@ -112,7 +112,7 @@ async fn lock_org(
         .bind(org_id)
         .fetch_optional(&mut **tx)
         .await
-        .map_err(OrgError::Database)?
+        .map_err(OrgError::from)?
         .ok_or(OrgError::NotFound)?;
     let org: Uuid = row.get("id");
     let status = sqlx::query_scalar::<_, String>(
@@ -122,12 +122,12 @@ async fn lock_org(
     .bind(user)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(OrgError::Database)?;
+    .map_err(OrgError::from)?;
     if status.as_deref() != Some("active") {
         return Err(OrgError::NotFound);
     }
     let roles = sqlx::query_scalar("SELECT role_name FROM org_member_roles WHERE org_id=$1 AND user_id=$2 ORDER BY role_name FOR SHARE")
-        .bind(org).bind(user).fetch_all(&mut **tx).await.map_err(OrgError::Database)?;
+        .bind(org).bind(user).fetch_all(&mut **tx).await.map_err(OrgError::from)?;
     let context = OrgContext {
         id: org,
         slug: row.get("slug"),
@@ -153,7 +153,7 @@ async fn lock_child(
         .bind(slug)
         .fetch_optional(&mut **tx)
         .await
-        .map_err(OrgError::Database)?
+        .map_err(OrgError::from)?
         .ok_or(OrgError::NotFound)
 }
 
@@ -198,7 +198,7 @@ async fn lock_target(
             let environment = lock_child(tx, sql, project, environment).await?;
             if let Deletion::Application(_, _, application) = target {
                 let id = sqlx::query_scalar("SELECT id FROM applications WHERE environment_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE")
-                    .bind(environment).bind(application).fetch_optional(&mut **tx).await.map_err(OrgError::Database)?.ok_or(OrgError::NotFound)?;
+                    .bind(environment).bind(application).fetch_optional(&mut **tx).await.map_err(OrgError::from)?.ok_or(OrgError::NotFound)?;
                 LockedDeletion {
                     id,
                     children: "SELECT EXISTS(SELECT 1 FROM oauth_clients WHERE application_id=$1 AND deleted_at IS NULL)",
@@ -219,19 +219,20 @@ async fn lock_target(
 }
 
 /// Deletes one authorized resource after atomically establishing an empty immediate child set.
-/// SHARE locks used by all child creators conflict with the target's UPDATE lock.
+/// Deadline-bound SHARE locks used by child creators conflict with the target's UPDATE lock.
 /// Repeated/foreign/inaccessible targets return 404; protocol scope rows never count as children.
 pub(in super::super) async fn delete_resource(
     pool: &sqlx::PgPool,
     user: Uuid,
     org_slug: &str,
     target: Deletion<'_>,
+    policy: MutationPolicy,
 ) -> Result<(), OrgError> {
     // Reject foreign tenants before joining their lifecycle lock queue. Recheck
     // authority under locks below, pinned to this organization rather than a reused slug.
     let context = resolve_org_context(pool, user, org_slug)
         .await
-        .map_err(OrgError::Database)?
+        .map_err(OrgError::from)?
         .ok_or(OrgError::NotFound)?;
     let owner_only = matches!(target, Deletion::Organization(_));
     // A browser confirmation may outlive a slug rename/reuse. The optional UUID
@@ -244,14 +245,14 @@ pub(in super::super) async fn delete_resource(
     if (owner_only && !context.is_owner()) || (!owner_only && !context.can_manage()) {
         return Err(OrgError::NotFound);
     }
-    let mut tx = pool.begin().await.map_err(OrgError::Database)?;
+    let mut tx = policy.begin(pool).await.map_err(OrgError::from)?;
     let org = lock_org(&mut tx, user, org_slug, context.id(), owner_only).await?;
     let row = lock_target(&mut tx, &org, target).await?;
     let nonempty: bool = sqlx::query_scalar(row.children)
         .bind(row.id)
         .fetch_one(&mut *tx)
         .await
-        .map_err(OrgError::Database)?;
+        .map_err(OrgError::from)?;
     if nonempty {
         return Err(OrgError::Conflict(row.message));
     }
@@ -259,7 +260,7 @@ pub(in super::super) async fn delete_resource(
         .bind(row.id)
         .execute(&mut *tx)
         .await
-        .map_err(OrgError::Database)?;
-    tx.commit().await.map_err(OrgError::Database)?;
+        .map_err(OrgError::from)?;
+    tx.commit().await.map_err(OrgError::from)?;
     Ok(())
 }

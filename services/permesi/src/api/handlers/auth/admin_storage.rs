@@ -56,13 +56,14 @@ pub async fn operator_enabled(pool: &PgPool, user_id: Uuid) -> Result<bool> {
     Ok(row.is_some_and(|row| row.get::<bool, _>("enabled")))
 }
 
+/// Bootstraps the first operator under the existing advisory lock and safe transaction startup.
+/// Callers must enforce the bootstrap endpoint's session and admission policy.
 pub async fn bootstrap_operator(
     pool: &PgPool,
     user_id: Uuid,
     note: Option<&str>,
 ) -> Result<BootstrapOutcome> {
-    let mut tx = pool
-        .begin()
+    let mut tx = service_utils::database::begin(pool)
         .await
         .context("failed to begin bootstrap transaction")?;
 

@@ -117,13 +117,21 @@ async fn tenant_deletion_is_bottom_up_retains_rows_and_hides_deleted_ancestry() 
             &f.db.pool,
             &old_context,
             Some("Changed after deletion"),
-            None
+            None,
+            crate::api::tenant::MutationPolicy::for_tests()
         )
         .await,
         Err(super::super::super::storage::OrgError::NotFound)
     ));
     assert!(matches!(
-        super::super::super::storage::insert_project(&f.db.pool, f.org, "Stale", "stale").await,
+        super::super::super::storage::insert_project(
+            &f.db.pool,
+            f.org,
+            "Stale",
+            "stale",
+            crate::api::tenant::MutationPolicy::for_tests()
+        )
+        .await,
         Err(super::super::super::storage::OrgError::NotFound)
     ));
     assert!(matches!(
@@ -132,13 +140,20 @@ async fn tenant_deletion_is_bottom_up_retains_rows_and_hides_deleted_ancestry() 
             f.project,
             "Stale",
             "stale",
-            super::super::super::types::EnvironmentTier::NonProduction
+            super::super::super::types::EnvironmentTier::NonProduction,
+            crate::api::tenant::MutationPolicy::for_tests()
         )
         .await,
         Err(super::super::super::storage::OrgError::NotFound)
     ));
     assert!(matches!(
-        super::super::super::storage::insert_application(&f.db.pool, f.environment, "Stale").await,
+        super::super::super::storage::insert_application(
+            &f.db.pool,
+            f.environment,
+            "Stale",
+            crate::api::tenant::MutationPolicy::for_tests()
+        )
+        .await,
         Err(super::super::super::storage::OrgError::NotFound)
     ));
     assert_eq!(
@@ -280,9 +295,15 @@ async fn application_deletion_requires_explicit_client_revocation_and_exact_ance
         .bind(f.owner).bind(internal).bind(f.application).bind(f.org).fetch_one(&f.db.pool).await?;
     sqlx::query("INSERT INTO oauth_client_secrets(client_id,secret_hash) VALUES($1,'$argon2id$test-only-hash')")
         .bind(internal).execute(&f.db.pool).await?;
-    let other = create_org_with_roles(&f.db.pool, f.owner, "Other", "other-org")
-        .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let other = create_org_with_roles(
+        &f.db.pool,
+        f.owner,
+        "Other",
+        "other-org",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
     insert_application(&f.db.pool, Uuid::parse_str(&other.id)?).await?;
     let foreign = format!(
         "/v1/orgs/other-org/projects/project/envs/prod/apps/{}",

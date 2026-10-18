@@ -83,7 +83,9 @@ pub(super) async fn insert_user_and_verification(
 ) -> Result<SignupOutcome> {
     // Transaction ensures user creation, verification token, and email outbox row
     // stay consistent even if something fails.
-    let mut tx = pool.begin().await.context("begin signup transaction")?;
+    let mut tx = service_utils::database::begin(pool)
+        .await
+        .context("begin signup transaction")?;
 
     let query = r"
         INSERT INTO users
@@ -729,7 +731,9 @@ pub(super) async fn enqueue_resend_verification(
     config: &AuthConfig,
 ) -> Result<ResendOutcome> {
     // Resend is intentionally opaque: callers always get 204 to avoid account probing.
-    let mut tx = pool.begin().await.context("begin resend transaction")?;
+    let mut tx = service_utils::database::begin(pool)
+        .await
+        .context("begin resend transaction")?;
 
     let query = r"
         SELECT id, email, status::text AS status

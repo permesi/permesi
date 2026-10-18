@@ -18,7 +18,7 @@ impl TotpRepo {
         seed_ciphertext: &[u8],
         label: Option<&str>,
     ) -> Result<()> {
-        let mut transaction = pool.begin().await?;
+        let mut transaction = service_utils::database::begin(pool).await?;
         Self::create_credential_on(
             &mut transaction,
             credential_id,
@@ -118,7 +118,7 @@ impl TotpRepo {
         user_id: Uuid,
         credential_id: Uuid,
     ) -> Result<()> {
-        let mut transaction = pool.begin().await?;
+        let mut transaction = service_utils::database::begin(pool).await?;
         Self::confirm_credential_on(&mut transaction, user_id, credential_id).await?;
         transaction.commit().await?;
         Ok(())

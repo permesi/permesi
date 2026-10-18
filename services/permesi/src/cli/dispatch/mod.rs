@@ -68,6 +68,23 @@ fn passkey_config(
     )
 }
 
+/// Revalidates tenant budgets, slug attempts and deadline ordering after clap parsing.
+fn tenant_mutation_policy(
+    matches: &clap::ArgMatches,
+) -> Result<crate::api::tenant::MutationPolicy> {
+    crate::api::tenant::MutationPolicy::new(
+        *matches
+            .get_one::<i64>("tenant-lock-timeout-ms")
+            .context("missing tenant lock timeout")?,
+        *matches
+            .get_one::<u64>("tenant-mutation-timeout-ms")
+            .context("missing tenant mutation timeout")?,
+        *matches
+            .get_one::<u16>("tenant-slug-attempts")
+            .context("missing tenant slug attempts")?,
+    )
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -131,6 +148,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let db_pool = database::parse(matches)?;
     let oauth = crate::oauth::config::OAuthConfig::from_matches(matches)?;
+    let tenant_mutations = tenant_mutation_policy(matches)?;
 
     Ok(Action::Server(Args {
         port,
@@ -138,6 +156,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         dsn,
         db_pool,
         oauth,
+        tenant_mutations,
         vault_url: vault_opts.url,
         vault_target,
         vault_role_id: vault_opts.role_id,
@@ -180,6 +199,95 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clap bounds and dispatch revalidation must both reject invalid operator budgets.
+    #[test]
+    fn tenant_mutation_budgets_are_validated_by_clap_and_dispatch() -> Result<()> {
+        temp_env::with_vars(
+            [
+                ("PERMESI_TENANT_LOCK_TIMEOUT_MS", None::<&str>),
+                ("PERMESI_TENANT_MUTATION_TIMEOUT_MS", None::<&str>),
+                ("PERMESI_TENANT_SLUG_ATTEMPTS", None::<&str>),
+            ],
+            || {
+                let base = [
+                    "permesi",
+                    "--dsn",
+                    "postgres://",
+                    "--admission-paserk-url",
+                    "https://url",
+                    "--tls-pem-bundle",
+                    "bundle",
+                    "--vault-url",
+                    "http://vault:8200",
+                    "--vault-role-id",
+                    "role",
+                    "--vault-secret-id",
+                    "secret",
+                ];
+                for (lock, total) in [
+                    ("0", "5000"),
+                    ("10001", "30000"),
+                    ("1", "0"),
+                    ("1", "30001"),
+                ] {
+                    let args = base.into_iter().chain([
+                        "--tenant-lock-timeout-ms",
+                        lock,
+                        "--tenant-mutation-timeout-ms",
+                        total,
+                    ]);
+                    assert!(
+                        crate::cli::commands::new()
+                            .try_get_matches_from(args)
+                            .is_err()
+                    );
+                    // Programmatic matches can bypass clap's range validators; dispatch cannot.
+                    let matches = crate::cli::commands::new()
+                        .mut_arg("tenant-lock-timeout-ms", |arg| {
+                            arg.value_parser(clap::value_parser!(i64))
+                        })
+                        .mut_arg("tenant-mutation-timeout-ms", |arg| {
+                            arg.value_parser(clap::value_parser!(u64))
+                        })
+                        .try_get_matches_from(base.into_iter().chain([
+                            "--tenant-lock-timeout-ms",
+                            lock,
+                            "--tenant-mutation-timeout-ms",
+                            total,
+                        ]))?;
+                    assert!(handler(&matches).is_err());
+                }
+                let matches =
+                    crate::cli::commands::new().try_get_matches_from(base.into_iter().chain([
+                        "--tenant-lock-timeout-ms",
+                        "1000",
+                        "--tenant-mutation-timeout-ms",
+                        "999",
+                    ]))?;
+                assert!(handler(&matches).is_err());
+                for attempts in ["0", "129"] {
+                    let args = base.into_iter().chain(["--tenant-slug-attempts", attempts]);
+                    assert!(
+                        crate::cli::commands::new()
+                            .try_get_matches_from(args)
+                            .is_err()
+                    );
+                    let matches = crate::cli::commands::new()
+                        .mut_arg("tenant-slug-attempts", |arg| {
+                            arg.value_parser(clap::value_parser!(u16))
+                        })
+                        .try_get_matches_from(
+                            base.into_iter().chain(["--tenant-slug-attempts", attempts]),
+                        )?;
+                    assert!(handler(&matches).is_err());
+                }
+                let matches = crate::cli::commands::new().try_get_matches_from(base)?;
+                assert!(handler(&matches).is_ok());
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn admission_paserk_url_required() {

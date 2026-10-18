@@ -15,18 +15,36 @@ async fn organization_deletion_lock_rejects_a_reused_slug_with_stale_context() -
         return Ok(());
     };
     let owner = insert_active_user(&db.pool, "slug-pin@lifecycle.test").await?;
-    create_org_with_roles(&db.pool, owner, "Original", "reused")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    create_org_with_roles(
+        &db.pool,
+        owner,
+        "Original",
+        "reused",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     let original = resolve_org_context(&db.pool, owner, "reused")
         .await?
         .context("original tenant context")?;
-    update_org_record(&db.pool, &original, None, Some("renamed"))
-        .await
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-    let replacement = create_org_with_roles(&db.pool, owner, "Replacement", "reused")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    update_org_record(
+        &db.pool,
+        &original,
+        None,
+        Some("renamed"),
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    let replacement = create_org_with_roles(
+        &db.pool,
+        owner,
+        "Replacement",
+        "reused",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     let replacement = Uuid::parse_str(&replacement.id)?;
     assert_ne!(replacement, original.id());
 

@@ -53,6 +53,12 @@ not prevent application deletion.
 This works across independent replicas without local state. The coordination is in
 the API storage layer; arbitrary administrative SQL is not a supported lifecycle API.
 
+Hierarchy mutations now use configurable [handler and PostgreSQL deadlines](tenant-mutation-deadlines.md).
+Budget exhaustion returns the existing generic 503 envelope. Local settings preserve
+stricter database limits and reset after transaction completion. Callers must reconcile
+ambiguous outcomes before retrying; no deletion is retried automatically. Row locks
+continue enforcing lifecycle consistency; sustained-load writer fairness remains separate.
+
 ## Console
 
 `GET /v1/orgs/{org_slug}/capabilities` requires a full active session and active membership.
@@ -99,9 +105,9 @@ visible labels. Delete has destructive light/dark styling and both actions remai
 keyboard accessible. System OIDC entries remain read-only.
 
 The current phase adds no restore, purge, resource move or recursive cascade API.
-Token issuance and refresh-token policy remain separate OAuth milestones. Sustained
-load testing and bounded ancestor-writer coordination remain part of the operations
-roadmap; row locks establish lifecycle consistency, not a production latency guarantee.
+Token issuance and rotating refresh families are implemented in the separate OAuth
+milestones. Sustained load testing and fair ancestor-writer coordination remain part
+of the operations roadmap; bounded mutation waits establish no production latency SLO.
 Existing organization metadata DTOs continue to omit roles; the separate capability
 contract supplies presentation hints without changing mutation authorization.
 
@@ -120,8 +126,8 @@ that the child-creation race, disabled-user and slug-pin regressions fail withou
 guards. Authorization tests reject pending consent and outstanding codes after teardown,
 including redemption through an independent PostgreSQL pool.
 
-Workspace tests, formatting, Clippy, schema verification, native builds, OpenAPI
-consistency, the release WASM build and Chromium tests pass. Browser coverage includes
+The earlier lifecycle phase passed workspace tests, formatting, Clippy, schema verification,
+native builds, OpenAPI consistency, the release WASM build and Chromium tests. Browser coverage includes
 keyboard/focus, dark/mobile scope actions, typed confirmation, pending-dialog protection,
 409 child-list refresh and parent navigation. Additional real OPAQUE/PostgreSQL browser
 coverage exercises password rejection, throttle/unavailable responses, explicit post-proof
@@ -138,7 +144,7 @@ defects. Its documentation observation about recoverable password-step failures 
 verified against the state machine and corrected; accepting a fresh deliberate Enter
 press after successful verification remains the explicit confirmation policy.
 
-The corrected workspace suites pass 509 tests with default features and 539 with all
+That earlier phase passed 509 workspace tests with default features and 539 with all
 features. Their two ignored real browser tests are run explicitly and pass through
 `just web-test-browser`, alongside the console browser suite. Formatting, native Clippy,
 both native builds, PostgreSQL schema verification, OpenAPI generation/consistency,
@@ -152,8 +158,7 @@ remain future UX hardening, without weakening current server authorization. Ambi
 DELETE timeouts need explicit reconciliation and capability failures currently require
 a page reload. These usability follow-ups are tracked in TODO.md.
 
-Browser tests run explicitly during local validation; current CI builds WASM and runs
-the native/database suites but has no browser-test job. Adding that gate is tracked
-separately. Four other security-settings flows still contain inline OPAQUE exchanges;
-sharing their helper is outside this focused milestone. Bounded ancestor coordination
-and the remaining MFA/quota milestones remain separate roadmap items. [WebAuthn exchanges](webauthn-exchanges.md) now use shared PostgreSQL storage.
+The current required CI browser gate builds WASM and exercises real PostgreSQL/OPAQUE
+authorization and console flows; see [scenario validation](oauth-scenarios.md#validation-and-independent-review). Four other security-settings flows still contain inline OPAQUE exchanges;
+sharing their helper is outside this focused milestone. Fair ancestor coordination
+and broader MFA/browser coverage remain separate roadmap items. [WebAuthn exchanges](webauthn-exchanges.md) now use shared PostgreSQL storage.

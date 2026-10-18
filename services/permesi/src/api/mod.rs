@@ -57,6 +57,7 @@ pub(crate) mod handlers;
 // OpenAPI router wiring and route registration live in openapi.rs.
 mod openapi;
 mod state;
+pub mod tenant;
 
 pub use openapi::openapi;
 pub use state::AppState;
@@ -93,6 +94,8 @@ pub struct AppConfig {
     pub database: PoolConfig,
     /// Opt-in OAuth issuer, resource audience, and bounded transaction lifetimes.
     pub oauth: crate::oauth::config::OAuthConfig,
+    /// Bounded hierarchy mutation policy, independent of OAuth protocol configuration.
+    pub tenant_mutations: tenant::MutationPolicy,
 }
 
 /// Start the server
@@ -186,6 +189,7 @@ pub async fn new(
     }
 
     let app = build_router(AppState {
+        tenant_mutations: config.tenant_mutations,
         oauth: oauth_state,
         auth: auth_state,
         admin: admin_state,

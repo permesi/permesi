@@ -270,6 +270,10 @@ typed dialogs pin the organization UUID and show immediate-child blockers. When 
 inline OPAQUE password verification refreshes authority and children before returning to
 confirmation; the owner must explicitly click Delete Organization again. See [resource lifecycle](docs/resource-lifecycle.md) for API,
 transactional race protection and OAuth effects; populated parents never silently cascade.
+Hierarchy writes also use configurable [mutation deadlines](docs/tenant-mutation-deadlines.md)
+for handler work and PostgreSQL locks. Exhaustion returns a generic 503; reconcile an
+ambiguous outcome before retrying. These bounds preserve lifecycle safety across replicas
+without claiming writer fairness or a production load SLO.
 OPAQUE login/reauthentication exchanges use bounded, encrypted, single-attempt PostgreSQL
 state across replicas, including original-session binding for reauthentication. See
 [shared OPAQUE exchanges](docs/opaque-exchanges.md) for migration, expiry, retention and

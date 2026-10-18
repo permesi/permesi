@@ -126,7 +126,7 @@ impl AuthorizationService<'_> {
         input: AuthorizationInput,
         browser: &SecretValue,
     ) -> Result<Uuid, Error> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = service_utils::database::begin(self.pool).await?;
         set_lock_timeout(&mut tx, self.config).await?;
         let request = input.validate(&mut tx).await?;
         let id = self.persist_request(&mut tx, &request, browser).await?;
@@ -159,7 +159,7 @@ impl AuthorizationService<'_> {
         session: Option<&SessionBinding>,
         decision: Decision,
     ) -> Result<Outcome, Error> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = service_utils::database::begin(self.pool).await?;
         set_lock_timeout(&mut tx, self.config).await?;
         let initial = self.load_request(&mut tx, id, browser, false).await?;
         let context = lock_client(&mut tx, initial.public_id).await?;

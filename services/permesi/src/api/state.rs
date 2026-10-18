@@ -28,6 +28,8 @@ use tokio::sync::mpsc;
 /// Dependencies shared by every permesi route.
 #[derive(Clone, FromRef)]
 pub struct AppState {
+    /// Operator limits for hierarchy mutation handlers and their transactions.
+    pub tenant_mutations: super::tenant::MutationPolicy,
     /// OPAQUE, session, MFA, and rate-limit state for the auth endpoints.
     pub auth: Arc<AuthState>,
     /// Shared OAuth policy and Vault verification key source.
@@ -85,6 +87,7 @@ impl AppState {
 
         let globals = GlobalArgs::new(vault_url.clone(), transport.clone());
         Ok(Self {
+            tenant_mutations: super::tenant::MutationPolicy::for_tests(),
             oauth: Arc::new(crate::oauth::oidc::OAuthState::new(
                 crate::oauth::config::OAuthConfig::disabled(),
                 &globals,

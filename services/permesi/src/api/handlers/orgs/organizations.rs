@@ -27,10 +27,11 @@ use super::{
     path = "/v1/orgs",
     request_body = CreateOrgRequest,
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 201, description = "Organization created.", body = OrgResponse),
         (status = 400, description = "Invalid input.", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
-        (status = 409, description = "Organization with this name already exists for this user.", body = String),
+        (status = 409, description = "Organization name or slug is unavailable.", body = String),
     ),
     tag = "orgs"
 )]
@@ -38,34 +39,43 @@ use super::{
 /// On success, the creator is enrolled as an active member and granted the `owner` role.
 /// The slug is normalized and collision-resolved on insert; creator name conflicts return `409`.
 /// The response intentionally omits membership state and roles.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn create_org(
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
     Json(payload): Json<CreateOrgRequest>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
 
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Organization name is required.").into_response();
-    }
+            let name = payload.name.trim();
+            if name.is_empty() {
+                return (StatusCode::BAD_REQUEST, "Organization name is required.").into_response();
+            }
 
-    let base_slug = match payload.slug.as_deref() {
-        Some(slug) => normalize_slug(slug, ORG_SLUG_MIN, ORG_SLUG_MAX),
-        None => normalize_slug(name, ORG_SLUG_MIN, ORG_SLUG_MAX),
-    };
+            let base_slug = match payload.slug.as_deref() {
+                Some(slug) => normalize_slug(slug, ORG_SLUG_MIN, ORG_SLUG_MAX),
+                None => normalize_slug(name, ORG_SLUG_MIN, ORG_SLUG_MAX),
+            };
 
-    let Some(base_slug) = base_slug else {
-        return (StatusCode::BAD_REQUEST, "Invalid organization slug.").into_response();
-    };
+            let Some(base_slug) = base_slug else {
+                return (StatusCode::BAD_REQUEST, "Invalid organization slug.").into_response();
+            };
 
-    match create_org_with_roles(&pool, principal.user_id, name, &base_slug).await {
-        Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-        Err(err) => err.into_response(),
-    }
+            match create_org_with_roles(&pool, principal.user_id, name, &base_slug, policy.0).await
+            {
+                Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
+                Err(err) => err.into_response(),
+            }
+        })
+        .await
 }
 
 #[utoipa::path(
@@ -135,62 +145,72 @@ pub async fn get_org(
     request_body = UpdateOrgRequest,
     params(("org_slug" = String, Path, description = "Organization slug")),
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 200, description = "Organization updated.", body = OrgResponse),
         (status = 400, description = "Invalid input.", body = String),
         (status = 401, description = "Missing or invalid session cookie."),
         (status = 404, description = "Organization not found."),
+        (status = 409, description = "Organization name or slug is unavailable.", body = String),
     ),
     tag = "orgs"
 )]
 /// Updates an organization's name and/or slug and returns the updated `OrgResponse`.
 /// Requires `OrgContext::can_manage`; otherwise it returns `404` to avoid leaking org existence.
 /// The slug is normalized and uniqueness conflicts map to `409`, and roles are never returned.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn patch_org(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
     Json(payload): Json<UpdateOrgRequest>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
 
-    let context = match resolve_org_context(&pool, principal.user_id, &org_slug).await {
-        Ok(Some(context)) => context,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            error!("Failed to resolve org for patch: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            let context = match resolve_org_context(&pool, principal.user_id, &org_slug).await {
+                Ok(Some(context)) => context,
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(err) => {
+                    error!("Failed to resolve org for patch: {err}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
-    if !context.can_manage() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+            if !context.can_manage() {
+                return StatusCode::NOT_FOUND.into_response();
+            }
 
-    let name = payload
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let slug = match payload.slug.as_deref() {
-        Some(value) => normalize_slug(value, ORG_SLUG_MIN, ORG_SLUG_MAX),
-        None => None,
-    };
+            let name = payload
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let slug = match payload.slug.as_deref() {
+                Some(value) => normalize_slug(value, ORG_SLUG_MIN, ORG_SLUG_MAX),
+                None => None,
+            };
 
-    if payload.slug.is_some() && slug.is_none() {
-        return (StatusCode::BAD_REQUEST, "Invalid organization slug.").into_response();
-    }
+            if payload.slug.is_some() && slug.is_none() {
+                return (StatusCode::BAD_REQUEST, "Invalid organization slug.").into_response();
+            }
 
-    if name.is_none() && slug.is_none() {
-        return (StatusCode::BAD_REQUEST, "No updates provided.").into_response();
-    }
+            if name.is_none() && slug.is_none() {
+                return (StatusCode::BAD_REQUEST, "No updates provided.").into_response();
+            }
 
-    match update_org_record(&pool, &context, name, slug.as_deref()).await {
-        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(err) => err.into_response(),
-    }
+            match update_org_record(&pool, &context, name, slug.as_deref(), policy.0).await {
+                Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+                Err(err) => err.into_response(),
+            }
+        })
+        .await
 }
 
 #[utoipa::path(
@@ -201,6 +221,7 @@ pub async fn patch_org(
         ("X-Permesi-Expected-Organization-Id" = Option<String>, Header, format = "uuid", description = "Optional UUID pin from the confirmed capabilities response. A different organization returns 404."),
     ),
     responses(
+        (status = 503, description = "Tenant mutation budget exhausted; reconcile state before retrying."),
         (status = 204, description = "Organization soft-deleted."),
         (status = 400, description = "Malformed or repeated expected organization UUID header."),
         (status = 401, description = "Full authenticated session required; stale authentication returns reauthentication_required."),
@@ -214,38 +235,47 @@ pub async fn patch_org(
 /// Inaccessible and repeated targets return 404 without disclosing tenant information.
 /// A valid session needing recent authentication receives the stable reauthentication error code.
 /// An optional expected UUID restricts deletion to the originally confirmed organization.
+///
+/// Lock/handler budget exhaustion returns 503; callers must reconcile ambiguous mutations.
 pub async fn delete_org(
     Path(org_slug): Path<String>,
     headers: HeaderMap,
     pool: State<PgPool>,
+    policy: State<crate::api::tenant::MutationPolicy>,
 ) -> impl IntoResponse {
-    let principal = match require_auth(&headers, &pool).await {
-        Ok(principal) => principal,
-        Err(status) => return status.into_response(),
-    };
-    if !super::super::me::recent_auth_ok(&principal) {
-        return ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "reauthentication_required",
-            "Recent authentication required. Sign in again before deleting the organization.",
-        )
-        .into_response();
-    }
-    let expected = match expected_organization_id(&headers) {
-        Ok(expected) => expected,
-        Err(error) => return error.into_response(),
-    };
-    match super::storage::delete_resource(
-        &pool,
-        principal.user_id,
-        &org_slug,
-        super::storage::Deletion::Organization(expected),
-    )
-    .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => error.into_response(),
-    }
+    policy
+        .0
+        .respond(async {
+            let principal = match require_auth(&headers, &pool).await {
+                Ok(principal) => principal,
+                Err(status) => return status.into_response(),
+            };
+            if !super::super::me::recent_auth_ok(&principal) {
+                return ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "reauthentication_required",
+                "Recent authentication required. Sign in again before deleting the organization.",
+            )
+            .into_response();
+            }
+            let expected = match expected_organization_id(&headers) {
+                Ok(expected) => expected,
+                Err(error) => return error.into_response(),
+            };
+            match super::storage::delete_resource(
+                &pool,
+                principal.user_id,
+                &org_slug,
+                super::storage::Deletion::Organization(expected),
+                policy.0,
+            )
+            .await
+            {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => error.into_response(),
+            }
+        })
+        .await
 }
 
 /// Parses a single optional UUID restriction, rejecting ambiguity rather than selecting a header.

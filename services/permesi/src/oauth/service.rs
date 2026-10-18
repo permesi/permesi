@@ -76,7 +76,7 @@ pub(crate) async fn create_client(
     context: &ApplicationContext,
     config: ClientConfiguration,
 ) -> Result<Client, Error> {
-    let mut tx = pool.begin().await?;
+    let mut tx = service_utils::database::begin(pool).await?;
     lock_application(&mut tx, context).await?;
     let scope_ids = resolve_scope_ids(&mut tx, context, &config.scopes).await?;
     let client = sqlx::query_as::<_, Client>(
@@ -167,7 +167,7 @@ pub(crate) async fn patch_client(
         .as_deref()
         .map(super::client::validate_name)
         .transpose()?;
-    let mut tx = pool.begin().await?;
+    let mut tx = service_utils::database::begin(pool).await?;
     let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     if disabled == Some(true) {
         revoke_grants(&mut tx, client.id).await?;
@@ -191,7 +191,7 @@ pub(crate) async fn delete_client(
     client_id: Uuid,
     lock_timeout_ms: i64,
 ) -> Result<(), Error> {
-    let mut tx = pool.begin().await?;
+    let mut tx = service_utils::database::begin(pool).await?;
     let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     revoke_grants(&mut tx, client.id).await?;
     sqlx::query("UPDATE oauth_client_secrets SET revoked_at = NOW() WHERE client_id = $1 AND revoked_at IS NULL")
@@ -221,7 +221,7 @@ pub(crate) async fn replace_redirects(
     lock_timeout_ms: i64,
     values: Vec<String>,
 ) -> Result<Vec<String>, Error> {
-    let mut tx = pool.begin().await?;
+    let mut tx = service_utils::database::begin(pool).await?;
     let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     let redirects = RedirectUri::validate_list(values, client.client_type)?;
     revoke_grants(&mut tx, client.id).await?;
@@ -283,7 +283,7 @@ pub(crate) async fn replace_client_scopes(
     values: Vec<String>,
 ) -> Result<Vec<String>, Error> {
     let scopes = OAuthScope::validate_list(values)?;
-    let mut tx = pool.begin().await?;
+    let mut tx = service_utils::database::begin(pool).await?;
     let client = lock_client(&mut tx, context, client_id, lock_timeout_ms).await?;
     let scope_ids = resolve_scope_ids(&mut tx, context, &scopes).await?;
     revoke_grants(&mut tx, client.id).await?;
@@ -392,7 +392,7 @@ pub(crate) async fn create_scope(
 ) -> Result<ScopeRecord, Error> {
     let name = ApplicationScope::parse(name)?;
     validate_description(&description)?;
-    let mut tx = pool.begin().await?;
+    let mut tx = service_utils::database::begin(pool).await?;
     lock_application(&mut tx, context).await?;
     let scope = sqlx::query_as("INSERT INTO oauth_scopes (application_id, name, description, kind) VALUES ($1, $2, $3, 'application') RETURNING *")
         .bind(context.application_id).bind(name.as_str()).bind(description).fetch_one(&mut *tx).await?;

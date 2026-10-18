@@ -142,6 +142,11 @@ pub(super) async fn insert_member_role(
 /// Builds an `axum::Router` with the org/project/env/app routes mounted for end-to-end tests.
 /// It exercises the same auth and `404`-on-unauthorized behavior as production handlers.
 fn app_router(pool: PgPool) -> Router {
+    #[derive(Clone, axum::extract::FromRef)]
+    struct TestState {
+        pool: PgPool,
+        policy: crate::api::tenant::MutationPolicy,
+    }
     Router::new()
         .route(
             "/v1/orgs",
@@ -165,8 +170,10 @@ fn app_router(pool: PgPool) -> Router {
             post(super::applications::create_application)
                 .get(super::applications::list_applications),
         )
-        // The org handlers only extract `State<PgPool>`, so the pool itself is the state.
-        .with_state(pool)
+        .with_state(TestState {
+            pool,
+            policy: crate::api::tenant::MutationPolicy::for_tests(),
+        })
 }
 
 #[tokio::test]

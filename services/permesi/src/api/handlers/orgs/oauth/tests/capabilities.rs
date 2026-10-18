@@ -195,9 +195,15 @@ async fn organization_confirmation_rejects_committed_slug_reuse_and_allows_exact
         .bind(f.org)
         .execute(&f.db.pool)
         .await?;
-    let replacement = create_org_with_roles(&f.db.pool, f.owner, "Replacement", "oauth-org")
-        .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let replacement = create_org_with_roles(
+        &f.db.pool,
+        f.owner,
+        "Replacement",
+        "oauth-org",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
     assert_eq!(
         pinned_delete(&f, "oauth-org", &[f.org.to_string()]).await?,
         StatusCode::NOT_FOUND
@@ -212,9 +218,15 @@ async fn organization_confirmation_rejects_committed_slug_reuse_and_allows_exact
         pinned_delete(&f, "oauth-org", &[replacement.id]).await?,
         StatusCode::NO_CONTENT
     );
-    let compatible = create_org_with_roles(&f.db.pool, f.owner, "Compatible", "compatible")
-        .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let compatible = create_org_with_roles(
+        &f.db.pool,
+        f.owner,
+        "Compatible",
+        "compatible",
+        crate::api::tenant::MutationPolicy::for_tests(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
     assert_eq!(
         pinned_delete(&f, "compatible", &[]).await?,
         StatusCode::NO_CONTENT

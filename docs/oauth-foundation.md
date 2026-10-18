@@ -491,10 +491,12 @@ authorization/OPAQUE flows against the same commit's frontend artifact on an iso
 hosted runner. Operational work still includes Firefox/Safari coverage, multi-replica load tests for shared
 locks/MultiXact behavior, and sanitized metrics/alerts. Ancestor rows still use ordinary
 share locks: overlapping readers across clients in a subtree can starve organization,
-project, environment or application updates/deletions. Existing ancestor writers lack
-the client-level advisory coordination and consistent deadlines. The operations milestone
-must add hierarchical coordination or bounded deadline/retry before claiming sustained-load
-lifecycle guarantees. Those row locks continue to protect current ancestry during authorization.
+project, environment or application updates/deletions. Hierarchy writers now have
+[bounded handler/database waits](tenant-mutation-deadlines.md), returning generic 503
+without automatic mutation retries. They retain row locks and do not gain the client-level
+fair advisory coordination. Hierarchical fairness and load benchmarks remain necessary
+before claiming sustained-load lifecycle guarantees. Those row locks continue to protect
+current ancestry during authorization.
 Record coverage actually exercised;
 local Chromium tests do not establish cross-browser or production load behavior.
 

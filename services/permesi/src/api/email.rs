@@ -207,13 +207,13 @@ pub fn spawn_outbox_worker(
     })
 }
 
+/// Claims an outbox batch under cancellation-safe transaction startup and SKIP LOCKED.
 async fn process_outbox_batch(
     pool: &PgPool,
     sender: &dyn EmailSender,
     config: &EmailWorkerConfig,
 ) -> Result<usize> {
-    let mut tx = pool
-        .begin()
+    let mut tx = service_utils::database::begin(pool)
         .await
         .context("failed to start email outbox transaction")?;
 

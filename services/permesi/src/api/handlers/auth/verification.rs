@@ -72,7 +72,7 @@ pub async fn verify_email(
 
     // Hash the token before lookup; raw tokens are never stored server-side.
     let token_hash = hash_verification_token(token);
-    let mut tx = match pool.begin().await {
+    let mut tx = match service_utils::database::begin(&pool).await {
         Ok(tx) => tx,
         Err(err) => {
             error!("Failed to start verify-email transaction: {err}");

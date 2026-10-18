@@ -19,10 +19,15 @@
 //! Every option is set explicitly, including those equal to sqlx defaults, so a
 //! dependency upgrade cannot silently change pool behavior. Connections carry an
 //! `application_name` so they can be told apart in `pg_stat_activity`.
+//!
+//! Flow Overview: [`begin`] acquires a connection in the caller, then completes
+//! BEGIN in an owned task. Cancelling the caller cannot interrupt SQLx before it
+//! tracks the server transaction. An abandoned task result drops the tracked
+//! transaction and schedules rollback before the connection can be reused.
 
 use anyhow::{Context, Result, bail};
 use sqlx::{
-    PgPool,
+    PgPool, Postgres, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 use std::{fmt, str::FromStr, time::Duration};
@@ -38,6 +43,24 @@ const MAX_LIFETIME_MAX: Duration = Duration::from_hours(24);
 
 /// Longest wait for pooled connections to close during shutdown.
 pub const POOL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Starts a pool-owned transaction without exposing SQLx's interrupted-BEGIN window.
+///
+/// Pool acquisition stays cancellable and bounded by existing caller/pool deadlines.
+/// After acquisition, the owned task finishes BEGIN even if its receiver disappears;
+/// its dropped output then rolls back a fully tracked transaction. The task holds
+/// one existing pool permit and never executes application writes after cancellation.
+///
+/// # Errors
+/// Returns pool/BEGIN failures or a sanitized worker error if initialization panics.
+pub async fn begin(pool: &PgPool) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    let connection = pool.acquire().await?;
+    // SQLx 0.9's doc-hidden constructor accepts the owned pool connection, keeping
+    // this transaction 'static. Preserve the BEGIN-cancellation regression on upgrades.
+    tokio::spawn(async move { Transaction::begin(connection, None).await })
+        .await
+        .map_err(|_| sqlx::Error::WorkerCrashed)?
+}
 
 /// Validated shape of a service's PostgreSQL pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -203,7 +203,7 @@ impl CredentialService {
         context: &ApplicationContext,
         client: Uuid,
     ) -> std::result::Result<Vec<SecretMetadata>, CredentialError> {
-        let mut tx = pool.begin().await?;
+        let mut tx = service_utils::database::begin(pool).await?;
         storage::timeout(&mut tx, self.config.lock_timeout_ms).await?;
         let id = storage::management_client(&mut tx, context, client, false, false).await?;
         let rows = storage::live(&mut tx, id).await?;
@@ -222,7 +222,7 @@ impl CredentialService {
     ) -> std::result::Result<IssuedSecret, CredentialError> {
         // Reject inaccessible/unsupported/stale states before expensive hashing. Final
         // mutation reloads everything because the short preflight releases its locks.
-        let mut preflight = pool.begin().await?;
+        let mut preflight = service_utils::database::begin(pool).await?;
         storage::timeout(&mut preflight, self.config.lock_timeout_ms).await?;
         let id = storage::management_client(&mut preflight, context, client, true, true).await?;
         let rows = storage::live(&mut preflight, id).await?;
@@ -241,7 +241,7 @@ impl CredentialService {
         })
         .await
         .map_err(|_| CredentialError::Unavailable)??;
-        let mut tx = pool.begin().await?;
+        let mut tx = service_utils::database::begin(pool).await?;
         storage::timeout(&mut tx, self.config.lock_timeout_ms).await?;
         let client_id = storage::management_client(&mut tx, context, client, true, true).await?;
         let rows = storage::live(&mut tx, client_id).await?;
@@ -268,7 +268,7 @@ impl CredentialService {
         client: Uuid,
         secret: Uuid,
     ) -> std::result::Result<(), CredentialError> {
-        let mut tx = pool.begin().await?;
+        let mut tx = service_utils::database::begin(pool).await?;
         storage::timeout(&mut tx, self.config.lock_timeout_ms).await?;
         let id = storage::management_client(&mut tx, context, client, true, false).await?;
         storage::revoke(&mut tx, id, secret).await?;

@@ -161,7 +161,7 @@ impl<'a> AuthenticatedExchange<'a> {
         oauth: &OAuthState,
         auth: ClientAuthentication,
     ) -> std::result::Result<Self, TokenError> {
-        let mut tx = pool.begin().await?;
+        let mut tx = service_utils::database::begin(pool).await?;
         super::locking::deadline(&mut tx, oauth.config.lock_timeout_ms).await?;
         let (client, application, organization) = match auth {
             ClientAuthentication::Basic { client, secret } => {

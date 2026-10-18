@@ -26,6 +26,19 @@ struct RefreshAuthority {
 }
 
 impl RefreshAuthority {
+    /// Resolves the public protocol ID through its registration before checking retained family history.
+    /// PostgreSQL families bind the internal client row ID; all tenant and reuse predicates stay exact.
+    async fn revoked_lineage(
+        &self,
+        pool: &sqlx::PgPool,
+        successor: &[u8],
+        previous: &[u8],
+    ) -> Result<bool> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_refresh_tokens t JOIN oauth_refresh_families f ON f.id=t.family_id JOIN oauth_clients c ON c.id=f.client_id WHERE t.token_hash=$1 AND t.previous_hash=$2 AND f.organization_id=$3 AND f.application_id=$4 AND f.user_id=$5 AND c.client_id=$6 AND f.revoked_at IS NOT NULL AND f.revocation_reason='reuse')")
+            .bind(successor).bind(previous).bind(self.organization).bind(self.application).bind(self.user).bind(self.client)
+            .fetch_one(pool).await.safe("Cannot inspect refresh race lineage and revocation.")
+    }
+
     /// Rejects signed-but-substituted context, widened scopes, fabricated identity tokens and invalid lifetimes.
     fn validate(&self, claims: &Value, body: &Value, now: i64) -> Result<()> {
         check(
@@ -89,11 +102,13 @@ pub(super) async fn race_authority(
     let (_, claims) = token::verify(&access, &keys, "at+jwt")?;
     expected.validate(&claims, body, chrono::Utc::now().timestamp())?;
     let successor = text_field(body, "refresh_token")?;
-    let revoked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_refresh_tokens t JOIN oauth_refresh_families f ON f.id=t.family_id WHERE t.token_hash=$1 AND t.previous_hash=$2 AND f.organization_id=$3 AND f.application_id=$4 AND f.user_id=$5 AND f.client_id=$6 AND f.revoked_at IS NOT NULL AND f.revocation_reason='reuse')")
-        .bind(Sha256::digest(successor.as_bytes()).to_vec())
-        .bind(Sha256::digest(original.as_bytes()).to_vec())
-        .bind(expected.organization).bind(expected.application).bind(expected.user).bind(expected.client)
-        .fetch_one(context.pool).await.safe("Cannot inspect refresh race lineage and revocation.")?;
+    let revoked = expected
+        .revoked_lineage(
+            context.pool,
+            &Sha256::digest(successor.as_bytes()),
+            &Sha256::digest(original.as_bytes()),
+        )
+        .await?;
     check(
         revoked,
         "Refresh race lost lineage or did not revoke its family before replay.",
@@ -275,10 +290,9 @@ pub(super) async fn lifecycle(context: &mut Context<'_>, fixture: &Fixture) -> R
 mod tests {
     use super::*;
 
-    /// Signature validity alone cannot accept a changed issuer/client/tenant/scope or expired refresh result.
-    #[test]
-    fn race_authority_rejects_substitution_widening_and_invalid_lifetimes() -> Result<()> {
-        let expected = RefreshAuthority {
+    /// Independent fixture authority shared by claim and database-oracle negative controls.
+    fn example_authority() -> RefreshAuthority {
+        RefreshAuthority {
             issuer: "https://issuer.example".into(),
             audience: "jobs-api".into(),
             user: Uuid::from_u128(1),
@@ -287,7 +301,114 @@ mod tests {
             application: Uuid::from_u128(4),
             scope: "openid jobs:read offline_access".into(),
             ttl: 10,
-        };
+        }
+    }
+
+    /// Tests the actual oracle SQL with distinct public/internal IDs and adversarial bindings.
+    /// Temporary tables isolate identifier/query semantics; live scenarios retain the canonical schema.
+    #[tokio::test]
+    async fn refresh_lineage_oracle_resolves_public_ids_and_rejects_wrong_bindings() -> Result<()> {
+        use test_support::{postgres::PostgresContainer, runtime};
+        if runtime::ensure_container_runtime().is_err() {
+            eprintln!("Skipping PostgreSQL oracle test: container runtime unavailable.");
+            return Ok(());
+        }
+        let db = PostgresContainer::start("bridge")
+            .await
+            .safe("Cannot start oracle database.")?;
+        db.wait_until_ready()
+            .await
+            .safe("Oracle database did not become ready.")?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&db.admin_dsn())
+            .await
+            .safe("Cannot connect oracle database.")?;
+        for statement in [
+            "CREATE TEMP TABLE oauth_clients(id uuid PRIMARY KEY,client_id uuid UNIQUE)",
+            "CREATE TEMP TABLE oauth_refresh_families(id uuid PRIMARY KEY,client_id uuid,organization_id uuid,application_id uuid,user_id uuid,revoked_at timestamptz,revocation_reason text)",
+            "CREATE TEMP TABLE oauth_refresh_tokens(token_hash bytea,previous_hash bytea,family_id uuid)",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .safe("Cannot create oracle tables.")?;
+        }
+        let mut expected = example_authority();
+        let registration = Uuid::from_u128(20);
+        let family = Uuid::from_u128(21);
+        assert_ne!(registration, expected.client);
+        sqlx::query("INSERT INTO oauth_clients VALUES($1,$2)")
+            .bind(registration)
+            .bind(expected.client)
+            .execute(&pool)
+            .await
+            .safe("Cannot insert oracle registration.")?;
+        sqlx::query("INSERT INTO oauth_refresh_families VALUES($1,$2,$3,$4,$5,NOW(),'reuse')")
+            .bind(family)
+            .bind(registration)
+            .bind(expected.organization)
+            .bind(expected.application)
+            .bind(expected.user)
+            .execute(&pool)
+            .await
+            .safe("Cannot insert oracle family.")?;
+        let next = [1u8; 32];
+        let previous = [2u8; 32];
+        let wrong = [3u8; 32];
+        sqlx::query("INSERT INTO oauth_refresh_tokens VALUES($1,$2,$3)")
+            .bind(next.as_slice())
+            .bind(previous.as_slice())
+            .bind(family)
+            .execute(&pool)
+            .await
+            .safe("Cannot insert oracle lineage.")?;
+        assert!(
+            expected.revoked_lineage(&pool, &next, &previous).await?,
+            "Public client ID must resolve through the internal registration"
+        );
+        assert!(!expected.revoked_lineage(&pool, &wrong, &previous).await?);
+        assert!(!expected.revoked_lineage(&pool, &next, &wrong).await?);
+        for field in ["client", "organization", "application", "user"] {
+            let original = match field {
+                "client" => &mut expected.client,
+                "organization" => &mut expected.organization,
+                "application" => &mut expected.application,
+                _ => &mut expected.user,
+            };
+            let saved = *original;
+            *original = Uuid::from_u128(99);
+            assert!(
+                !expected.revoked_lineage(&pool, &next, &previous).await?,
+                "Substitution accepted for {field}"
+            );
+            let original = match field {
+                "client" => &mut expected.client,
+                "organization" => &mut expected.organization,
+                "application" => &mut expected.application,
+                _ => &mut expected.user,
+            };
+            *original = saved;
+        }
+        // A different revocation reason, or no revocation, cannot prove race-driven reuse handling.
+        sqlx::query("UPDATE oauth_refresh_families SET revocation_reason='authority'")
+            .execute(&pool)
+            .await
+            .safe("Cannot change oracle reason.")?;
+        assert!(!expected.revoked_lineage(&pool, &next, &previous).await?);
+        sqlx::query("UPDATE oauth_refresh_families SET revoked_at=NULL,revocation_reason=NULL")
+            .execute(&pool)
+            .await
+            .safe("Cannot clear oracle revocation.")?;
+        assert!(!expected.revoked_lineage(&pool, &next, &previous).await?);
+        pool.close().await;
+        Ok(())
+    }
+
+    /// Signature validity alone cannot accept a changed issuer/client/tenant/scope or expired refresh result.
+    #[test]
+    fn race_authority_rejects_substitution_widening_and_invalid_lifetimes() -> Result<()> {
+        let expected = example_authority();
         let claims = json!({"iss":"https://issuer.example","aud":"jobs-api",
             "sub":Uuid::from_u128(1),"client_id":Uuid::from_u128(2),
             "organization_id":Uuid::from_u128(3),"application_id":Uuid::from_u128(4),

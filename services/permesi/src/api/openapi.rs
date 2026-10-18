@@ -288,6 +288,59 @@ mod tests {
         Ok(())
     }
 
+    /// Every implemented hierarchy write documents the actual generic transient error envelope.
+    #[test]
+    fn tenant_mutation_openapi_describes_deadlines_and_organization_conflicts() -> Result<()> {
+        let document = serde_json::to_value(openapi())?;
+        for (path, method) in [
+            ("/v1/orgs", "post"),
+            ("/v1/orgs/{org_slug}", "patch"),
+            ("/v1/orgs/{org_slug}", "delete"),
+            ("/v1/orgs/{org_slug}/projects", "post"),
+            ("/v1/orgs/{org_slug}/projects/{project_slug}", "delete"),
+            ("/v1/orgs/{org_slug}/projects/{project_slug}/envs", "post"),
+            (
+                "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}",
+                "delete",
+            ),
+            (
+                "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps",
+                "post",
+            ),
+            (
+                "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}",
+                "delete",
+            ),
+        ] {
+            let responses = document
+                .get("paths")
+                .and_then(|paths| paths.get(path))
+                .and_then(|operations| operations.get(method))
+                .and_then(|operation| operation.get("responses"))
+                .context("Missing hierarchy mutation responses")?;
+            let transient = responses.get("503").context("Missing transient response")?;
+            assert_eq!(
+                transient
+                    .pointer("/content/application~1json/schema/$ref")
+                    .and_then(serde_json::Value::as_str),
+                Some("#/components/schemas/ErrorEnvelope"),
+                "{method} {path}"
+            );
+            if method == "patch" || (method == "post" && path == "/v1/orgs") {
+                let conflict = responses
+                    .get("409")
+                    .context("Missing organization conflict")?;
+                assert_eq!(
+                    conflict
+                        .pointer("/content/application~1json/schema/$ref")
+                        .and_then(serde_json::Value::as_str),
+                    Some("#/components/schemas/ErrorEnvelope")
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn openapi_tags_and_paths() -> Result<()> {
         let spec = openapi();
