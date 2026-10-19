@@ -5,6 +5,7 @@
 //! 2. Display QR code to the user.
 //! 3. Verify the first TOTP token.
 //! 4. Display recovery codes and wait for acknowledgement before OAuth resume or dashboard navigation.
+//!
 //! Enrollment updates the verified session immediately without unloading the one-time codes.
 
 use crate::{
@@ -24,9 +25,7 @@ use leptos_router::hooks::use_navigate;
 /// Session authority stays server-side; OAuth navigation never preempts the one-time display.
 #[component]
 pub fn MfaSetupPage() -> impl IntoView {
-    let _auth = use_auth();
-    let navigate = use_navigate();
-    let navigate_for_success = navigate.clone();
+    let auth = use_auth();
     let (code, set_code) = signal(String::new());
 
     let (error, set_error) = signal::<Option<AppError>>(None);
@@ -39,32 +38,13 @@ pub fn MfaSetupPage() -> impl IntoView {
         Action::new_local(move |(code, credential_id): &(String, String)| {
             let code = code.clone();
             let credential_id = credential_id.clone();
-            async move {
-                let recovery_codes = client::mfa_totp_enroll_finish(&MfaTotpEnrollFinishRequest {
-                    code,
-                    credential_id,
-                })
-                .await?;
-
-                // After successful enrollment, fetch the new full session.
-                let session = client::fetch_session().await?.ok_or_else(|| {
-                    AppError::Config("Enrollment succeeded but session not found.".to_string())
-                })?;
-
-                Ok::<
-                    (
-                        RecoveryCodesResponse,
-                        crate::features::auth::types::UserSession,
-                    ),
-                    AppError,
-                >((recovery_codes, session))
-            }
+            async move { finish_enrollment(code, credential_id).await }
         });
 
     Effect::new(move |_| {
         if let Some(Ok((codes, session))) = enroll_finish_action.value().get() {
             set_recovery_codes.set(Some(codes));
-            _auth.set_session_preserving_mfa(session);
+            auth.set_session_preserving_mfa(session);
         } else if let Some(Err(err)) = enroll_finish_action.value().get() {
             set_error.set(Some(err));
         }
@@ -83,26 +63,7 @@ pub fn MfaSetupPage() -> impl IntoView {
 
             {move || {
                 if let Some(codes) = recovery_codes.get() {
-                    let navigate_for_success = navigate_for_success.clone();
-                    view! {
-                        <div class="space-y-6">
-                            <Alert kind=AlertKind::Info message="MFA has been successfully enabled. Please save these recovery codes in a safe place. You will need them if you lose access to your authenticator app.".to_string() />
-                            <div class="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
-                                <div class="grid grid-cols-2 gap-2 font-mono text-sm">
-                                    {codes.codes.into_iter().map(|code| view! { <div class="p-2 bg-white dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm">{code}</div> }).collect::<Vec<_>>()}
-                                </div>
-                            </div>
-                            <Button on:click=move |_| {
-                                if !_auth.is_full_session.get_untracked() || !crate::features::auth::authorization::resume_after_authentication(
-                                    &crate::app_lib::config::AppConfig::load().api_base_url,
-                                ) {
-                                    navigate_for_success(paths::DASHBOARD, Default::default());
-                                }
-                            }>
-                                "I've saved my codes - Continue"
-                            </Button>
-                        </div>
-                    }.into_any()
+                    view! { <RecoveryCodesPanel codes=codes /> }.into_any()
                 } else {
                     match enroll_data.get() {
                         Some(Ok(data)) => {
@@ -168,6 +129,54 @@ pub fn MfaSetupPage() -> impl IntoView {
                     }
                 }
             }}
+        </div>
+    }
+}
+
+/// Finishes TOTP enrollment and loads the resulting session before exposing codes.
+async fn finish_enrollment(
+    code: String,
+    credential_id: String,
+) -> Result<
+    (
+        RecoveryCodesResponse,
+        crate::features::auth::types::UserSession,
+    ),
+    AppError,
+> {
+    let recovery_codes = client::mfa_totp_enroll_finish(&MfaTotpEnrollFinishRequest {
+        code,
+        credential_id,
+    })
+    .await?;
+    let session = client::fetch_session().await?.ok_or_else(|| {
+        AppError::Config("Enrollment succeeded but session not found.".to_string())
+    })?;
+    Ok((recovery_codes, session))
+}
+
+/// Keeps one-time recovery codes visible until the user explicitly continues.
+#[component]
+fn RecoveryCodesPanel(codes: RecoveryCodesResponse) -> impl IntoView {
+    let auth = use_auth();
+    let navigate = use_navigate();
+    view! {
+        <div class="space-y-6">
+            <Alert kind=AlertKind::Info message="MFA has been successfully enabled. Please save these recovery codes in a safe place. You will need them if you lose access to your authenticator app.".to_string() />
+            <div class="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="grid grid-cols-2 gap-2 font-mono text-sm">
+                    {codes.codes.into_iter().map(|code| view! { <div class="p-2 bg-white dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm">{code}</div> }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <Button on:click=move |_| {
+                if !auth.is_full_session.get_untracked() || !crate::features::auth::authorization::resume_after_authentication(
+                    &crate::app_lib::config::AppConfig::load().api_base_url,
+                ) {
+                    navigate(paths::DASHBOARD, leptos_router::NavigateOptions::default());
+                }
+            }>
+                "I've saved my codes - Continue"
+            </Button>
         </div>
     }
 }

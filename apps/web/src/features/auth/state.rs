@@ -31,15 +31,10 @@ impl AuthContext {
         let is_full_session = Signal::derive(move || {
             session
                 .get()
-                .map(|s| s.session_kind == crate::features::auth::types::SessionKind::Full)
-                .unwrap_or(false)
+                .is_some_and(|s| s.session_kind == crate::features::auth::types::SessionKind::Full)
         });
-        let is_operator = Signal::derive(move || {
-            session
-                .get()
-                .map(|session| session.is_operator)
-                .unwrap_or(false)
-        });
+        let is_operator =
+            Signal::derive(move || session.get().is_some_and(|session| session.is_operator));
         Self {
             session,
             admin_token,
@@ -94,7 +89,7 @@ impl AuthContext {
 
     /// Refetches the session from the server to update roles/flags.
     pub fn refresh_session(&self) {
-        let auth = self.clone();
+        let auth = *self;
         spawn_local(async move {
             if let Ok(Some(session)) = client::fetch_session().await {
                 auth.set_session(session);
@@ -111,7 +106,7 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
     let admin_token = RwSignal::new(None);
     let is_loading = RwSignal::new(true);
     let auth = AuthContext::new(session, admin_token, is_loading);
-    provide_context(auth.clone());
+    provide_context(auth);
 
     // Automatically clear admin token when it expires.
     Effect::new(move |_| {
@@ -126,21 +121,25 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
             if diff <= 0.0 {
                 auth.clear_admin_token();
             } else {
-                let auth_retry = auth.clone();
+                let Ok(delay) = std::time::Duration::try_from_secs_f64(diff / 1000.0) else {
+                    auth.clear_admin_token();
+                    return;
+                };
+                let auth_retry = auth;
                 spawn_local(async move {
-                    gloo_timers::future::sleep(std::time::Duration::from_millis(diff as u64)).await;
+                    gloo_timers::future::sleep(delay).await;
                     // Double check if the token we wanted to clear is still the same one
-                    if let Some(current) = auth_retry.admin_token.get_untracked() {
-                        if current.admin_token == token.admin_token {
-                            auth_retry.clear_admin_token();
-                        }
+                    if let Some(current) = auth_retry.admin_token.get_untracked()
+                        && current.admin_token == token.admin_token
+                    {
+                        auth_retry.clear_admin_token();
                     }
                 });
             }
         }
     });
 
-    let auth_for_fetch = auth.clone();
+    let auth_for_fetch = auth;
     spawn_local(async move {
         let storage = web_sys::window()
             .and_then(|w| w.local_storage().ok())
@@ -148,8 +147,7 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
         let should_fetch = storage
             .as_ref()
             .and_then(|s| s.get_item("permesi_logged_in").ok().flatten())
-            .map(|v| v == "true")
-            .unwrap_or(false);
+            .is_some_and(|v| v == "true");
 
         if should_fetch {
             match client::fetch_session().await {

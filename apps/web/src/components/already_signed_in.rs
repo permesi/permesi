@@ -42,7 +42,7 @@ pub fn AlreadySignedInPanel() -> impl IntoView {
                 </A>
                 <button
                     on:click=move |_| {
-                        let auth = auth.clone();
+                        let auth = auth;
                         spawn_local(async move {
                             let _ = client::logout().await;
                             auth.clear_session();

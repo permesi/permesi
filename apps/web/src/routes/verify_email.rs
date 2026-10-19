@@ -43,6 +43,7 @@ enum ResendStatus {
 
 /// Renders the verify-email page and manages verification and resend actions.
 /// The token is read from the URL fragment and cleared after parsing.
+#[expect(clippy::too_many_lines, reason = "existing Leptos verification view")]
 #[component]
 pub fn VerifyEmailPage() -> impl IntoView {
     let navigate = use_navigate();
@@ -282,9 +283,8 @@ fn clear_token_fragment() {
     let Some(window) = window() else {
         return;
     };
-    let history = match window.history() {
-        Ok(history) => history,
-        Err(_) => return,
+    let Ok(history) = window.history() else {
+        return;
     };
     let _ = history.replace_state_with_url(&JsValue::NULL, "", Some("/verify-email"));
 }

@@ -1,16 +1,16 @@
-//! WebAuthn implementation for hardware security keys.
+//! `WebAuthn` implementation for hardware security keys.
 //!
 //! This module provides a pure Rust interface to the browser's `navigator.credentials`
 //! API via `web_sys`. it handles the conversion between the server's JSON-based
-//! challenge options and the browser's binary-oriented WebAuthn types.
+//! challenge options and the browser's binary-oriented `WebAuthn` types.
 //!
 //! ### Flow Overview
-//! 1. **Preparation**: Unwraps the server's `publicKey` options and decodes Base64URL
+//! 1. **Preparation**: Unwraps the server's `publicKey` options and decodes `Base64URL`
 //!    fields (challenges, user IDs, credential IDs) into binary buffers (`Uint8Array`).
 //! 2. **Interaction**: Calls `navigator.credentials.create` (for registration) or
 //!    `.get` (for authentication), triggering the browser's security key dialog.
 //! 3. **Finalization**: Captures the binary response from the authenticator, encodes
-//!    it back to Base64URL, and returns a JSON-serializable structure compatible with
+//!    it back to `Base64URL`, and returns a JSON-serializable structure compatible with
 //!    the `webauthn-rs` backend.
 
 use crate::app_lib::AppError;
@@ -49,7 +49,7 @@ pub async fn register_key(challenge: &Value) -> Result<Value, AppError> {
     finish_register_key(promise).await
 }
 
-/// Begin WebAuthn registration by invoking the browser prompt synchronously.
+/// Begin `WebAuthn` registration by invoking the browser prompt synchronously.
 ///
 /// This must be called directly in response to a user gesture (e.g., a click)
 /// to ensure the browser shows the passkey prompt.
@@ -62,25 +62,25 @@ pub fn begin_register_key(challenge: &Value) -> Result<js_sys::Promise, AppError
 
     credentials
         .create_with_options(&create_options)
-        .map_err(|e| AppError::Config(format!("WebAuthn create failed: {:?}", e)))
+        .map_err(|e| AppError::Config(format!("WebAuthn create failed: {e:?}")))
 }
 
-/// Finish WebAuthn registration after the browser prompt resolves.
+/// Finish `WebAuthn` registration after the browser prompt resolves.
 pub async fn finish_register_key(promise: js_sys::Promise) -> Result<Value, AppError> {
     let result = JsFuture::from(promise).await.map_err(|e| {
-        let err_str = format!("{:?}", e);
+        let err_str = format!("{e:?}");
         if err_str.contains("InvalidStateError") {
             AppError::Config("This security key is already registered.".to_string())
         } else if err_str.contains("NotAllowedError") {
             AppError::Config("Operation timed out or was cancelled.".to_string())
         } else {
-            AppError::Config(format!("Hardware key registration failed: {:?}", e))
+            AppError::Config(format!("Hardware key registration failed: {e:?}"))
         }
     })?;
 
     let credential = coerce_public_key_credential(result)?;
 
-    let raw_id = encode_arraybuffer_to_base64(credential.raw_id());
+    let raw_id = encode_arraybuffer_to_base64(&credential.raw_id());
 
     let (attestation_object, client_data_json) = extract_attestation_fields(&credential)?;
 
@@ -101,7 +101,7 @@ pub async fn authenticate_key(challenge: &Value) -> Result<Value, AppError> {
     finish_authenticate_key(promise).await
 }
 
-/// Begin WebAuthn authentication by invoking the browser prompt synchronously.
+/// Begin `WebAuthn` authentication by invoking the browser prompt synchronously.
 ///
 /// This must be called directly in response to a user gesture (e.g., a click)
 /// to ensure the browser shows the passkey prompt.
@@ -114,24 +114,24 @@ pub fn begin_authenticate_key(challenge: &Value) -> Result<js_sys::Promise, AppE
 
     credentials
         .get_with_options(&get_options)
-        .map_err(|e| AppError::Config(format!("WebAuthn get failed: {:?}", e)))
+        .map_err(|e| AppError::Config(format!("WebAuthn get failed: {e:?}")))
 }
 
-/// Finish WebAuthn authentication after the browser prompt resolves.
+/// Finish `WebAuthn` authentication after the browser prompt resolves.
 pub async fn finish_authenticate_key(promise: js_sys::Promise) -> Result<Value, AppError> {
     let result = JsFuture::from(promise).await.map_err(|e| {
-        let err_str = format!("{:?}", e);
+        let err_str = format!("{e:?}");
         if err_str.contains("NotAllowedError") {
             AppError::Config("Operation timed out or was cancelled.".to_string())
         } else {
-            AppError::Config(format!("Hardware key authentication failed: {:?}", e))
+            AppError::Config(format!("Hardware key authentication failed: {e:?}"))
         }
     })?;
 
     let credential = coerce_public_key_credential(result)?;
 
     // 3. Convert back
-    let raw_id = encode_arraybuffer_to_base64(credential.raw_id());
+    let raw_id = encode_arraybuffer_to_base64(&credential.raw_id());
 
     let (authenticator_data, client_data_json, signature, user_handle) = if let Ok(response) =
         credential
@@ -139,10 +139,12 @@ pub async fn finish_authenticate_key(promise: js_sys::Promise) -> Result<Value, 
             .dyn_into::<AuthenticatorAssertionResponse>()
     {
         (
-            encode_arraybuffer_to_base64(response.authenticator_data()),
-            encode_arraybuffer_to_base64(response.client_data_json()),
-            encode_arraybuffer_to_base64(response.signature()),
-            response.user_handle().map(encode_arraybuffer_to_base64),
+            encode_arraybuffer_to_base64(&response.authenticator_data()),
+            encode_arraybuffer_to_base64(&response.client_data_json()),
+            encode_arraybuffer_to_base64(&response.signature()),
+            response
+                .user_handle()
+                .map(|buffer| encode_arraybuffer_to_base64(&buffer)),
         )
     } else {
         let response = Reflect::get(credential.as_ref(), &JsValue::from_str("response"))
@@ -167,12 +169,12 @@ pub async fn finish_authenticate_key(promise: js_sys::Promise) -> Result<Value, 
             value
                 .dyn_into::<js_sys::ArrayBuffer>()
                 .ok()
-                .map(encode_arraybuffer_to_base64)
+                .map(|buffer| encode_arraybuffer_to_base64(&buffer))
         });
         (
-            encode_arraybuffer_to_base64(authenticator_buffer),
-            encode_arraybuffer_to_base64(client_data_buffer),
-            encode_arraybuffer_to_base64(signature_buffer),
+            encode_arraybuffer_to_base64(&authenticator_buffer),
+            encode_arraybuffer_to_base64(&client_data_buffer),
+            encode_arraybuffer_to_base64(&signature_buffer),
             user_handle,
         )
     };
@@ -195,10 +197,12 @@ fn decode_base64_to_uint8array(b64: &str) -> Result<Uint8Array, AppError> {
     let bytes = URL_SAFE_NO_PAD
         .decode(b64)
         .or_else(|_| STANDARD.decode(b64))
-        .map_err(|e| AppError::Config(format!("Invalid base64: {}", e)))?;
+        .map_err(|e| AppError::Config(format!("Invalid base64: {e}")))?;
     Ok(Uint8Array::from(&bytes[..]))
 }
 
+/// Converts server registration options and rejects malformed algorithm or timeout fields
+/// before invoking the browser credential API.
 fn build_creation_options(challenge: &Value) -> Result<CredentialCreationOptions, AppError> {
     let pk_options = challenge.get("publicKey").unwrap_or(challenge);
 
@@ -247,9 +251,13 @@ fn build_creation_options(challenge: &Value) -> Result<CredentialCreationOptions
         let js_params = Array::new();
         for param in params {
             let js_param = Object::new();
-            if let Some(alg) = param["alg"].as_i64() {
-                Reflect::set(&js_param, &"alg".into(), &(alg as f64).into()).ok();
-            }
+            let alg = param["alg"]
+                .as_i64()
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| {
+                    AppError::Config("Invalid WebAuthn algorithm identifier.".to_string())
+                })?;
+            Reflect::set(&js_param, &"alg".into(), &f64::from(alg).into()).ok();
             if let Some(typ) = param["type"].as_str() {
                 Reflect::set(&js_param, &"type".into(), &typ.into()).ok();
             }
@@ -259,8 +267,12 @@ fn build_creation_options(challenge: &Value) -> Result<CredentialCreationOptions
     }
 
     // timeout
-    if let Some(timeout) = pk_options["timeout"].as_u64() {
-        Reflect::set(&js_options, &"timeout".into(), &(timeout as f64).into()).ok();
+    if let Some(value) = pk_options.get("timeout") {
+        let timeout = value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| AppError::Config("Invalid WebAuthn timeout.".to_string()))?;
+        Reflect::set(&js_options, &"timeout".into(), &f64::from(timeout).into()).ok();
     }
 
     // attestation
@@ -268,38 +280,7 @@ fn build_creation_options(challenge: &Value) -> Result<CredentialCreationOptions
         Reflect::set(&js_options, &"attestation".into(), &attestation.into()).ok();
     }
 
-    // authenticatorSelection
-    if let Some(selection) = pk_options.get("authenticatorSelection") {
-        let js_selection = Object::new();
-        if let Some(auth_attachment) = selection["authenticatorAttachment"].as_str() {
-            Reflect::set(
-                &js_selection,
-                &"authenticatorAttachment".into(),
-                &auth_attachment.into(),
-            )
-            .ok();
-        }
-        if let Some(require_resident_key) = selection["requireResidentKey"].as_bool() {
-            Reflect::set(
-                &js_selection,
-                &"requireResidentKey".into(),
-                &require_resident_key.into(),
-            )
-            .ok();
-        }
-        if let Some(resident_key) = selection["residentKey"].as_str() {
-            Reflect::set(&js_selection, &"residentKey".into(), &resident_key.into()).ok();
-        }
-        if let Some(user_verification) = selection["userVerification"].as_str() {
-            Reflect::set(
-                &js_selection,
-                &"userVerification".into(),
-                &user_verification.into(),
-            )
-            .ok();
-        }
-        Reflect::set(&js_options, &"authenticatorSelection".into(), &js_selection).ok();
-    }
+    copy_authenticator_selection(pk_options, &js_options);
 
     // excludeCredentials
     if let Some(excludes) = pk_options["excludeCredentials"].as_array() {
@@ -344,11 +325,48 @@ fn build_creation_options(challenge: &Value) -> Result<CredentialCreationOptions
     Ok(create_options.unchecked_into::<CredentialCreationOptions>())
 }
 
-fn encode_arraybuffer_to_base64(buffer: js_sys::ArrayBuffer) -> String {
-    let bytes = Uint8Array::new(&buffer).to_vec();
+/// Copies optional authenticator preferences without trusting them as authority.
+fn copy_authenticator_selection(pk_options: &Value, js_options: &Object) {
+    // authenticatorSelection
+    if let Some(selection) = pk_options.get("authenticatorSelection") {
+        let js_selection = Object::new();
+        if let Some(auth_attachment) = selection["authenticatorAttachment"].as_str() {
+            Reflect::set(
+                &js_selection,
+                &"authenticatorAttachment".into(),
+                &auth_attachment.into(),
+            )
+            .ok();
+        }
+        if let Some(require_resident_key) = selection["requireResidentKey"].as_bool() {
+            Reflect::set(
+                &js_selection,
+                &"requireResidentKey".into(),
+                &require_resident_key.into(),
+            )
+            .ok();
+        }
+        if let Some(resident_key) = selection["residentKey"].as_str() {
+            Reflect::set(&js_selection, &"residentKey".into(), &resident_key.into()).ok();
+        }
+        if let Some(user_verification) = selection["userVerification"].as_str() {
+            Reflect::set(
+                &js_selection,
+                &"userVerification".into(),
+                &user_verification.into(),
+            )
+            .ok();
+        }
+        Reflect::set(js_options, &"authenticatorSelection".into(), &js_selection).ok();
+    }
+}
+
+fn encode_arraybuffer_to_base64(buffer: &js_sys::ArrayBuffer) -> String {
+    let bytes = Uint8Array::new(buffer).to_vec();
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 
+/// Converts server authentication options and rejects a present malformed timeout.
 fn build_request_options(challenge: &Value) -> Result<CredentialRequestOptions, AppError> {
     let pk_options = challenge.get("publicKey").unwrap_or(challenge);
 
@@ -362,8 +380,12 @@ fn build_request_options(challenge: &Value) -> Result<CredentialRequestOptions, 
     Reflect::set(&js_options, &"challenge".into(), &challenge_buf).ok();
 
     // timeout
-    if let Some(timeout) = pk_options["timeout"].as_u64() {
-        Reflect::set(&js_options, &"timeout".into(), &(timeout as f64).into()).ok();
+    if let Some(value) = pk_options.get("timeout") {
+        let timeout = value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| AppError::Config("Invalid WebAuthn timeout.".to_string()))?;
+        Reflect::set(&js_options, &"timeout".into(), &f64::from(timeout).into()).ok();
     }
 
     // rpId
@@ -417,8 +439,8 @@ fn extract_attestation_fields(
         .response()
         .dyn_into::<AuthenticatorAttestationResponse>()
     {
-        let attestation_object = encode_arraybuffer_to_base64(response.attestation_object());
-        let client_data_json = encode_arraybuffer_to_base64(response.client_data_json());
+        let attestation_object = encode_arraybuffer_to_base64(&response.attestation_object());
+        let client_data_json = encode_arraybuffer_to_base64(&response.client_data_json());
         return Ok((attestation_object, client_data_json));
     }
 
@@ -438,7 +460,7 @@ fn extract_attestation_fields(
         .map_err(|_| AppError::Config("Invalid attestation response".into()))?;
 
     Ok((
-        encode_arraybuffer_to_base64(attestation_buffer),
-        encode_arraybuffer_to_base64(client_data_buffer),
+        encode_arraybuffer_to_base64(&attestation_buffer),
+        encode_arraybuffer_to_base64(&client_data_buffer),
     ))
 }

@@ -19,19 +19,22 @@ pub fn AuthLayout() -> impl IntoView {
             match session.session_kind {
                 crate::features::auth::types::SessionKind::MfaChallenge => {
                     if path != paths::MFA_CHALLENGE {
-                        navigate(paths::MFA_CHALLENGE, Default::default());
+                        navigate(
+                            paths::MFA_CHALLENGE,
+                            leptos_router::NavigateOptions::default(),
+                        );
                     }
                 }
                 crate::features::auth::types::SessionKind::MfaBootstrap => {
                     if path != paths::MFA_SETUP {
-                        navigate(paths::MFA_SETUP, Default::default());
+                        navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default());
                     }
                 }
                 crate::features::auth::types::SessionKind::Full => {
                     // Only redirect away from challenge if we are fully authenticated.
                     // Allow setup page for re-enrollment.
                     if path == paths::MFA_CHALLENGE {
-                        navigate(paths::DASHBOARD, Default::default());
+                        navigate(paths::DASHBOARD, leptos_router::NavigateOptions::default());
                     }
                 }
             }

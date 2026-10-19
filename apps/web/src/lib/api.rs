@@ -300,7 +300,7 @@ fn build_url_with_base(base_url: &str, path: &str) -> String {
 }
 
 /// Maps network errors into user-facing `AppError` variants with timeout detection.
-fn map_request_error(err: gloo_net::Error) -> AppError {
+fn map_request_error(err: &gloo_net::Error) -> AppError {
     let message = err.to_string();
     let lowered = message.to_lowercase();
 
@@ -322,7 +322,7 @@ async fn send_with_timeout(
     let _timeout = Timeout::new(DEFAULT_TIMEOUT_MS, move || timeout_controller.abort());
 
     let request = build_request(&signal)?;
-    request.send().await.map_err(map_request_error)
+    request.send().await.map_err(|err| map_request_error(&err))
 }
 
 /// Parses JSON responses and surfaces HTTP errors with sanitized bodies.

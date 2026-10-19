@@ -189,13 +189,13 @@ impl DeletionState {
             caps,
             children,
         } = snapshot;
-        if let Some(pin) = self.confirmation.get_value() {
-            if pin.user != session.user_id || pin.organization != caps.organization_id {
-                self.reset();
-                return Err(AppError::Config(
-                    "The organization changed. Open a new confirmation.".to_owned(),
-                ));
-            }
+        if let Some(pin) = self.confirmation.get_value()
+            && (pin.user != session.user_id || pin.organization != caps.organization_id)
+        {
+            self.reset();
+            return Err(AppError::Config(
+                "The organization changed. Open a new confirmation.".to_owned(),
+            ));
         }
         self.capabilities.set(Some(caps));
         self.children.set(children);

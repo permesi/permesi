@@ -30,27 +30,27 @@ fn breadcrumbs(path: &str) -> Vec<String> {
         _ => {}
     }
 
-    if let Some(rest) = path.strip_prefix("/orgs/") {
-        if !rest.is_empty() {
-            let mut segments = vec!["Organizations".to_string()];
-            let parts: Vec<&str> = rest.split('/').collect();
-            if let Some(org_slug) = parts.get(0) {
-                segments.push(org_slug.to_string());
-            }
-            if parts.get(1) == Some(&"projects") {
-                segments.push("Projects".to_string());
-                if let Some(project_slug) = parts.get(2) {
-                    segments.push(project_slug.to_string());
-                }
-            }
-            return segments;
+    if let Some(rest) = path.strip_prefix("/orgs/")
+        && !rest.is_empty()
+    {
+        let mut segments = vec!["Organizations".to_string()];
+        let parts: Vec<&str> = rest.split('/').collect();
+        if let Some(org_slug) = parts.first() {
+            segments.push(org_slug.to_string());
         }
+        if parts.get(1) == Some(&"projects") {
+            segments.push("Projects".to_string());
+            if let Some(project_slug) = parts.get(2) {
+                segments.push(project_slug.to_string());
+            }
+        }
+        return segments;
     }
 
-    if let Some(rest) = path.strip_prefix("/users/") {
-        if !rest.is_empty() {
-            return vec!["Users".to_string(), "User".to_string()];
-        }
+    if let Some(rest) = path.strip_prefix("/users/")
+        && !rest.is_empty()
+    {
+        return vec!["Users".to_string(), "User".to_string()];
     }
 
     path.trim_matches('/')
@@ -76,26 +76,78 @@ fn breadcrumbs(path: &str) -> Vec<String> {
 /// Wraps routes with a header and main content container.
 #[component]
 pub fn AppShell(children: Children) -> impl IntoView {
+    let is_full_session = use_auth().is_full_session;
+
+    view! {
+        <div class="min-h-screen flex flex-col bg-white dark:bg-gray-900">
+            <AppHeader />
+
+            <div class="flex flex-1 overflow-hidden">
+                <Show when=move || is_full_session.get()>
+                    <Sidebar />
+                </Show>
+
+                <main class="flex-1 overflow-y-auto">
+                    <div class="max-w-screen-xl mx-auto px-4 py-6">
+                        {children()}
+                    </div>
+                </main>
+            </div>
+        </div>
+    }
+}
+
+/// Renders the responsive account header and its browser-only menu state.
+#[component]
+fn AppHeader() -> impl IntoView {
     let (menu_open, set_menu_open) = signal(false);
     let toggle_menu = move |_| {
         set_menu_open.update(|open| *open = !*open);
     };
+    view! {
+            <header class="border-b border-gray-200 bg-[#f6f8fa] dark:bg-gray-900 z-30">
+                <div class="w-full flex flex-wrap items-center gap-4 px-4 py-3">
+                    <HeaderBrand set_menu_open=set_menu_open />
+                    <button
+                        type="button"
+                        class="ml-auto inline-flex items-center p-2 w-10 h-10 justify-center text-sm text-gray-500 rounded-lg md:hidden hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-600"
+                        data-collapse-toggle="navbar-default"
+                        aria-controls="navbar-default"
+                        aria-expanded=move || menu_open.get().to_string()
+                        on:click=toggle_menu
+                    >
+                        <span class="sr-only">"Open main menu"</span>
+                        <svg
+                            class="w-5 h-5"
+                            aria-hidden="true"
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 17 14"
+                        >
+                            <path
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M1 1h15M1 7h15M1 13h15"
+                            ></path>
+                        </svg>
+                    </button>
+                    <HeaderNavigation menu_open=menu_open set_menu_open=set_menu_open />
+                </div>
+            </header>
+    }
+}
+
+/// Shows the current route breadcrumb without exposing a partial-session sidebar.
+#[component]
+fn HeaderBrand(set_menu_open: WriteSignal<bool>) -> impl IntoView {
     let auth = use_auth();
     let is_authenticated = auth.is_authenticated;
     let is_full_session = auth.is_full_session;
     let location = use_location();
-    let on_login = move || location.pathname.get() == paths::LOGIN;
     let breadcrumb_segments = Memo::new(move |_| breadcrumbs(&location.pathname.get()));
-    let user_info = Signal::derive(move || {
-        auth.session
-            .get()
-            .map(|session| (session.user_id.clone(), session.email.clone()))
-    });
-
     view! {
-        <div class="min-h-screen flex flex-col bg-white dark:bg-gray-900">
-            <header class="border-b border-gray-200 bg-[#f6f8fa] dark:bg-gray-900 z-30">
-                <div class="w-full flex flex-wrap items-center gap-4 px-4 py-3">
                     {move || {
                         let target = if is_authenticated.get() { paths::DASHBOARD } else { paths::LANDING };
                         view! {
@@ -125,31 +177,27 @@ pub fn AppShell(children: Children) -> impl IntoView {
                             </A>
                         }
                     }}
-                    <button
-                        type="button"
-                        class="ml-auto inline-flex items-center p-2 w-10 h-10 justify-center text-sm text-gray-500 rounded-lg md:hidden hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-600"
-                        data-collapse-toggle="navbar-default"
-                        aria-controls="navbar-default"
-                        aria-expanded=move || menu_open.get().to_string()
-                        on:click=toggle_menu
-                    >
-                        <span class="sr-only">"Open main menu"</span>
-                        <svg
-                            class="w-5 h-5"
-                            aria-hidden="true"
-                            xmlns="http://www.w3.org/2000/svg"
-                            fill="none"
-                            viewBox="0 0 17 14"
-                        >
-                            <path
-                                stroke="currentColor"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M1 1h15M1 7h15M1 13h15"
-                            ></path>
-                        </svg>
-                    </button>
+    }
+}
+
+/// Renders login, account and sign-out actions for the current session state.
+#[component]
+fn HeaderNavigation(
+    menu_open: ReadSignal<bool>,
+    set_menu_open: WriteSignal<bool>,
+) -> impl IntoView {
+    let auth = use_auth();
+    let is_authenticated = auth.is_authenticated;
+    let is_full_session = auth.is_full_session;
+    let location = use_location();
+    let on_login = move || location.pathname.get() == paths::LOGIN;
+    let user_info = Signal::derive(move || {
+        auth.session
+            .get()
+            .map(|session| (session.user_id.clone(), session.email.clone()))
+    });
+
+    view! {
                     <div
                         id="navbar-default"
                         class="w-full md:ml-auto md:block md:w-auto"
@@ -234,20 +282,5 @@ pub fn AppShell(children: Children) -> impl IntoView {
                             </li>
                         </ul>
                     </div>
-                </div>
-            </header>
-
-            <div class="flex flex-1 overflow-hidden">
-                <Show when=move || is_full_session.get()>
-                    <Sidebar />
-                </Show>
-
-                <main class="flex-1 overflow-y-auto">
-                    <div class="max-w-screen-xl mx-auto px-4 py-6">
-                        {children()}
-                    </div>
-                </main>
-            </div>
-        </div>
     }
 }

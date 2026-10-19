@@ -153,7 +153,7 @@ pub async fn resend_verification(
 
 /// Starts TOTP enrollment and returns the secret and QR code URL.
 pub async fn mfa_totp_enroll_start() -> Result<MfaTotpEnrollStartResponse, AppError> {
-    post_json_with_headers_with_credentials_response("/v1/auth/mfa/totp/enroll/start", &(), &vec![])
+    post_json_with_headers_with_credentials_response("/v1/auth/mfa/totp/enroll/start", &(), &[])
         .await
 }
 
@@ -164,19 +164,19 @@ pub async fn mfa_totp_enroll_finish(
     post_json_with_headers_with_credentials_response(
         "/v1/auth/mfa/totp/enroll/finish",
         request,
-        &vec![],
+        &[],
     )
     .await
 }
 
 /// Verifies a TOTP code during challenge.
 pub async fn mfa_totp_verify(request: &MfaTotpVerifyRequest) -> Result<(), AppError> {
-    post_json_with_headers_with_credentials("/v1/auth/mfa/totp/verify", request, &vec![]).await
+    post_json_with_headers_with_credentials("/v1/auth/mfa/totp/verify", request, &[]).await
 }
 
 /// Verifies a recovery code during challenge.
 pub async fn mfa_recovery(request: &MfaRecoveryRequest) -> Result<(), AppError> {
-    post_json_with_headers_with_credentials("/v1/auth/mfa/recovery", request, &vec![]).await
+    post_json_with_headers_with_credentials("/v1/auth/mfa/recovery", request, &[]).await
 }
 
 /// Disables TOTP MFA.
@@ -189,47 +189,43 @@ pub async fn regenerate_recovery_codes() -> Result<RecoveryCodesResponse, AppErr
     post_json_with_headers_with_credentials_response("/v1/me/mfa/recovery-codes", &(), &[]).await
 }
 
-/// Starts WebAuthn registration.
+/// Starts `WebAuthn` registration.
 pub async fn mfa_webauthn_register_start() -> Result<WebauthnRegisterStartResponse, AppError> {
     post_json_with_headers_with_credentials_response(
         "/v1/auth/mfa/webauthn/register/start",
         &(),
-        &vec![],
+        &[],
     )
     .await
 }
 
-/// Finishes WebAuthn registration.
+/// Finishes `WebAuthn` registration.
 pub async fn mfa_webauthn_register_finish(
     request: &WebauthnRegisterFinishRequest,
 ) -> Result<(), AppError> {
-    post_json_with_headers_with_credentials(
-        "/v1/auth/mfa/webauthn/register/finish",
-        request,
-        &vec![],
-    )
-    .await
+    post_json_with_headers_with_credentials("/v1/auth/mfa/webauthn/register/finish", request, &[])
+        .await
 }
 
-/// Starts WebAuthn authentication.
+/// Starts `WebAuthn` authentication.
 pub async fn mfa_webauthn_authenticate_start() -> Result<WebauthnAuthenticateStartResponse, AppError>
 {
     post_json_with_headers_with_credentials_response(
         "/v1/auth/mfa/webauthn/authenticate/start",
         &(),
-        &vec![],
+        &[],
     )
     .await
 }
 
-/// Finishes WebAuthn authentication.
+/// Finishes `WebAuthn` authentication.
 pub async fn mfa_webauthn_authenticate_finish(
     request: &WebauthnAuthenticateFinishRequest,
 ) -> Result<(), AppError> {
     post_json_with_headers_with_credentials(
         "/v1/auth/mfa/webauthn/authenticate/finish",
         request,
-        &vec![],
+        &[],
     )
     .await
 }

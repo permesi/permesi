@@ -16,7 +16,7 @@ tokio = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
-rustls-pemfile = { workspace = true }
+rustls-pki-types = { workspace = true, features = ["std"] }
 socket2 = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

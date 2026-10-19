@@ -1,4 +1,4 @@
-//! Types for passkey (WebAuthn) API requests and responses.
+//! Types for passkey (`WebAuthn`) API requests and responses.
 
 use serde::{Deserialize, Serialize};
 

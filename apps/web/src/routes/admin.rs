@@ -160,22 +160,24 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
 }
 
 fn format_bytes(value: Option<i64>) -> String {
-    let Some(bytes) = value else {
+    let Some(bytes) = value.filter(|bytes| *bytes >= 0) else {
         return "unavailable".to_string();
     };
-    if bytes < 0 {
-        return "unavailable".to_string();
-    }
     let units = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut size = bytes as f64;
+    let value = u128::try_from(bytes).unwrap_or_default();
+    let mut divisor = 1_u128;
     let mut unit_index = 0;
-    while size >= 1024.0 && unit_index < units.len() - 1 {
-        size /= 1024.0;
+    while value / divisor >= 1024 && unit_index < units.len() - 1 {
+        divisor *= 1024;
         unit_index += 1;
     }
     if unit_index == 0 {
         format!("{bytes} B")
     } else {
-        format!("{size:.2} {}", units[unit_index])
+        let hundredths = (value * 100 + divisor / 2) / divisor;
+        let whole = hundredths / 100;
+        let fraction = hundredths % 100;
+        let unit = units.get(unit_index).copied().unwrap_or("B");
+        format!("{whole}.{fraction:02} {unit}")
     }
 }

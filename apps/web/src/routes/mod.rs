@@ -58,15 +58,15 @@ pub mod paths {
     pub const USERS: &str = "/console/users";
 
     pub fn org_detail(slug: &str) -> String {
-        format!("/console/orgs/{}", slug)
+        format!("/console/orgs/{slug}")
     }
 
     pub fn project_detail(org_slug: &str, project_slug: &str) -> String {
-        format!("/console/orgs/{}/projects/{}", org_slug, project_slug)
+        format!("/console/orgs/{org_slug}/projects/{project_slug}")
     }
 
     pub fn user_detail(id: &str) -> String {
-        format!("/console/users/{}", id)
+        format!("/console/users/{id}")
     }
 }
 
@@ -143,8 +143,8 @@ fn LandingPage() -> impl IntoView {
                 }.into_any()
             } else if auth.is_authenticated.get() {
                 // Redirect to dashboard if authenticated
-                navigate(paths::DASHBOARD, Default::default());
-                view! {}.into_any()
+                navigate(paths::DASHBOARD, leptos_router::NavigateOptions::default());
+                ().into_any()
             } else {
                 view! { <WelcomePage /> }.into_any()
             }

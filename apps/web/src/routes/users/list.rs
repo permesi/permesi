@@ -12,8 +12,6 @@ use leptos_router::components::A;
 /// Renders the users list view and fetches data on mount.
 #[component]
 pub fn UsersListPage() -> impl IntoView {
-    let users = LocalResource::new(move || async move { client::list_users().await });
-
     view! {
         <RequireAdmin children=move || view! {
             <div class="space-y-6">
@@ -28,6 +26,17 @@ pub fn UsersListPage() -> impl IntoView {
                     </div>
                 </div>
 
+                <UsersTable />
+            </div>
+        } />
+    }
+}
+
+/// Loads the platform user table inside the existing administrator gate.
+#[component]
+fn UsersTable() -> impl IntoView {
+    let users = LocalResource::new(move || async move { client::list_users().await });
+    view! {
                 <div class="overflow-hidden bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700 rounded-lg">
                     <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead class="bg-gray-50 dark:bg-gray-900/50">
@@ -118,7 +127,5 @@ pub fn UsersListPage() -> impl IntoView {
                         </tbody>
                     </table>
                 </div>
-            </div>
-        } />
     }
 }

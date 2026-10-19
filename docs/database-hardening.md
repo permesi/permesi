@@ -210,6 +210,12 @@ unmaintained-crate warnings: direct `rustls-pemfile` usage and Leptos' transitiv
 `paste` dependency. Their replacement/upstream tracking remains in TODO; this refresh
 does not claim those maintenance risks are resolved.
 
+A later maintenance change replaced direct `rustls-pemfile` use in shared TLS loading
+with `rustls-pki-types` PEM parsing. The parser continues to require a key and
+certificates, rejects multiple keys and malformed trailing sections, and leaves
+TLS verification enabled. The locked graph no longer contains `rustls-pemfile`;
+Leptos' transitive `paste` warning remains tracked in TODO.
+
 ## Independent review
 
 Claude reviewed the surrounding SQL, bootstrap callers, runtime operations, tests,

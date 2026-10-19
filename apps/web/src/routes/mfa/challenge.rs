@@ -4,6 +4,7 @@
 //! 1. Ask for TOTP code.
 //! 2. Option to use recovery code.
 //! 3. Verify and resume pending OAuth authorization or navigate to the dashboard.
+//!
 //! Recovery requires re-enrollment; its session update preserves the setup screen and
 //! one-time recovery-code acknowledgement before the pending OAuth flow can resume.
 
@@ -24,147 +25,37 @@ use leptos_router::hooks::use_navigate;
 /// Recovery preserves re-enrollment and recovery-code acknowledgement before navigation.
 #[component]
 pub fn MfaChallengePage() -> impl IntoView {
-    let _auth = use_auth();
-    let navigate = use_navigate();
-
+    let auth = use_auth();
     let (code, set_code) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
     let (show_recovery, set_show_recovery) = signal(false);
 
-    let totp_enabled = move || _auth.session.get().map(|s| s.totp_enabled).unwrap_or(true);
-    let webauthn_enabled = move || {
-        _auth
-            .session
-            .get()
-            .map(|s| s.webauthn_enabled)
-            .unwrap_or(false)
-    };
+    let totp_enabled = move || auth.session.get().is_none_or(|s| s.totp_enabled);
+    let webauthn_enabled = move || auth.session.get().is_some_and(|s| s.webauthn_enabled);
 
-    let authenticate_key_action = Action::new_local(move |_: &()| {
-        async move {
-            // 1. Start WebAuthn authentication
-            let start_response = client::mfa_webauthn_authenticate_start().await?;
+    let authenticate_key_action =
+        Action::new_local(move |(): &()| async move { authenticate_security_key().await });
 
-            // 2. Browser interaction (hardware key touch)
-            let auth_response =
-                crate::features::auth::webauthn::authenticate_key(&start_response.challenge)
-                    .await?;
-
-            // 3. Finish authentication
-            client::mfa_webauthn_authenticate_finish(
-                &crate::features::auth::types::WebauthnAuthenticateFinishRequest {
-                    auth_id: start_response.auth_id,
-                    response: auth_response,
-                },
-            )
-            .await?;
-
-            // 4. Fetch the full session
-            let session = client::fetch_session().await?.ok_or_else(|| {
-                AppError::Config("Authentication succeeded but session not found.".to_string())
-            })?;
-
-            Ok::<crate::features::auth::types::UserSession, AppError>(session)
-        }
-    });
-
-    // Auto-trigger security key if it's the only factor available
-    Effect::new(move |_| {
-        if !show_recovery.get()
-            && !totp_enabled()
-            && webauthn_enabled()
-            && authenticate_key_action.value().get().is_none()
-            && !authenticate_key_action.pending().get()
-        {
-            authenticate_key_action.dispatch(());
-        }
-    });
+    auto_start_key_if_only_factor(auth, show_recovery, authenticate_key_action);
 
     let verify_action = Action::new_local(move |code: &String| {
-        // ... existing verify_action logic ...
         let code = code.clone();
         let is_recovery = show_recovery.get_untracked();
-        async move {
-            if is_recovery {
-                client::mfa_recovery(&MfaRecoveryRequest { code }).await?
-            } else {
-                client::mfa_totp_verify(&MfaTotpVerifyRequest { code }).await?
-            }
-
-            // After successful verification, fetch the new full session.
-            let session = client::fetch_session().await?.ok_or_else(|| {
-                AppError::Config("Verification succeeded but session not found.".to_string())
-            })?;
-
-            Ok::<crate::features::auth::types::UserSession, AppError>(session)
-        }
+        async move { verify_factor(code, is_recovery).await }
     });
 
-    let navigate_for_auth = navigate.clone();
-    Effect::new(move |_| {
-        if let Some(result) = authenticate_key_action.value().get() {
-            match result {
-                Ok(session) => {
-                    _auth.set_session(session);
-                    if let Some(storage) = web_sys::window()
-                        .and_then(|w| w.local_storage().ok())
-                        .flatten()
-                    {
-                        let _ = storage.set_item("permesi_logged_in", "true");
-                    }
-                    navigate_for_auth(paths::DASHBOARD, Default::default());
-                }
-                Err(err) => set_error.set(Some(err)),
-            }
-        }
-    });
-
-    let navigate_for_verify = navigate.clone();
-    Effect::new(move |_| {
-        if let Some(result) = verify_action.value().get() {
-            match result {
-                Ok(session) => {
-                    if show_recovery.get() {
-                        // Recovery requires re-enrollment before resuming the OAuth presentation flow.
-                        _auth.set_session_preserving_mfa(session);
-                        navigate_for_verify(paths::MFA_SETUP, Default::default());
-                    } else {
-                        _auth.set_session(session);
-                        // Success: The server issued a full session cookie.
-                        if let Some(storage) = web_sys::window()
-                            .and_then(|w| w.local_storage().ok())
-                            .flatten()
-                        {
-                            let _ = storage.set_item("permesi_logged_in", "true");
-                        }
-                        navigate_for_verify(paths::DASHBOARD, Default::default());
-                    }
-                }
-                Err(err) => set_error.set(Some(err)),
-            }
-        }
-    });
+    watch_challenge_results(
+        auth,
+        show_recovery,
+        authenticate_key_action,
+        verify_action,
+        set_error,
+    );
 
     view! {
         <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
             <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8">
-                <div class="space-y-2">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                        "Verify"
-                    </p>
-                    <h1 class="text-2xl font-semibold text-slate-900">
-                        {move || if show_recovery.get() { "Recovery code" } else { "Two-factor check" }}
-                    </h1>
-                    <p class="text-sm text-slate-500">
-                        {move || if show_recovery.get() {
-                            "Enter a recovery code to regain access to your account."
-                        } else if totp_enabled() {
-                            "Enter the 6-digit code from your authenticator app."
-                        } else {
-                            "Confirm with your security key."
-                        }}
-                    </p>
-                </div>
+                <ChallengeHeader show_recovery=show_recovery />
 
                 <div class="mt-6 space-y-6">
                     <Show when=move || totp_enabled() || show_recovery.get()>
@@ -206,29 +97,7 @@ pub fn MfaChallengePage() -> impl IntoView {
                             </div>
                         </Show>
 
-                        <button
-                            type="button"
-                            disabled=authenticate_key_action.pending()
-                            on:click=move |_| { authenticate_key_action.dispatch(()); }
-                            class="w-full inline-flex justify-center items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 cursor-pointer"
-                        >
-                            <span class="material-symbols-outlined text-base">"key"</span>
-                            {move || if authenticate_key_action.pending().get() {
-                                "Waiting for key..."
-                            } else {
-                                "Use security key"
-                            }}
-                        </button>
-
-                        {move || {
-                            authenticate_key_action
-                                .value()
-                                .get()
-                                .and_then(|res| res.err())
-                                .map(|err| {
-                                    view! { <div class="mt-2"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                })
-                        }}
+                        <SecurityKeyButton action=authenticate_key_action />
                     </Show>
 
                     <div class="text-center">
@@ -256,5 +125,183 @@ pub fn MfaChallengePage() -> impl IntoView {
                 </div>
             </div>
         </div>
+    }
+}
+
+/// Completes the browser security-key ceremony and reloads the verified session.
+async fn authenticate_security_key() -> Result<crate::features::auth::types::UserSession, AppError>
+{
+    let start = client::mfa_webauthn_authenticate_start().await?;
+    let response = crate::features::auth::webauthn::authenticate_key(&start.challenge).await?;
+    client::mfa_webauthn_authenticate_finish(
+        &crate::features::auth::types::WebauthnAuthenticateFinishRequest {
+            auth_id: start.auth_id,
+            response,
+        },
+    )
+    .await?;
+    client::fetch_session().await?.ok_or_else(|| {
+        AppError::Config("Authentication succeeded but session not found.".to_string())
+    })
+}
+
+/// Verifies the selected factor and reloads the server-issued session before navigation.
+async fn verify_factor(
+    code: String,
+    is_recovery: bool,
+) -> Result<crate::features::auth::types::UserSession, AppError> {
+    if is_recovery {
+        client::mfa_recovery(&MfaRecoveryRequest { code }).await?;
+    } else {
+        client::mfa_totp_verify(&MfaTotpVerifyRequest { code }).await?;
+    }
+    client::fetch_session().await?.ok_or_else(|| {
+        AppError::Config("Verification succeeded but session not found.".to_string())
+    })
+}
+
+/// Starts the key prompt automatically only when no TOTP factor can be used.
+fn auto_start_key_if_only_factor(
+    auth: crate::features::auth::state::AuthContext,
+    show_recovery: ReadSignal<bool>,
+    action: Action<(), Result<crate::features::auth::types::UserSession, AppError>>,
+) {
+    Effect::new(move |_| {
+        let session = auth.session.get();
+        if !show_recovery.get()
+            && session
+                .as_ref()
+                .is_some_and(|value| !value.totp_enabled && value.webauthn_enabled)
+            && action.value().get().is_none()
+            && !action.pending().get()
+        {
+            action.dispatch(());
+        }
+    });
+}
+
+/// Applies server-verified MFA outcomes before switching routes or resuming OAuth.
+fn watch_challenge_results(
+    auth: crate::features::auth::state::AuthContext,
+    show_recovery: ReadSignal<bool>,
+    authenticate_key_action: Action<
+        (),
+        Result<crate::features::auth::types::UserSession, AppError>,
+    >,
+    verify_action: Action<String, Result<crate::features::auth::types::UserSession, AppError>>,
+    set_error: WriteSignal<Option<AppError>>,
+) {
+    let navigate = use_navigate();
+    let navigate_for_auth = navigate.clone();
+    Effect::new(move |_| {
+        if let Some(result) = authenticate_key_action.value().get() {
+            match result {
+                Ok(session) => {
+                    auth.set_session(session);
+                    if let Some(storage) = web_sys::window()
+                        .and_then(|w| w.local_storage().ok())
+                        .flatten()
+                    {
+                        let _ = storage.set_item("permesi_logged_in", "true");
+                    }
+                    navigate_for_auth(paths::DASHBOARD, leptos_router::NavigateOptions::default());
+                }
+                Err(err) => set_error.set(Some(err)),
+            }
+        }
+    });
+
+    let navigate_for_verify = navigate.clone();
+    Effect::new(move |_| {
+        if let Some(result) = verify_action.value().get() {
+            match result {
+                Ok(session) => {
+                    if show_recovery.get() {
+                        // Recovery requires re-enrollment before resuming the OAuth presentation flow.
+                        auth.set_session_preserving_mfa(session);
+                        navigate_for_verify(
+                            paths::MFA_SETUP,
+                            leptos_router::NavigateOptions::default(),
+                        );
+                    } else {
+                        auth.set_session(session);
+                        // Success: The server issued a full session cookie.
+                        if let Some(storage) = web_sys::window()
+                            .and_then(|w| w.local_storage().ok())
+                            .flatten()
+                        {
+                            let _ = storage.set_item("permesi_logged_in", "true");
+                        }
+                        navigate_for_verify(
+                            paths::DASHBOARD,
+                            leptos_router::NavigateOptions::default(),
+                        );
+                    }
+                }
+                Err(err) => set_error.set(Some(err)),
+            }
+        }
+    });
+}
+
+/// Explains the currently selected MFA factor without implying client-side authority.
+#[component]
+fn ChallengeHeader(show_recovery: ReadSignal<bool>) -> impl IntoView {
+    let auth = use_auth();
+    let totp_enabled = move || {
+        auth.session
+            .get()
+            .is_none_or(|session| session.totp_enabled)
+    };
+    view! {
+                <div class="space-y-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                        "Verify"
+                    </p>
+                    <h1 class="text-2xl font-semibold text-slate-900">
+                        {move || if show_recovery.get() { "Recovery code" } else { "Two-factor check" }}
+                    </h1>
+                    <p class="text-sm text-slate-500">
+                        {move || if show_recovery.get() {
+                            "Enter a recovery code to regain access to your account."
+                        } else if totp_enabled() {
+                            "Enter the 6-digit code from your authenticator app."
+                        } else {
+                            "Confirm with your security key."
+                        }}
+                    </p>
+                </div>
+    }
+}
+
+/// Keeps the key prompt action and its error presentation together.
+#[component]
+fn SecurityKeyButton(
+    action: Action<(), Result<crate::features::auth::types::UserSession, AppError>>,
+) -> impl IntoView {
+    view! {
+                        <button
+                            type="button"
+                            disabled=action.pending()
+                            on:click=move |_| { action.dispatch(()); }
+                            class="w-full inline-flex justify-center items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 cursor-pointer"
+                        >
+                            <span class="material-symbols-outlined text-base">"key"</span>
+                            {move || if action.pending().get() {
+                                "Waiting for key..."
+                            } else {
+                                "Use security key"
+                            }}
+                        </button>
+
+                        {move || {
+                            action
+                                .value()
+                                .get()
+                                .and_then(std::result::Result::err)
+                                .map(|err| {
+                                    view! { <div class="mt-2"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                })
+                        }}
     }
 }

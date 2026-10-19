@@ -1,4 +1,4 @@
-//! Passkey (WebAuthn) UI section for the security settings page.
+//! Passkey (`WebAuthn`) UI section for the security settings page.
 
 use crate::{
     app_lib::{AppError, theme::Theme},
@@ -28,11 +28,9 @@ fn webauthn_supported() -> bool {
 
 fn challenge_timeout_ms(challenge: &serde_json::Value) -> Option<f64> {
     let pk_options = challenge.get("publicKey").unwrap_or(challenge);
-    pk_options.get("timeout").and_then(|value| {
-        value
-            .as_f64()
-            .or_else(|| value.as_u64().map(|ms| ms as f64))
-    })
+    pk_options
+        .get("timeout")
+        .and_then(serde_json::Value::as_f64)
 }
 
 fn format_rfc3339(value: &str) -> String {
@@ -52,12 +50,15 @@ fn format_relative(value: &str) -> String {
     let now_ms = js_sys::Date::now();
     let then_ms = date.get_time();
     let diff_ms = (now_ms - then_ms).max(0.0);
-    let total_minutes = (diff_ms / 1000.0 / 60.0).floor() as i64;
+    let Ok(elapsed) = std::time::Duration::try_from_secs_f64(diff_ms / 1000.0) else {
+        return format_rfc3339(value);
+    };
+    let total_minutes = elapsed.as_secs() / 60;
     let cutoff_minutes = 30 * 24 * 60;
     if total_minutes >= cutoff_minutes {
         return format_rfc3339(value);
     }
-    if total_minutes <= 0 {
+    if total_minutes == 0 {
         return "Just now".to_string();
     }
     let days = total_minutes / (60 * 24);
@@ -92,6 +93,7 @@ fn format_relative(value: &str) -> String {
     format!("{} ago", parts.join(", "))
 }
 
+#[expect(clippy::too_many_lines, reason = "existing Leptos passkey view")]
 #[component]
 pub fn PasskeysSection() -> impl IntoView {
     let auth = use_auth();
@@ -119,13 +121,11 @@ pub fn PasskeysSection() -> impl IntoView {
         if has_feedback {
             let has_listener = click_listener
                 .try_read_value()
-                .map(|handle| handle.is_some())
-                .unwrap_or(false);
+                .is_some_and(|handle| handle.is_some());
             if has_listener {
                 return;
             }
-            let set_feedback = set_feedback.clone();
-            let section_ref = section_ref.clone();
+            let section_ref = section_ref;
             let handle = window_event_listener(ev::click, move |event| {
                 let Some(section) = section_ref.get() else {
                     return;
@@ -143,18 +143,18 @@ pub fn PasskeysSection() -> impl IntoView {
             if let Some(mut stored) = click_listener.try_write_value() {
                 *stored = Some(handle);
             }
-        } else if let Some(mut stored) = click_listener.try_write_value() {
-            if let Some(handle) = stored.take() {
-                handle.remove();
-            }
+        } else if let Some(mut stored) = click_listener.try_write_value()
+            && let Some(handle) = stored.take()
+        {
+            handle.remove();
         }
     });
 
     on_cleanup(move || {
-        if let Some(mut stored) = click_listener.try_write_value() {
-            if let Some(handle) = stored.take() {
-                handle.remove();
-            }
+        if let Some(mut stored) = click_listener.try_write_value()
+            && let Some(handle) = stored.take()
+        {
+            handle.remove();
         }
     });
 
@@ -162,21 +162,11 @@ pub fn PasskeysSection() -> impl IntoView {
     let create_disabled = Signal::derive(move || create_pending.get());
 
     let prepare_registration = {
-        let set_preview_mode = set_preview_mode.clone();
-        let set_prepared_options = set_prepared_options.clone();
-        let set_prepared_at = set_prepared_at.clone();
-        let set_prepare_pending = set_prepare_pending.clone();
-        let set_feedback = set_feedback.clone();
         Rc::new(move |announce: bool| {
             if prepare_pending.get_untracked() {
                 return;
             }
             set_prepare_pending.set(true);
-            let set_preview_mode = set_preview_mode.clone();
-            let set_prepared_options = set_prepared_options.clone();
-            let set_prepared_at = set_prepared_at.clone();
-            let set_prepare_pending = set_prepare_pending.clone();
-            let set_feedback = set_feedback.clone();
             spawn_local(async move {
                 let result: Result<PasskeyRegisterOptionsResponse, AppError> = async {
                     let zero_token = token::fetch_zero_token().await?;
@@ -222,7 +212,7 @@ pub fn PasskeysSection() -> impl IntoView {
     let delete_action = Action::new_local(move |(credential_id, password): &(String, String)| {
         let credential_id = credential_id.clone();
         let password = password.clone();
-        let auth = auth.clone();
+        let auth = auth;
         async move {
             let email = auth
                 .session
@@ -237,7 +227,7 @@ pub fn PasskeysSection() -> impl IntoView {
             client::delete_credential(&credential_id, &zero_token).await
         }
     });
-    let delete_action_value = delete_action.clone();
+    let delete_action_value = delete_action;
 
     Effect::new(move |_| {
         if let Some(result) = delete_action_value.value().get() {
@@ -288,13 +278,10 @@ pub fn PasskeysSection() -> impl IntoView {
                             if create_pending.get_untracked() {
                                 return;
                             }
-                            let passkeys = passkeys.clone();
+                            let passkeys = passkeys;
                             let prepare_registration = prepare_registration.clone();
-                            let set_feedback = set_feedback.clone();
-                            let set_create_pending = set_create_pending.clone();
-                            let set_prepared_options = set_prepared_options.clone();
-                            let set_prepared_at = set_prepared_at.clone();
-                            let prepared_options = prepared_options.get_untracked();
+                                                let set_create_pending = set_create_pending;
+                                                                    let prepared_options = prepared_options.get_untracked();
                             let prepared_at = prepared_at.get_untracked();
                             let prepare_pending = prepare_pending.get_untracked();
                             if prepared_options.is_none() {
@@ -307,7 +294,9 @@ pub fn PasskeysSection() -> impl IntoView {
                                 )));
                                 return;
                             }
-                            let options = prepared_options.expect("checked above");
+                            let Some(options) = prepared_options else {
+                                return;
+                            };
                             if let (Some(prepared_at), Some(timeout_ms)) =
                                 (prepared_at, challenge_timeout_ms(&options.challenge))
                             {
@@ -414,9 +403,7 @@ pub fn PasskeysSection() -> impl IntoView {
                             view! {
                                 <div class="px-6 py-4 space-y-2">
                                     {list.credentials.into_iter().map(|cred| {
-                                        let delete_action = delete_action.clone();
-                                        let set_show_delete_passkey_form = set_show_delete_passkey_form.clone();
-                                        let id = cred.id.clone();
+                                                                                                        let id = cred.id.clone();
                                         let credential_id_for_show = id.clone();
                                         let credential_id_for_delete = id.clone();
                                         let remove_button = if preview {
@@ -462,15 +449,11 @@ pub fn PasskeysSection() -> impl IntoView {
                                                                 {format!(
                                                                     "Added {} | Last used {}",
                                                                     cred.created_at
-                                                                        .as_deref()
-                                                                        .map(format_rfc3339)
-                                                                        .unwrap_or_else(|| {
+                                                                        .as_deref().map_or_else(|| {
                                                                             "date unavailable".to_string()
-                                                                        }),
+                                                                        }, format_rfc3339),
                                                                     cred.last_used_at
-                                                                        .as_deref()
-                                                                        .map(format_relative)
-                                                                        .unwrap_or_else(|| "Never".to_string())
+                                                                        .as_deref().map_or_else(|| "Never".to_string(), format_relative)
                                                                 )}
                                                             </p>
                                                         </div>
@@ -483,8 +466,7 @@ pub fn PasskeysSection() -> impl IntoView {
                                                             class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
                                                             on:submit={
                                                                 let credential_id = credential_id_for_delete.clone();
-                                                                let delete_action = delete_action.clone();
-                                                                move |event: leptos::ev::SubmitEvent| {
+                                                                                                                        move |event: leptos::ev::SubmitEvent| {
                                                                     event.prevent_default();
                                                                     let password = delete_passkey_password.get_untracked();
                                                                     if password.trim().is_empty() {
@@ -532,7 +514,7 @@ pub fn PasskeysSection() -> impl IntoView {
                                                                 delete_action
                                                                     .value()
                                                                     .get()
-                                                                    .and_then(|res| res.err())
+                                                                    .and_then(std::result::Result::err)
                                                                     .map(|err| {
                                                                         view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
                                                                     })

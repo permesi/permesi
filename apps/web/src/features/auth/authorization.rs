@@ -103,7 +103,7 @@ pub fn abandon_if_outside_flow(path: &str) {
 }
 
 /// Captures only an opaque locator and cleanup deadline on login entry.
-/// The server-owned request and HttpOnly cookie remain the only authority.
+/// The server-owned request and `HttpOnly` cookie remain the only authority.
 #[cfg(target_arch = "wasm32")]
 pub fn capture_request() {
     let Some(window) = web_sys::window() else {
@@ -135,12 +135,10 @@ pub fn capture_request() {
                 expiry
                     .as_deref()
                     .filter(|expiry| request_deadline(expiry, js_sys::Date::now())),
-            ) {
-                if storage.set_item(STORAGE_KEY, id).is_ok()
-                    && storage.set_item(DEADLINE_KEY, expiry).is_ok()
-                {
-                    return;
-                }
+            ) && storage.set_item(STORAGE_KEY, id).is_ok()
+                && storage.set_item(DEADLINE_KEY, expiry).is_ok()
+            {
+                return;
             }
             clear_request();
             return;
@@ -172,6 +170,7 @@ pub fn capture_request() {
 /// Enrollment callers must wait until the user acknowledges their recovery codes.
 /// Returns whether browser navigation was started, allowing an ordinary-login fallback.
 #[cfg(target_arch = "wasm32")]
+#[must_use]
 pub fn resume_after_authentication(api_base_url: &str) -> bool {
     let Some(window) = web_sys::window() else {
         return false;

@@ -171,7 +171,8 @@ load/fault benchmarks and Firefox/Safari were not exercised by this validation.
 UserInfo, introspection/public revocation and immediate resource-server revocation policy,
 broader grants UI, device authorization, M2M, formal OIDC conformance, ancestor mutation
 coordination/deadlines, consistent recent authentication, terminal MFA attempt counters,
-independent exchange-key rotation and the existing WASM Clippy backlog remain tracked
-in TODO. The current Chromium, real-dependency and A/B tests establish the exercised
+and independent exchange-key rotation remain tracked in TODO. Browser-target WASM Clippy
+now runs in CI; the remaining large-view line-count expectations are tracked there separately.
+The current Chromium, real-dependency and A/B tests establish the exercised
 boundaries, not certification or production throughput. Release promotion should use an
 exact green commit and the documented schema/configuration rollout requirements.

@@ -702,7 +702,7 @@ We welcome contributions of all kinds!
 1.  **Read the [Agent & Contributor Contract](AGENTS.md)**: It contains mandatory guidelines on code style, security invariants, and module organization.
 2.  **Pick an issue**: Check the [TODO.md](TODO.md) or open issues.
 3.  **Run tests**: `just test` runs rustfmt, clippy, the release web build and every workspace test (the same suite a release runs locally).
-4.  **Linting**: We use strict Clippy rules. Run `just clippy` before submitting.
+4.  **Linting**: We use strict Clippy rules. Run `just web-setup` once to install the browser target, then `just clippy` to check both native Rust and WebAssembly before submitting.
 
 *Note: This project uses a "Reference Quality" approach. We prefer small, well-documented, and secure diffs over large refactors.*
 
@@ -724,4 +724,5 @@ its isolation and readiness regressions before setup; run those locally with
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --all-targets --all-features`
+- `cargo clippy --locked -p permesi_web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings`
 - `cargo test --workspace`

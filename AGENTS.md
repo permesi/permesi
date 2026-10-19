@@ -71,6 +71,7 @@ Authorization helper rule:
 - Lint/format gates (run after any change):
   - `cargo fmt --all -- --check`
   - `cargo clippy --all-targets --all-features`
+  - `cargo clippy --locked -p permesi_web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings` (install the target with `just web-setup`)
 
 OpenAPI regeneration:
 - `just openapi` regenerates both service artifacts; use `just openapi-permesi` or `just openapi-genesis` for one service.

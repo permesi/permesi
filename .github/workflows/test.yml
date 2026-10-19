@@ -43,9 +43,13 @@ jobs:
       - uses: ./.github/actions/rust-toolchain
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
 
       - name: Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Clippy (Web WASM)
+        run: cargo clippy --locked -p permesi_web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
   check:
     name: Check

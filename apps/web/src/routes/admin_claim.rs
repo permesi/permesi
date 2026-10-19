@@ -37,6 +37,17 @@ enum PageState {
     Success,
 }
 
+/// Reactive presentation updates for the current claim attempt.
+#[derive(Clone, Copy)]
+struct ClaimUiState {
+    error: WriteSignal<Option<AppError>>,
+    success: WriteSignal<Option<String>>,
+    vault_token: WriteSignal<String>,
+    note: WriteSignal<String>,
+    page_state: WriteSignal<PageState>,
+}
+
+#[expect(clippy::too_many_lines, reason = "existing Leptos form view")]
 #[component]
 pub fn AdminClaimPage() -> impl IntoView {
     let auth = use_auth();
@@ -60,111 +71,39 @@ pub fn AdminClaimPage() -> impl IntoView {
         }
     });
 
-    let status_signal = Signal::derive(move || {
-        status_resource
-            .get()
-            .and_then(|result| result.ok())
-            .map(|status| status.clone())
-    });
+    let status_signal =
+        Signal::derive(move || status_resource.get().and_then(std::result::Result::ok));
 
-    Effect::new(move |_| {
-        if let Some(status) = status_signal.get() {
-            // Security Fix: If the backend says bootstrap is open (meaning no operators exist),
-            // any client-side admin token is semantically invalid. Clear it to prevent
-            // "persistent admin token" issues when the DB is wiped.
-            if status.bootstrap_open {
-                if auth.admin_token.get_untracked().is_some() {
-                    auth.clear_admin_token();
-                }
-            }
-        }
-    });
+    watch_bootstrap_status(status_signal, auth);
 
     let claim_action = Action::new_local(move |input: &ClaimInput| {
         let input = input.clone();
-        async move {
-            // 1. If bootstrap is needed, do it first.
-            if input.status.bootstrap_open && !input.status.operator {
-                let request = AdminBootstrapRequest {
-                    vault_token: input.token.clone(),
-                    note: input.note.clone(),
-                };
-                let response = client::admin_bootstrap(&request).await?;
-                if !response.ok {
-                    return Err(AppError::Config("Bootstrap failed.".to_string()));
-                }
-            }
-
-            // 2. Always elevate immediately using the same token.
-            // This ensures the user gets the admin token in one go, avoiding "enter token again" UX.
-            let request = AdminElevateRequest {
-                vault_token: input.token.clone(),
-            };
-            let response = client::admin_elevate(&request).await?;
-            Ok(ClaimOutcome::Elevated(response))
-        }
+        async move { perform_claim(input).await }
     });
 
-    let auth_for_claim = auth.clone();
-    Effect::new(move |_| {
-        if claim_action.pending().get() {
-            set_success.set(None); // Clear previous success messages when a new elevation starts
-        }
-        if let Some(result) = claim_action.value().get() {
-            match result {
-                Ok(outcome) => {
-                    set_error.set(None);
-                    set_vault_token.set(String::new());
-                    set_note.set(String::new());
-                    match outcome {
-                        ClaimOutcome::Elevated(token) => {
-                            auth_for_claim.set_admin_token(token);
-                            // We set success state, but simpler logic below relies on has_active_token
-                            set_page_state.set(PageState::Success);
-                            set_success.set(Some(
-                                "Claimed successfully. You are now a platform operator."
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                    status_resource.refetch();
-                    auth_for_claim.refresh_session();
-                }
-                Err(err) => {
-                    set_error.set(Some(err));
-                    set_success.set(None);
-                }
-            }
-        }
-    });
+    watch_claim_results(
+        claim_action,
+        ClaimUiState {
+            error: set_error,
+            success: set_success,
+            vault_token: set_vault_token,
+            note: set_note,
+            page_state: set_page_state,
+        },
+        status_resource,
+        auth,
+    );
 
     let on_claim_submit = move |event: SubmitEvent| {
-        event.prevent_default();
-        set_error.set(None);
-        set_success.set(None);
-        let token = vault_token.get_untracked();
-        if token.trim().is_empty() {
-            set_error.set(Some(AppError::Config(
-                "Vault token is required.".to_string(),
-            )));
-            return;
-        }
-        let Some(status) = status_signal.get_untracked() else {
-            set_error.set(Some(AppError::Config(
-                "Unable to load admin status.".to_string(),
-            )));
-            return;
-        };
-        let note_value = note.get_untracked().trim().to_string();
-        claim_action.dispatch(ClaimInput {
-            status,
-            token: token.trim().to_string(),
-            note: if note_value.is_empty() {
-                None
-            } else {
-                Some(note_value)
-            },
-        });
+        submit_claim(
+            &event,
+            vault_token,
+            note,
+            status_signal,
+            claim_action,
+            set_error,
+            set_success,
+        );
     };
 
     view! {
@@ -188,7 +127,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                                     type="button"
                                     on:click={
                                         let navigate = navigate.clone();
-                                        move |_| navigate(paths::ADMIN, Default::default())
+                                        move |_| navigate(paths::ADMIN, leptos_router::NavigateOptions::default())
                                     }
                                     class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all cursor-pointer"
                                 >
@@ -202,10 +141,9 @@ pub fn AdminClaimPage() -> impl IntoView {
                      }.into_any()
                 } else {
                     status_resource
-                        .get()
-                        .map(|result: Result<AdminStatusResponse, _>| match result {
+                        .get().map_or_else(|| view! { <Spinner /> }.into_any(), |result: Result<AdminStatusResponse, _>| match result {
                             Ok(status) => render_admin_forms(
-                                status,
+                                &status,
                                 vault_token,
                                 set_vault_token,
                                 note,
@@ -219,7 +157,6 @@ pub fn AdminClaimPage() -> impl IntoView {
                             }
                             .into_any(),
                         })
-                        .unwrap_or_else(|| view! { <Spinner /> }.into_any())
                 }
             }}
 
@@ -239,7 +176,7 @@ pub fn AdminClaimPage() -> impl IntoView {
 
 #[allow(clippy::too_many_arguments)]
 fn render_admin_forms(
-    status: AdminStatusResponse,
+    status: &AdminStatusResponse,
     vault_token: ReadSignal<String>,
     set_vault_token: WriteSignal<String>,
     note: ReadSignal<String>,
@@ -248,6 +185,8 @@ fn render_admin_forms(
     claim_pending: Signal<bool>,
     admin_token: RwSignal<Option<crate::features::auth::types::AdminElevateResponse>>,
 ) -> impl IntoView {
+    let bootstrap_open = status.bootstrap_open;
+    let operator = status.operator;
     let cooldown_message = if status.cooldown_seconds > 0 {
         Some(format!(
             "Cooldown active: {}s remaining.",
@@ -259,7 +198,7 @@ fn render_admin_forms(
     let has_active_token = Signal::derive(move || {
         admin_token
             .get()
-            .map_or(false, |token| !is_token_expired(&token.expires_at))
+            .is_some_and(|token| !is_token_expired(&token.expires_at))
     });
 
     view! {
@@ -267,44 +206,13 @@ fn render_admin_forms(
             {cooldown_message.map(|message| {
                 view! { <Alert kind=AlertKind::Info message=message /> }
             })}
-            {move || {
-                admin_token
-                    .get()
-                    .and_then(|token| {
-                        if is_token_expired(&token.expires_at) {
-                            None
-                        } else {
-                            Some(
-                                view! {
-                                <Alert
-                                    kind=AlertKind::Success
-                                    message=format!("Admin token active until {}.", token.expires_at)
-                                />
-                                <div class="mt-4">
-                                    <A
-                                        href={paths::ADMIN}
-                                        {..}
-                                        class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all"
-                                    >
-                                        <span class="material-symbols-outlined mr-2 text-base">
-                                            "settings"
-                                        </span>
-                                        "Go Admin"
-                                    </A>
-                                </div>
-                            }
-                                .into_any(),
-                            )
-                        }
-                    })
-                    .unwrap_or_else(|| ().into_any())
-            }}
+            {active_token_notice(admin_token)}
         </div>
 
         {move || {
             if has_active_token.get() {
                 ().into_any()
-            } else if status.bootstrap_open && !status.operator {
+            } else if bootstrap_open && !operator {
                 view! {
                     <form class="space-y-4" on:submit=on_claim_submit>
                         <div>
@@ -338,7 +246,7 @@ fn render_admin_forms(
                     </form>
                 }
                 .into_any()
-            } else if status.operator && !has_active_token.get() {
+            } else if operator && !has_active_token.get() {
                 view! {
                     <form class="space-y-4" on:submit=on_claim_submit>
                         <div>
@@ -365,4 +273,166 @@ fn render_admin_forms(
             }
         }}
     }
+}
+
+/// Shows only a still-valid administrator elevation and its navigation link.
+fn active_token_notice(
+    admin_token: RwSignal<Option<crate::features::auth::types::AdminElevateResponse>>,
+) -> impl IntoView {
+    view! {
+            {move || {
+                admin_token
+                    .get()
+                    .and_then(|token| {
+                        if is_token_expired(&token.expires_at) {
+                            None
+                        } else {
+                            Some(
+                                view! {
+                                <Alert
+                                    kind=AlertKind::Success
+                                    message=format!("Admin token active until {}.", token.expires_at)
+                                />
+                                <div class="mt-4">
+                                    <A
+                                        href={paths::ADMIN}
+                                        {..}
+                                        class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all"
+                                    >
+                                        <span class="material-symbols-outlined mr-2 text-base">
+                                            "settings"
+                                        </span>
+                                        "Go Admin"
+                                    </A>
+                                </div>
+                            }
+                                .into_any(),
+                            )
+                        }
+                    })
+                    .unwrap_or_else(|| ().into_any())
+            }}
+    }
+}
+
+/// Performs bootstrap only when server status requires it, then elevates with the same token.
+async fn perform_claim(input: ClaimInput) -> Result<ClaimOutcome, AppError> {
+    if input.status.bootstrap_open && !input.status.operator {
+        let request = AdminBootstrapRequest {
+            vault_token: input.token.clone(),
+            note: input.note.clone(),
+        };
+        let response = client::admin_bootstrap(&request).await?;
+        if !response.ok {
+            return Err(AppError::Config("Bootstrap failed.".to_string()));
+        }
+    }
+    let response = client::admin_elevate(&AdminElevateRequest {
+        vault_token: input.token,
+    })
+    .await?;
+    Ok(ClaimOutcome::Elevated(response))
+}
+
+/// Validates the visible Vault token and current status before dispatching the claim.
+fn submit_claim(
+    event: &SubmitEvent,
+    vault_token: ReadSignal<String>,
+    note: ReadSignal<String>,
+    status_signal: Signal<Option<AdminStatusResponse>>,
+    claim_action: Action<ClaimInput, Result<ClaimOutcome, AppError>>,
+    set_error: WriteSignal<Option<AppError>>,
+    set_success: WriteSignal<Option<String>>,
+) {
+    event.prevent_default();
+    set_error.set(None);
+    set_success.set(None);
+    let token = vault_token.get_untracked();
+    if token.trim().is_empty() {
+        set_error.set(Some(AppError::Config(
+            "Vault token is required.".to_string(),
+        )));
+        return;
+    }
+    let Some(status) = status_signal.get_untracked() else {
+        set_error.set(Some(AppError::Config(
+            "Unable to load admin status.".to_string(),
+        )));
+        return;
+    };
+    let note_value = note.get_untracked().trim().to_string();
+    claim_action.dispatch(ClaimInput {
+        status,
+        token: token.trim().to_string(),
+        note: if note_value.is_empty() {
+            None
+        } else {
+            Some(note_value)
+        },
+    });
+}
+
+/// Invalidates browser-held elevation when the server reopens bootstrap.
+fn watch_bootstrap_status(
+    status_signal: Signal<Option<AdminStatusResponse>>,
+    auth: crate::features::auth::state::AuthContext,
+) {
+    Effect::new(move |_| {
+        if let Some(status) = status_signal.get() {
+            // Security Fix: If the backend says bootstrap is open (meaning no operators exist),
+            // any client-side admin token is semantically invalid. Clear it to prevent
+            // "persistent admin token" issues when the DB is wiped.
+            if status.bootstrap_open && auth.admin_token.get_untracked().is_some() {
+                auth.clear_admin_token();
+            }
+        }
+    });
+}
+
+/// Applies only the server-returned elevation result and refreshes session state.
+fn watch_claim_results(
+    claim_action: Action<ClaimInput, Result<ClaimOutcome, AppError>>,
+    state: ClaimUiState,
+    status_resource: LocalResource<Result<AdminStatusResponse, AppError>>,
+    auth: crate::features::auth::state::AuthContext,
+) {
+    let ClaimUiState {
+        error: set_error,
+        success: set_success,
+        vault_token: set_vault_token,
+        note: set_note,
+        page_state: set_page_state,
+    } = state;
+    let auth_for_claim = auth;
+    Effect::new(move |_| {
+        if claim_action.pending().get() {
+            set_success.set(None); // Clear previous success messages when a new elevation starts
+        }
+        if let Some(result) = claim_action.value().get() {
+            match result {
+                Ok(outcome) => {
+                    set_error.set(None);
+                    set_vault_token.set(String::new());
+                    set_note.set(String::new());
+                    match outcome {
+                        ClaimOutcome::Elevated(token) => {
+                            auth_for_claim.set_admin_token(token);
+                            // We set success state, but simpler logic below relies on has_active_token
+                            set_page_state.set(PageState::Success);
+                            set_success.set(Some(
+                                "Claimed successfully. You are now a platform operator."
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    status_resource.refetch();
+                    auth_for_claim.refresh_session();
+                }
+                Err(err) => {
+                    set_error.set(Some(err));
+                    set_success.set(None);
+                }
+            }
+        }
+    });
 }

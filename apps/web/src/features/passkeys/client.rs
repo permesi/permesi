@@ -1,4 +1,4 @@
-//! Client helpers for passkey (WebAuthn) endpoints.
+//! Client helpers for passkey (`WebAuthn`) endpoints.
 
 use crate::app_lib::{
     AppError, delete_json_with_headers_with_credentials, get_json_with_credentials,

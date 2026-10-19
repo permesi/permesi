@@ -33,6 +33,7 @@ struct SignupInput {
 
 /// Renders the signup form and drives the OPAQUE registration flow.
 /// On success it prompts the user to verify their email.
+#[expect(clippy::too_many_lines, reason = "existing Leptos signup view")]
 #[component]
 pub fn SignUpPage() -> impl IntoView {
     let auth = use_auth();

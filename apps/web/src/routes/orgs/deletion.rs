@@ -118,37 +118,22 @@ pub(super) fn DeleteResource(
     let auth = crate::features::auth::state::use_auth();
     let target = StoredValue::new(target);
     let expected = StoredValue::new(confirmation_name);
-    let blocker = Signal::derive(move || state.children.get().or_else(|| blocked.get()));
-    let delete = Action::new_local(move |(): &()| {
-        let target = target.get_value();
-        let id = state.confirmed_id();
-        async move {
-            let id =
-                id.ok_or_else(|| AppError::Config("Open a new deletion confirmation.".to_owned()))?;
-            target.delete(&id).await
-        }
-    });
+    let child_blocker = Signal::derive(move || state.children.get().or_else(|| blocked.get()));
+    let delete = deletion_action(state, target);
     let busy = Signal::derive(move || state.busy.get() || delete.pending().get());
     let confirmation = NodeRef::<leptos::html::Input>::new();
     let password = NodeRef::<leptos::html::Input>::new();
-    Effect::new(move |_| {
-        if state.open.get() && !busy.get() {
-            if state.reauth.get() {
-                if let Some(node) = password.get() {
-                    let _ = node.focus();
-                }
-            } else if let Some(node) = confirmation.get() {
-                let _ = node.focus();
-            }
-        }
-    });
+    focus_confirmation(state, busy, confirmation, password);
     let navigate = use_navigate();
     Effect::new(move |_| {
         if let Some(result) = delete.value().get() {
             match result {
                 Ok(()) => {
                     state.open.set(false);
-                    navigate(&target.get_value().parent(), Default::default());
+                    navigate(
+                        &target.get_value().parent(),
+                        leptos_router::NavigateOptions::default(),
+                    );
                 }
                 Err(err) => {
                     let reauth = matches!(&err, AppError::Http { status: 401, code: Some(code), .. } if code == "reauthentication_required");
@@ -176,8 +161,8 @@ pub(super) fn DeleteResource(
             <section aria-labelledby="resource-danger-title" class="space-y-3 rounded-lg border border-red-200 bg-white p-6 dark:border-red-900 dark:bg-gray-800">
                 <h2 id="resource-danger-title" class="text-lg font-semibold text-gray-900 dark:text-white">"Danger Zone"</h2>
                 <p class="text-sm text-gray-600 dark:text-gray-300">{description}</p>
-                <p id="resource-delete-blocker" class="text-sm text-gray-600 dark:text-gray-300" aria-live="polite">{move || blocker.get().unwrap_or_default()}</p>
-                <button type="button" class=DESTRUCTIVE aria-describedby="resource-delete-blocker" disabled=move || blocker.get().is_some() || busy.get()
+                <p id="resource-delete-blocker" class="text-sm text-gray-600 dark:text-gray-300" aria-live="polite">{move || child_blocker.get().unwrap_or_default()}</p>
+                <button type="button" class=DESTRUCTIVE aria-describedby="resource-delete-blocker" disabled=move || child_blocker.get().is_some() || busy.get()
                     on:click=move |_| { state.error.set(String::new()); state.begin(); }>
                     <span class="material-symbols-outlined" aria-hidden="true">"delete"</span>{title}
                 </button>
@@ -193,14 +178,14 @@ pub(super) fn DeleteResource(
                 ev.prevent_default();
                 if busy.get_untracked() { return; }
                 if state.reauth.get_untracked() { state.verify(); }
-                else if blocker.get_untracked().is_none() && !expected.get_value().is_empty()
+                else if child_blocker.get_untracked().is_none() && !expected.get_value().is_empty()
                     && state.typed.get_untracked() == expected.get_value() && state.confirmed_id().is_some() {
                     state.error.set(String::new()); delete.dispatch(());
                 }
             }>
                 <Show when=move || state.reauth.get() fallback=move || view! {
                     <p class="text-sm">{description}</p>
-                    <p class="text-sm" aria-live="polite">{move || blocker.get().unwrap_or_default()}</p>
+                    <p class="text-sm" aria-live="polite">{move || child_blocker.get().unwrap_or_default()}</p>
                     <label for="resource-delete-confirmation" class=LABEL>"Type "<code class="break-all">{expected.get_value()}</code>" to confirm deletion"</label>
                     <input node_ref=confirmation id="resource-delete-confirmation" class=INPUT autofocus autocomplete="off" spellcheck="false" aria-describedby="resource-delete-error" prop:value=move || state.typed.get()
                         disabled=move || busy.get() on:input=move |ev| state.typed.set(event_target_value(&ev)) />
@@ -214,11 +199,47 @@ pub(super) fn DeleteResource(
                 <div class="flex flex-wrap justify-end gap-3">
                     <button type="button" class=SECONDARY disabled=move || busy.get() on:click=move |_| state.open.set(false)>"Cancel"</button>
                     <button type="submit" class=move || if state.reauth.get() { SECONDARY } else { DESTRUCTIVE }
-                        disabled=move || busy.get() || if state.reauth.get() { state.password.get().is_empty() } else { blocker.get().is_some() || expected.get_value().is_empty() || state.typed.get() != expected.get_value() || !state.eligible() }>
+                        disabled=move || busy.get() || if state.reauth.get() { state.password.get().is_empty() } else { child_blocker.get().is_some() || expected.get_value().is_empty() || state.typed.get() != expected.get_value() || !state.eligible() }>
                         {move || if state.reauth.get() { if busy.get() { "Verifying…" } else { "Verify password" } } else if busy.get() { "Please wait…" } else { title }}
                     </button>
                 </div>
             </form>
         </Dialog>
     }
+}
+
+/// Focuses the active confirmation field after each safe dialog transition.
+fn focus_confirmation(
+    state: DeletionState,
+    busy: Signal<bool>,
+    confirmation: NodeRef<leptos::html::Input>,
+    password: NodeRef<leptos::html::Input>,
+) {
+    Effect::new(move |_| {
+        if state.open.get() && !busy.get() {
+            if state.reauth.get() {
+                if let Some(node) = password.get() {
+                    let _ = node.focus();
+                }
+            } else if let Some(node) = confirmation.get() {
+                let _ = node.focus();
+            }
+        }
+    });
+}
+
+/// Issues a DELETE only for the server-pinned resource identity in the active confirmation.
+fn deletion_action(
+    state: DeletionState,
+    target: StoredValue<DeleteTarget>,
+) -> Action<(), Result<(), AppError>> {
+    Action::new_local(move |(): &()| {
+        let target = target.get_value();
+        let id = state.confirmed_id();
+        async move {
+            let id =
+                id.ok_or_else(|| AppError::Config("Open a new deletion confirmation.".to_owned()))?;
+            target.delete(&id).await
+        }
+    })
 }

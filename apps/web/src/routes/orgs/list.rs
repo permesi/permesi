@@ -182,7 +182,7 @@ fn CreateOrgModal(on_success: Callback<OrgResponse>) -> impl IntoView {
                             </div>
 
                             <Show when=move || error.get().is_some()>
-                                <Alert kind=AlertKind::Error message=error.get().unwrap().to_string() />
+                                <Alert kind=AlertKind::Error message=error.get().map_or_else(String::new, |err| err.to_string()) />
                             </Show>
 
                             <div class="pt-4 flex flex-col-reverse sm:flex-row gap-3 sm:justify-end">

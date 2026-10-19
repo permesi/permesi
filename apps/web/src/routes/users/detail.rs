@@ -4,7 +4,10 @@
 use crate::{
     app_lib::AppError,
     components::{Alert, AlertKind, Button, Spinner},
-    features::{auth::RequireAdmin, users::client},
+    features::{
+        auth::RequireAdmin,
+        users::{client, types::UserDetail},
+    },
     routes::paths,
 };
 use leptos::prelude::*;
@@ -66,77 +69,7 @@ pub fn UserDetailPage() -> impl IntoView {
                 <Suspense fallback=move || view! { <Spinner /> }.into_any()>
                     {move || match user.get() {
                         Some(Ok(detail)) => {
-                            let display_name = detail.display_name.clone().unwrap_or_else(|| "Not set".to_string());
-                            let locale = detail.locale.clone().unwrap_or_else(|| "Default".to_string());
-                            let role = detail.role.clone().unwrap_or_else(|| "none".to_string());
-
-                            view! {
-                                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                    <div class="lg:col-span-2 space-y-6">
-                                        <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                                            <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                                                <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
-                                                    "Profile Information"
-                                                </h2>
-                                            </div>
-                                            <div class="p-6 space-y-6">
-                                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                                                    <div>
-                                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Email Address"</label>
-                                                        <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{detail.email}</div>
-                                                    </div>
-                                                    <div>
-                                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Display Name"</label>
-                                                        <div class="mt-1 text-sm text-gray-900 dark:text-white">{display_name}</div>
-                                                    </div>
-                                                    <div>
-                                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Locale"</label>
-                                                        <div class="mt-1 text-sm text-gray-900 dark:text-white">{locale}</div>
-                                                    </div>
-                                                    <div>
-                                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Internal ID"</label>
-                                                        <div class="mt-1 text-xs font-mono text-gray-500 dark:text-gray-400">{detail.id.clone()}</div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                                            <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                                                <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
-                                                    "Platform Role"
-                                                </h2>
-                                            </div>
-                                            <div class="p-6">
-                                                <RoleManager
-                                                    user_id=detail.id.clone()
-                                                    current_role=role
-                                                    on_success=Callback::new(move |_| user.refetch())
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="space-y-6">
-                                        <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                                            <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                                                <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
-                                                    "Metadata"
-                                                </h2>
-                                            </div>
-                                            <div class="p-6 space-y-4">
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Joined"</label>
-                                                    <div class="mt-1 text-xs text-gray-900 dark:text-white">{detail.created_at}</div>
-                                                </div>
-                                                <div>
-                                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Last Updated"</label>
-                                                    <div class="mt-1 text-xs text-gray-900 dark:text-white">{detail.updated_at}</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            }.into_any()
+                            render_user_detail(detail, Callback::new(move |()| user.refetch())).into_any()
                         }
                         Some(Err(err)) => {
                             view! { <Alert kind=AlertKind::Error message=err.to_string() /> }.into_any()
@@ -146,6 +79,87 @@ pub fn UserDetailPage() -> impl IntoView {
                 </Suspense>
             </div>
         } />
+    }
+}
+
+/// Displays a fetched user record and its platform-role action.
+fn render_user_detail(detail: UserDetail, on_success: Callback<()>) -> impl IntoView {
+    let display_name = detail
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "Not set".to_string());
+    let locale = detail
+        .locale
+        .clone()
+        .unwrap_or_else(|| "Default".to_string());
+    let role = detail.role.clone().unwrap_or_else(|| "none".to_string());
+
+    view! {
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 space-y-6">
+                <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
+                            "Profile Information"
+                        </h2>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Email Address"</label>
+                                <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{detail.email}</div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Display Name"</label>
+                                <div class="mt-1 text-sm text-gray-900 dark:text-white">{display_name}</div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Locale"</label>
+                                <div class="mt-1 text-sm text-gray-900 dark:text-white">{locale}</div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Internal ID"</label>
+                                <div class="mt-1 text-xs font-mono text-gray-500 dark:text-gray-400">{detail.id.clone()}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
+                            "Platform Role"
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <RoleManager
+                            user_id=detail.id.clone()
+                            current_role=role
+                            on_success=on_success
+                        />
+                    </div>
+                </div>
+            </div>
+            <div class="space-y-6">
+                <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
+                            "Metadata"
+                        </h2>
+                    </div>
+                    <div class="p-6 space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Joined"</label>
+                            <div class="mt-1 text-xs text-gray-900 dark:text-white">{detail.created_at}</div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Last Updated"</label>
+                            <div class="mt-1 text-xs text-gray-900 dark:text-white">{detail.updated_at}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     }
 }
 
@@ -205,7 +219,7 @@ fn RoleManager(user_id: String, current_role: String, on_success: Callback<()>) 
             </div>
 
             <Show when=move || error.get().is_some()>
-                <Alert kind=AlertKind::Error message=error.get().unwrap().to_string() />
+                <Alert kind=AlertKind::Error message=error.get().map_or_else(String::new, |err| err.to_string()) />
             </Show>
 
             <p class="text-xs text-gray-500">

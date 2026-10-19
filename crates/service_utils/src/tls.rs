@@ -2,17 +2,20 @@
 //!
 //! Loads Vault-issued certificates from disk and builds a rustls server config that
 //! always enforces HTTPS. The CA bundle is also loaded at startup to fail closed if
-//! runtime trust material is missing.
+//! runtime trust material is missing. Mixed PEM bundles are parsed in one pass so
+//! certificate order is preserved and multiple private keys are rejected.
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::Certificate;
 use rustls::{
     RootCertStore, ServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer},
     server::{ClientHello, ResolvesServerCert},
     sign::CertifiedKey,
 };
-use rustls_pemfile::certs;
+use rustls_pki_types::{
+    CertificateDer, PrivateKeyDer,
+    pem::{PemObject, SectionKind},
+};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     fs::File,
@@ -143,8 +146,8 @@ fn load_reqwest_ca_from(path: &Path) -> Result<Vec<Certificate>> {
         .with_context(|| format!("Failed to open TLS CA bundle: {}", path.display()))?;
     let mut reader = BufReader::new(file);
 
-    // Use pemfile to extract all certificates, ignoring keys or other metadata
-    let cert_ders = certs(&mut reader)
+    // Extract all certificates, ignoring keys or other metadata in the bundle.
+    let cert_ders = CertificateDer::pem_reader_iter(&mut reader)
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| format!("Failed to parse certificates from: {}", path.display()))?;
 
@@ -318,6 +321,8 @@ fn spawn_watcher(target: Arc<RwLock<Arc<CertifiedKey>>>, paths: TlsPaths, poll_i
     });
 }
 
+/// Parses a mixed TLS bundle in one pass, rejecting missing or multiple private keys.
+/// The key material is never included in parse errors or logs.
 fn load_bundle(path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     let file = File::open(path)
         .with_context(|| format!("Failed to open TLS bundle: {}", path.display()))?;
@@ -326,28 +331,15 @@ fn load_bundle(path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyD
     let mut certs = Vec::new();
     let mut key = None;
 
-    for item in rustls_pemfile::read_all(&mut reader) {
-        match item.context("Failed to parse PEM item")? {
-            rustls_pemfile::Item::X509Certificate(c) => certs.push(c),
-            rustls_pemfile::Item::Pkcs1Key(k) => {
-                if key.is_some() {
-                    return Err(anyhow!("Multiple private keys found in bundle"));
-                }
-                key = Some(PrivateKeyDer::Pkcs1(k));
+    for item in <(SectionKind, Vec<u8>)>::pem_reader_iter(&mut reader) {
+        let (kind, der) = item.context("Failed to parse PEM item")?;
+        if kind == SectionKind::Certificate {
+            certs.push(CertificateDer::from(der));
+        } else if let Some(parsed_key) = PrivateKeyDer::from_pem(kind, der) {
+            if key.is_some() {
+                return Err(anyhow!("Multiple private keys found in bundle"));
             }
-            rustls_pemfile::Item::Pkcs8Key(k) => {
-                if key.is_some() {
-                    return Err(anyhow!("Multiple private keys found in bundle"));
-                }
-                key = Some(PrivateKeyDer::Pkcs8(k));
-            }
-            rustls_pemfile::Item::Sec1Key(k) => {
-                if key.is_some() {
-                    return Err(anyhow!("Multiple private keys found in bundle"));
-                }
-                key = Some(PrivateKeyDer::Sec1(k));
-            }
-            _ => {}
+            key = Some(parsed_key);
         }
     }
 
@@ -366,7 +358,7 @@ fn load_root_store(path: &Path) -> Result<RootCertStore> {
     let file = File::open(path)
         .with_context(|| format!("Failed to open TLS CA bundle: {}", path.display()))?;
     let mut reader = BufReader::new(file);
-    let certs = certs(&mut reader)
+    let certs = CertificateDer::pem_reader_iter(&mut reader)
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| format!("Failed to read TLS CA bundle: {}", path.display()))?;
     if certs.is_empty() {
@@ -441,12 +433,87 @@ mod tests {
     }
 
     #[test]
+    fn load_bundle_recognizes_sec1_and_pkcs1_private_key_labels() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        for (label, is_expected_variant) in [
+            (
+                "EC PRIVATE KEY",
+                (|key: &PrivateKeyDer<'_>| matches!(key, PrivateKeyDer::Sec1(_)))
+                    as fn(&PrivateKeyDer<'_>) -> bool,
+            ),
+            (
+                "RSA PRIVATE KEY",
+                (|key: &PrivateKeyDer<'_>| matches!(key, PrivateKeyDer::Pkcs1(_)))
+                    as fn(&PrivateKeyDer<'_>) -> bool,
+            ),
+        ] {
+            let path = missing_path("key-label");
+            // The parser classifies the PEM label; rustls validates key DER when building
+            // the server configuration. These bytes are deliberately not a private key.
+            let content = format!(
+                "-----BEGIN {label}-----\nAQID\n-----END {label}-----\n{}",
+                cert.cert.pem()
+            );
+            std::fs::write(&path, content).unwrap();
+            let (_, key) = load_bundle(&path).unwrap();
+            assert!(is_expected_variant(&key), "wrong key type for {label}");
+        }
+    }
+
+    #[test]
+    fn load_bundle_rejects_mixed_sec1_and_pkcs1_private_keys() {
+        let path = missing_path("mixed-key-labels");
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let content = format!(
+            "-----BEGIN EC PRIVATE KEY-----\nAQID\n-----END EC PRIVATE KEY-----\n\
+             -----BEGIN RSA PRIVATE KEY-----\nAQID\n-----END RSA PRIVATE KEY-----\n{}",
+            cert.cert.pem()
+        );
+        std::fs::write(&path, content).unwrap();
+        let error = load_bundle(&path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Multiple private keys found in bundle"),
+            "unexpected rejection: {error}"
+        );
+    }
+
+    #[test]
     fn load_bundle_garbage_fails() {
         let dir = std::env::temp_dir().join(format!("utils-tls-test-garbage-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let bundle_path = dir.join("garbage.pem");
         std::fs::write(&bundle_path, "not a pem file").unwrap();
         assert!(load_bundle(&bundle_path).is_err());
+    }
+
+    #[test]
+    fn load_bundle_rejects_malformed_section_after_valid_material() {
+        let path = missing_path("malformed-bundle");
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let content = format!(
+            "{}{}-----BEGIN PRIVATE KEY-----\n!!!\n-----END PRIVATE KEY-----\n",
+            cert.signing_key.serialize_pem(),
+            cert.cert.pem()
+        );
+        std::fs::write(&path, content).unwrap();
+
+        assert!(load_bundle(&path).is_err());
+    }
+
+    #[test]
+    fn load_reqwest_ca_rejects_malformed_section_after_valid_certificate() {
+        let path = missing_path("malformed-ca");
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let content = format!(
+            "{}-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n",
+            cert.cert.pem()
+        );
+        std::fs::write(&path, content).unwrap();
+
+        assert!(load_reqwest_ca_from(&path).is_err());
+        assert!(load_root_store(&path).is_err());
     }
 
     #[tokio::test]
@@ -575,13 +642,12 @@ mod tests {
         let mut reader = BufReader::new(file);
         let mut cert_count = 0;
         let mut key_count = 0;
-        for item in rustls_pemfile::read_all(&mut reader) {
-            match item.unwrap() {
-                rustls_pemfile::Item::X509Certificate(_) => cert_count += 1,
-                rustls_pemfile::Item::Pkcs1Key(_)
-                | rustls_pemfile::Item::Pkcs8Key(_)
-                | rustls_pemfile::Item::Sec1Key(_) => key_count += 1,
-                _ => {}
+        for item in <(SectionKind, Vec<u8>)>::pem_reader_iter(&mut reader) {
+            let (kind, der) = item.unwrap();
+            if kind == SectionKind::Certificate {
+                cert_count += 1;
+            } else if PrivateKeyDer::from_pem(kind, der).is_some() {
+                key_count += 1;
             }
         }
 

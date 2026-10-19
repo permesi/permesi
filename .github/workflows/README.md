@@ -25,7 +25,7 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 
 ## Workflow Overview
 
-- **`test.yml`**: Handles formatting, linting (clippy), dependency auditing for the web app, and
+- **`test.yml`**: Handles formatting, strict native and browser-target WASM Clippy, dependency auditing for the web app, and
   unit/integration tests. A separate hosted OpenAPI drift job generates both service
   contracts and compares them byte-for-byte with the committed artifacts; failure
   blocks the reusable test workflow and `CI OK`. Web auditing includes development/build dependencies so
@@ -37,7 +37,10 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   at four so concurrent fixtures do not saturate the shared self-hosted machine;
   each test keeps its own race assertions. The shared PostgreSQL fixture also limits
   simultaneous startup through TCP readiness and allows 30 seconds for a starting
-  container to accept connections. Coverage still runs the full default workspace.
+  container to accept connections. The lint job installs `wasm32-unknown-unknown` and
+  checks `permesi_web` with the same denied warnings as the native workspace. Locally,
+  `just clippy` runs both targets after `just web-setup` installs the browser target.
+  Coverage still runs the full default workspace.
 - **`security-audit.yml`**: Audits the locked Rust dependency graph for vulnerabilities, unsound
   advisories, and yanked crates when Cargo dependency files change, on manual runs, and weekly so
   newly published RustSec advisories are detected without duplicating the normal test workflow.

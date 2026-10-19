@@ -20,7 +20,7 @@ pub async fn create_org(request: &CreateOrgRequest) -> Result<OrgResponse, AppEr
 
 /// Lists all projects within a specific organization.
 pub async fn list_projects(org_slug: &str) -> Result<Vec<ProjectResponse>, AppError> {
-    let path = format!("/v1/orgs/{}/projects", org_slug);
+    let path = format!("/v1/orgs/{org_slug}/projects");
     get_json_with_credentials(&path).await
 }
 
@@ -29,7 +29,7 @@ pub async fn create_project(
     org_slug: &str,
     request: &CreateProjectRequest,
 ) -> Result<ProjectResponse, AppError> {
-    let path = format!("/v1/orgs/{}/projects", org_slug);
+    let path = format!("/v1/orgs/{org_slug}/projects");
     post_json_with_headers_with_credentials_response(&path, request, &[]).await
 }
 
@@ -38,7 +38,7 @@ pub async fn list_environments(
     org_slug: &str,
     project_slug: &str,
 ) -> Result<Vec<EnvironmentResponse>, AppError> {
-    let path = format!("/v1/orgs/{}/projects/{}/envs", org_slug, project_slug);
+    let path = format!("/v1/orgs/{org_slug}/projects/{project_slug}/envs");
     get_json_with_credentials(&path).await
 }
 
@@ -48,7 +48,7 @@ pub async fn create_environment(
     project_slug: &str,
     request: &CreateEnvironmentRequest,
 ) -> Result<EnvironmentResponse, AppError> {
-    let path = format!("/v1/orgs/{}/projects/{}/envs", org_slug, project_slug);
+    let path = format!("/v1/orgs/{org_slug}/projects/{project_slug}/envs");
     post_json_with_headers_with_credentials_response(&path, request, &[]).await
 }
 
@@ -59,10 +59,7 @@ pub async fn create_application(
     env_slug: &str,
     request: &CreateApplicationRequest,
 ) -> Result<ApplicationResponse, AppError> {
-    let path = format!(
-        "/v1/orgs/{}/projects/{}/envs/{}/apps",
-        org_slug, project_slug, env_slug
-    );
+    let path = format!("/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps");
     post_json_with_headers_with_credentials_response(&path, request, &[]).await
 }
 

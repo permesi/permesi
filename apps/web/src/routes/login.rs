@@ -52,15 +52,14 @@ fn webauthn_supported() -> bool {
 
 fn challenge_timeout_ms(challenge: &serde_json::Value) -> Option<f64> {
     let pk_options = challenge.get("publicKey").unwrap_or(challenge);
-    pk_options.get("timeout").and_then(|value| {
-        value
-            .as_f64()
-            .or_else(|| value.as_u64().map(|ms| ms as f64))
-    })
+    pk_options
+        .get("timeout")
+        .and_then(serde_json::Value::as_f64)
 }
 
 /// Renders the login form and drives the OPAQUE login flow.
 /// On success it fetches the session cookie and updates auth state.
+#[expect(clippy::too_many_lines, reason = "existing Leptos login view")]
 #[component]
 pub fn LoginPage() -> impl IntoView {
     let auth = use_auth();
@@ -154,13 +153,22 @@ pub fn LoginPage() -> impl IntoView {
                             {
                                 let _ = storage.set_item("permesi_logged_in", "true");
                             }
-                            navigate_for_effect(paths::DASHBOARD, Default::default());
+                            navigate_for_effect(
+                                paths::DASHBOARD,
+                                leptos_router::NavigateOptions::default(),
+                            );
                         }
                         SessionKind::MfaBootstrap => {
-                            navigate_for_effect(paths::MFA_SETUP, Default::default());
+                            navigate_for_effect(
+                                paths::MFA_SETUP,
+                                leptos_router::NavigateOptions::default(),
+                            );
                         }
                         SessionKind::MfaChallenge => {
-                            navigate_for_effect(paths::MFA_CHALLENGE, Default::default());
+                            navigate_for_effect(
+                                paths::MFA_CHALLENGE,
+                                leptos_router::NavigateOptions::default(),
+                            );
                         }
                     }
                 }
@@ -192,7 +200,7 @@ pub fn LoginPage() -> impl IntoView {
     view! {
         {
             move || {
-                let auth = auth.clone();
+                let auth = auth;
                 let navigate = navigate.clone();
                 if auth.is_authenticated.get() {
                     view! {
@@ -273,7 +281,7 @@ pub fn LoginPage() -> impl IntoView {
                                                     "Preparing passkey login...".to_string(),
                                                 )));
                                                 start_passkey_prepare_and_auth(
-                                                    auth.clone(),
+                                                    auth,
                                                     navigate.clone(),
                                                     set_passkey_prepare_pending,
                                                     set_passkey_feedback,
@@ -283,7 +291,9 @@ pub fn LoginPage() -> impl IntoView {
                                                 );
                                                 return;
                                             }
-                                            let options = prepared.expect("checked");
+                                            let Some(options) = prepared else {
+                                                return;
+                                            };
                                             if let (Some(prepared_at), Some(timeout_ms)) = (
                                                 passkey_prepared_at.get_untracked(),
                                                 challenge_timeout_ms(&options.challenge),
@@ -297,7 +307,7 @@ pub fn LoginPage() -> impl IntoView {
                                                         "Passkey request expired. Preparing a new one...".to_string(),
                                                     )));
                                                     start_passkey_prepare_and_auth(
-                                                        auth.clone(),
+                                                        auth,
                                                         navigate.clone(),
                                                         set_passkey_prepare_pending,
                                                         set_passkey_feedback,
@@ -311,7 +321,7 @@ pub fn LoginPage() -> impl IntoView {
                                             set_passkey_options.set(None);
                                             set_passkey_prepared_at.set(None);
                                             start_passkey_auth(
-                                                auth.clone(),
+                                                auth,
                                                 navigate.clone(),
                                                 options,
                                                 set_passkey_feedback,
@@ -509,13 +519,16 @@ fn start_passkey_auth<N>(
                         {
                             let _ = storage.set_item("permesi_logged_in", "true");
                         }
-                        navigate(paths::DASHBOARD, Default::default());
+                        navigate(paths::DASHBOARD, leptos_router::NavigateOptions::default());
                     }
                     SessionKind::MfaBootstrap => {
-                        navigate(paths::MFA_SETUP, Default::default());
+                        navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default());
                     }
                     SessionKind::MfaChallenge => {
-                        navigate(paths::MFA_CHALLENGE, Default::default());
+                        navigate(
+                            paths::MFA_CHALLENGE,
+                            leptos_router::NavigateOptions::default(),
+                        );
                     }
                 }
             }

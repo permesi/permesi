@@ -15,7 +15,7 @@
 //!
 //! ### Feature Support
 //! - **Password**: Fully implemented with OPAQUE.
-//! - **Passkeys**: WebAuthn registration support (preview mode when storage is unavailable).
+//! - **Passkeys**: `WebAuthn` registration support (preview mode when storage is unavailable).
 //! - **2FA**: UI placeholder for future TOTP/Hardware key implementation.
 
 mod passkeys;
@@ -75,6 +75,10 @@ struct MfaAuthInput {
     password: String,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "existing Leptos security settings view"
+)]
 #[component]
 pub fn MeSecurityPage() -> impl IntoView {
     let auth = use_auth();
@@ -106,7 +110,7 @@ pub fn MeSecurityPage() -> impl IntoView {
         Action::new_local(move |(credential_id, password): &(String, String)| {
             let credential_id = credential_id.clone();
             let password = password.clone();
-            let auth = auth.clone();
+            let auth = auth;
             async move {
                 let config = AppConfig::load();
                 let client_id = normalize_email(
@@ -206,7 +210,7 @@ pub fn MeSecurityPage() -> impl IntoView {
     let security_status = Memo::new(move |_| {
         profile
             .get()
-            .and_then(|result| result.ok())
+            .and_then(std::result::Result::ok)
             .map(|me| SecurityStatus {
                 password_configured: true, // Always true for now as we only support password auth
                 passkey_count: 0,
@@ -439,7 +443,7 @@ pub fn MeSecurityPage() -> impl IntoView {
         }
     });
 
-    let auth_for_effect = auth.clone();
+    let auth_for_effect = auth;
     Effect::new(move |_| {
         if let Some(result) = change_password_action.value().get() {
             match result {
@@ -452,7 +456,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                         let _ = storage.remove_item("permesi_logged_in");
                     }
                     let navigate = use_navigate();
-                    navigate(paths::LOGIN, Default::default());
+                    navigate(paths::LOGIN, leptos_router::NavigateOptions::default());
                 }
                 Err(err) => set_password_error.set(Some(err)),
             }
@@ -474,7 +478,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                 {move || match (profile.get(), security_status.get()) {
                     (Some(Ok(me)), Some(status)) => {
                         let email = StoredValue::new(me.email.clone());
-                        let disable_totp_action = disable_totp_action.clone();
+                        let disable_totp_action = disable_totp_action;
 
                         view! {
                             <div class="space-y-8">
@@ -649,7 +653,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                         view! {
                                                             <button
                                                                 on:click=move |_| {
-                                                                    navigate(paths::MFA_SETUP, Default::default());
+                                                                    navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default());
                                                                 }
                                                                 class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                             >
@@ -739,7 +743,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                     let navigate = use_navigate();
                                                                     view! {
                                                                         <button
-                                                                            on:click=move |_| navigate(paths::MFA_SETUP, Default::default())
+                                                                            on:click=move |_| navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default())
                                                                             class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                                                         >
                                                                             "Add"
@@ -814,7 +818,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                 disable_totp_action
                                                                     .value()
                                                                     .get()
-                                                                    .and_then(|res| res.err())
+                                                                    .and_then(std::result::Result::err)
                                                                     .map(|err| {
                                                                         view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
                                                                     })
@@ -901,7 +905,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                         add_key_action
                                                             .value()
                                                             .get()
-                                                            .and_then(|res| res.err())
+                                                            .and_then(std::result::Result::err)
                                                             .map(|err| {
                                                                 view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
                                                             })
@@ -911,15 +915,15 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         </div>
 
                                         <Show when=move || {
-                                            security_keys.get().map(|r| r.map(|keys| !keys.is_empty()).unwrap_or(false)).unwrap_or(false)
+                                            security_keys.get().is_some_and(|r| r.is_ok_and(|keys| !keys.is_empty()))
                                         }>
                                             <div class="px-6 py-4 space-y-2">
                                                 <For
-                                                    each=move || security_keys.get().and_then(|res| res.ok()).unwrap_or_default()
+                                                    each=move || security_keys.get().and_then(std::result::Result::ok).unwrap_or_default()
                                                     key=|key| key.credential_id.clone()
                                                     children={
-                                                        let show_delete_key_form = show_delete_key_form.clone();
-                                                        let delete_key_action = delete_key_action.clone();
+                                                        let show_delete_key_form = show_delete_key_form;
+                                                        let delete_key_action = delete_key_action;
                                                         move |key| {
                                                             let credential_id = key.credential_id.clone();
                                                             let label = key.label.clone();
@@ -943,11 +947,9 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                                         "Added {} | Last used {}",
                                                                                         format_rfc3339(&key.created_at),
                                                                                         key.last_used_at
-                                                                                            .as_deref()
-                                                                                            .map(format_relative)
-                                                                                            .unwrap_or_else(|| {
+                                                                                            .as_deref().map_or_else(|| {
                                                                                                 "Never".to_string()
-                                                                                            })
+                                                                                            }, format_relative)
                                                                                     )}
                                                                                 </p>
                                                                             </div>
@@ -983,7 +985,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                                 class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
                                                                                 on:submit={
                                                                                     let credential_id = credential_id_for_delete.clone();
-                                                                                    let delete_key_action = delete_key_action.clone();
+                                                                                    let delete_key_action = delete_key_action;
                                                                                     move |event: SubmitEvent| {
                                                                                         event.prevent_default();
                                                                                         let password = delete_key_password.get_untracked();
@@ -1032,7 +1034,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                                                     delete_key_action
                                                                                         .value()
                                                                                         .get()
-                                                                                        .and_then(|res| res.err())
+                                                                                        .and_then(std::result::Result::err)
                                                                                         .map(|err| {
                                                                                             view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
                                                                                         })
@@ -1121,7 +1123,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                             regenerate_codes_action
                                                                 .value()
                                                                 .get()
-                                                                .and_then(|res| res.err())
+                                                                .and_then(std::result::Result::err)
                                                                 .map(|err| {
                                                                     view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
                                                                 })
@@ -1182,12 +1184,15 @@ fn format_relative(value: &str) -> String {
     let now_ms = Date::now();
     let then_ms = date.get_time();
     let diff_ms = (now_ms - then_ms).max(0.0);
-    let total_minutes = (diff_ms / 1000.0 / 60.0).floor() as i64;
+    let Ok(elapsed) = std::time::Duration::try_from_secs_f64(diff_ms / 1000.0) else {
+        return format_rfc3339(value);
+    };
+    let total_minutes = elapsed.as_secs() / 60;
     let cutoff_minutes = 30 * 24 * 60;
     if total_minutes >= cutoff_minutes {
         return format_rfc3339(value);
     }
-    if total_minutes <= 0 {
+    if total_minutes == 0 {
         return "Just now".to_string();
     }
     let days = total_minutes / (60 * 24);

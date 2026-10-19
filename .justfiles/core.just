@@ -34,7 +34,8 @@ fmt:
   cargo fmt --all -- --check
 
 clippy:
-  cargo clippy --all-targets --all-features
+  cargo clippy --locked --all-targets --all-features -- -D warnings
+  cargo clippy --locked -p permesi_web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 # Local test suite: formatting, clippy, the release web build and every workspace test
 test: fmt clippy web-build

@@ -7,6 +7,7 @@
 
 use super::common::{CARD, FormError, SECONDARY, error_message};
 use crate::{
+    app_lib::AppError,
     components::{Button, ui::Dialog},
     features::oauth::{
         client,
@@ -53,20 +54,7 @@ pub(super) fn CredentialSection(
         let id = id.clone();
         async move { client::revoke_secret(&paths, &client, &id).await }
     });
-    Effect::new(move |_| {
-        if let Some(result) = revoke.value().get() {
-            match result {
-                Ok(()) => {
-                    revoke_open.set(false);
-                    refresh.update(|version| *version += 1);
-                }
-                Err(err) => {
-                    revoke_error.set(error_message(&err));
-                    refresh.update(|version| *version += 1);
-                }
-            }
-        }
-    });
+    watch_revocation(revoke, revoke_open, revoke_error, refresh);
     Effect::new(move |_| {
         if !open.get() {
             secret.set(None);
@@ -128,6 +116,24 @@ pub(super) fn CredentialSection(
             <Button disabled=revoke.pending() on_click=move |_| { if !revoke.pending().get_untracked() { revoke.dispatch(revoke_id.get_untracked()); } }>"Confirm Revocation"</Button>
         </Dialog>
     </section> }
+}
+
+/// Refreshes secret metadata after a revoke attempt and reports failures in the dialog.
+fn watch_revocation(
+    revoke: Action<String, Result<(), AppError>>,
+    revoke_open: RwSignal<bool>,
+    revoke_error: RwSignal<String>,
+    refresh: RwSignal<u64>,
+) {
+    Effect::new(move |_| {
+        if let Some(result) = revoke.value().get() {
+            match result {
+                Ok(()) => revoke_open.set(false),
+                Err(err) => revoke_error.set(error_message(&err)),
+            }
+            refresh.update(|version| *version += 1);
+        }
+    });
 }
 
 /// Mounted only during disclosure; closing destroys the plaintext text and clipboard closure.

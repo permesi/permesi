@@ -14,11 +14,6 @@ use leptos_router::{components::A, hooks::use_location};
 #[component]
 pub fn Sidebar() -> impl IntoView {
     let auth = use_auth();
-    let location = use_location();
-    let pathname = move || location.pathname.get();
-
-    let (is_profile_open, set_profile_open) = signal(false);
-
     // True = Operational (Green), False = Offline (Red)
     let (is_healthy, set_is_healthy) = signal(false);
 
@@ -29,17 +24,6 @@ pub fn Sidebar() -> impl IntoView {
             }
         });
     });
-
-    // Auto-expand if navigating to any profile sub-route
-    Effect::new(move |_| {
-        if pathname().starts_with("/console/me") {
-            set_profile_open.set(true);
-        }
-    });
-
-    let toggle_profile = move |_| {
-        set_profile_open.update(|open| *open = !*open);
-    };
 
     view! {
         <aside class="w-64 flex-shrink-0 hidden md:flex flex-col border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-y-auto">
@@ -56,100 +40,7 @@ pub fn Sidebar() -> impl IntoView {
                             label="Dashboard"
                         />
 
-                        // My Profile Parent (Collapsible)
-                        <div>
-                            <button
-                                on:click=toggle_profile
-                                class="w-full group flex items-center justify-between px-2 py-2 text-sm font-medium rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
-                                class:text-gray-900=move || is_profile_open.get()
-                                class:dark:text-white=move || is_profile_open.get()
-                                aria-expanded=move || if is_profile_open.get() { "true" } else { "false" }
-                            >
-                                <div class="flex items-center">
-                                    <span class=Theme::ICON>
-                                        "person"
-                                    </span>
-                                    "My Profile"
-                                </div>
-                                <span
-                                    class="material-symbols-outlined text-base text-gray-400 transition-transform duration-200"
-                                    class:rotate-180=move || is_profile_open.get()
-                                >
-                                    "expand_more"
-                                </span>
-                            </button>
-
-                            // Nested Children
-                            <div
-                                class="mt-1 space-y-1 transition-all duration-300 ease-in-out"
-                                class:max-h-0=move || !is_profile_open.get()
-                                class:max-h-40=move || is_profile_open.get()
-                                class:opacity-0=move || !is_profile_open.get()
-                                class:opacity-100=move || is_profile_open.get()
-                                class:overflow-hidden=move || !is_profile_open.get()
-                                class:overflow-visible=move || is_profile_open.get()
-                            >
-                                // Overview Child
-                                <A
-                                    href=move || paths::ME.to_string()
-                                    {..}
-                                    attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition"
-                                    class:bg-slate-200=move || pathname() == paths::ME
-                                    class:text-slate-900=move || pathname() == paths::ME
-                                    class:font-medium=move || pathname() == paths::ME
-                                    class:text-slate-600=move || pathname() != paths::ME
-                                    class:hover:bg-slate-100=move || pathname() != paths::ME
-                                    class:hover:text-slate-900=move || pathname() != paths::ME
-                                    aria-current=move || {
-                                        if pathname() == paths::ME { Some("page") } else { None }
-                                    }
-                                >
-                                    <Show when=move || pathname() == paths::ME>
-                                        <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
-                                    </Show>
-                                    <span
-                                        class=move || format!("{} text-lg", Theme::ICON)
-                                        class:text-slate-700=move || pathname() == paths::ME
-                                        class:text-slate-400=move || pathname() != paths::ME
-                                    >
-                                        "badge"
-                                    </span>
-                                    "Overview"
-                                </A>
-
-                                // Security Child
-                                <A
-                                    href=move || paths::ME_SECURITY.to_string()
-                                    {..}
-                                    attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition"
-                                    class:bg-slate-200=move || pathname() == paths::ME_SECURITY
-                                    class:text-slate-900=move || pathname() == paths::ME_SECURITY
-                                    class:font-medium=move || pathname() == paths::ME_SECURITY
-                                    class:text-slate-600=move || pathname() != paths::ME_SECURITY
-                                    class:hover:bg-slate-100=move || pathname() != paths::ME_SECURITY
-                                    class:hover:text-slate-900=move || pathname() != paths::ME_SECURITY
-                                    aria-current=move || {
-                                        if pathname() == paths::ME_SECURITY {
-                                            Some("page")
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                >
-                                    <Show when=move || pathname() == paths::ME_SECURITY>
-                                        <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
-                                    </Show>
-                                    <span
-                                        class=move || format!("{} text-lg", Theme::ICON)
-                                        class:text-slate-700=move || pathname() == paths::ME_SECURITY
-                                        class:text-slate-400=move || pathname() != paths::ME_SECURITY
-                                    >
-                                        "encrypted"
-                                    </span>
-                                    "Security"
-                                </A>
-                            </div>
-                        </div>
+                        <ProfileNavigation />
                     </div>
                 </div>
 
@@ -212,12 +103,79 @@ pub fn Sidebar() -> impl IntoView {
     }
 }
 
+/// Keeps the profile submenu expanded on its own routes without changing navigation authority.
+#[component]
+fn ProfileNavigation() -> impl IntoView {
+    let location = use_location();
+    let (is_open, set_open) = signal(false);
+    Effect::new(move |_| {
+        if location.pathname.get().starts_with("/console/me") {
+            set_open.set(true);
+        }
+    });
+
+    view! {
+        <div>
+            <button
+                on:click=move |_| set_open.update(|open| *open = !*open)
+                class="w-full group flex items-center justify-between px-2 py-2 text-sm font-medium rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white cursor-pointer"
+                class:text-gray-900=move || is_open.get()
+                class:dark:text-white=move || is_open.get()
+                aria-expanded=move || if is_open.get() { "true" } else { "false" }
+            >
+                <div class="flex items-center">
+                    <span class=Theme::ICON>"person"</span>
+                    "My Profile"
+                </div>
+                <span class="material-symbols-outlined text-base text-gray-400 transition-transform duration-200"
+                    class:rotate-180=move || is_open.get()>"expand_more"</span>
+            </button>
+            <div class="mt-1 space-y-1 transition-all duration-300 ease-in-out"
+                class:max-h-0=move || !is_open.get()
+                class:max-h-40=move || is_open.get()
+                class:opacity-0=move || !is_open.get()
+                class:opacity-100=move || is_open.get()
+                class:overflow-hidden=move || !is_open.get()
+                class:overflow-visible=move || is_open.get()>
+                <ProfileSubLink href=paths::ME icon="badge" label="Overview" />
+                <ProfileSubLink href=paths::ME_SECURITY icon="encrypted" label="Security" />
+            </div>
+        </div>
+    }
+}
+
+/// Marks only the exact active profile route while retaining keyboard navigation.
+#[component]
+fn ProfileSubLink(href: &'static str, icon: &'static str, label: &'static str) -> impl IntoView {
+    let location = use_location();
+    let active = move || location.pathname.get() == href;
+    view! {
+        <A href=move || href.to_string() {..}
+            attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition cursor-pointer"
+            class:bg-slate-200=active
+            class:text-slate-900=active
+            class:font-medium=active
+            class:text-slate-600=move || !active()
+            class:hover:bg-slate-100=move || !active()
+            class:hover:text-slate-900=move || !active()
+            aria-current=move || active().then_some("page")>
+            <Show when=active>
+                <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
+            </Show>
+            <span class=move || format!("{} text-lg", Theme::ICON)
+                class:text-slate-700=active
+                class:text-slate-400=move || !active()>{icon}</span>
+            {label}
+        </A>
+    }
+}
+
 #[component]
 fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> impl IntoView {
     let location = use_location();
     let is_active = move || location.pathname.get().starts_with(href);
-    let active_1 = is_active.clone();
-    let active_4 = is_active.clone();
+    let active_1 = is_active;
+    let active_4 = is_active;
 
     view! {
         <A
