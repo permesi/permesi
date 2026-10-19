@@ -1,22 +1,11 @@
-//! Security settings route for the authenticated user.
+//! Security settings route for the authenticated user. Small sections own password
+//! rotation, passkeys, authenticator settings, hardware keys and recovery codes.
+//! The route resolves the current profile and passes only its presentation state.
 //!
-//! Provides a centralized interface for managing "Sign-in methods" (GitHub-style layout).
-//! Users can manage their credentials here without exposing sensitive data to the UI.
-//!
-//! ### Password Change Flow (OPAQUE)
-//!
-//! Password changes are performed via a secure 4-step cryptographic handshake:
-//! 1. **Secure Re-auth (Start)**: Authenticate the user with their current password.
-//! 2. **Secure Re-auth (Finish)**: Verify the client's proof of the current password.
-//! 3. **Password Rotation (Start)**: Initiate registration of the new password.
-//! 4. **Password Rotation (Finish)**: Seal and store the new registration record.
-//!
-//! This ensures the plaintext password never leaves the user's browser.
-//!
-//! ### Feature Support
-//! - **Password**: Fully implemented with OPAQUE.
-//! - **Passkeys**: `WebAuthn` registration support (preview mode when storage is unavailable).
-//! - **2FA**: UI placeholder for future TOTP/Hardware key implementation.
+//! Flow Overview: Password and factor mutations first prove the current password
+//! through OPAQUE or a WebAuthn ceremony, then call the server mutation API.
+//! Server-side recent-authentication and factor policy remain authoritative;
+//! browser state never grants permission. Password rotation clears the old session.
 
 mod passkeys;
 
@@ -84,138 +73,9 @@ struct MfaAuthInput {
     password: String,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "existing Leptos security settings view"
-)]
 #[component]
 pub fn MeSecurityPage() -> impl IntoView {
-    let auth = use_auth();
     let profile = LocalResource::new(move || async move { client::fetch_me().await });
-    let (current_password, set_current_password) = signal(String::new());
-    let (new_password, set_new_password) = signal(String::new());
-    let (confirm_password, set_confirm_password) = signal(String::new());
-    let (password_error, set_password_error) = signal::<Option<AppError>>(None);
-    let (show_password_form, set_show_password_form) = signal(false);
-
-    // Recovery codes signals
-    let (show_recovery_codes_form, set_show_recovery_codes_form) = signal(false);
-    let (recovery_password, set_recovery_password) = signal(String::new());
-    let (regenerated_codes, set_regenerated_codes) = signal::<Option<Vec<String>>>(None);
-
-    // Delete MFA signals
-    let (show_delete_totp_form, set_show_delete_totp_form) = signal(false);
-    let (delete_password, set_delete_password) = signal(String::new());
-
-    // Security keys signals
-    let security_keys =
-        LocalResource::new(move || async move { client::list_security_keys().await });
-    let (show_add_key_form, set_show_add_key_form) = signal(false);
-    let (new_key_label, set_new_key_label) = signal(String::new());
-    let (show_delete_key_form, set_show_delete_key_form) = signal::<Option<String>>(None); // Credential ID
-    let (delete_key_password, set_delete_key_password) = signal(String::new());
-
-    let delete_key_action =
-        Action::new_local(move |(credential_id, password): &(String, String)| {
-            let credential_id = credential_id.clone();
-            let password = password.clone();
-            let auth = auth;
-            async move {
-                let config = AppConfig::load();
-                let client_id = normalize_email(
-                    &auth
-                        .session
-                        .get_untracked()
-                        .map(|s| s.email)
-                        .unwrap_or_default(),
-                );
-                let server_id = config.opaque_server_id;
-
-                let mut rng = OsRng;
-                // 1. Re-auth
-                let start = ClientLogin::<OpaqueSuite>::start(&mut rng, password.as_bytes())
-                    .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
-                let start_request = OpaqueReauthStartRequest {
-                    credential_request: base64::engine::general_purpose::STANDARD
-                        .encode(start.message.serialize()),
-                };
-                let zero_token = token::fetch_zero_token().await?;
-                let start_response =
-                    auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
-
-                let response_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(start_response.credential_response)
-                    .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
-                let credential_response = CredentialResponse::<OpaqueSuite>::deserialize(
-                    &response_bytes,
-                )
-                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
-
-                let ksf_params = ksf();
-                let params = ClientLoginFinishParameters::new(
-                    None,
-                    identifiers(client_id.as_bytes(), server_id.as_bytes()),
-                    Some(&ksf_params),
-                );
-                let finish = start
-                    .state
-                    .finish(&mut rng, password.as_bytes(), credential_response, params)
-                    .map_err(|_| {
-                        AppError::Config("Unable to complete secure re-auth.".to_string())
-                    })?;
-
-                let finish_request = OpaqueReauthFinishRequest {
-                    login_id: start_response.login_id,
-                    credential_finalization: base64::engine::general_purpose::STANDARD
-                        .encode(finish.message.serialize()),
-                };
-                let zero_token = token::fetch_zero_token().await?;
-                auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
-
-                // 2. Call delete
-                client::delete_security_key(&credential_id).await
-            }
-        });
-
-    Effect::new(move |_| {
-        if let Some(Ok(())) = delete_key_action.value().get() {
-            set_show_delete_key_form.set(None);
-            set_delete_key_password.set(String::new());
-            security_keys.refetch();
-        }
-    });
-
-    let add_key_action = Action::new_local(move |label: &String| {
-        let label = label.clone();
-        async move {
-            // 1. Start WebAuthn registration
-            let start_response = auth_client::mfa_webauthn_register_start().await?;
-
-            // 2. Browser interaction (YubiKey touch)
-            let reg_response =
-                crate::features::auth::webauthn::register_key(&start_response.challenge).await?;
-
-            // 3. Finish registration
-            auth_client::mfa_webauthn_register_finish(
-                &crate::features::auth::types::WebauthnRegisterFinishRequest {
-                    reg_id: start_response.reg_id,
-                    label,
-                    response: reg_response,
-                },
-            )
-            .await
-        }
-    });
-
-    Effect::new(move |_| {
-        if let Some(Ok(())) = add_key_action.value().get() {
-            set_show_add_key_form.set(false);
-            set_new_key_label.set(String::new());
-            security_keys.refetch();
-        }
-    });
-
-    // Derived security status from profile
     let security_status = Memo::new(move |_| {
         profile
             .get()
@@ -227,6 +87,539 @@ pub fn MeSecurityPage() -> impl IntoView {
                 totp_enabled: me.totp_enabled,
             })
     });
+
+    view! {
+        <div class="space-y-8">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+                    "Security"
+                </h1>
+                <p class="text-gray-500 dark:text-gray-400">
+                    "Manage your account security and authentication methods."
+                </p>
+            </div>
+
+            <Suspense fallback=move || view! { <Spinner /> }>
+                {move || match (profile.get(), security_status.get()) {
+                    (Some(Ok(me)), Some(status)) => {
+                        let email = StoredValue::new(me.email.clone());
+
+                        view! {
+                            <div class="space-y-8">
+                                // Sign-in methods section
+                                <section class="space-y-4">
+                                    <h2 class="text-lg font-medium text-gray-900 dark:text-white px-1">
+                                        "Sign-in methods"
+                                    </h2>
+                                    <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                                        <PasswordSection email configured=status.password_configured />
+
+                                        <PasskeysSection />
+                                    </div>
+                                </section>
+
+                                // Two-factor authentication section
+                                <section class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible bg-white dark:bg-gray-800">
+                                    <div class="px-6 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
+                                        <h2 class="text-lg font-medium text-gray-900 dark:text-white">
+                                            "Two-factor authentication"
+                                        </h2>
+                                    </div>
+
+                                    <div class="divide-y divide-gray-200 dark:divide-gray-700">
+                                        // Status Row
+                                        <div class=Theme::ROW>
+                                            <div class="flex items-center justify-between">
+                                                <div class="flex items-center space-x-3">
+                                                    <span class=Theme::ICON>
+                                                        "phonelink_lock"
+                                                    </span>
+                                                    <div>
+                                                        <p class="text-sm font-medium text-gray-900 dark:text-white">
+                                                            "Two-factor methods"
+                                                        </p>
+                                                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                                                            {if status.two_factor_enabled {
+                                                                "Two-factor authentication is enabled."
+                                                            } else {
+                                                                "Two-factor authentication is not enabled."
+                                                            }}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <Show when=move || !status.two_factor_enabled>
+                                                    {
+                                                        let navigate = use_navigate();
+                                                        view! {
+                                                            <button
+                                                                on:click=move |_| {
+                                                                    navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default());
+                                                                }
+                                                                class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                            >
+                                                                "Add"
+                                                            </button>
+                                                        }
+                                                    }
+                                                </Show>
+                                            </div>
+                                        </div>
+
+                                        <AuthenticatorSection email enabled=status.two_factor_enabled totp_enabled=status.totp_enabled profile />
+
+                                        <SecurityKeysSection />
+
+                                        <RecoveryCodesSection email enabled=status.two_factor_enabled && status.totp_enabled />
+                                    </div>
+                                </section>
+                            </div>
+                        }.into_any()
+                    }
+                    (Some(Err(err)), _) => {
+                        view! { <Alert kind=AlertKind::Error message=err.to_string() /> }
+                            .into_any()
+                    }
+                    _ => view! { <Spinner /> }.into_any(),
+                }}
+            </Suspense>
+        </div>
+    }
+}
+
+/// Owns authenticator settings and rechecks current session authority on removal.
+#[component]
+fn AuthenticatorSection(
+    email: StoredValue<String>,
+    enabled: bool,
+    totp_enabled: bool,
+    profile: LocalResource<Result<crate::features::me::types::MeProfile, AppError>>,
+) -> impl IntoView {
+    let auth = use_auth();
+    // Delete MFA signals
+    let (show_delete_totp_form, set_show_delete_totp_form) = signal(false);
+    let (delete_password, set_delete_password) = signal(String::new());
+
+    // Derived security status from profile
+    let disable_totp_action = Action::new_local(move |input: &MfaAuthInput| {
+        let input = input.clone();
+        async move {
+            let config = AppConfig::load();
+            let client_id = normalize_email(&input.email);
+            let server_id = config.opaque_server_id;
+
+            let mut rng = OsRng;
+            // 1. Re-auth via OPAQUE
+            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
+                .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
+            let start_request = OpaqueReauthStartRequest {
+                credential_request: base64::engine::general_purpose::STANDARD
+                    .encode(start.message.serialize()),
+            };
+            let zero_token = token::fetch_zero_token().await?;
+            let start_response =
+                auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
+
+            let response_bytes = base64::engine::general_purpose::STANDARD
+                .decode(start_response.credential_response)
+                .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
+            let credential_response =
+                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
+                    AppError::Config("Unable to complete secure re-auth.".to_string())
+                })?;
+
+            let ksf_params = ksf();
+            let params = ClientLoginFinishParameters::new(
+                None,
+                identifiers(client_id.as_bytes(), server_id.as_bytes()),
+                Some(&ksf_params),
+            );
+            let finish = start
+                .state
+                .finish(
+                    &mut rng,
+                    input.password.as_bytes(),
+                    credential_response,
+                    params,
+                )
+                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
+
+            let finish_request = OpaqueReauthFinishRequest {
+                login_id: start_response.login_id,
+                credential_finalization: base64::engine::general_purpose::STANDARD
+                    .encode(finish.message.serialize()),
+            };
+            let zero_token = token::fetch_zero_token().await?;
+            auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
+
+            // 2. Call disable endpoint
+            auth_client::mfa_totp_disable().await
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(Ok(())) = disable_totp_action.value().get() {
+            set_show_delete_totp_form.set(false);
+            set_delete_password.set(String::new());
+            profile.refetch();
+            auth.refresh_session();
+        }
+    });
+
+    view! {
+                                        <Show when=move || enabled>
+                                            <div class="px-6 py-4 space-y-2">
+                                                <div class="group">
+                                                    <div class=Theme::LIST_ITEM_FLAT>
+                                                        <div class="flex items-center space-x-3">
+                                                            <span class=Theme::ICON_SMALL>
+                                                                "smartphone"
+                                                            </span>
+                                                            <span class="text-sm text-gray-700 dark:text-gray-300 font-medium">
+                                                                "Authenticator app"
+                                                            </span>
+                                                        </div>
+                                                        <div class="flex items-center space-x-4">
+                                                            <Show when=move || totp_enabled>
+                                                                <div class="relative inline-block text-left">
+                                                                    {
+                                                                        let (show_menu, set_show_menu) = signal(false);
+                                                                        view! {
+                                                                                <span
+                                                                                    class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                                                                                    role="button"
+                                                                                    tabindex="0"
+                                                                                    aria-label="Authenticator settings"
+                                                                                    on:click=move |ev| {
+                                                                                        ev.stop_propagation();
+                                                                                        set_show_menu.update(|v| *v = !*v);
+                                                                                    }
+                                                                                    on:keydown=move |event| {
+                                                                                        if event.key() == "Enter" || event.key() == " " {
+                                                                                            set_show_menu.update(|v| *v = !*v);
+                                                                                        }
+                                                                                    }
+                                                                                >
+                                                                                    <span class="material-symbols-outlined text-sm">"settings"</span>
+                                                                                </span>
+
+                                                                            <Show when=move || show_menu.get()>
+                                                                                <div
+                                                                                    class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black/5 focus:outline-none border border-gray-100 dark:border-gray-700"
+                                                                                    on:click=move |ev| ev.stop_propagation()
+                                                                                    on:mouseleave=move |_| set_show_menu.set(false)
+                                                                                >
+                                                                                    <div class="py-1">
+                                                                                        <leptos_router::components::A
+                                                                                            href={paths::MFA_SETUP}
+                                                                                            {..}
+                                                                                            on:click=move |_| set_show_menu.set(false)
+                                                                                            class="flex w-full items-center px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                                                                        >
+                                                                                            <span class="material-symbols-outlined mr-3 text-sm">"edit"</span>
+                                                                                            "Edit"
+                                                                                        </leptos_router::components::A>
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            on:click={
+                                                                                                move |_| {
+                                                                                                    set_show_menu.set(false);
+                                                                                                    set_show_delete_totp_form.set(true);
+                                                                                                }
+                                                                                            }
+                                                                                            class="flex w-full items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer text-left"
+                                                                                        >
+                                                                                            <span class="material-symbols-outlined mr-3 text-sm">"delete"</span>
+                                                                                            "Delete"
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </Show>
+                                                                        }
+                                                                    }
+                                                                </div>
+                                                            </Show>
+
+                                                            <Show when=move || !totp_enabled>
+                                                                {
+                                                                    let navigate = use_navigate();
+                                                                    view! {
+                                                                        <button
+                                                                            on:click=move |_| navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default())
+                                                                            class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                                        >
+                                                                            "Add"
+                                                                        </button>
+                                                                    }
+                                                                }
+                                                            </Show>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <Show when=move || show_delete_totp_form.get()>
+                                                    <div class="mt-4">
+                                                        <form
+                                                            class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
+                                                            on:submit=move |event: SubmitEvent| {
+                                                                event.prevent_default();
+                                                                let password = delete_password.get_untracked();
+                                                                if password.trim().is_empty() {
+                                                                    return;
+                                                                }
+                                                                disable_totp_action.dispatch(MfaAuthInput {
+                                                                    email: email.get_value(),
+                                                                    password,
+                                                                });
+                                                            }
+                                                        >
+                                                            <div class="flex items-start space-x-3 mb-2">
+                                                                <span class="material-symbols-outlined text-red-600 dark:text-red-400">"warning"</span>
+                                                                <p class="text-sm text-red-800 dark:text-red-200 font-medium">
+                                                                    "Confirm removal of Authenticator app"
+                                                                </p>
+                                                            </div>
+                                                            <p class="text-xs text-red-700 dark:text-red-300 mb-4">
+                                                                "This will disable two-factor authentication for your account. Please enter your password to confirm."
+                                                            </p>
+                                                            <div>
+                                                                <label class="block mb-1 text-xs font-medium text-red-900 dark:text-red-200" for="delete_password">
+                                                                    "Password"
+                                                                </label>
+                                                                <input
+                                                                    id="delete_password"
+                                                                    type="password"
+                                                                    class="bg-white border border-red-200 text-gray-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block w-full p-2 dark:bg-gray-800 dark:border-red-900/50 dark:text-white"
+                                                                    required
+                                                                    on:input=move |event| set_delete_password.set(event_target_value(&event))
+                                                                />
+                                                            </div>
+                                                            <div class="pt-2 flex items-center gap-3">
+                                                                <button
+                                                                    type="submit"
+                                                                    disabled=disable_totp_action.pending()
+                                                                    class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                                                                >
+                                                                    "Remove method"
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    on:click=move |_| set_show_delete_totp_form.set(false)
+                                                                    class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                                >
+                                                                    "Cancel"
+                                                                </button>
+                                                                {move || {
+                                                                    disable_totp_action
+                                                                        .pending()
+                                                                        .get()
+                                                                        .then_some(view! { <Spinner /> })
+                                                                }}
+                                                            </div>
+                                                            {move || {
+                                                                disable_totp_action
+                                                                    .value()
+                                                                    .get()
+                                                                    .and_then(std::result::Result::err)
+                                                                    .map(|err| {
+                                                                        view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                                                    })
+                                                            }}
+                                                        </form>
+                                                    </div>
+                                                </Show>
+                                            </div>
+                                        </Show>
+
+    }
+}
+
+/// Regenerates recovery codes after password proof and shows them only in this view.
+#[component]
+fn RecoveryCodesSection(email: StoredValue<String>, enabled: bool) -> impl IntoView {
+    // Recovery codes signals
+    let (show_recovery_codes_form, set_show_recovery_codes_form) = signal(false);
+    let (recovery_password, set_recovery_password) = signal(String::new());
+    let (regenerated_codes, set_regenerated_codes) = signal::<Option<Vec<String>>>(None);
+
+    let regenerate_codes_action = Action::new_local(move |input: &MfaAuthInput| {
+        let input = input.clone();
+        async move {
+            let config = AppConfig::load();
+            let client_id = normalize_email(&input.email);
+            let server_id = config.opaque_server_id;
+
+            let mut rng = OsRng;
+            // 1. Re-auth via OPAQUE
+            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
+                .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
+            let start_request = OpaqueReauthStartRequest {
+                credential_request: base64::engine::general_purpose::STANDARD
+                    .encode(start.message.serialize()),
+            };
+            let zero_token = token::fetch_zero_token().await?;
+            let start_response =
+                auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
+
+            let response_bytes = base64::engine::general_purpose::STANDARD
+                .decode(start_response.credential_response)
+                .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
+            let credential_response =
+                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
+                    AppError::Config("Unable to complete secure re-auth.".to_string())
+                })?;
+
+            let ksf_params = ksf();
+            let params = ClientLoginFinishParameters::new(
+                None,
+                identifiers(client_id.as_bytes(), server_id.as_bytes()),
+                Some(&ksf_params),
+            );
+            let finish = start
+                .state
+                .finish(
+                    &mut rng,
+                    input.password.as_bytes(),
+                    credential_response,
+                    params,
+                )
+                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
+
+            let finish_request = OpaqueReauthFinishRequest {
+                login_id: start_response.login_id,
+                credential_finalization: base64::engine::general_purpose::STANDARD
+                    .encode(finish.message.serialize()),
+            };
+            let zero_token = token::fetch_zero_token().await?;
+            auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
+
+            // 2. Call regeneration endpoint
+            let response = auth_client::regenerate_recovery_codes().await?;
+            Ok::<Vec<String>, AppError>(response.codes)
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(Ok(codes)) = regenerate_codes_action.value().get() {
+            set_regenerated_codes.set(Some(codes));
+            set_show_recovery_codes_form.set(false);
+            set_recovery_password.set(String::new());
+        }
+    });
+
+    view! {
+                                        // Recovery Codes Row
+                                        <Show when=move || enabled>
+                                            <div class=Theme::ROW>
+                                                <div class="flex items-center justify-between">
+                                                    <div class="flex items-center space-x-3">
+                                                        <span class=Theme::ICON>
+                                                            "settings_backup_restore"
+                                                        </span>
+                                                        <div>
+                                                            <p class="text-sm font-medium text-gray-900 dark:text-white">
+                                                                "Recovery codes"
+                                                            </p>
+                                                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                                                "Fallback access via one-time codes."
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    <button
+                                                        on:click=move |_| {
+                                                            set_show_recovery_codes_form.update(|v| *v = !*v);
+                                                            set_regenerated_codes.set(None);
+                                                        }
+                                                        class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                    >
+                                                        {move || if show_recovery_codes_form.get() { "Cancel" } else { "Regenerate" }}
+                                                    </button>
+                                                </div>
+
+                                                <Show when=move || show_recovery_codes_form.get()>
+                                                    <form
+                                                        class="mt-6 space-y-4 max-w-md bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm"
+                                                        on:submit=move |event: SubmitEvent| {
+                                                            event.prevent_default();
+                                                            let password = recovery_password.get_untracked();
+                                                            if password.trim().is_empty() {
+                                                                return;
+                                                            }
+                                                            regenerate_codes_action.dispatch(MfaAuthInput {
+                                                                email: email.get_value(),
+                                                                password,
+                                                            });
+                                                        }
+                                                    >
+                                                        <p class="text-xs text-gray-600 dark:text-gray-400 mb-4">
+                                                            "Regenerating codes will invalidate your existing set. Enter your password to continue."
+                                                        </p>
+                                                        <div>
+                                                            <label class="block mb-1 text-xs font-medium text-gray-700 dark:text-gray-300" for="recovery_password">
+                                                                "Password"
+                                                            </label>
+                                                            <input
+                                                                id="recovery_password"
+                                                                type="password"
+                                                                class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                                                required
+                                                                on:input=move |event| set_recovery_password.set(event_target_value(&event))
+                                                            />
+                                                        </div>
+                                                        <div class="pt-2 flex items-center gap-4">
+                                                            <Button button_type="submit" disabled=regenerate_codes_action.pending()>
+                                                                "Regenerate codes"
+                                                            </Button>
+                                                            {move || {
+                                                                regenerate_codes_action
+                                                                    .pending()
+                                                                    .get()
+                                                                    .then_some(view! { <Spinner /> })
+                                                            }}
+                                                        </div>
+                                                        {move || {
+                                                            regenerate_codes_action
+                                                                .value()
+                                                                .get()
+                                                                .and_then(std::result::Result::err)
+                                                                .map(|err| {
+                                                                    view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                                                })
+                                                        }}
+                                                    </form>
+                                                </Show>
+
+                                                <Show when=move || regenerated_codes.get().is_some()>
+                                                    <div class="mt-6 space-y-4">
+                                                        <Alert kind=AlertKind::Info message="New recovery codes have been generated. Please save them in a safe place.".to_string() />
+                                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-inner">
+                                                            <div class="grid grid-cols-2 gap-2 font-mono text-sm">
+                                                                {move || regenerated_codes.get().unwrap_or_default().into_iter().map(|code| {
+                                                                    view! { <div class="p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm text-center">{code}</div> }
+                                                                }).collect::<Vec<_>>()}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            on:click=move |_| set_regenerated_codes.set(None)
+                                                            class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                                        >
+                                                            "Close"
+                                                        </button>
+                                                    </div>
+                                                </Show>
+                                            </div>
+                                        </Show>
+    }
+}
+
+/// Owns the password-rotation ceremony and clears the old session on success.
+#[component]
+fn PasswordSection(email: StoredValue<String>, configured: bool) -> impl IntoView {
+    let auth = use_auth();
+    let (current_password, set_current_password) = signal(String::new());
+    let (new_password, set_new_password) = signal(String::new());
+    let (confirm_password, set_confirm_password) = signal(String::new());
+    let (password_error, set_password_error) = signal::<Option<AppError>>(None);
+    let (show_password_form, set_show_password_form) = signal(false);
 
     let change_password_action = Action::new_local(move |input: &ChangePasswordInput| {
         let input = input.clone();
@@ -322,136 +715,6 @@ pub fn MeSecurityPage() -> impl IntoView {
         }
     });
 
-    let regenerate_codes_action = Action::new_local(move |input: &MfaAuthInput| {
-        let input = input.clone();
-        async move {
-            let config = AppConfig::load();
-            let client_id = normalize_email(&input.email);
-            let server_id = config.opaque_server_id;
-
-            let mut rng = OsRng;
-            // 1. Re-auth via OPAQUE
-            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
-                .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
-            let start_request = OpaqueReauthStartRequest {
-                credential_request: base64::engine::general_purpose::STANDARD
-                    .encode(start.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            let start_response =
-                auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
-
-            let response_bytes = base64::engine::general_purpose::STANDARD
-                .decode(start_response.credential_response)
-                .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
-            let credential_response =
-                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
-                    AppError::Config("Unable to complete secure re-auth.".to_string())
-                })?;
-
-            let ksf_params = ksf();
-            let params = ClientLoginFinishParameters::new(
-                None,
-                identifiers(client_id.as_bytes(), server_id.as_bytes()),
-                Some(&ksf_params),
-            );
-            let finish = start
-                .state
-                .finish(
-                    &mut rng,
-                    input.password.as_bytes(),
-                    credential_response,
-                    params,
-                )
-                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
-
-            let finish_request = OpaqueReauthFinishRequest {
-                login_id: start_response.login_id,
-                credential_finalization: base64::engine::general_purpose::STANDARD
-                    .encode(finish.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
-
-            // 2. Call regeneration endpoint
-            let response = auth_client::regenerate_recovery_codes().await?;
-            Ok::<Vec<String>, AppError>(response.codes)
-        }
-    });
-
-    Effect::new(move |_| {
-        if let Some(Ok(codes)) = regenerate_codes_action.value().get() {
-            set_regenerated_codes.set(Some(codes));
-            set_show_recovery_codes_form.set(false);
-            set_recovery_password.set(String::new());
-        }
-    });
-
-    let disable_totp_action = Action::new_local(move |input: &MfaAuthInput| {
-        let input = input.clone();
-        async move {
-            let config = AppConfig::load();
-            let client_id = normalize_email(&input.email);
-            let server_id = config.opaque_server_id;
-
-            let mut rng = OsRng;
-            // 1. Re-auth via OPAQUE
-            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
-                .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
-            let start_request = OpaqueReauthStartRequest {
-                credential_request: base64::engine::general_purpose::STANDARD
-                    .encode(start.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            let start_response =
-                auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
-
-            let response_bytes = base64::engine::general_purpose::STANDARD
-                .decode(start_response.credential_response)
-                .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
-            let credential_response =
-                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
-                    AppError::Config("Unable to complete secure re-auth.".to_string())
-                })?;
-
-            let ksf_params = ksf();
-            let params = ClientLoginFinishParameters::new(
-                None,
-                identifiers(client_id.as_bytes(), server_id.as_bytes()),
-                Some(&ksf_params),
-            );
-            let finish = start
-                .state
-                .finish(
-                    &mut rng,
-                    input.password.as_bytes(),
-                    credential_response,
-                    params,
-                )
-                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
-
-            let finish_request = OpaqueReauthFinishRequest {
-                login_id: start_response.login_id,
-                credential_finalization: base64::engine::general_purpose::STANDARD
-                    .encode(finish.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
-
-            // 2. Call disable endpoint
-            auth_client::mfa_totp_disable().await
-        }
-    });
-
-    Effect::new(move |_| {
-        if let Some(Ok(())) = disable_totp_action.value().get() {
-            set_show_delete_totp_form.set(false);
-            set_delete_password.set(String::new());
-            profile.refetch();
-            auth.refresh_session();
-        }
-    });
-
     let auth_for_effect = auth;
     Effect::new(move |_| {
         if let Some(result) = change_password_action.value().get() {
@@ -473,30 +736,6 @@ pub fn MeSecurityPage() -> impl IntoView {
     });
 
     view! {
-        <div class="space-y-8">
-            <div>
-                <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-                    "Security"
-                </h1>
-                <p class="text-gray-500 dark:text-gray-400">
-                    "Manage your account security and authentication methods."
-                </p>
-            </div>
-
-            <Suspense fallback=move || view! { <Spinner /> }>
-                {move || match (profile.get(), security_status.get()) {
-                    (Some(Ok(me)), Some(status)) => {
-                        let email = StoredValue::new(me.email.clone());
-                        let disable_totp_action = disable_totp_action;
-
-                        view! {
-                            <div class="space-y-8">
-                                // Sign-in methods section
-                                <section class="space-y-4">
-                                    <h2 class="text-lg font-medium text-gray-900 dark:text-white px-1">
-                                        "Sign-in methods"
-                                    </h2>
-                                    <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                                         // Password Row
                                         <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
@@ -509,7 +748,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                             "Password"
                                                         </p>
                                                         <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                            {if status.password_configured {
+                                                            {if configured {
                                                                 "Password is set"
                                                             } else {
                                                                 "No password set"
@@ -623,221 +862,122 @@ pub fn MeSecurityPage() -> impl IntoView {
                                             </Show>
                                         </div>
 
-                                        <PasskeysSection />
-                                    </div>
-                                </section>
+    }
+}
 
-                                // Two-factor authentication section
-                                <section class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible bg-white dark:bg-gray-800">
-                                    <div class="px-6 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
-                                        <h2 class="text-lg font-medium text-gray-900 dark:text-white">
-                                            "Two-factor authentication"
-                                        </h2>
-                                    </div>
+/// Manages hardware MFA keys with per-mutation reauthentication and local feedback.
+#[component]
+fn SecurityKeysSection() -> impl IntoView {
+    let auth = use_auth();
+    // Security keys signals
+    let security_keys =
+        LocalResource::new(move || async move { client::list_security_keys().await });
+    let (show_add_key_form, set_show_add_key_form) = signal(false);
+    let (new_key_label, set_new_key_label) = signal(String::new());
+    let (show_delete_key_form, set_show_delete_key_form) = signal::<Option<String>>(None); // Credential ID
+    let (delete_key_password, set_delete_key_password) = signal(String::new());
 
-                                    <div class="divide-y divide-gray-200 dark:divide-gray-700">
-                                        // Status Row
-                                        <div class=Theme::ROW>
-                                            <div class="flex items-center justify-between">
-                                                <div class="flex items-center space-x-3">
-                                                    <span class=Theme::ICON>
-                                                        "phonelink_lock"
-                                                    </span>
-                                                    <div>
-                                                        <p class="text-sm font-medium text-gray-900 dark:text-white">
-                                                            "Two-factor methods"
-                                                        </p>
-                                                        <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                            {if status.two_factor_enabled {
-                                                                "Two-factor authentication is enabled."
-                                                            } else {
-                                                                "Two-factor authentication is not enabled."
-                                                            }}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                                <Show when=move || !status.two_factor_enabled>
-                                                    {
-                                                        let navigate = use_navigate();
-                                                        view! {
-                                                            <button
-                                                                on:click=move |_| {
-                                                                    navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default());
-                                                                }
-                                                                class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                                            >
-                                                                "Add"
-                                                            </button>
-                                                        }
-                                                    }
-                                                </Show>
-                                            </div>
-                                        </div>
+    let delete_key_action =
+        Action::new_local(move |(credential_id, password): &(String, String)| {
+            let credential_id = credential_id.clone();
+            let password = password.clone();
+            let auth = auth;
+            async move {
+                let config = AppConfig::load();
+                let client_id = normalize_email(
+                    &auth
+                        .session
+                        .get_untracked()
+                        .map(|s| s.email)
+                        .unwrap_or_default(),
+                );
+                let server_id = config.opaque_server_id;
 
-                                        <Show when=move || status.two_factor_enabled>
-                                            <div class="px-6 py-4 space-y-2">
-                                                <div class="group">
-                                                    <div class=Theme::LIST_ITEM_FLAT>
-                                                        <div class="flex items-center space-x-3">
-                                                            <span class=Theme::ICON_SMALL>
-                                                                "smartphone"
-                                                            </span>
-                                                            <span class="text-sm text-gray-700 dark:text-gray-300 font-medium">
-                                                                "Authenticator app"
-                                                            </span>
-                                                        </div>
-                                                        <div class="flex items-center space-x-4">
-                                                            <Show when=move || status.totp_enabled>
-                                                                <div class="relative inline-block text-left">
-                                                                    {
-                                                                        let (show_menu, set_show_menu) = signal(false);
-                                                                        view! {
-                                                                                <span
-                                                                                    class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
-                                                                                    role="button"
-                                                                                    tabindex="0"
-                                                                                    aria-label="Authenticator settings"
-                                                                                    on:click=move |ev| {
-                                                                                        ev.stop_propagation();
-                                                                                        set_show_menu.update(|v| *v = !*v);
-                                                                                    }
-                                                                                    on:keydown=move |event| {
-                                                                                        if event.key() == "Enter" || event.key() == " " {
-                                                                                            set_show_menu.update(|v| *v = !*v);
-                                                                                        }
-                                                                                    }
-                                                                                >
-                                                                                    <span class="material-symbols-outlined text-sm">"settings"</span>
-                                                                                </span>
+                let mut rng = OsRng;
+                // 1. Re-auth
+                let start = ClientLogin::<OpaqueSuite>::start(&mut rng, password.as_bytes())
+                    .map_err(|_| AppError::Config("Unable to start secure re-auth.".to_string()))?;
+                let start_request = OpaqueReauthStartRequest {
+                    credential_request: base64::engine::general_purpose::STANDARD
+                        .encode(start.message.serialize()),
+                };
+                let zero_token = token::fetch_zero_token().await?;
+                let start_response =
+                    auth_client::opaque_reauth_start(&start_request, &zero_token).await?;
 
-                                                                            <Show when=move || show_menu.get()>
-                                                                                <div
-                                                                                    class="absolute right-0 z-20 mt-2 w-48 origin-top-right rounded-md bg-white dark:bg-gray-800 shadow-lg ring-1 ring-black/5 focus:outline-none border border-gray-100 dark:border-gray-700"
-                                                                                    on:click=move |ev| ev.stop_propagation()
-                                                                                    on:mouseleave=move |_| set_show_menu.set(false)
-                                                                                >
-                                                                                    <div class="py-1">
-                                                                                        <leptos_router::components::A
-                                                                                            href={paths::MFA_SETUP}
-                                                                                            {..}
-                                                                                            on:click=move |_| set_show_menu.set(false)
-                                                                                            class="flex w-full items-center px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                                                                                        >
-                                                                                            <span class="material-symbols-outlined mr-3 text-sm">"edit"</span>
-                                                                                            "Edit"
-                                                                                        </leptos_router::components::A>
-                                                                                        <button
-                                                                                            type="button"
-                                                                                            on:click={
-                                                                                                move |_| {
-                                                                                                    set_show_menu.set(false);
-                                                                                                    set_show_delete_totp_form.set(true);
-                                                                                                }
-                                                                                            }
-                                                                                            class="flex w-full items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer text-left"
-                                                                                        >
-                                                                                            <span class="material-symbols-outlined mr-3 text-sm">"delete"</span>
-                                                                                            "Delete"
-                                                                                        </button>
-                                                                                    </div>
-                                                                                </div>
-                                                                            </Show>
-                                                                        }
-                                                                    }
-                                                                </div>
-                                                            </Show>
+                let response_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(start_response.credential_response)
+                    .map_err(|_| AppError::Config("Invalid re-auth response.".to_string()))?;
+                let credential_response = CredentialResponse::<OpaqueSuite>::deserialize(
+                    &response_bytes,
+                )
+                .map_err(|_| AppError::Config("Unable to complete secure re-auth.".to_string()))?;
 
-                                                            <Show when=move || !status.totp_enabled>
-                                                                {
-                                                                    let navigate = use_navigate();
-                                                                    view! {
-                                                                        <button
-                                                                            on:click=move |_| navigate(paths::MFA_SETUP, leptos_router::NavigateOptions::default())
-                                                                            class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                                                        >
-                                                                            "Add"
-                                                                        </button>
-                                                                    }
-                                                                }
-                                                            </Show>
-                                                        </div>
-                                                    </div>
-                                                </div>
+                let ksf_params = ksf();
+                let params = ClientLoginFinishParameters::new(
+                    None,
+                    identifiers(client_id.as_bytes(), server_id.as_bytes()),
+                    Some(&ksf_params),
+                );
+                let finish = start
+                    .state
+                    .finish(&mut rng, password.as_bytes(), credential_response, params)
+                    .map_err(|_| {
+                        AppError::Config("Unable to complete secure re-auth.".to_string())
+                    })?;
 
-                                                <Show when=move || show_delete_totp_form.get()>
-                                                    <div class="mt-4">
-                                                        <form
-                                                            class="space-y-4 max-w-md bg-red-50 dark:bg-red-900/10 p-4 rounded-lg border border-red-100 dark:border-red-900/30"
-                                                            on:submit=move |event: SubmitEvent| {
-                                                                event.prevent_default();
-                                                                let password = delete_password.get_untracked();
-                                                                if password.trim().is_empty() {
-                                                                    return;
-                                                                }
-                                                                disable_totp_action.dispatch(MfaAuthInput {
-                                                                    email: email.get_value(),
-                                                                    password,
-                                                                });
-                                                            }
-                                                        >
-                                                            <div class="flex items-start space-x-3 mb-2">
-                                                                <span class="material-symbols-outlined text-red-600 dark:text-red-400">"warning"</span>
-                                                                <p class="text-sm text-red-800 dark:text-red-200 font-medium">
-                                                                    "Confirm removal of Authenticator app"
-                                                                </p>
-                                                            </div>
-                                                            <p class="text-xs text-red-700 dark:text-red-300 mb-4">
-                                                                "This will disable two-factor authentication for your account. Please enter your password to confirm."
-                                                            </p>
-                                                            <div>
-                                                                <label class="block mb-1 text-xs font-medium text-red-900 dark:text-red-200" for="delete_password">
-                                                                    "Password"
-                                                                </label>
-                                                                <input
-                                                                    id="delete_password"
-                                                                    type="password"
-                                                                    class="bg-white border border-red-200 text-gray-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block w-full p-2 dark:bg-gray-800 dark:border-red-900/50 dark:text-white"
-                                                                    required
-                                                                    on:input=move |event| set_delete_password.set(event_target_value(&event))
-                                                                />
-                                                            </div>
-                                                            <div class="pt-2 flex items-center gap-3">
-                                                                <button
-                                                                    type="submit"
-                                                                    disabled=disable_totp_action.pending()
-                                                                    class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-                                                                >
-                                                                    "Remove method"
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    on:click=move |_| set_show_delete_totp_form.set(false)
-                                                                    class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                                                >
-                                                                    "Cancel"
-                                                                </button>
-                                                                {move || {
-                                                                    disable_totp_action
-                                                                        .pending()
-                                                                        .get()
-                                                                        .then_some(view! { <Spinner /> })
-                                                                }}
-                                                            </div>
-                                                            {move || {
-                                                                disable_totp_action
-                                                                    .value()
-                                                                    .get()
-                                                                    .and_then(std::result::Result::err)
-                                                                    .map(|err| {
-                                                                        view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                                                    })
-                                                            }}
-                                                        </form>
-                                                    </div>
-                                                </Show>
-                                            </div>
-                                        </Show>
+                let finish_request = OpaqueReauthFinishRequest {
+                    login_id: start_response.login_id,
+                    credential_finalization: base64::engine::general_purpose::STANDARD
+                        .encode(finish.message.serialize()),
+                };
+                let zero_token = token::fetch_zero_token().await?;
+                auth_client::opaque_reauth_finish(&finish_request, &zero_token).await?;
 
+                // 2. Call delete
+                client::delete_security_key(&credential_id).await
+            }
+        });
+
+    Effect::new(move |_| {
+        if let Some(Ok(())) = delete_key_action.value().get() {
+            set_show_delete_key_form.set(None);
+            set_delete_key_password.set(String::new());
+            security_keys.refetch();
+        }
+    });
+
+    let add_key_action = Action::new_local(move |label: &String| {
+        let label = label.clone();
+        async move {
+            // 1. Start WebAuthn registration
+            let start_response = auth_client::mfa_webauthn_register_start().await?;
+
+            // 2. Browser interaction (YubiKey touch)
+            let reg_response =
+                crate::features::auth::webauthn::register_key(&start_response.challenge).await?;
+
+            // 3. Finish registration
+            auth_client::mfa_webauthn_register_finish(
+                &crate::features::auth::types::WebauthnRegisterFinishRequest {
+                    reg_id: start_response.reg_id,
+                    label,
+                    response: reg_response,
+                },
+            )
+            .await
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(Ok(())) = add_key_action.value().get() {
+            set_show_add_key_form.set(false);
+            set_new_key_label.set(String::new());
+            security_keys.refetch();
+        }
+    });
+
+    view! {
                                         // Security Keys Row
                                         <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
@@ -1059,120 +1199,6 @@ pub fn MeSecurityPage() -> impl IntoView {
                                             </div>
                                         </Show>
 
-                                        // Recovery Codes Row
-                                        <Show when=move || status.two_factor_enabled && status.totp_enabled>
-                                            <div class=Theme::ROW>
-                                                <div class="flex items-center justify-between">
-                                                    <div class="flex items-center space-x-3">
-                                                        <span class=Theme::ICON>
-                                                            "settings_backup_restore"
-                                                        </span>
-                                                        <div>
-                                                            <p class="text-sm font-medium text-gray-900 dark:text-white">
-                                                                "Recovery codes"
-                                                            </p>
-                                                            <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                                "Fallback access via one-time codes."
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <button
-                                                        on:click=move |_| {
-                                                            set_show_recovery_codes_form.update(|v| *v = !*v);
-                                                            set_regenerated_codes.set(None);
-                                                        }
-                                                        class="text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                                    >
-                                                        {move || if show_recovery_codes_form.get() { "Cancel" } else { "Regenerate" }}
-                                                    </button>
-                                                </div>
-
-                                                <Show when=move || show_recovery_codes_form.get()>
-                                                    <form
-                                                        class="mt-6 space-y-4 max-w-md bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm"
-                                                        on:submit=move |event: SubmitEvent| {
-                                                            event.prevent_default();
-                                                            let password = recovery_password.get_untracked();
-                                                            if password.trim().is_empty() {
-                                                                return;
-                                                            }
-                                                            regenerate_codes_action.dispatch(MfaAuthInput {
-                                                                email: email.get_value(),
-                                                                password,
-                                                            });
-                                                        }
-                                                    >
-                                                        <p class="text-xs text-gray-600 dark:text-gray-400 mb-4">
-                                                            "Regenerating codes will invalidate your existing set. Enter your password to continue."
-                                                        </p>
-                                                        <div>
-                                                            <label class="block mb-1 text-xs font-medium text-gray-700 dark:text-gray-300" for="recovery_password">
-                                                                "Password"
-                                                            </label>
-                                                            <input
-                                                                id="recovery_password"
-                                                                type="password"
-                                                                class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                                                required
-                                                                on:input=move |event| set_recovery_password.set(event_target_value(&event))
-                                                            />
-                                                        </div>
-                                                        <div class="pt-2 flex items-center gap-4">
-                                                            <Button button_type="submit" disabled=regenerate_codes_action.pending()>
-                                                                "Regenerate codes"
-                                                            </Button>
-                                                            {move || {
-                                                                regenerate_codes_action
-                                                                    .pending()
-                                                                    .get()
-                                                                    .then_some(view! { <Spinner /> })
-                                                            }}
-                                                        </div>
-                                                        {move || {
-                                                            regenerate_codes_action
-                                                                .value()
-                                                                .get()
-                                                                .and_then(std::result::Result::err)
-                                                                .map(|err| {
-                                                                    view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
-                                                                })
-                                                        }}
-                                                    </form>
-                                                </Show>
-
-                                                <Show when=move || regenerated_codes.get().is_some()>
-                                                    <div class="mt-6 space-y-4">
-                                                        <Alert kind=AlertKind::Info message="New recovery codes have been generated. Please save them in a safe place.".to_string() />
-                                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-inner">
-                                                            <div class="grid grid-cols-2 gap-2 font-mono text-sm">
-                                                                {move || regenerated_codes.get().unwrap_or_default().into_iter().map(|code| {
-                                                                    view! { <div class="p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700 shadow-sm text-center">{code}</div> }
-                                                                }).collect::<Vec<_>>()}
-                                                            </div>
-                                                        </div>
-                                                        <button
-                                                            on:click=move |_| set_regenerated_codes.set(None)
-                                                            class="px-4 py-2 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                                        >
-                                                            "Close"
-                                                        </button>
-                                                    </div>
-                                                </Show>
-                                            </div>
-                                        </Show>
-                                    </div>
-                                </section>
-                            </div>
-                        }.into_any()
-                    }
-                    (Some(Err(err)), _) => {
-                        view! { <Alert kind=AlertKind::Error message=err.to_string() /> }
-                            .into_any()
-                    }
-                    _ => view! { <Spinner /> }.into_any(),
-                }}
-            </Suspense>
-        </div>
     }
 }
 

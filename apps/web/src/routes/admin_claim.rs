@@ -47,11 +47,9 @@ struct ClaimUiState {
     page_state: WriteSignal<PageState>,
 }
 
-#[expect(clippy::too_many_lines, reason = "existing Leptos form view")]
 #[component]
 pub fn AdminClaimPage() -> impl IntoView {
     let auth = use_auth();
-    let navigate = use_navigate();
     let (vault_token, set_vault_token) = signal(String::new());
     let (note, set_note) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
@@ -119,26 +117,7 @@ pub fn AdminClaimPage() -> impl IntoView {
 
             {move || {
                 if page_state.get() == PageState::Success {
-                     view! {
-                         <div class="space-y-4">
-                             {move || success.get().map(|msg| view! { <Alert kind=AlertKind::Success message=msg /> })}
-                             <div class="mt-4">
-                                <button
-                                    type="button"
-                                    on:click={
-                                        let navigate = navigate.clone();
-                                        move |_| navigate(paths::ADMIN, leptos_router::NavigateOptions::default())
-                                    }
-                                    class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all cursor-pointer"
-                                >
-                                    <span class="material-symbols-outlined mr-2 text-base">
-                                        "settings"
-                                    </span>
-                                    "Go Admin"
-                                </button>
-                             </div>
-                         </div>
-                     }.into_any()
+                    view! { <AdminClaimSuccess success /> }.into_any()
                 } else {
                     status_resource
                         .get().map_or_else(|| view! { <Spinner /> }.into_any(), |result: Result<AdminStatusResponse, _>| match result {
@@ -170,6 +149,27 @@ pub fn AdminClaimPage() -> impl IntoView {
                     ().into_any()
                 }
             }}
+        </div>
+    }
+}
+
+/// Shows the post-claim navigation only after server-confirmed elevation.
+#[component]
+fn AdminClaimSuccess(success: ReadSignal<Option<String>>) -> impl IntoView {
+    let navigate = use_navigate();
+    view! {
+        <div class="space-y-4">
+            {move || success.get().map(|msg| view! { <Alert kind=AlertKind::Success message=msg /> })}
+            <div class="mt-4">
+                <button
+                    type="button"
+                    on:click=move |_| navigate(paths::ADMIN, leptos_router::NavigateOptions::default())
+                    class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all cursor-pointer"
+                >
+                    <span class="material-symbols-outlined mr-2 text-base">"settings"</span>
+                    "Go Admin"
+                </button>
+            </div>
         </div>
     }
 }

@@ -59,85 +59,36 @@ fn challenge_timeout_ms(challenge: &serde_json::Value) -> Option<f64> {
 
 /// Renders the login form and drives the OPAQUE login flow.
 /// On success it fetches the session cookie and updates auth state.
-#[expect(clippy::too_many_lines, reason = "existing Leptos login view")]
 #[component]
 pub fn LoginPage() -> impl IntoView {
+    let auth = use_auth();
+    let expired_authorization = crate::features::auth::authorization::expired_request_hint();
+    view! {
+        {move || {
+            if auth.is_authenticated.get() {
+                view! {
+                    {expired_authorization.then(|| view! { <Alert kind=AlertKind::Info message="The authorization request expired. Start sign-in again from the application; this login cannot resume it.".to_owned() /> })}
+                    <AlreadySignedInPanel />
+                }.into_any()
+            } else {
+                view! { <LoginForm expired_authorization /> }.into_any()
+            }
+        }}
+    }
+}
+
+/// Owns browser-local password and passkey sign-in state.
+#[component]
+fn LoginForm(expired_authorization: bool) -> impl IntoView {
     let auth = use_auth();
     let navigate = use_navigate();
     let (email, set_email) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
-    let passkey_supported = webauthn_supported();
-    let (passkey_feedback, set_passkey_feedback) = signal::<Option<(AlertKind, String)>>(None);
-    let (passkey_pending, set_passkey_pending) = signal(false);
-    let (passkey_prepare_pending, set_passkey_prepare_pending) = signal(false);
-    let (passkey_options, set_passkey_options) = signal::<Option<PasskeyLoginStartResponse>>(None);
-    let (passkey_prepared_at, set_passkey_prepared_at) = signal::<Option<f64>>(None);
     let (show_password_fields, set_show_password_fields) = signal(false);
-    let expired_authorization = crate::features::auth::authorization::expired_request_hint();
 
-    let login_action = Action::new_local(move |input: &LoginInput| {
-        let input = input.clone();
-        async move {
-            let config = AppConfig::load();
-            let client_id = normalize_email(&input.email);
-            let server_id = config.opaque_server_id;
-
-            let mut rng = OsRng;
-            // Start OPAQUE locally so the password never leaves the browser.
-            let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
-                .map_err(|_| AppError::Config("Unable to start secure login.".to_string()))?;
-            let start_request = OpaqueLoginStartRequest {
-                email: input.email.clone(),
-                credential_request: base64::engine::general_purpose::STANDARD
-                    .encode(start.message.serialize()),
-            };
-            // Zero tokens gate permesi auth calls and are separate from sessions.
-            let zero_token = token::fetch_zero_token().await?;
-            let start_response = client::opaque_login_start(&start_request, &zero_token).await?;
-
-            // Decode the server's OPAQUE response before finishing the exchange.
-            let response_bytes = base64::engine::general_purpose::STANDARD
-                .decode(start_response.credential_response)
-                .map_err(|_| AppError::Config("Invalid login response.".to_string()))?;
-            let credential_response =
-                CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes).map_err(|_| {
-                    AppError::Config("Unable to complete secure login.".to_string())
-                })?;
-
-            let ksf_params = ksf();
-            // Bind identifiers and KSF params so the finish step is scoped correctly.
-            let params = ClientLoginFinishParameters::new(
-                None,
-                identifiers(client_id.as_bytes(), server_id.as_bytes()),
-                Some(&ksf_params),
-            );
-            let finish = start
-                .state
-                .finish(
-                    &mut rng,
-                    input.password.as_bytes(),
-                    credential_response,
-                    params,
-                )
-                .map_err(|_| AppError::Config("Unable to complete secure login.".to_string()))?;
-
-            let finish_request = OpaqueLoginFinishRequest {
-                login_id: start_response.login_id,
-                email: input.email.clone(),
-                credential_finalization: base64::engine::general_purpose::STANDARD
-                    .encode(finish.message.serialize()),
-            };
-            let zero_token = token::fetch_zero_token().await?;
-            // Finish login so the server can mint the session cookie.
-            client::opaque_login_finish(&finish_request, &zero_token).await?;
-            // Hydrate auth state by fetching the session established via cookie.
-            let session = client::fetch_session().await?.ok_or_else(|| {
-                AppError::Config("Login succeeded but no session found.".to_string())
-            })?;
-            Ok(LoginResult { session })
-        }
-    });
+    let login_action =
+        Action::new_local(move |input: &LoginInput| perform_password_login(input.clone()));
 
     let navigate_for_effect = navigate.clone();
     Effect::new(move |_| {
@@ -198,18 +149,7 @@ pub fn LoginPage() -> impl IntoView {
     };
 
     view! {
-        {
-            move || {
-                let auth = auth;
-                let navigate = navigate.clone();
-                if auth.is_authenticated.get() {
-                    view! {
-                        {expired_authorization.then(|| view! { <Alert kind=AlertKind::Info message="The authorization request expired. Start sign-in again from the application; this login cannot resume it.".to_owned() /> })}
-                        <AlreadySignedInPanel />
-                    }.into_any()
-                } else {
-                    view! {
-                        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
                             <form
                                 class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
                                 on:submit=on_submit
@@ -248,6 +188,89 @@ pub fn LoginPage() -> impl IntoView {
                                         />
                                     </div>
 
+                                    <PasskeySignIn show_password_fields set_show_password_fields />
+                                </div>
+
+                                {move || {
+                                    if show_password_fields.get() {
+                                        view! {
+                                            <div class="mt-6 space-y-4 border-t border-slate-100 pt-5">
+                                                <div class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                                    "Continue with password"
+                                                </div>
+                                                <div>
+                                                    <label
+                                                        class="block mb-2 text-sm font-medium text-slate-700"
+                                                        for="password"
+                                                    >
+                                                        "Password"
+                                                    </label>
+                                                    <input
+                                                        id="password"
+                                                        type="password"
+                                                        class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                                                        autocomplete="current-password"
+                                                        required
+                                                        on:input=move |event| set_password.set(event_target_value(&event))
+                                                    />
+                                                </div>
+                                                <Button
+                                                    button_type="submit"
+                                                    disabled=login_action.pending()
+                                                >
+                                                    "Continue with password"
+                                                </Button>
+                                            </div>
+                                        }
+                                            .into_any()
+                                    } else {
+                                        view! {
+                                            <p class="mt-4 text-xs text-slate-400">
+                                                "Prefer passkeys. Passwords are available if needed."
+                                            </p>
+                                        }
+                                            .into_any()
+                                    }
+                                }}
+
+                                {move || {
+                                    login_action
+                                        .pending()
+                                        .get()
+                                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                                }}
+                                {move || {
+                                    error
+                                        .get()
+                                        .map(|err| {
+                                            let message = format_error(&err);
+                                            view! {
+                                                <div class="mt-4">
+                                                    <Alert kind=AlertKind::Error message=message />
+                                                </div>
+                                            }
+                                        })
+                                }}
+                            </form>
+        </div>
+    }
+}
+
+/// Offers passkey login while keeping challenge preparation and browser mediation local.
+#[component]
+fn PasskeySignIn(
+    show_password_fields: ReadSignal<bool>,
+    set_show_password_fields: WriteSignal<bool>,
+) -> impl IntoView {
+    let auth = use_auth();
+    let navigate = use_navigate();
+    let passkey_supported = webauthn_supported();
+    let (passkey_feedback, set_passkey_feedback) = signal::<Option<(AlertKind, String)>>(None);
+    let (passkey_pending, set_passkey_pending) = signal(false);
+    let (passkey_prepare_pending, set_passkey_prepare_pending) = signal(false);
+    let (passkey_options, set_passkey_options) = signal::<Option<PasskeyLoginStartResponse>>(None);
+    let (passkey_prepared_at, set_passkey_prepared_at) = signal::<Option<f64>>(None);
+    view! {
                                     <button
                                         type="button"
                                         class="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
@@ -357,76 +380,66 @@ pub fn LoginPage() -> impl IntoView {
                                             }}
                                         </button>
                                     </div>
-                                </div>
-
-                                {move || {
-                                    if show_password_fields.get() {
-                                        view! {
-                                            <div class="mt-6 space-y-4 border-t border-slate-100 pt-5">
-                                                <div class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                                    "Continue with password"
-                                                </div>
-                                                <div>
-                                                    <label
-                                                        class="block mb-2 text-sm font-medium text-slate-700"
-                                                        for="password"
-                                                    >
-                                                        "Password"
-                                                    </label>
-                                                    <input
-                                                        id="password"
-                                                        type="password"
-                                                        class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                                                        autocomplete="current-password"
-                                                        required
-                                                        on:input=move |event| set_password.set(event_target_value(&event))
-                                                    />
-                                                </div>
-                                                <Button
-                                                    button_type="submit"
-                                                    disabled=login_action.pending()
-                                                >
-                                                    "Continue with password"
-                                                </Button>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! {
-                                            <p class="mt-4 text-xs text-slate-400">
-                                                "Prefer passkeys. Passwords are available if needed."
-                                            </p>
-                                        }
-                                            .into_any()
-                                    }
-                                }}
-
-                                {move || {
-                                    login_action
-                                        .pending()
-                                        .get()
-                                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
-                                }}
-                                {move || {
-                                    error
-                                        .get()
-                                        .map(|err| {
-                                            let message = format_error(&err);
-                                            view! {
-                                                <div class="mt-4">
-                                                    <Alert kind=AlertKind::Error message=message />
-                                                </div>
-                                            }
-                                        })
-                                }}
-                            </form>
-                        </div>
-                    }
-                        .into_any()
-                }
-            }
-        }
     }
+}
+
+/// Completes OPAQUE locally and accepts only the server-issued session cookie.
+async fn perform_password_login(input: LoginInput) -> Result<LoginResult, AppError> {
+    let config = AppConfig::load();
+    let client_id = normalize_email(&input.email);
+    let server_id = config.opaque_server_id;
+
+    let mut rng = OsRng;
+    // Start OPAQUE locally so the password never leaves the browser.
+    let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
+        .map_err(|_| AppError::Config("Unable to start secure login.".to_string()))?;
+    let start_request = OpaqueLoginStartRequest {
+        email: input.email.clone(),
+        credential_request: base64::engine::general_purpose::STANDARD
+            .encode(start.message.serialize()),
+    };
+    // Zero tokens gate permesi auth calls and are separate from sessions.
+    let zero_token = token::fetch_zero_token().await?;
+    let start_response = client::opaque_login_start(&start_request, &zero_token).await?;
+
+    // Decode the server's OPAQUE response before finishing the exchange.
+    let response_bytes = base64::engine::general_purpose::STANDARD
+        .decode(start_response.credential_response)
+        .map_err(|_| AppError::Config("Invalid login response.".to_string()))?;
+    let credential_response = CredentialResponse::<OpaqueSuite>::deserialize(&response_bytes)
+        .map_err(|_| AppError::Config("Unable to complete secure login.".to_string()))?;
+
+    let ksf_params = ksf();
+    // Bind identifiers and KSF params so the finish step is scoped correctly.
+    let params = ClientLoginFinishParameters::new(
+        None,
+        identifiers(client_id.as_bytes(), server_id.as_bytes()),
+        Some(&ksf_params),
+    );
+    let finish = start
+        .state
+        .finish(
+            &mut rng,
+            input.password.as_bytes(),
+            credential_response,
+            params,
+        )
+        .map_err(|_| AppError::Config("Unable to complete secure login.".to_string()))?;
+
+    let finish_request = OpaqueLoginFinishRequest {
+        login_id: start_response.login_id,
+        email: input.email.clone(),
+        credential_finalization: base64::engine::general_purpose::STANDARD
+            .encode(finish.message.serialize()),
+    };
+    let zero_token = token::fetch_zero_token().await?;
+    // Finish login so the server can mint the session cookie.
+    client::opaque_login_finish(&finish_request, &zero_token).await?;
+    // Hydrate auth state by fetching the session established via cookie.
+    let session = client::fetch_session()
+        .await?
+        .ok_or_else(|| AppError::Config("Login succeeded but no session found.".to_string()))?;
+    Ok(LoginResult { session })
 }
 
 fn start_passkey_prepare_and_auth<N>(

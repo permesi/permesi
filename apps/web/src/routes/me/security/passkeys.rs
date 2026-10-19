@@ -1,4 +1,11 @@
-//! Passkey (`WebAuthn`) UI section for the security settings page.
+//! Passkey (`WebAuthn`) UI for security settings. Registration preparation,
+//! credential listing and deletion are separate components sharing only the
+//! current resource and feedback state.
+//!
+//! Flow Overview: Prepare server options, complete the browser WebAuthn ceremony,
+//! then submit the response. Deletion requires OPAQUE reauthentication before
+//! its server mutation. Challenges and passwords stay transient in the browser;
+//! the server enforces session recency and credential ownership.
 
 use crate::{
     app_lib::{AppError, theme::Theme},
@@ -7,7 +14,10 @@ use crate::{
         auth::{opaque::reauthenticate, state::use_auth, token, webauthn},
         passkeys::{
             client,
-            types::{PasskeyRegisterFinishRequest, PasskeyRegisterOptionsResponse},
+            types::{
+                PasskeyCredentialListResponse, PasskeyRegisterFinishRequest,
+                PasskeyRegisterOptionsResponse,
+            },
         },
     },
 };
@@ -93,28 +103,15 @@ fn format_relative(value: &str) -> String {
     format!("{} ago", parts.join(", "))
 }
 
-#[expect(clippy::too_many_lines, reason = "existing Leptos passkey view")]
 #[component]
 pub fn PasskeysSection() -> impl IntoView {
     let auth = use_auth();
-    let supported = webauthn_supported();
     let passkeys = LocalResource::new(move || async move { client::list_credentials().await });
-    let (preview_mode, set_preview_mode) = signal(false);
     let (feedback, set_feedback) = signal::<Option<(AlertKind, String)>>(None);
-    let (prepared_options, set_prepared_options) =
-        signal::<Option<PasskeyRegisterOptionsResponse>>(None);
-    let (prepared_at, set_prepared_at) = signal::<Option<f64>>(None);
-    let (prepare_pending, set_prepare_pending) = signal(false);
     let (show_delete_passkey_form, set_show_delete_passkey_form) = signal::<Option<String>>(None);
     let (delete_passkey_password, set_delete_passkey_password) = signal(String::new());
     let section_ref: NodeRef<leptos::html::Div> = NodeRef::new();
     let click_listener: StoredValue<Option<WindowListenerHandle>> = StoredValue::new(None);
-
-    Effect::new(move |_| {
-        if let Some(Ok(list)) = passkeys.get() {
-            set_preview_mode.set(list.preview_mode);
-        }
-    });
 
     Effect::new(move |_| {
         let has_feedback = feedback.get().is_some();
@@ -155,6 +152,64 @@ pub fn PasskeysSection() -> impl IntoView {
             && let Some(handle) = stored.take()
         {
             handle.remove();
+        }
+    });
+
+    let delete_action = Action::new_local(move |(credential_id, password): &(String, String)| {
+        let credential_id = credential_id.clone();
+        let password = password.clone();
+        let email = auth.session.get_untracked().map(|session| session.email);
+        async move { delete_passkey_with_reauth(email, credential_id, password).await }
+    });
+    let delete_action_value = delete_action;
+
+    Effect::new(move |_| {
+        if let Some(result) = delete_action_value.value().get() {
+            match result {
+                Ok(()) => {
+                    set_feedback.set(Some((AlertKind::Success, "Passkey removed.".to_string())));
+                    set_show_delete_passkey_form.set(None);
+                    set_delete_passkey_password.set(String::new());
+                    passkeys.refetch();
+                }
+                Err(err) => set_feedback.set(Some((AlertKind::Error, err.to_string()))),
+            }
+        }
+    });
+
+    view! {
+        <div node_ref=section_ref>
+            <CreatePasskeyControl passkeys feedback set_feedback />
+
+            <PasskeyList
+                supported=webauthn_supported()
+                passkeys
+                show_delete_passkey_form
+                set_show_delete_passkey_form
+                delete_passkey_password
+                set_delete_passkey_password
+                delete_action
+            />
+        </div>
+    }
+}
+
+/// Prepares and finishes registration without exposing the browser challenge to other views.
+#[component]
+fn CreatePasskeyControl(
+    passkeys: LocalResource<Result<PasskeyCredentialListResponse, AppError>>,
+    feedback: ReadSignal<Option<(AlertKind, String)>>,
+    set_feedback: WriteSignal<Option<(AlertKind, String)>>,
+) -> impl IntoView {
+    let supported = webauthn_supported();
+    let (preview_mode, set_preview_mode) = signal(false);
+    let (prepared_options, set_prepared_options) =
+        signal::<Option<PasskeyRegisterOptionsResponse>>(None);
+    let (prepared_at, set_prepared_at) = signal::<Option<f64>>(None);
+    let (prepare_pending, set_prepare_pending) = signal(false);
+    Effect::new(move |_| {
+        if let Some(Ok(list)) = passkeys.get() {
+            set_preview_mode.set(list.preview_mode);
         }
     });
 
@@ -210,42 +265,7 @@ pub fn PasskeysSection() -> impl IntoView {
         });
     }
 
-    let delete_action = Action::new_local(move |(credential_id, password): &(String, String)| {
-        let credential_id = credential_id.clone();
-        let password = password.clone();
-        let auth = auth;
-        async move {
-            let email = auth
-                .session
-                .get_untracked()
-                .map(|s| s.email)
-                .ok_or_else(|| {
-                    AppError::Config("Sign in again before removing a passkey.".to_owned())
-                })?;
-            reauthenticate(&email, password).await?;
-
-            let zero_token = token::fetch_zero_token().await?;
-            client::delete_credential(&credential_id, &zero_token).await
-        }
-    });
-    let delete_action_value = delete_action;
-
-    Effect::new(move |_| {
-        if let Some(result) = delete_action_value.value().get() {
-            match result {
-                Ok(()) => {
-                    set_feedback.set(Some((AlertKind::Success, "Passkey removed.".to_string())));
-                    set_show_delete_passkey_form.set(None);
-                    set_delete_passkey_password.set(String::new());
-                    passkeys.refetch();
-                }
-                Err(err) => set_feedback.set(Some((AlertKind::Error, err.to_string()))),
-            }
-        }
-    });
-
     view! {
-        <div node_ref=section_ref>
             <div class=Theme::ROW>
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-3">
@@ -384,6 +404,21 @@ pub fn PasskeysSection() -> impl IntoView {
             }}
             {move || create_pending.get().then_some(view! { <div class="px-6 py-2"><Spinner /></div> })}
 
+    }
+}
+
+/// Lists persisted credentials and keeps delete controls scoped to their row.
+#[component]
+fn PasskeyList(
+    supported: bool,
+    passkeys: LocalResource<Result<PasskeyCredentialListResponse, AppError>>,
+    show_delete_passkey_form: ReadSignal<Option<String>>,
+    set_show_delete_passkey_form: WriteSignal<Option<String>>,
+    delete_passkey_password: ReadSignal<String>,
+    set_delete_passkey_password: WriteSignal<String>,
+    delete_action: Action<(String, String), Result<(), AppError>>,
+) -> impl IntoView {
+    view! {
             <Show
                 when=move || supported
                 fallback=|| ().into_any()
@@ -532,6 +567,18 @@ pub fn PasskeysSection() -> impl IntoView {
                     }
                 }}
             </Show>
-        </div>
     }
+}
+
+/// Reauthenticates the current account before deleting its passkey credential.
+async fn delete_passkey_with_reauth(
+    email: Option<String>,
+    credential_id: String,
+    password: String,
+) -> Result<(), AppError> {
+    let email = email
+        .ok_or_else(|| AppError::Config("Sign in again before removing a passkey.".to_owned()))?;
+    reauthenticate(&email, password).await?;
+    let zero_token = token::fetch_zero_token().await?;
+    client::delete_credential(&credential_id, &zero_token).await
 }

@@ -33,70 +33,40 @@ struct SignupInput {
 
 /// Renders the signup form and drives the OPAQUE registration flow.
 /// On success it prompts the user to verify their email.
-#[expect(clippy::too_many_lines, reason = "existing Leptos signup view")]
 #[component]
 pub fn SignUpPage() -> impl IntoView {
     let auth = use_auth();
+    let is_loading = auth.is_loading;
+    view! {
+        <Show
+            when=move || !is_loading.get()
+            fallback=|| view! {
+                <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+                    <Spinner />
+                </div>
+            }
+        >
+            {move || {
+                if auth.is_authenticated.get() {
+                    view! { <AlreadySignedInPanel /> }.into_any()
+                } else {
+                    view! { <SignupForm /> }.into_any()
+                }
+            }}
+        </Show>
+    }
+}
+
+/// Owns browser-local form state and dispatches the OPAQUE registration action.
+#[component]
+fn SignupForm() -> impl IntoView {
     let (email, set_email) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (confirm_password, set_confirm_password) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
     let (success, set_success) = signal(false);
 
-    let signup_action = Action::new_local(move |input: &SignupInput| {
-        let input = input.clone();
-        async move {
-            let config = AppConfig::load();
-            let client_id = normalize_email(&input.email);
-            let server_id = config.opaque_server_id;
-
-            let mut rng = OsRng;
-            let start =
-                ClientRegistration::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
-                    .map_err(|_| AppError::Config("Unable to start secure signup.".to_string()))?;
-
-            let start_request = OpaqueSignupStartRequest {
-                email: input.email.clone(),
-                registration_request: base64::engine::general_purpose::STANDARD
-                    .encode(start.message.serialize()),
-            };
-
-            let zero_token = token::fetch_zero_token().await?;
-            let start_response = client::opaque_signup_start(&start_request, &zero_token).await?;
-
-            let response_bytes = base64::engine::general_purpose::STANDARD
-                .decode(start_response.registration_response)
-                .map_err(|_| AppError::Config("Invalid signup response.".to_string()))?;
-            let registration_response = RegistrationResponse::<OpaqueSuite>::deserialize(
-                &response_bytes,
-            )
-            .map_err(|_| AppError::Config("Unable to complete secure signup.".to_string()))?;
-
-            let ksf_params = ksf();
-            let params = ClientRegistrationFinishParameters::new(
-                identifiers(client_id.as_bytes(), server_id.as_bytes()),
-                Some(&ksf_params),
-            );
-            let finish = start
-                .state
-                .finish(
-                    &mut rng,
-                    input.password.as_bytes(),
-                    registration_response,
-                    params,
-                )
-                .map_err(|_| AppError::Config("Unable to complete secure signup.".to_string()))?;
-
-            let finish_request = OpaqueSignupFinishRequest {
-                email: input.email,
-                registration_record: base64::engine::general_purpose::STANDARD
-                    .encode(finish.message.serialize()),
-            };
-
-            let zero_token = token::fetch_zero_token().await?;
-            client::opaque_signup_finish(&finish_request, &zero_token).await
-        }
-    });
+    let signup_action = Action::new_local(move |input: &SignupInput| perform_signup(input.clone()));
 
     Effect::new(move |_| {
         if let Some(result) = signup_action.value().get() {
@@ -114,66 +84,21 @@ pub fn SignUpPage() -> impl IntoView {
         set_error.set(None);
         set_success.set(false);
 
-        let email_value = normalize_email(&email.get_untracked());
-        let password_value = password.get_untracked();
-        let confirm_value = confirm_password.get_untracked();
-
-        if email_value.is_empty()
-            || password_value.trim().is_empty()
-            || confirm_value.trim().is_empty()
-        {
-            set_error.set(Some(AppError::Config(
-                "Email and both password fields are required.".to_string(),
-            )));
-            return;
+        match validate_signup_input(
+            &email.get_untracked(),
+            &password.get_untracked(),
+            &confirm_password.get_untracked(),
+        ) {
+            Ok(input) => {
+                signup_action.dispatch(input);
+            }
+            Err(err) => set_error.set(Some(err)),
         }
-
-        if !email_value.contains('@') {
-            set_error.set(Some(AppError::Config(
-                "Email address looks invalid.".to_string(),
-            )));
-            return;
-        }
-
-        if password_value != confirm_value {
-            set_error.set(Some(AppError::Config(
-                "Passwords do not match.".to_string(),
-            )));
-            return;
-        }
-
-        if password_value.trim().len() < MIN_PASSWORD_LENGTH {
-            set_error.set(Some(AppError::Config(format!(
-                "Password must be at least {MIN_PASSWORD_LENGTH} characters."
-            ))));
-            return;
-        }
-
-        signup_action.dispatch(SignupInput {
-            email: email_value,
-            password: password_value,
-        });
     };
 
-    let is_loading = auth.is_loading;
     view! {
-        <Show
-            when=move || !is_loading.get()
-            fallback=|| {
-                view! {
-                    <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
-                        <Spinner />
-                    </div>
-                }
-            }
-        >
-            {move || {
-                if auth.is_authenticated.get() {
-                    view! { <AlreadySignedInPanel /> }.into_any()
-                } else {
-                    view! {
-                        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
-                            <form
+        <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
+            <form
                                 class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8"
                                 on:submit=on_submit
                             >
@@ -189,6 +114,50 @@ pub fn SignUpPage() -> impl IntoView {
                                     </p>
                                 </div>
 
+                                <SignupFields set_email set_password set_confirm_password pending=signup_action.pending().into() />
+
+                                {move || {
+                                    signup_action
+                                        .pending()
+                                        .get()
+                                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
+                                }}
+                                {move || {
+                                    success
+                                        .get()
+                                        .then_some(view! {
+                                            <div class="mt-4">
+                                                <Alert
+                                                    kind=AlertKind::Success
+                                                    message="Check your email to verify your account.".to_string()
+                                                />
+                                            </div>
+                                        })
+                                }}
+                                {move || {
+                                    error.get().map(|err| {
+                                        let message = format_error(&err);
+                                        view! {
+                                            <div class="mt-4">
+                                                <Alert kind=AlertKind::Error message=message />
+                                            </div>
+                                        }
+                                    })
+                                }}
+            </form>
+        </div>
+    }
+}
+
+/// Renders the registration inputs while the parent owns validation and submission.
+#[component]
+fn SignupFields(
+    set_email: WriteSignal<String>,
+    set_password: WriteSignal<String>,
+    set_confirm_password: WriteSignal<String>,
+    pending: Signal<bool>,
+) -> impl IntoView {
+    view! {
                                 <div class="mt-6 space-y-4">
                                     <div>
                                         <label
@@ -244,46 +213,11 @@ pub fn SignUpPage() -> impl IntoView {
                                         />
                                     </div>
 
-                                    <Button button_type="submit" disabled=signup_action.pending()>
+                                    <Button button_type="submit" disabled=pending>
                                         "Create account"
                                     </Button>
                                 </div>
 
-                                {move || {
-                                    signup_action
-                                        .pending()
-                                        .get()
-                                        .then_some(view! { <div class="mt-4"><Spinner /></div> })
-                                }}
-                                {move || {
-                                    success
-                                        .get()
-                                        .then_some(view! {
-                                            <div class="mt-4">
-                                                <Alert
-                                                    kind=AlertKind::Success
-                                                    message="Check your email to verify your account.".to_string()
-                                                />
-                                            </div>
-                                        })
-                                }}
-                                {move || {
-                                    error.get().map(|err| {
-                                        let message = format_error(&err);
-                                        view! {
-                                            <div class="mt-4">
-                                                <Alert kind=AlertKind::Error message=message />
-                                            </div>
-                                        }
-                                    })
-                                }}
-                            </form>
-                        </div>
-                    }
-                        .into_any()
-                }
-            }}
-        </Show>
     }
 }
 
@@ -293,4 +227,79 @@ fn format_error(err: &AppError) -> String {
         AppError::Config(message) => message.clone(),
         _ => err.to_string(),
     }
+}
+
+/// Gives immediate form feedback; the server still enforces registration policy.
+fn validate_signup_input(
+    email: &str,
+    password: &str,
+    confirmation: &str,
+) -> Result<SignupInput, AppError> {
+    let email = normalize_email(email);
+    if email.is_empty() || password.trim().is_empty() || confirmation.trim().is_empty() {
+        return Err(AppError::Config(
+            "Email and both password fields are required.".to_string(),
+        ));
+    }
+    if !email.contains('@') {
+        return Err(AppError::Config("Email address looks invalid.".to_string()));
+    }
+    if password != confirmation {
+        return Err(AppError::Config("Passwords do not match.".to_string()));
+    }
+    if password.trim().len() < MIN_PASSWORD_LENGTH {
+        return Err(AppError::Config(format!(
+            "Password must be at least {MIN_PASSWORD_LENGTH} characters."
+        )));
+    }
+    Ok(SignupInput {
+        email,
+        password: password.to_string(),
+    })
+}
+
+/// Completes OPAQUE registration locally; only protocol messages leave the browser.
+async fn perform_signup(input: SignupInput) -> Result<(), AppError> {
+    let config = AppConfig::load();
+    let client_id = normalize_email(&input.email);
+    let server_id = config.opaque_server_id;
+
+    let mut rng = OsRng;
+    let start = ClientRegistration::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
+        .map_err(|_| AppError::Config("Unable to start secure signup.".to_string()))?;
+    let start_request = OpaqueSignupStartRequest {
+        email: input.email.clone(),
+        registration_request: base64::engine::general_purpose::STANDARD
+            .encode(start.message.serialize()),
+    };
+    let zero_token = token::fetch_zero_token().await?;
+    let start_response = client::opaque_signup_start(&start_request, &zero_token).await?;
+
+    let response_bytes = base64::engine::general_purpose::STANDARD
+        .decode(start_response.registration_response)
+        .map_err(|_| AppError::Config("Invalid signup response.".to_string()))?;
+    let registration_response =
+        RegistrationResponse::<OpaqueSuite>::deserialize(&response_bytes)
+            .map_err(|_| AppError::Config("Unable to complete secure signup.".to_string()))?;
+    let ksf_params = ksf();
+    let params = ClientRegistrationFinishParameters::new(
+        identifiers(client_id.as_bytes(), server_id.as_bytes()),
+        Some(&ksf_params),
+    );
+    let finish = start
+        .state
+        .finish(
+            &mut rng,
+            input.password.as_bytes(),
+            registration_response,
+            params,
+        )
+        .map_err(|_| AppError::Config("Unable to complete secure signup.".to_string()))?;
+    let finish_request = OpaqueSignupFinishRequest {
+        email: input.email,
+        registration_record: base64::engine::general_purpose::STANDARD
+            .encode(finish.message.serialize()),
+    };
+    let zero_token = token::fetch_zero_token().await?;
+    client::opaque_signup_finish(&finish_request, &zero_token).await
 }

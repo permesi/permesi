@@ -43,15 +43,10 @@ enum ResendStatus {
 
 /// Renders the verify-email page and manages verification and resend actions.
 /// The token is read from the URL fragment and cleared after parsing.
-#[expect(clippy::too_many_lines, reason = "existing Leptos verification view")]
 #[component]
 pub fn VerifyEmailPage() -> impl IntoView {
-    let navigate = use_navigate();
-    let navigate_for_success = StoredValue::new(navigate);
     let auth = use_auth();
     let (status, set_status) = signal(VerifyStatus::Idle);
-    let (resend_email, set_resend_email) = signal(String::new());
-    let (resend_status, set_resend_status) = signal(ResendStatus::Idle);
     let (verify_attempted, set_verify_attempted) = signal(false);
     let (token_processed, set_token_processed) = signal(false);
 
@@ -61,15 +56,6 @@ pub fn VerifyEmailPage() -> impl IntoView {
             let request = VerifyEmailRequest { token: token_value };
             let zero_token = token::fetch_zero_token().await?;
             client::verify_email(&request, &zero_token).await
-        }
-    });
-
-    let resend_action = Action::new_local(move |email: &String| {
-        let email = email.clone();
-        async move {
-            let request = ResendVerificationRequest { email };
-            let zero_token = token::fetch_zero_token().await?;
-            client::resend_verification(&request, &zero_token).await
         }
     });
 
@@ -112,34 +98,6 @@ pub fn VerifyEmailPage() -> impl IntoView {
         set_token_processed.set(true);
     });
 
-    Effect::new(move |_| {
-        if let Some(result) = resend_action.value().get() {
-            match result {
-                Ok(()) => set_resend_status.set(ResendStatus::Success),
-                Err(err) => set_resend_status.set(ResendStatus::Error(err.to_string())),
-            }
-        }
-    });
-
-    let on_resend_click = move |_| {
-        let email_value = resend_email.get_untracked().trim().to_string();
-        if email_value.is_empty() {
-            set_resend_status.set(ResendStatus::Error(
-                "Email is required to resend verification.".to_string(),
-            ));
-            return;
-        }
-        if !email_value.contains('@') {
-            set_resend_status.set(ResendStatus::Error(
-                "Email address looks invalid.".to_string(),
-            ));
-            return;
-        }
-
-        set_resend_status.set(ResendStatus::Pending);
-        resend_action.dispatch(email_value);
-    };
-
     view! {
         <Show
             when=move || !auth.is_loading.get()
@@ -154,6 +112,24 @@ pub fn VerifyEmailPage() -> impl IntoView {
                             <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
                                 "Verify your email"
                             </h1>
+                            <VerificationResult status />
+                            <Show when=move || status.get() != VerifyStatus::Success>
+                                <ResendVerification />
+                            </Show>
+                        </div>
+                    }
+                    .into_any()
+                }
+            }}
+        </Show>
+    }
+}
+
+/// Presents verification outcomes without taking ownership of the token-bearing action.
+#[component]
+fn VerificationResult(status: ReadSignal<VerifyStatus>) -> impl IntoView {
+    let navigate_for_success = StoredValue::new(use_navigate());
+    view! {
                             {move || match status.get() {
                                 VerifyStatus::Idle | VerifyStatus::Pending => view! {
                                     <div class="mt-4">
@@ -199,7 +175,52 @@ pub fn VerifyEmailPage() -> impl IntoView {
                                 }
                                 .into_any(),
                             }}
-                            <Show when=move || status.get() != VerifyStatus::Success>
+    }
+}
+
+/// Keeps resend state separate from the one-shot verification-token flow.
+#[component]
+fn ResendVerification() -> impl IntoView {
+    let (resend_email, set_resend_email) = signal(String::new());
+    let (resend_status, set_resend_status) = signal(ResendStatus::Idle);
+    let resend_action = Action::new_local(move |email: &String| {
+        let email = email.clone();
+        async move {
+            let request = ResendVerificationRequest { email };
+            let zero_token = token::fetch_zero_token().await?;
+            client::resend_verification(&request, &zero_token).await
+        }
+    });
+
+    Effect::new(move |_| {
+        if let Some(result) = resend_action.value().get() {
+            match result {
+                Ok(()) => set_resend_status.set(ResendStatus::Success),
+                Err(err) => set_resend_status.set(ResendStatus::Error(err.to_string())),
+            }
+        }
+    });
+
+    let on_resend_click = move |_| {
+        let email_value = resend_email.get_untracked().trim().to_string();
+        if email_value.is_empty() {
+            set_resend_status.set(ResendStatus::Error(
+                "Email is required to resend verification.".to_string(),
+            ));
+            return;
+        }
+        if !email_value.contains('@') {
+            set_resend_status.set(ResendStatus::Error(
+                "Email address looks invalid.".to_string(),
+            ));
+            return;
+        }
+
+        set_resend_status.set(ResendStatus::Pending);
+        resend_action.dispatch(email_value);
+    };
+
+    view! {
                                 <div class="mt-8 rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-800">
                                     <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
                                         "Need a new link?"
@@ -256,13 +277,6 @@ pub fn VerifyEmailPage() -> impl IntoView {
                                         }),
                                     }}
                                 </div>
-                            </Show>
-                        </div>
-                    }
-                    .into_any()
-                }
-            }}
-        </Show>
     }
 }
 
