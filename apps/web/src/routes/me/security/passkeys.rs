@@ -2,7 +2,7 @@
 //! credential listing and deletion are separate components sharing only the
 //! current resource and feedback state.
 //!
-//! Flow Overview: Prepare server options, complete the browser WebAuthn ceremony,
+//! Flow Overview: Prepare server options, complete the browser `WebAuthn` ceremony,
 //! then submit the response. Deletion requires OPAQUE reauthentication before
 //! its server mutation. Challenges and passwords stay transient in the browser;
 //! the server enforces session recency and credential ownership.

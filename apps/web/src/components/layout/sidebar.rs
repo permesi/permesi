@@ -139,6 +139,7 @@ fn ProfileNavigation() -> impl IntoView {
                 class:overflow-visible=move || is_open.get()>
                 <ProfileSubLink href=paths::ME icon="badge" label="Overview" />
                 <ProfileSubLink href=paths::ME_SECURITY icon="encrypted" label="Security" />
+                <ProfileSubLink href=paths::ME_CONNECTED_APPS icon="hub" label="Connected apps" />
             </div>
         </div>
     }

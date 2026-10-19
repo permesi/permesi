@@ -22,6 +22,8 @@ let clients=[];
 let organizationActive=true, projectActive=true, applicationActive=true;
 let memberRole='owner', delayCapabilities=false, failCapabilities=false;
 const orgId='33333333-3333-4333-8333-333333333333';
+const grantId='44444444-4444-4444-8444-444444444444';
+let savedGrants=[{id:grantId,client_id:clientId,client_name:'Jobs reader',application_name:'Jobs application',organization_slug:'crono',organization_name:'Crono',scopes:['jobs:read','runs:read'],created_at:time}];
 let denyNextResourceDelete=false;
 let requireRecentOrgAuthentication=false;
 let environments=[];
@@ -50,6 +52,8 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
   if(p==='/v1/auth/logout'&&req.method==='POST'){sessionKind='none';return send(204);}
   if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
+  if(p==='/v1/me/oauth/grants'&&req.method==='GET')return send(200,{grants:savedGrants,next_cursor:null});
+  if(p===`/v1/me/oauth/grants/${grantId}`&&req.method==='DELETE'){savedGrants=[];return send(204);}
   if(p==='/v1/orgs/crono/capabilities'){if(delayCapabilities)await new Promise(resolve=>setTimeout(resolve,650));if(failCapabilities)return send(503,{error:{code:'unavailable',message:'Capability lookup unavailable.'}});return send(organizationActive?200:404,organizationActive?{organization_id:orgId,can_manage_resources:['owner','admin'].includes(memberRole),can_delete_organization:memberRole==='owner'}:undefined);}
   if(p==='/v1/orgs')return send(200,organizationActive?[{id:'org',slug:'crono',name:'Crono',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects')return send(200,projectActive?[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]:[]);
@@ -162,6 +166,13 @@ try {
  await call('Runtime.enable');await call('Page.enable');await call('Page.bringToFront');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('permesi_logged_in','true');"});
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
+ await goto('/console/me/connected-apps');await wait("document.body.innerText.includes('Jobs reader') && document.body.innerText.includes('runs:read')");
+ assert(await evaluate("document.body.innerText.includes('Organization: Crono (crono)')"));
+ assert(!await evaluate("document.body.innerText.includes('platform:admin')"));
+ await click('Revoke access');await wait("document.querySelector('dialog[open]') && document.body.innerText.includes('Already-issued access tokens remain valid until they expire.')");
+ await click('Revoke access');await wait("document.body.innerText.includes('No saved application access on this page.')");
+ assert.equal(savedGrants.length,0);
  await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
  assert.equal(await evaluate('window.PERMESI_CONFIG.token_base_url'),origin,'Admission requests must stay on the owned fixture origin');
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/console/orgs/crono')).click()");await wait("document.body.innerText.includes('Jobs')");
@@ -466,6 +477,6 @@ try {
  for(const endpoint of [route.replace('/console','/v1'),'/v1/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs','/v1/orgs/crono'])assert(requests.some(value=>value.method==='DELETE'&&value.path===endpoint&&value.input===null));
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
+ console.log('Browser smoke passed: connected-app consent display/revocation, Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
  fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

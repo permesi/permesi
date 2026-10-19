@@ -361,6 +361,8 @@ CREATE TABLE IF NOT EXISTS oauth_grants (
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_grants_active_idx
     ON oauth_grants (user_id, client_id, organization_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS oauth_grants_client_idx ON oauth_grants (client_id);
+CREATE INDEX IF NOT EXISTS oauth_grants_user_active_page_idx
+    ON oauth_grants (user_id, created_at DESC, id DESC) WHERE revoked_at IS NULL;
 
 CREATE OR REPLACE FUNCTION validate_oauth_grant_context()
 RETURNS TRIGGER AS $$

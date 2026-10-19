@@ -2365,6 +2365,133 @@
         }
       }
     },
+    "/v1/me/oauth/grants": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Lists the session user's current saved OAuth consent in bounded, cursor-based pages.",
+        "operationId": "list_grants",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Last grant ID from the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active grants for the authenticated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedGrantPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Grant storage unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/oauth/grants/{grant_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Permanently revokes one owned grant; foreign, unknown and repeated IDs all return 404.",
+        "operationId": "revoke_grant",
+        "parameters": [
+          {
+            "name": "grant_id",
+            "in": "path",
+            "description": "Saved grant ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Saved consent revoked."
+          },
+          "400": {
+            "description": "Invalid grant ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid full session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found for this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Grant storage unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/me/sessions": {
       "get": {
         "tags": [
@@ -7651,6 +7778,68 @@
           }
         },
         "additionalProperties": false
+      },
+      "SavedGrantPage": {
+        "type": "object",
+        "required": [
+          "grants"
+        ],
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedGrantResponse"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SavedGrantResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "client_id",
+          "client_name",
+          "application_name",
+          "organization_slug",
+          "organization_name",
+          "scopes",
+          "created_at"
+        ],
+        "properties": {
+          "application_name": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "client_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "organization_name": {
+            "type": "string"
+          },
+          "organization_slug": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       },
       "ScopeResponse": {
         "type": "object",

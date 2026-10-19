@@ -20,7 +20,7 @@ pub(crate) use admin_claim::AdminClaimPage;
 pub(crate) use dashboard::DashboardPage;
 pub(crate) use health::HealthPage;
 pub(crate) use login::LoginPage;
-pub(crate) use me::{MePage, MeSecurityPage};
+pub(crate) use me::{ConnectedAppsPage, MePage, MeSecurityPage};
 pub(crate) use mfa::{MfaChallengePage, MfaSetupPage};
 pub(crate) use not_found::{NotFoundContent, NotFoundPage};
 use oauth::{ClientDetailPage, ClientsPage, OAuthOverviewPage, ScopesPage};
@@ -50,6 +50,7 @@ pub mod paths {
     pub const DASHBOARD: &str = "/console/dashboard";
     pub const ME: &str = "/console/me";
     pub const ME_SECURITY: &str = "/console/me/security";
+    pub const ME_CONNECTED_APPS: &str = "/console/me/connected-apps";
     pub const MFA_SETUP: &str = "/console/mfa/setup";
     pub const MFA_CHALLENGE: &str = "/console/mfa/challenge";
     pub const ADMIN: &str = "/console/admin";
@@ -94,6 +95,7 @@ pub fn AppRoutes() -> impl IntoView {
                 <Route path=path!("dashboard") view=DashboardPage />
                 <Route path=path!("me") view=MePage />
                 <Route path=path!("me/security") view=MeSecurityPage />
+                <Route path=path!("me/connected-apps") view=ConnectedAppsPage />
                 <Route path=path!("mfa/setup") view=MfaSetupPage />
                 <Route path=path!("mfa/challenge") view=MfaChallengePage />
 

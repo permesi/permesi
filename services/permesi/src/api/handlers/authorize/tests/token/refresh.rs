@@ -151,6 +151,37 @@ async fn refresh_public_rotation_preserves_family_scope_and_revokes_on_reuse() -
     Ok(())
 }
 
+/// Self-service consent revocation blocks future refresh on another replica.
+#[tokio::test]
+async fn refresh_rejects_user_revoked_grant_across_replicas() -> Result<()> {
+    let t = TokenFixture::new().await?;
+    let issued = issue(&t).await?;
+    let token = issued["refresh_token"].as_str().context("refresh token")?;
+    let grant_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM oauth_grants WHERE user_id=$1 AND client_id=$2 AND revoked_at IS NULL",
+    )
+    .bind(t.f.user)
+    .bind(t.f.client_internal)
+    .fetch_one(&t.f.pool)
+    .await?;
+    let revoke =
+        t.f.call(
+            &t.f.router,
+            "DELETE",
+            &format!("/v1/me/oauth/grants/{grant_id}"),
+            Some(&t.f.token),
+            None,
+            None,
+        )
+        .await?;
+    assert_eq!(revoke.status, StatusCode::NO_CONTENT);
+    let b = replica(&t).await?;
+    let (status, body) = refresh(&b, t.f.client, token, None).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body, json!({"error":"invalid_grant"}));
+    Ok(())
+}
+
 #[tokio::test]
 async fn refresh_concurrent_replicas_have_one_winner_then_revoke_the_winner_family() -> Result<()> {
     let t = TokenFixture::new().await?;

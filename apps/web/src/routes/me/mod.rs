@@ -4,8 +4,10 @@
 //! - **Overview** (`page.rs`): Displays user identity, roles, and basic profile information.
 //! - **Security** (`security.rs`): Management of sign-in methods, including OPAQUE password rotation and MFA.
 
+pub(crate) mod connected_apps;
 pub(crate) mod page;
 pub(crate) mod security;
 
+pub(crate) use connected_apps::ConnectedAppsPage;
 pub(crate) use page::MePage;
 pub(crate) use security::MeSecurityPage;

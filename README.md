@@ -300,7 +300,11 @@ to a five-minute TTL. [Refresh families](docs/oauth-refresh-tokens.md) use hashe
 single-use PostgreSQL tokens with atomic rotation, family revocation on reuse and current
 tenant/consent checks. Initial offline access requires `openid` and explicit `prompt=consent`;
 other code exchanges return no refresh token. Password rotation/recovery revoke families
-and invalidate older codes. Immediate JWT revocation and UserInfo remain planned.
+and invalidate older codes. The signed-in user can review current saved OAuth consent
+under Connected apps and revoke a grant through `GET /v1/me/oauth/grants` and
+`DELETE /v1/me/oauth/grants/{grant_id}`. Revocation blocks later code redemption and
+refresh across replicas; already-issued JWT access tokens remain valid until expiry.
+Immediate JWT revocation and UserInfo remain planned.
 The [authentication release validation record](docs/authentication-release-validation.md)
 tracks the completed shared-state, MFA, admission and refresh batch, independent review,
 regression evidence and remaining release boundaries.

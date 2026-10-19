@@ -3,7 +3,7 @@
 //! The route resolves the current profile and passes only its presentation state.
 //!
 //! Flow Overview: Password and factor mutations first prove the current password
-//! through OPAQUE or a WebAuthn ceremony, then call the server mutation API.
+//! through OPAQUE or a `WebAuthn` ceremony, then call the server mutation API.
 //! Server-side recent-authentication and factor policy remain authoritative;
 //! browser state never grants permission. Password rotation clears the old session.
 

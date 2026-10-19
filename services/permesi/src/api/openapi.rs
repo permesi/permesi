@@ -53,6 +53,8 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(me::patch_me))
         .routes(routes!(me::list_sessions))
         .routes(routes!(me::revoke_session))
+        .routes(routes!(me::grants::list_grants))
+        .routes(routes!(me::grants::revoke_grant))
         .routes(routes!(me::disable_totp))
         .routes(routes!(me::list_security_keys))
         .routes(routes!(auth::mfa::webauthn::delete_key))

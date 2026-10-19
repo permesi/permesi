@@ -3,6 +3,8 @@
 //! This module provides endpoints for users to manage their own profile,
 //! view active sessions, and configure multi-factor authentication (MFA).
 
+pub mod grants;
+
 use axum::{
     Json,
     extract::{Path, State},

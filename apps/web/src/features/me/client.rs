@@ -2,7 +2,7 @@
 
 use crate::{
     app_lib::{AppError, delete_json_with_headers_with_credentials, get_json_with_credentials},
-    features::me::types::{MeProfile, SecurityKeySummary},
+    features::me::types::{MeProfile, SavedGrantPage, SecurityKeySummary},
 };
 
 /// Fetch the authenticated user's profile.
@@ -19,4 +19,18 @@ pub async fn list_security_keys() -> Result<Vec<SecurityKeySummary>, AppError> {
 pub async fn delete_security_key(credential_id: &str) -> Result<(), AppError> {
     delete_json_with_headers_with_credentials(&format!("/v1/me/mfa/webauthn/{credential_id}"), &[])
         .await
+}
+
+/// Lists a bounded page of saved delegated consent for the current full session.
+pub async fn list_oauth_grants(after: Option<&str>) -> Result<SavedGrantPage, AppError> {
+    let path = after.map_or_else(
+        || "/v1/me/oauth/grants".to_string(),
+        |cursor| format!("/v1/me/oauth/grants?after={cursor}"),
+    );
+    get_json_with_credentials(&path).await
+}
+
+/// Revokes one grant owned by the current user; the server checks ownership.
+pub async fn revoke_oauth_grant(id: &str) -> Result<(), AppError> {
+    delete_json_with_headers_with_credentials(&format!("/v1/me/oauth/grants/{id}"), &[]).await
 }

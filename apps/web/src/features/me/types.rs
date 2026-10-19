@@ -23,3 +23,23 @@ pub struct SecurityKeySummary {
     pub created_at: String,
     pub last_used_at: Option<String>,
 }
+
+/// Saved delegated consent bound to one client and organization.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SavedGrant {
+    pub id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub application_name: String,
+    pub organization_slug: String,
+    pub organization_name: String,
+    pub scopes: Vec<String>,
+    pub created_at: String,
+}
+
+/// Bounded keyset page of the current user's active OAuth grants.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SavedGrantPage {
+    pub grants: Vec<SavedGrant>,
+    pub next_cursor: Option<String>,
+}

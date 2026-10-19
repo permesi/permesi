@@ -287,6 +287,15 @@ consent; prior saved authority never enlarges a new code. Cancel permanently com
 the request and returns `access_denied`. Client allow-lists are always maximum authority,
 never consent. Configuration changes revoke saved grants under existing client locks.
 Client/ancestry/membership and scope checks run independently of the saved grant.
+The Connected apps console lists the signed-in user's current grants in pages of 50,
+showing the exact client, application, organization and delegated scopes. The
+session-authenticated `/v1/me/oauth/grants` API never accepts a user or tenant selector;
+the delete route revokes only a grant owned by that user, returning the same 404 for
+foreign, unknown and already-revoked IDs. Both responses prohibit caching. Revocation
+is permanent and serialized against code redemption and refresh through PostgreSQL
+grant row locks. It stops future issuance under that grant, including on other replicas,
+but cannot retract a JWT already issued to a resource server. Client, scope and tenant
+configuration management remain separate from this user self-service page.
 
 Issuance generates 256 OS-random bits encoded as unpadded base64url and persists only
 SHA-256 in `oauth_authorization_codes`. Code rows bind the exact user, client, application,
@@ -512,7 +521,7 @@ current ancestry during authorization.
 Record coverage actually exercised;
 local Chromium tests do not establish cross-browser or production load behavior.
 
-Broader tenant-bound grants/consent management, UserInfo, introspection, token revocation,
+Broader administrator grant management, UserInfo, introspection, token revocation,
 device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
 and resource policy; possession of a confidential credential must not manufacture a user
 grant. Audit UI and tenant RLS remain tracked separately in TODO.md; the implemented
