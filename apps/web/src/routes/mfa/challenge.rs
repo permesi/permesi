@@ -19,6 +19,7 @@ use crate::{
     routes::paths,
 };
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
 
 /// Completes the existing server-verified MFA flow before resuming OAuth or the console.
@@ -28,6 +29,7 @@ pub fn MfaChallengePage() -> impl IntoView {
     let auth = use_auth();
     let (code, set_code) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
+    let (challenge_exhausted, set_challenge_exhausted) = signal(false);
     let (show_recovery, set_show_recovery) = signal(false);
 
     let totp_enabled = move || auth.session.get().is_none_or(|s| s.totp_enabled);
@@ -50,15 +52,15 @@ pub fn MfaChallengePage() -> impl IntoView {
         authenticate_key_action,
         verify_action,
         set_error,
+        set_challenge_exhausted,
     );
-
     view! {
         <div class="min-h-[70vh] flex items-center justify-center px-6 py-10">
             <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur sm:p-8">
                 <ChallengeHeader show_recovery=show_recovery />
 
                 <div class="mt-6 space-y-6">
-                    <Show when=move || totp_enabled() || show_recovery.get()>
+                    <Show when=move || !challenge_exhausted.get() && (totp_enabled() || show_recovery.get())>
                         <div>
                             <label class="block mb-2 text-sm font-medium text-slate-700">
                                 {move || if show_recovery.get() { "Recovery code" } else { "Verification code" }}
@@ -83,7 +85,7 @@ pub fn MfaChallengePage() -> impl IntoView {
                         </Button>
                     </Show>
 
-                    <Show when=move || !show_recovery.get() && webauthn_enabled()>
+                    <Show when=move || !challenge_exhausted.get() && !show_recovery.get() && webauthn_enabled()>
                         <Show when=totp_enabled>
                             <div class="relative my-6">
                                 <div class="absolute inset-0 flex items-center" aria-hidden="true">
@@ -100,6 +102,7 @@ pub fn MfaChallengePage() -> impl IntoView {
                         <SecurityKeyButton action=authenticate_key_action />
                     </Show>
 
+                    <Show when=move || !challenge_exhausted.get()>
                     <div class="text-center">
                         <button
                             on:click=move |_| {
@@ -115,6 +118,11 @@ pub fn MfaChallengePage() -> impl IntoView {
                             }}
                         </button>
                     </div>
+                    </Show>
+
+                    <Show when=move || challenge_exhausted.get()>
+                        <ChallengeRestart />
+                    </Show>
 
                     {move || {
                         verify_action.pending().get().then_some(view! { <Spinner /> })
@@ -124,6 +132,38 @@ pub fn MfaChallengePage() -> impl IntoView {
                     }}
                 </div>
             </div>
+        </div>
+    }
+}
+
+/// Clears the exhausted browser session and starts a fresh server-side login challenge.
+#[component]
+fn ChallengeRestart() -> impl IntoView {
+    let auth = use_auth();
+    let navigation = StoredValue::new(use_navigate());
+    let (pending, set_pending) = signal(false);
+    let (error, set_error) = signal::<Option<AppError>>(None);
+    view! {
+        <div role="alert" class="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
+            <p>"This MFA challenge has reached its attempt limit. Sign in again to start a new challenge."</p>
+            <button type="button" disabled=pending class="cursor-pointer rounded-lg border border-amber-700 px-3 py-2 font-medium transition hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:cursor-not-allowed dark:border-amber-300 dark:hover:bg-amber-900" on:click=move |_| {
+                set_pending.set(true);
+                set_error.set(None);
+                let navigate = navigation.get_value();
+                spawn_local(async move {
+                    match client::logout().await {
+                        Ok(()) => {
+                            auth.clear_session();
+                            navigate(paths::LOGIN, leptos_router::NavigateOptions::default());
+                        }
+                        Err(err) => set_error.set(Some(err)),
+                    }
+                    set_pending.set(false);
+                });
+            }>
+                "Sign in again"
+            </button>
+            {move || error.get().map(|err| view! { <Alert kind=AlertKind::Error message=err.to_string() /> })}
         </div>
     }
 }
@@ -190,6 +230,7 @@ fn watch_challenge_results(
     >,
     verify_action: Action<String, Result<crate::features::auth::types::UserSession, AppError>>,
     set_error: WriteSignal<Option<AppError>>,
+    set_challenge_exhausted: WriteSignal<bool>,
 ) {
     let navigate = use_navigate();
     let navigate_for_auth = navigate.clone();
@@ -205,6 +246,10 @@ fn watch_challenge_results(
                         let _ = storage.set_item("permesi_logged_in", "true");
                     }
                     navigate_for_auth(paths::DASHBOARD, leptos_router::NavigateOptions::default());
+                }
+                Err(err) if is_challenge_exhausted(&err) => {
+                    set_challenge_exhausted.set(true);
+                    set_error.set(None);
                 }
                 Err(err) => set_error.set(Some(err)),
             }
@@ -238,10 +283,38 @@ fn watch_challenge_results(
                         );
                     }
                 }
+                Err(err) if is_challenge_exhausted(&err) => {
+                    set_challenge_exhausted.set(true);
+                    set_error.set(None);
+                }
                 Err(err) => set_error.set(Some(err)),
             }
         }
     });
+}
+
+/// Only the server's explicit terminal challenge code disables local verification controls.
+fn is_challenge_exhausted(error: &AppError) -> bool {
+    matches!(error, AppError::Http { code: Some(code), .. } if code == "mfa_challenge_exhausted")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn challenge_lockout_requires_server_error_code() {
+        assert!(is_challenge_exhausted(&AppError::Http {
+            status: 429,
+            code: Some("mfa_challenge_exhausted".to_string()),
+            message: String::new(),
+        }));
+        assert!(!is_challenge_exhausted(&AppError::Http {
+            status: 429,
+            code: Some("rate_limited".to_string()),
+            message: String::new(),
+        }));
+    }
 }
 
 /// Explains the currently selected MFA factor without implying client-side authority.

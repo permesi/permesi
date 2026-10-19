@@ -278,6 +278,10 @@ OPAQUE login/reauthentication exchanges use bounded, encrypted, single-attempt P
 state across replicas, including original-session binding for reauthentication. See
 [shared OPAQUE exchanges](docs/opaque-exchanges.md) for migration, expiry, retention and
 regression checks. Passkey and hardware-key ceremonies also use [shared sealed PostgreSQL state](docs/webauthn-exchanges.md); [MFA lifecycle](docs/mfa-lifecycle.md) and [shared admission policy](docs/authentication-operations.md) guard current authority and bounded authentication capacity.
+Factor mutations require recent authentication for full sessions; required-enrollment
+bootstrap sessions retain their limited path. Primary-login MFA challenges share a
+PostgreSQL attempt limit across TOTP, recovery and hardware-key proofs and require a
+fresh sign-in when exhausted, including across replicas.
 
 Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
 PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,

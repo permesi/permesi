@@ -36,6 +36,7 @@ pub struct Args {
     pub email_outbox_backoff_base_seconds: u64,
     pub email_outbox_backoff_max_seconds: u64,
     pub passkeys: crate::webauthn::PasskeyConfig,
+    pub mfa_challenge_max_attempts: i32,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
     pub opaque_exchange_timeout_ms: i64,
@@ -148,6 +149,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         .with_resend_cooldown_seconds(args.email_resend_cooldown_seconds)
         .with_session_ttl_seconds(args.session_ttl_seconds)
         .with_passkeys(args.passkeys.clone())
+        .with_mfa_challenge_max_attempts(args.mfa_challenge_max_attempts)
         .with_opaque_server_id(args.opaque_server_id.clone())
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds)
         .with_opaque_exchange_timeout_ms(args.opaque_exchange_timeout_ms)
@@ -246,6 +248,10 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             args.email_resend_cooldown_seconds.to_string(),
         ),
         ("session_ttl_seconds", args.session_ttl_seconds.to_string()),
+        (
+            "mfa_challenge_max_attempts",
+            args.mfa_challenge_max_attempts.to_string(),
+        ),
         (
             "email_outbox_poll_seconds",
             args.email_outbox_poll_seconds.to_string(),
@@ -451,6 +457,7 @@ mod tests {
                 std::time::Duration::from_secs(300),
                 false,
             )?,
+            mfa_challenge_max_attempts: crate::cli::commands::DEFAULT_MFA_CHALLENGE_MAX_ATTEMPTS,
             opaque_server_id: "server-id".to_string(),
             opaque_login_ttl_seconds: 60,
             opaque_exchange_timeout_ms: 1000,

@@ -14,6 +14,7 @@ pub const DEFAULT_AUTH_LOGIN_LIMIT: i64 = 10000;
 pub const DEFAULT_AUTH_REAUTH_LIMIT: i64 = 1000;
 pub const DEFAULT_AUTH_REGISTRATION_LIMIT: i64 = 1000;
 pub const DEFAULT_AUTH_MFA_LIMIT: i64 = 1000;
+pub const DEFAULT_MFA_CHALLENGE_MAX_ATTEMPTS: i32 = 5;
 
 /// Defines every authentication admission/trusted-edge runtime option in clap.
 pub(crate) fn with_operations_args(mut command: clap::Command) -> clap::Command {
@@ -53,6 +54,14 @@ pub(crate) fn with_operations_args(mut command: clap::Command) -> clap::Command 
         );
     }
     command
+        .arg(
+            clap::Arg::new("mfa-challenge-max-attempts")
+                .long("mfa-challenge-max-attempts")
+                .env("PERMESI_MFA_CHALLENGE_MAX_ATTEMPTS")
+                .default_value("5")
+                .value_parser(clap::value_parser!(i32).range(1..=20))
+                .help("Failed factor proofs allowed per MFA login challenge"),
+        )
         .arg(
             clap::Arg::new("auth-trusted-proxy")
                 .long("auth-trusted-proxy")

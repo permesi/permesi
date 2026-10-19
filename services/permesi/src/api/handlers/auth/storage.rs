@@ -361,7 +361,13 @@ pub(super) async fn insert_mfa_challenge_session(
     ttl_seconds: i64,
 ) -> Result<String> {
     let mut connection = pool.acquire().await?;
-    insert_mfa_challenge_session_on(&mut connection, user_id, ttl_seconds).await
+    insert_mfa_challenge_session_on(
+        &mut connection,
+        user_id,
+        ttl_seconds,
+        crate::cli::commands::DEFAULT_MFA_CHALLENGE_MAX_ATTEMPTS,
+    )
+    .await
 }
 
 /// Insert through the caller's connection so verified identity locks cover issuance.
@@ -370,11 +376,12 @@ pub(super) async fn insert_mfa_challenge_session_on(
     connection: &mut PgConnection,
     user_id: Uuid,
     ttl_seconds: i64,
+    max_attempts: i32,
 ) -> Result<String> {
     // TODO: Draft-only table `user_mfa_challenge_sessions` pending migrations.
     let query = r"
-        INSERT INTO user_mfa_challenge_sessions (user_id, session_hash, expires_at)
-        VALUES ($1, $2, clock_timestamp() + ($3 * INTERVAL '1 second'))
+        INSERT INTO user_mfa_challenge_sessions (user_id, session_hash, expires_at, max_attempts)
+        VALUES ($1, $2, clock_timestamp() + ($3 * INTERVAL '1 second'), $4)
         ON CONFLICT (session_hash) DO NOTHING
     ";
     let span = tracing::info_span!(
@@ -391,6 +398,7 @@ pub(super) async fn insert_mfa_challenge_session_on(
             .bind(user_id)
             .bind(token_hash)
             .bind(ttl_seconds)
+            .bind(max_attempts)
             .execute(&mut *connection)
             .instrument(span.clone())
             .await;
@@ -456,6 +464,7 @@ pub(super) async fn lookup_mfa_challenge_session(
         JOIN users ON users.id = user_mfa_challenge_sessions.user_id
         WHERE user_mfa_challenge_sessions.session_hash = $1
           AND user_mfa_challenge_sessions.expires_at > NOW()
+          AND user_mfa_challenge_sessions.failed_attempts < user_mfa_challenge_sessions.max_attempts
           AND users.status = 'active'
         LIMIT 1
     ";

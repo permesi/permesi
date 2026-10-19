@@ -32,8 +32,12 @@ bootstrap session in the same transaction. Recovery likewise revokes refresh fam
 and advances the user revision. Recovery batch regeneration and factor/passkey
 mutation also recheck current authority under lifecycle locks. Internal roles/scopes
 remain server-resolved and never become delegated OAuth scopes.
-Recovery batch regeneration and TOTP disabling also recheck their existing recent-authentication
-requirement from the locked session row. Their storage failures and password/passkey MFA-state
+Recovery batch regeneration and TOTP disabling recheck recent authentication from the
+locked session row. Full-session TOTP and hardware-key enrollment/deletion use the same
+ten-minute policy; required-enrollment bootstrap sessions remain usable only while MFA
+is unenrolled. Passkey registration and deletion check recency before issuing options
+and again under the current-session lock before persisting credentials. A stale full
+session must reauthenticate or sign in again. Storage failures and password/passkey MFA-state
 failures return generic 503 without publishing partial authority or new recovery codes.
 
 No guarded path acquires another connection from its own pool. TOTP state/audit changes
@@ -41,7 +45,7 @@ use the guard's connection. WebAuthn proof state is consumed before opening the 
 passkey login verifies against current locked credentials and resolves MFA on that same
 connection. Hardware-key finish rechecks/locks the current credential before issuing a
 session. Enrollment persists the key, MFA state and audit together. Storage/commit failures
-publish no replacement cookie. Rejected TOTP proofs commit only their failure audit,
+publish no replacement cookie. Rejected TOTP proofs commit their failure audit and challenge attempt,
 while retaining the original session and never publishing replacement authority. An already confirmed TOTP credential is rejected as a new
 enrollment: a known credential identifier and arbitrary code cannot stand in for proof.
 
@@ -73,9 +77,17 @@ than adding a new TOTP counter protocol.
 
 Successful enrollment preserves other existing full sessions. Recovery retains registered
 factors while requiring enrollment again, allowing a recovered user to explicitly replace
-or remove them. Recent authentication remains required for TOTP disable and recovery-code
-regeneration; extending that policy to every factor mutation is tracked separately.
-Shared account/IP budgets now limit enrollment and verification attempts; a separate
-per-challenge terminal attempt counter remains a follow-up rather than an implemented claim.
+or remove them. Shared account/IP budgets limit enrollment and verification requests.
+Every primary-login MFA challenge also carries its own PostgreSQL failure count and
+issuance-time limit, default five and configurable from 1 to 20 with
+`--mfa-challenge-max-attempts` / `PERMESI_MFA_CHALLENGE_MAX_ATTEMPTS`. Invalid TOTP,
+recovery and hardware-key finish proofs share that count, including malformed JSON and
+recovery codes. At the limit, the response has `mfa_challenge_exhausted` and the cookie
+can no longer elevate on any replica; the Web console asks the user to sign in again and
+routes a reloaded, unresolvable challenge back to login.
+Missing dependencies return 503 without spending an attempt. This counter does not
+replace the independent account/IP budgets. Deploy the schema before this version and
+finish replacing old replicas before relying on terminal lockout: old binaries do not
+read the new counter columns.
 Completed workspace, real-dependency and independent review results are recorded in
 [authentication release validation](authentication-release-validation.md).

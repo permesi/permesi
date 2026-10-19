@@ -40,6 +40,7 @@ pub struct AuthConfig {
     rate_limit_ip_attempts: i64,
     rate_limit_account_attempts: i64,
     passkeys: Option<crate::webauthn::PasskeyConfig>,
+    mfa_challenge_max_attempts: i32,
     webauthn_rp_id: String,
     webauthn_rp_origin: String,
 }
@@ -71,6 +72,7 @@ impl AuthConfig {
             rate_limit_ip_attempts: DEFAULT_RATE_LIMIT_IP_ATTEMPTS,
             rate_limit_account_attempts: DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS,
             passkeys: None,
+            mfa_challenge_max_attempts: crate::cli::commands::DEFAULT_MFA_CHALLENGE_MAX_ATTEMPTS,
             webauthn_rp_id: rp_id,
             webauthn_rp_origin: rp_origin,
         }
@@ -93,6 +95,18 @@ impl AuthConfig {
     pub fn with_passkeys(mut self, config: crate::webauthn::PasskeyConfig) -> Self {
         self.passkeys = Some(config);
         self
+    }
+
+    /// Sets the dispatch-validated terminal failure limit stored with each new MFA challenge.
+    #[must_use]
+    pub fn with_mfa_challenge_max_attempts(mut self, limit: i32) -> Self {
+        self.mfa_challenge_max_attempts = limit;
+        self
+    }
+
+    /// The failure limit persisted at challenge issuance, stable across replicas and restarts.
+    pub(crate) const fn mfa_challenge_max_attempts(&self) -> i32 {
+        self.mfa_challenge_max_attempts
     }
 
     /// Retrieves explicit `WebAuthn` policy, required in production server construction.

@@ -861,7 +861,7 @@
             }
           },
           "429": {
-            "description": "Rate limited",
+            "description": "Shared limit or terminal MFA challenge exhaustion (mfa_challenge_exhausted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -922,7 +922,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or full session requires recent authentication",
             "content": {
               "application/json": {
                 "schema": {
@@ -973,7 +973,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or full session requires recent authentication",
             "content": {
               "application/json": {
                 "schema": {
@@ -1047,7 +1047,7 @@
             }
           },
           "429": {
-            "description": "Authentication capacity or rate limit exceeded",
+            "description": "Shared limit or terminal MFA challenge exhaustion (mfa_challenge_exhausted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1102,6 +1102,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Terminal MFA challenge exhaustion (mfa_challenge_exhausted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1217,7 +1227,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or full session requires recent authentication",
             "content": {
               "application/json": {
                 "schema": {
@@ -1258,7 +1268,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or full session requires recent authentication",
             "content": {
               "application/json": {
                 "schema": {
@@ -2323,7 +2333,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or full session requires recent authentication",
             "content": {
               "application/json": {
                 "schema": {
@@ -2526,7 +2536,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or recent authentication required",
             "content": {
               "application/json": {
                 "schema": {
@@ -2609,7 +2619,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or recent authentication required",
             "content": {
               "application/json": {
                 "schema": {
@@ -2692,7 +2702,7 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
+            "description": "Unauthorized or recent authentication required",
             "content": {
               "application/json": {
                 "schema": {

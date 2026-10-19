@@ -54,6 +54,15 @@ use wasm_bindgen::JsValue;
 /// Minimum password length enforced by the client for early UX feedback.
 const MIN_PASSWORD_LENGTH: usize = 12;
 
+/// Gives a useful recovery path when the server's recent-authentication guard rejects a factor change.
+fn factor_mutation_error(error: &AppError) -> String {
+    if matches!(error, AppError::Http { status: 401, .. }) {
+        "Sign in again before changing authentication factors.".to_string()
+    } else {
+        error.to_string()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SecurityStatus {
     pub password_configured: bool,
@@ -907,7 +916,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                                             .get()
                                                             .and_then(std::result::Result::err)
                                                             .map(|err| {
-                                                                view! { <div class="mt-4"><Alert kind=AlertKind::Error message=err.to_string() /></div> }
+                                                                view! { <div class="mt-4"><Alert kind=AlertKind::Error message=factor_mutation_error(&err) /></div> }
                                                             })
                                                     }}
                                                 </form>

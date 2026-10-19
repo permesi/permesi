@@ -17,7 +17,7 @@ use crate::{
         utils::extract_client_ip,
         utils::hash_session_token,
     },
-    webauthn::{SecurityKeyRepo, SecurityKeyService},
+    webauthn::{SecurityKeyRepo, SecurityKeyService, VerifiedKey},
 };
 use axum::{
     Json,
@@ -42,7 +42,7 @@ type HandlerError = Box<axum::response::Response>;
         (status = 503, description = "Authentication storage unavailable"),
         (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Registration challenge generated", body = WebauthnRegisterStartResponse),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized or full session requires recent authentication")
     ),
     tag = "auth"
 )]
@@ -66,6 +66,22 @@ pub async fn register_start(
     .await
     {
         return status.into_response();
+    }
+
+    let guard = match AuthorityGuard::acquire(
+        &pool,
+        &headers,
+        principal.user_id,
+        Policy::Enrollment,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    if guard.commit().await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     let Some(session_token) = extract_session_token(&headers) else {
@@ -109,7 +125,7 @@ pub async fn register_start(
         (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Security key registered successfully"),
         (status = 400, description = "Invalid registration response"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized or full session requires recent authentication")
     ),
     tag = "auth"
 )]
@@ -302,7 +318,8 @@ pub async fn authenticate_start(
         (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Authentication successful"),
         (status = 400, description = "Invalid authentication response"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 429, description = "Terminal MFA challenge exhaustion (mfa_challenge_exhausted)")
     ),
     tag = "auth"
 )]
@@ -311,38 +328,64 @@ pub async fn authenticate_finish(
     pool: State<PgPool>,
     auth_state: State<Arc<AuthState>>,
     webauthn_service: State<Arc<SecurityKeyService>>,
-    payload: Option<Json<WebauthnAuthenticateFinishRequest>>,
+    payload: Result<
+        Json<WebauthnAuthenticateFinishRequest>,
+        axum::extract::rejection::JsonRejection,
+    >,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
 
-    let Some(Json(request)) = payload else {
-        return (StatusCode::BAD_REQUEST, "Missing payload").into_response();
+    let Ok(Json(request)) = payload else {
+        return super::reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
     };
 
     let Ok(auth_id) = Uuid::parse_str(&request.auth_id) else {
-        return (StatusCode::BAD_REQUEST, "Invalid authentication ID").into_response();
+        return super::reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
     };
 
     let Some(session_token) = extract_session_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let session_hash = hash_session_token(&session_token);
-    let origin = match extract_origin(&headers, webauthn_service.0.as_ref()) {
-        Ok(origin) => origin,
-        Err(response) => return *response,
+    let Ok(origin) = extract_origin(&headers, webauthn_service.0.as_ref()) else {
+        return super::reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
     };
 
     let auth_response: PublicKeyCredential = match serde_json::from_value(request.response) {
         Ok(res) => res,
-        Err(err) => {
-            return (
+        Err(_) => {
+            return super::reject_challenge(
+                &pool,
+                &headers,
+                principal.user_id,
+                &auth_state,
                 StatusCode::BAD_REQUEST,
-                format!("Invalid WebAuthn response: {err}"),
             )
-                .into_response();
+            .await;
         }
     };
 
@@ -359,37 +402,8 @@ pub async fn authenticate_finish(
         .await
     {
         Ok(proof) => {
-            let mut guard = match AuthorityGuard::acquire(
-                &pool,
-                &headers,
-                principal.user_id,
-                Policy::Challenge,
-                auth_state.config().opaque_exchange_timeout_ms(),
-            )
-            .await
-            {
-                Ok(guard) => guard,
-                Err(status) => return status.into_response(),
-            };
-
-            let current = sqlx::query_as::<_, (Uuid, Vec<u8>)>(
-                "SELECT user_id,public_key FROM security_keys WHERE credential_id=$1 FOR SHARE",
-            )
-            .bind(&proof.id)
-            .fetch_optional(guard.connection())
-            .await;
-            if !matches!(current,Ok(Some((user,key))) if user==principal.user_id && user==proof.user && <[u8;32]>::from(sha2::Sha256::digest(&key))==proof.fingerprint)
-            {
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
-            match guard.issue_full(&auth_state).await {
-                Ok(cookie) => (
-                    StatusCode::NO_CONTENT,
-                    [(axum::http::header::SET_COOKIE, cookie)],
-                )
-                    .into_response(),
-                Err(status) => status.into_response(),
-            }
+            issue_verified_security_key(&headers, &pool, &auth_state, principal.user_id, proof)
+                .await
         }
         Err(err) => {
             error!("Failed to finish WebAuthn authentication");
@@ -402,8 +416,65 @@ pub async fn authenticate_finish(
                 None,
             )
             .await;
-            crate::webauthn::exchange::error_response(&err)
+            let response = crate::webauthn::exchange::error_response(&err);
+            if response.status() == StatusCode::BAD_REQUEST {
+                super::reject_challenge(
+                    &pool,
+                    &headers,
+                    principal.user_id,
+                    &auth_state,
+                    StatusCode::BAD_REQUEST,
+                )
+                .await
+            } else {
+                response
+            }
         }
+    }
+}
+
+/// Rechecks the verified credential revision and exact challenge under lifecycle locks.
+async fn issue_verified_security_key(
+    headers: &HeaderMap,
+    pool: &PgPool,
+    auth_state: &AuthState,
+    user_id: Uuid,
+    proof: VerifiedKey,
+) -> axum::response::Response {
+    let mut guard = match AuthorityGuard::acquire(
+        pool,
+        headers,
+        user_id,
+        Policy::Challenge,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+
+    let current = sqlx::query_as::<_, (Uuid, Vec<u8>)>(
+        "SELECT user_id,public_key FROM security_keys WHERE credential_id=$1 FOR SHARE",
+    )
+    .bind(&proof.id)
+    .fetch_optional(guard.connection())
+    .await;
+    match current {
+        Ok(Some((owner, key)))
+            if owner == user_id
+                && owner == proof.user
+                && <[u8; 32]>::from(sha2::Sha256::digest(&key)) == proof.fingerprint => {}
+        Ok(_) => return super::commit_challenge_rejection(guard, StatusCode::UNAUTHORIZED).await,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    match guard.issue_full(auth_state).await {
+        Ok(cookie) => (
+            StatusCode::NO_CONTENT,
+            [(axum::http::header::SET_COOKIE, cookie)],
+        )
+            .into_response(),
+        Err(status) => status.into_response(),
     }
 }
 
@@ -444,7 +515,7 @@ fn extract_origin(
         (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Security key deleted successfully"),
         (status = 400, description = "Invalid credential id"),
-        (status = 401, description = "Unauthorized"),
+        (status = 401, description = "Unauthorized or full session requires recent authentication"),
         (status = 404, description = "Security key not found")
     ),
     tag = "me"

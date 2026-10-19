@@ -85,6 +85,17 @@ fn tenant_mutation_policy(
     )
 }
 
+/// Rechecks the challenge budget after clap so programmatic matches cannot bypass bounds.
+fn mfa_challenge_limit(matches: &clap::ArgMatches) -> Result<i32> {
+    let limit = *matches
+        .get_one::<i32>("mfa-challenge-max-attempts")
+        .context("missing MFA challenge attempt limit")?;
+    if !(1..=20).contains(&limit) {
+        return Err(anyhow!("invalid MFA challenge attempt limit"));
+    }
+    Ok(limit)
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -143,6 +154,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         auth_opts.rate_limit.account_attempts,
     )?;
     let passkeys = passkey_config(matches, &auth_opts)?;
+    let mfa_challenge_max_attempts = mfa_challenge_limit(matches)?;
     let tls_opts = tls::Options::parse(matches)?;
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
@@ -178,6 +190,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         email_outbox_backoff_base_seconds: auth_opts.email_outbox.backoff_base_seconds,
         email_outbox_backoff_max_seconds: auth_opts.email_outbox.backoff_max_seconds,
         passkeys,
+        mfa_challenge_max_attempts,
         opaque_server_id: auth_opts.opaque.server_id,
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
         opaque_exchange_timeout_ms: auth_opts.opaque.exchange_timeout_ms,
@@ -199,6 +212,45 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mfa_challenge_limit_rejects_out_of_range_clap_and_programmatic_values() -> Result<()> {
+        let base = [
+            "permesi",
+            "--dsn",
+            "postgres://",
+            "--admission-paserk-url",
+            "https://url",
+            "--tls-pem-bundle",
+            "bundle",
+            "--vault-url",
+            "http://vault:8200",
+            "--vault-role-id",
+            "role",
+            "--vault-secret-id",
+            "secret",
+        ];
+        for value in ["0", "21"] {
+            assert!(
+                crate::cli::commands::new()
+                    .try_get_matches_from(
+                        base.into_iter()
+                            .chain(["--mfa-challenge-max-attempts", value])
+                    )
+                    .is_err()
+            );
+            let matches = crate::cli::commands::new()
+                .mut_arg("mfa-challenge-max-attempts", |arg| {
+                    arg.value_parser(clap::value_parser!(i32))
+                })
+                .try_get_matches_from(
+                    base.into_iter()
+                        .chain(["--mfa-challenge-max-attempts", value]),
+                )?;
+            assert!(mfa_challenge_limit(&matches).is_err());
+        }
+        Ok(())
+    }
 
     /// Clap bounds and dispatch revalidation must both reject invalid operator budgets.
     #[test]

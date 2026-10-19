@@ -21,8 +21,11 @@ Password rotation and MFA recovery atomically revoke old authority and advance t
 user authorization revision. MFA enrollment/elevation/recovery checks current session
 kind and expiry under identity/session locks, consumes its original limited authority
 on success and cannot reenroll an already confirmed TOTP credential to bypass elevation.
-[MFA lifecycle](mfa-lifecycle.md) describes the intentionally preserved factor/session
-policy and remaining recent-authentication and attempt-counter work.
+[MFA lifecycle](mfa-lifecycle.md) describes the factor/session policy. A subsequent
+batch extends recent authentication to factor mutations and adds a terminal
+PostgreSQL attempt budget per primary-login MFA challenge. The counts below
+remain the validation record for the earlier release batch; current follow-up
+evidence appears below.
 
 [Authentication admission](authentication-operations.md) separates flow and subject
 budgets, verifies transport/proxy identity, bounds database waits and returns generic
@@ -170,9 +173,34 @@ load/fault benchmarks and Firefox/Safari were not exercised by this validation.
 
 UserInfo, introspection/public revocation and immediate resource-server revocation policy,
 broader grants UI, device authorization, M2M, formal OIDC conformance, ancestor mutation
-coordination/deadlines, consistent recent authentication, terminal MFA attempt counters,
-and independent exchange-key rotation remain tracked in TODO. Browser-target WASM Clippy
+coordination/deadlines and independent exchange-key rotation remain tracked in TODO.
+Recent authentication and terminal MFA challenge counters are implemented by the later
+follow-up below. Browser-target WASM Clippy
 now runs in CI; the remaining large-view line-count expectations are tracked there separately.
 The current Chromium, real-dependency and A/B tests establish the exercised
 boundaries, not certification or production throughput. Release promotion should use an
 exact green commit and the documented schema/configuration rollout requirements.
+
+## MFA recency and challenge-lockout follow-up
+
+The current `sandbox` follow-up rechecks full-session authentication time on the locked
+session before factor changes. Required-enrollment bootstrap sessions remain limited
+to an unenrolled account. Each primary-login MFA challenge stores a bounded failure
+count and issuance-time limit in PostgreSQL. TOTP, recovery and hardware-key proof
+failures share the counter across replicas; terminal failure blocks subsequent valid
+proofs and the Web console directs the user to a fresh sign-in. The schema must be
+deployed before new binaries, and old replicas must be replaced before the terminal
+limit can be relied upon across the fleet. See [MFA lifecycle](mfa-lifecycle.md) for
+exact policy and failure behavior.
+
+`just test`, all-feature workspace tests, `just db-verify`, `just openapi-check`,
+strict native/WASM Clippy, Web release build, both PostgreSQL browser stages and the
+console browser smoke test passed. The final browser reload correction was checked
+again with native Web tests, Clippy, build and all browser stages. Herdr/OMP
+`xai-oauth/grok-4.7` independently reviewed the full diff and found no confirmed
+critical, high, medium or low defect. It identified additional HTTP and restart-specific
+negative-test opportunities. A subsequent direct HTTP test rejects stale TOTP enrollment
+without writing a credential, then accepts the same session after its authentication
+time is refreshed. Shared-row concurrency and cross-pool replay regressions establish
+the server-side lockout invariant, while browser reload behavior is covered separately.
+This follow-up does not claim a release tag or hosted CI result.

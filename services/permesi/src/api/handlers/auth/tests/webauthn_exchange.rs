@@ -930,6 +930,76 @@ async fn webauthn_schema_reapplication_preserves_runtime_backstops() -> Result<(
     Ok(())
 }
 
+/// Malformed hardware-key finish requests spend the same durable login challenge budget.
+#[tokio::test]
+async fn webauthn_malformed_finish_exhausts_shared_challenge() -> Result<()> {
+    use crate::api::{
+        handlers::auth::{mfa::webauthn, storage},
+        state::AppState,
+    };
+    let db = TestDb::new()
+        .await?
+        .context("WebAuthn challenge regression requires a container runtime")?;
+    let user = insert_test_user(&db.pool).await?;
+    let token = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
+    let hash = hash_session_token(&token);
+    sqlx::query("UPDATE user_mfa_challenge_sessions SET max_attempts=1 WHERE session_hash=$1")
+        .bind(&hash)
+        .execute(&db.pool)
+        .await?;
+    let service = Arc::new(SecurityKeyService::new(
+        db.pool.clone(),
+        "example.com",
+        &[ORIGIN.into()],
+        &[1; 32],
+        300,
+        100,
+        1000,
+    )?);
+    let app = Router::new()
+        .route("/authenticate", post(webauthn::authenticate_finish))
+        .with_state(AppState {
+            security_keys: service,
+            ..AppState::for_tests(db.pool.clone())?
+        });
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/authenticate")
+            .header(COOKIE, format!("permesi_session={token}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+    };
+    let terminal = app.clone().oneshot(request()?).await?;
+    assert_eq!(terminal.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(terminal.headers().get(SET_COOKIE).is_none());
+    let body = to_bytes(terminal.into_body(), usize::MAX).await?;
+    let envelope: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        envelope
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_str),
+        Some("mfa_challenge_exhausted")
+    );
+    assert_eq!(
+        app.oneshot(request()?).await?.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let attempts: i32 = sqlx::query_scalar(
+        "SELECT failed_attempts FROM user_mfa_challenge_sessions WHERE session_hash=$1",
+    )
+    .bind(&hash)
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!(attempts, 1);
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(&db.pool)
+        .await?;
+    assert_eq!(sessions, 0);
+    Ok(())
+}
+
 /// Enrollment and challenge elevation replace exact limited cookies on a different replica.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]

@@ -84,6 +84,38 @@ BEGIN
     END IF;
 END $$;
 
+-- Every MFA challenge must retain its bounded, durable proof-failure state.
+DO $$
+DECLARE
+    account UUID;
+    challenge_hash BYTEA := decode(repeat('e7',32),'hex');
+    attempts INTEGER;
+    limit_value INTEGER;
+BEGIN
+    INSERT INTO users (email,opaque_registration_record,status)
+    VALUES ('mfa-schema-' || uuidv4()::text || '@example.test',decode(repeat('01',32),'hex'),'active')
+    RETURNING id INTO account;
+    INSERT INTO user_mfa_challenge_sessions (user_id,session_hash,expires_at)
+    VALUES (account,challenge_hash,NOW()+INTERVAL '5 minutes');
+    SELECT failed_attempts,max_attempts INTO attempts,limit_value
+    FROM user_mfa_challenge_sessions WHERE session_hash=challenge_hash;
+    IF attempts<>0 OR limit_value<>5 THEN
+        RAISE EXCEPTION 'invalid MFA challenge attempt defaults';
+    END IF;
+    BEGIN
+        UPDATE user_mfa_challenge_sessions SET max_attempts=0 WHERE session_hash=challenge_hash;
+        RAISE EXCEPTION 'missing positive MFA challenge attempt limit';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE user_mfa_challenge_sessions SET max_attempts=21 WHERE session_hash=challenge_hash;
+        RAISE EXCEPTION 'missing upper MFA challenge attempt limit';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+    BEGIN
+        UPDATE user_mfa_challenge_sessions SET failed_attempts=-1 WHERE session_hash=challenge_hash;
+        RAISE EXCEPTION 'missing nonnegative MFA challenge attempt constraint';
+    EXCEPTION WHEN check_violation THEN NULL; END;
+END $$;
+
 -- Credential lifecycle backstops must survive schema reapplication and bootstrap grants.
 DO $$
 DECLARE

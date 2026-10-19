@@ -23,7 +23,7 @@ use super::auth::{
     principal::require_auth,
 };
 
-const RECOVERY_RECENT_AUTH_SECONDS: i64 = 10 * 60;
+const RECOVERY_RECENT_AUTH_SECONDS: i64 = super::auth::authority_guard::FACTOR_RECENT_AUTH_SECONDS;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct MeResponse {

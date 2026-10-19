@@ -456,7 +456,13 @@ async fn create_session_token(
         MfaState::Enabled => {
             let ttl = auth_state.mfa().challenge_session_ttl_seconds();
             (
-                insert_mfa_challenge_session_on(connection, user_id, ttl).await,
+                insert_mfa_challenge_session_on(
+                    connection,
+                    user_id,
+                    ttl,
+                    auth_state.config().mfa_challenge_max_attempts(),
+                )
+                .await,
                 ttl,
             )
         }

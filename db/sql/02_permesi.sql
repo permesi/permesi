@@ -1029,9 +1029,16 @@ CREATE TABLE IF NOT EXISTS user_mfa_challenge_sessions (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     session_hash BYTEA NOT NULL UNIQUE CHECK (octet_length(session_hash) = 32),
+    failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    max_attempts INTEGER NOT NULL DEFAULT 5 CHECK (max_attempts BETWEEN 1 AND 20),
     expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE user_mfa_challenge_sessions
+    ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0);
+ALTER TABLE user_mfa_challenge_sessions
+    ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 5 CHECK (max_attempts BETWEEN 1 AND 20);
 
 CREATE INDEX IF NOT EXISTS user_mfa_challenge_sessions_expires_at_idx ON user_mfa_challenge_sessions (expires_at);
 

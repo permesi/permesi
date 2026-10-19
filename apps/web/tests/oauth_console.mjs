@@ -29,6 +29,7 @@ let registry=['openid','profile','email','address','phone','offline_access'].map
 let redirects=[], allowed=[];
 let secrets=[], secretSequence=0, delaySecretIssue=false, loseNextSecretResponse=false;
 let sessionKind='full';
+let exhaustMfaChallenge=false;
 let mutationForbidden=false;
 let denyNextLifecycle=false;
 const requests=[];
@@ -43,11 +44,12 @@ const server=http.createServer(async(req,res)=>{
  if(p.startsWith('/v1/')) {
   requests.push({method:req.method,path:p,input});
   if(mutationForbidden && req.method!=='GET')return send(404,'');
-  if(p==='/v1/auth/mfa/totp/verify'&&req.method==='POST'){assert.equal(input.code,'123456');sessionKind='full';return send(200,null);}
+  if(p==='/v1/auth/mfa/totp/verify'&&req.method==='POST'){if(exhaustMfaChallenge)return send(429,{error:{code:'mfa_challenge_exhausted',message:'MFA challenge exhausted. Sign in again.'}});assert.equal(input.code,'123456');sessionKind='full';return send(200,null);}
   if(p==='/v1/auth/mfa/recovery'&&req.method==='POST'){assert.equal(input.code,'TEST-RECOVERY');sessionKind='mfa_bootstrap';return send(200,null);}
   if(p==='/v1/auth/mfa/totp/enroll/start'){return send(200,{secret:'JBSWY3DPEHPK3PXP',qr_code_url:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E',credential_id:'test-enrollment'});}
   if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
-  if(p==='/v1/auth/session')return send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
+  if(p==='/v1/auth/logout'&&req.method==='POST'){sessionKind='none';return send(204);}
+  if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
   if(p==='/v1/orgs/crono/capabilities'){if(delayCapabilities)await new Promise(resolve=>setTimeout(resolve,650));if(failCapabilities)return send(503,{error:{code:'unavailable',message:'Capability lookup unavailable.'}});return send(organizationActive?200:404,organizationActive?{organization_id:orgId,can_manage_resources:['owner','admin'].includes(memberRole),can_delete_organization:memberRole==='owner'}:undefined);}
   if(p==='/v1/orgs')return send(200,organizationActive?[{id:'org',slug:'crono',name:'Crono',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects')return send(200,projectActive?[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]:[]);
@@ -388,6 +390,19 @@ try {
  assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeRecovery);
  await click("I've saved my codes - Continue");await wait("document.body.innerText.includes('Authorization resume reached')");
  assert.equal(requests.filter(value=>value.path==='/authorize/resume').length,beforeRecovery+1);
+ // Terminal server lockout removes proof controls and gives an explicit restart path.
+  sessionKind='mfa_challenge';exhaustMfaChallenge=false;
+ await goto('/console/mfa/challenge');await wait("document.body.innerText.includes('Two-factor check')");
+  exhaustMfaChallenge=true;
+ await evaluate("(()=>{const input=document.querySelector('input[type=text]');input.value='123456';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+ await click('Verify');await wait("document.body.innerText.includes('This MFA challenge has reached its attempt limit')");
+ assert(!await evaluate("[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Verify')"));
+ assert(await evaluate("[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Sign in again')"));
+ await click('Sign in again');await wait("location.pathname==='/login'");
+ assert(requests.some(value=>value.path==='/v1/auth/logout'&&value.method==='POST'));
+  sessionKind='mfa_challenge';
+  await goto('/console/mfa/challenge');await wait("location.pathname==='/login'");
+ exhaustMfaChallenge=false;
  // Leaving login/MFA abandons the handle; normal console sessions do not resume it.
  sessionKind='mfa_challenge';
  await goto('/login?oauth_request='+authorizationHandle+'&oauth_expires='+(Date.now()+600000));

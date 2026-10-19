@@ -189,7 +189,8 @@ pub fn PasskeysSection() -> impl IntoView {
                     }
                     Err(err) => {
                         if announce {
-                            set_feedback.set(Some((AlertKind::Error, err.to_string())));
+                            set_feedback
+                                .set(Some((AlertKind::Error, super::factor_mutation_error(&err))));
                         }
                     }
                 }
@@ -360,7 +361,7 @@ pub fn PasskeysSection() -> impl IntoView {
                                         passkeys.refetch();
                                     }
                                     Err(err) => {
-                                        set_feedback.set(Some((AlertKind::Error, err.to_string())));
+                                        set_feedback.set(Some((AlertKind::Error, super::factor_mutation_error(&err))));
                                     }
                                 }
                                 set_create_pending.set(false);

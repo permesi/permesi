@@ -219,6 +219,26 @@ fn app_router(auth_state: AuthState, pool: PgPool, totp_service: TotpService) ->
         })
 }
 
+/// Builds one cookie-bound MFA proof request for cross-instance HTTP regressions.
+fn challenge_request(token: &str, path: &str, body: String) -> Result<Request<Body>> {
+    Ok(Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(COOKIE, format!("permesi_session={token}"))
+        .header("Content-Type", "application/json")
+        .body(Body::from(body))?)
+}
+
+/// Counts unused recovery codes so rejected proofs cannot silently consume a factor.
+async fn unused_recovery_codes(pool: &PgPool, user: Uuid) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM user_mfa_recovery_codes WHERE user_id=$1 AND used_at IS NULL",
+    )
+    .bind(user)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// Uses the real shared limiter while preserving the normal session, factor and Vault dependencies.
 fn limited_auth(limiter: crate::api::handlers::auth::RateLimiter) -> AuthState {
     let base = auth_state();
@@ -418,6 +438,55 @@ async fn mfa_enrollment_flow() -> Result<()> {
     let me: crate::api::handlers::me::MeResponse = serde_json::from_slice(&body)?;
     assert!(me.mfa_enabled, "MFA should be enabled in profile");
 
+    Ok(())
+}
+
+/// TOTP enrollment must reject a stale full session before writing even pending factor state.
+#[tokio::test]
+async fn mfa_totp_enroll_start_rejects_stale_full_session() -> Result<()> {
+    let ctx = TestContext::new()
+        .await?
+        .context("TOTP recency integration requires a container runtime")?;
+    let user = insert_active_user(&ctx.pool, "stale-enrollment@example.com").await?;
+    let token = insert_session(&ctx.pool, user).await?;
+    let session_hash = hash_session_token(&token);
+    sqlx::query(
+        "UPDATE user_sessions SET created_at=statement_timestamp()-INTERVAL '11 minutes', auth_time=statement_timestamp()-INTERVAL '11 minutes' WHERE session_hash=$1",
+    )
+    .bind(&session_hash)
+    .execute(&ctx.pool)
+    .await?;
+    let app = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/auth/mfa/totp/enroll/start")
+            .header(COOKIE, format!("permesi_session={token}"))
+            .body(Body::empty())
+    };
+    let rejected = app.clone().oneshot(request()?).await?;
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert!(rejected.headers().get(SET_COOKIE).is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM totp_credentials WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&ctx.pool)
+            .await?,
+        0
+    );
+    sqlx::query("UPDATE user_sessions SET auth_time=clock_timestamp() WHERE session_hash=$1")
+        .bind(&session_hash)
+        .execute(&ctx.pool)
+        .await?;
+    let accepted = app.oneshot(request()?).await?;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM totp_credentials WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&ctx.pool)
+            .await?,
+        1
+    );
     Ok(())
 }
 
@@ -817,6 +886,110 @@ async fn mfa_rejected_totp_proofs_commit_failure_audits_without_authority() -> R
         .fetch_one(&ctx.pool)
         .await?,
         1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&ctx.pool)
+            .await?,
+        0
+    );
+    Ok(())
+}
+
+/// TOTP, malformed proofs and recovery share one terminal budget across independent API states.
+#[tokio::test]
+async fn mfa_challenge_mixed_failures_lock_out_all_factor_routes() -> Result<()> {
+    let Some(ctx) = TestContext::new().await? else {
+        return Ok(());
+    };
+    let email = format!("{}@example.com", Uuid::new_v4());
+    let user = insert_active_user(&ctx.pool, &email).await?;
+    let (secret, _, credential) = ctx.totp_service.enroll_begin(user, &email, None).await?;
+    crate::totp::repo::TotpRepo::confirm_credential(&ctx.pool, user, credential).await?;
+    let batch = super::recovery::RecoveryCodeBatch::generate(&[1, 2, 3, 4])?;
+    for hash in &batch.code_hashes {
+        sqlx::query(
+            "INSERT INTO user_mfa_recovery_codes (user_id,batch_id,code_hash) VALUES ($1,$2,$3)",
+        )
+        .bind(user)
+        .bind(batch.batch_id)
+        .bind(hash)
+        .execute(&ctx.pool)
+        .await?;
+    }
+    super::storage::upsert_mfa_state(&ctx.pool, user, MfaState::Enabled, Some(batch.batch_id))
+        .await?;
+    let challenge =
+        crate::api::handlers::auth::storage::insert_mfa_challenge_session(&ctx.pool, user, 300)
+            .await?;
+    let hash = hash_session_token(&challenge);
+    sqlx::query("UPDATE user_mfa_challenge_sessions SET max_attempts=3 WHERE session_hash=$1")
+        .bind(&hash)
+        .execute(&ctx.pool)
+        .await?;
+    let second_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(ctx.pool.connect_options().as_ref().clone())
+        .await?;
+    let a = app_router(auth_state(), ctx.pool.clone(), ctx.totp_service.clone());
+    let b = app_router(auth_state(), second_pool, ctx.totp_service.clone());
+    let first = a
+        .clone()
+        .oneshot(challenge_request(
+            &challenge,
+            "/v1/auth/mfa/totp/verify",
+            json!({"code":"invalid"}).to_string(),
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+    let second = b
+        .clone()
+        .oneshot(challenge_request(
+            &challenge,
+            "/v1/auth/mfa/totp/verify",
+            "{}".to_string(),
+        )?)
+        .await?;
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let terminal = b
+        .oneshot(challenge_request(
+            &challenge,
+            "/v1/auth/mfa/recovery",
+            json!({"code":"wrong"}).to_string(),
+        )?)
+        .await?;
+    assert_eq!(terminal.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(terminal.headers().get(SET_COOKIE).is_none());
+    let body = to_bytes(terminal.into_body(), usize::MAX).await?;
+    let envelope: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        envelope
+            .pointer("/error/code")
+            .and_then(|value| value.as_str()),
+        Some("mfa_challenge_exhausted")
+    );
+    let valid = current_totp(&secret, &email)?;
+    let replay = a
+        .oneshot(challenge_request(
+            &challenge,
+            "/v1/auth/mfa/totp/verify",
+            json!({"code":valid}).to_string(),
+        )?)
+        .await?;
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        sqlx::query_scalar::<_, i32>(
+            "SELECT failed_attempts FROM user_mfa_challenge_sessions WHERE session_hash=$1"
+        )
+        .bind(&hash)
+        .fetch_one(&ctx.pool)
+        .await?,
+        3
+    );
+    assert_eq!(
+        unused_recovery_codes(&ctx.pool, user).await?,
+        i64::try_from(batch.code_hashes.len())?
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")

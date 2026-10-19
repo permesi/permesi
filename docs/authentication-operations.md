@@ -59,6 +59,14 @@ authentication values never enter responses. Verification resend remains opaque
 204 for ordinary limits but dependency failure returns 503. Revocation races deny
 authority rather than being mistaken for proof success.
 
+Each primary-login MFA challenge also has a durable terminal proof-failure budget.
+The configured limit is stored on the challenge when issued, so later requests and
+other replicas use the same value. The final failed proof returns 429 with the stable
+`mfa_challenge_exhausted` code; ordinary shared rate limits remain distinct. Configure
+`--mfa-challenge-max-attempts` / `PERMESI_MFA_CHALLENGE_MAX_ATTEMPTS` (1–20, default 5).
+The browser hides further proof controls and offers a fresh sign-in. This does not
+count registration/enrollment failures as password-login challenge failures.
+
 `--opaque-exchange-timeout-ms` bounds pool acquisition, transaction locks and each
 statement for exchanges and MFA authority operations. It is not a total HTTP
 deadline; token exchange has its separate complete-request deadline. Cancellation

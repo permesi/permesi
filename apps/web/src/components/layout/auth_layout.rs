@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use leptos_router::components::Outlet;
 use leptos_router::hooks::{use_location, use_navigate};
 
+/// Keeps limited sessions on their factor routes and restarts missing MFA challenges at login.
 #[component]
 pub fn AuthLayout() -> impl IntoView {
     let auth = use_auth();
@@ -14,8 +15,9 @@ pub fn AuthLayout() -> impl IntoView {
     // Funnel restricted sessions to the correct page.
     // This runs reactively whenever the session or path changes.
     Effect::new(move |_| {
-        if let Some(session) = auth.session.get() {
-            let path = location.pathname.get();
+        let session = auth.session.get();
+        let path = location.pathname.get();
+        if let Some(session) = session {
             match session.session_kind {
                 crate::features::auth::types::SessionKind::MfaChallenge => {
                     if path != paths::MFA_CHALLENGE {
@@ -38,6 +40,9 @@ pub fn AuthLayout() -> impl IntoView {
                     }
                 }
             }
+        } else if !auth.is_loading.get() && path == paths::MFA_CHALLENGE {
+            // An exhausted or expired challenge cannot resolve a session on reload.
+            navigate(paths::LOGIN, leptos_router::NavigateOptions::default());
         }
     });
 

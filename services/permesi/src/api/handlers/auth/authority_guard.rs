@@ -12,6 +12,9 @@ use axum::http::{HeaderMap, StatusCode};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+/// Maximum age of a full session when changing a registered authentication factor.
+pub(crate) const FACTOR_RECENT_AUTH_SECONDS: i64 = 10 * 60;
+
 /// Server-selected routes' session capabilities, checked again under lifecycle locks.
 #[derive(Clone, Copy)]
 pub(crate) enum Policy {
@@ -29,6 +32,19 @@ pub(crate) struct AuthorityGuard {
 }
 
 impl AuthorityGuard {
+    /// Authorizes a fresh full session under the same identity/session locks used for mutation.
+    pub(crate) async fn acquire_recent_full(
+        pool: &PgPool,
+        headers: &HeaderMap,
+        user: Uuid,
+        timeout_ms: i64,
+        max_age_seconds: i64,
+    ) -> Result<Self, StatusCode> {
+        let mut guard = Self::acquire(pool, headers, user, Policy::Full, timeout_ms).await?;
+        guard.require_recent_auth(max_age_seconds).await?;
+        Ok(guard)
+    }
+
     /// Authorizes an active user with an unexpired exact session of the route's allowed kind.
     /// Lock order is identity then session; dependency failure yields only a generic 503.
     pub(crate) async fn acquire(
@@ -71,7 +87,7 @@ impl AuthorityGuard {
                 "SELECT expires_at>clock_timestamp() FROM user_mfa_bootstrap_sessions WHERE user_id=$1 AND session_hash=$2 FOR UPDATE"
             }
             SessionKind::MfaChallenge => {
-                "SELECT expires_at>clock_timestamp() FROM user_mfa_challenge_sessions WHERE user_id=$1 AND session_hash=$2 FOR UPDATE"
+                "SELECT expires_at>clock_timestamp() AND failed_attempts<max_attempts FROM user_mfa_challenge_sessions WHERE user_id=$1 AND session_hash=$2 FOR UPDATE"
             }
         };
         let valid: Option<bool> = sqlx::query_scalar(query)
@@ -96,12 +112,18 @@ impl AuthorityGuard {
                 return Err(StatusCode::UNAUTHORIZED);
             }
         }
-        Ok(Self {
+        let mut guard = Self {
             transaction,
             user,
             hash,
             kind,
-        })
+        };
+        if matches!(policy, Policy::Enrollment) && kind == SessionKind::Full {
+            guard
+                .require_recent_auth(FACTOR_RECENT_AUTH_SECONDS)
+                .await?;
+        }
+        Ok(guard)
     }
 
     /// The connection on which protected state changes and replacement sessions must run.
@@ -132,6 +154,26 @@ impl AuthorityGuard {
             return Err(StatusCode::UNAUTHORIZED);
         }
         Ok(())
+    }
+
+    /// Counts a failed proof against this database-backed challenge; the limit is fixed at issuance.
+    /// A terminal failure commits without granting a full session, including across replicas.
+    pub(crate) async fn record_failed_challenge(&mut self) -> Result<bool, StatusCode> {
+        if self.kind != SessionKind::MfaChallenge {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let terminal: Option<bool> = sqlx::query_scalar(
+            "UPDATE user_mfa_challenge_sessions
+             SET failed_attempts=failed_attempts+1
+             WHERE user_id=$1 AND session_hash=$2 AND failed_attempts<max_attempts
+             RETURNING failed_attempts>=max_attempts",
+        )
+        .bind(self.user)
+        .bind(&self.hash)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        terminal.ok_or(StatusCode::UNAUTHORIZED)
     }
 
     /// Consumes the exact verified original session; failure rolls back replacement authority.

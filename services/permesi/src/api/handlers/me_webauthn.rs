@@ -25,7 +25,7 @@ use super::{
     AdmissionVerifier,
     auth::{
         AuthState, RateLimitAction,
-        authority_guard::{AuthorityGuard, Policy},
+        authority_guard::{AuthorityGuard, FACTOR_RECENT_AUTH_SECONDS},
         extract_client_ip, hash_session_token,
         principal::require_auth,
         session::extract_session_token,
@@ -92,7 +92,7 @@ pub struct PasskeyCredentialListResponse {
         (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Passkey registration options", body = PasskeyRegisterOptionsResponse),
         (status = 400, description = "Invalid request"),
-        (status = 401, description = "Unauthorized"),
+        (status = 401, description = "Unauthorized or recent authentication required"),
         (status = 429, description = "Rate limited")
     ),
     tag = "me"
@@ -113,6 +113,9 @@ pub async fn register_options(
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
+    if !super::me::recent_auth_ok(&principal) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
 
     let request_id = request_id.to_string();
     info!(
@@ -203,7 +206,7 @@ pub async fn register_options(
         (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Passkey registration finished", body = PasskeyRegisterFinishResponse),
         (status = 400, description = "Invalid registration response"),
-        (status = 401, description = "Unauthorized"),
+        (status = 401, description = "Unauthorized or recent authentication required"),
         (status = 413, description = "Payload too large"),
         (status = 429, description = "Rate limited")
     ),
@@ -263,12 +266,12 @@ pub async fn register_finish(
                     .into_response();
             }
 
-            let mut guard = match AuthorityGuard::acquire(
+            let mut guard = match AuthorityGuard::acquire_recent_full(
                 &pool,
                 &headers,
                 context.user_id,
-                Policy::Full,
                 auth_state.config().opaque_exchange_timeout_ms(),
+                FACTOR_RECENT_AUTH_SECONDS,
             )
             .await
             {
@@ -410,7 +413,7 @@ pub async fn list_credentials(
         (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Passkey deleted"),
         (status = 400, description = "Invalid credential id or missing zero token"),
-        (status = 401, description = "Unauthorized"),
+        (status = 401, description = "Unauthorized or recent authentication required"),
         (status = 404, description = "Not found")
     ),
     tag = "me"
@@ -462,12 +465,12 @@ pub async fn delete_credential(
         Err(response) => return *response,
     };
 
-    let mut guard = match AuthorityGuard::acquire(
+    let mut guard = match AuthorityGuard::acquire_recent_full(
         &pool,
         &headers,
         principal.user_id,
-        Policy::Full,
         auth_state.config().opaque_exchange_timeout_ms(),
+        FACTOR_RECENT_AUTH_SECONDS,
     )
     .await
     {
@@ -530,6 +533,9 @@ async fn load_register_finish_context(
         Ok(principal) => principal,
         Err(status) => return Err(Box::new(status.into_response())),
     };
+    if !super::me::recent_auth_ok(&principal) {
+        return Err(Box::new(StatusCode::UNAUTHORIZED.into_response()));
+    }
 
     let request_id = request_id.to_string();
     info!(
@@ -853,6 +859,10 @@ mod tests {
 
         let (user_id, _email) = insert_user(&db.pool).await?;
         let session_token = insert_session(&db.pool, user_id).await?;
+        sqlx::query("UPDATE user_sessions SET created_at=statement_timestamp()-INTERVAL '11 minutes', auth_time=statement_timestamp()-INTERVAL '11 minutes' WHERE user_id=$1")
+            .bind(user_id)
+            .execute(&db.pool)
+            .await?;
 
         let auth_config = AuthConfig::new("https://permesi.dev".to_string());
         let auth_state = Arc::new(AuthState::new(
@@ -891,9 +901,37 @@ mod tests {
                     auth: auth_state,
                     admission,
                     passkeys: passkey_service,
-                    pool: db.pool,
+                    pool: db.pool.clone(),
                 }),
         );
+
+        let stale = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/me/webauthn/register/options")
+                    .header("Origin", "https://permesi.dev")
+                    .header("X-Permesi-Zero-Token", zero_token.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("Cookie", format!("permesi_session={session_token}"))
+                    .body(Body::from("{}"))?,
+            )
+            .await?;
+        assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM webauthn_exchanges WHERE user_id=$1"
+            )
+            .bind(user_id)
+            .fetch_one(&db.pool)
+            .await?,
+            0
+        );
+        sqlx::query("UPDATE user_sessions SET auth_time=clock_timestamp() WHERE user_id=$1")
+            .bind(user_id)
+            .execute(&db.pool)
+            .await?;
 
         let response = app
             .oneshot(

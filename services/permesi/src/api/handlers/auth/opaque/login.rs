@@ -368,6 +368,7 @@ pub async fn opaque_login_finish(
                         &mut tx,
                         user_id,
                         auth_state.mfa().challenge_session_ttl_seconds(),
+                        auth_state.config().mfa_challenge_max_attempts(),
                     )
                     .await
                     {

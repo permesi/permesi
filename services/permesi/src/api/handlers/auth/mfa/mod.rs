@@ -26,6 +26,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use service_utils::api_error::ApiError;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -208,7 +209,7 @@ fn parse_bool_env(key: &str) -> Option<bool> {
         (status = 503, description = "Authentication storage unavailable"),
         (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Enrollment started", body = MfaTotpEnrollStartResponse),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized or full session requires recent authentication")
     ),
     tag = "auth"
 )]
@@ -288,7 +289,7 @@ pub async fn totp_enroll_start(
         (status = 429, description = "Authentication capacity or rate limit exceeded"),
         (status = 200, description = "Enrollment finished with replacement cookie and recovery codes", body = crate::api::handlers::me::RecoveryCodesResponse),
         (status = 400, description = "Invalid code"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized or full session requires recent authentication")
     ),
     tag = "auth"
 )]
@@ -418,7 +419,7 @@ pub async fn totp_enroll_finish(
     request_body = MfaTotpVerifyRequest,
     responses(
         (status = 503, description = "Authentication storage unavailable"),
-        (status = 429, description = "Authentication capacity or rate limit exceeded"),
+        (status = 429, description = "Shared limit or terminal MFA challenge exhaustion (mfa_challenge_exhausted)"),
         (status = 204, description = "Verification successful"),
         (status = 400, description = "Invalid code"),
         (status = 401, description = "Unauthorized")
@@ -430,7 +431,7 @@ pub async fn totp_verify(
     pool: State<PgPool>,
     auth_state: State<Arc<AuthState>>,
     totp_service: State<TotpService>,
-    payload: Option<Json<MfaTotpVerifyRequest>>,
+    payload: Result<Json<MfaTotpVerifyRequest>, axum::extract::rejection::JsonRejection>,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
         Ok(principal) => principal,
@@ -448,8 +449,15 @@ pub async fn totp_verify(
         return status.into_response();
     }
 
-    let Some(Json(request)) = payload else {
-        return (StatusCode::BAD_REQUEST, "Missing payload").into_response();
+    let Ok(Json(request)) = payload else {
+        return reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
     };
 
     let mut guard = match AuthorityGuard::acquire(
@@ -493,7 +501,7 @@ pub async fn totp_verify(
         .await
     {
         Ok(true) => {} // Success
-        Ok(false) => return commit_factor_rejection(guard).await,
+        Ok(false) => return commit_challenge_rejection(guard, StatusCode::BAD_REQUEST).await,
         Err(e) => {
             error!("Error verifying TOTP: {e}");
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -519,6 +527,53 @@ async fn commit_factor_rejection(guard: AuthorityGuard) -> axum::response::Respo
     }
 }
 
+/// Commits an invalid factor proof and atomically exhausts the exact challenge at its limit.
+async fn commit_challenge_rejection(
+    mut guard: AuthorityGuard,
+    invalid_status: StatusCode,
+) -> axum::response::Response {
+    let terminal = match guard.record_failed_challenge().await {
+        Ok(terminal) => terminal,
+        Err(status) => return status.into_response(),
+    };
+    if guard.commit().await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if terminal {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "mfa_challenge_exhausted",
+            "MFA challenge exhausted. Sign in again.",
+        )
+        .into_response()
+    } else {
+        invalid_status.into_response()
+    }
+}
+
+/// Records a failed proof only against the current limited cookie, under lifecycle locks.
+async fn reject_challenge(
+    pool: &PgPool,
+    headers: &HeaderMap,
+    user: Uuid,
+    auth_state: &AuthState,
+    invalid_status: StatusCode,
+) -> axum::response::Response {
+    let guard = match AuthorityGuard::acquire(
+        pool,
+        headers,
+        user,
+        Policy::Challenge,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await
+    {
+        Ok(guard) => guard,
+        Err(status) => return status.into_response(),
+    };
+    commit_challenge_rejection(guard, invalid_status).await
+}
+
 /// Verify a recovery code during MFA challenge and issue a bootstrap session.
 #[utoipa::path(
     post,
@@ -526,11 +581,10 @@ async fn commit_factor_rejection(guard: AuthorityGuard) -> axum::response::Respo
     request_body = MfaRecoveryRequest,
     responses(
         (status = 503, description = "Authentication storage unavailable"),
-        (status = 429, description = "Authentication capacity or rate limit exceeded"),
+        (status = 429, description = "Shared limit or terminal MFA challenge exhaustion (mfa_challenge_exhausted)"),
         (status = 204, description = "Recovery accepted"),
         (status = 400, description = "Validation error", body = String),
         (status = 401, description = "Unauthorized"),
-        (status = 429, description = "Rate limited", body = String)
     ),
     tag = "auth"
 )]
@@ -539,15 +593,11 @@ pub async fn mfa_recovery(
     headers: HeaderMap,
     pool: State<PgPool>,
     auth_state: State<Arc<AuthState>>,
-    payload: Option<Json<MfaRecoveryRequest>>,
+    payload: Result<Json<MfaRecoveryRequest>, axum::extract::rejection::JsonRejection>,
 ) -> impl IntoResponse {
     let principal = match require_mfa_challenge(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
-    };
-
-    let Some(Json(request)) = payload else {
-        return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response();
     };
 
     let client_ip = extract_client_ip(&headers);
@@ -566,6 +616,27 @@ pub async fn mfa_recovery(
         .denial_status()
     {
         return (status, "Rate limited".to_string()).into_response();
+    }
+
+    let Ok(Json(request)) = payload else {
+        return reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+    };
+    if recovery::normalize_recovery_code(&request.code).is_err() {
+        return reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::UNAUTHORIZED,
+        )
+        .await;
     }
 
     let Some(pepper) = auth_state.mfa().recovery_pepper() else {
@@ -614,13 +685,20 @@ pub async fn mfa_recovery(
         Ok(hash) => hash,
         Err(err) => {
             warn!(user_id = %principal.user_id, "MFA recovery attempt failed: {err}");
-            return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
 
     let Some(matched_hash) = matched_hash else {
         warn!(user_id = %principal.user_id, "MFA recovery code invalid");
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+        return reject_challenge(
+            &pool,
+            &headers,
+            principal.user_id,
+            &auth_state,
+            StatusCode::UNAUTHORIZED,
+        )
+        .await;
     };
 
     let mut guard = match AuthorityGuard::acquire(
@@ -636,9 +714,11 @@ pub async fn mfa_recovery(
         Err(status) => return status.into_response(),
     };
     let current = storage::load_mfa_state(guard.connection(), principal.user_id).await;
-    if !matches!(current,Ok(Some(record)) if record.state==MfaState::Enabled && record.recovery_batch_id==Some(batch_id))
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
+    match current {
+        Ok(Some(record))
+            if record.state == MfaState::Enabled && record.recovery_batch_id == Some(batch_id) => {}
+        Ok(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
     let consumed = match storage::consume_recovery_code_hash(
         guard.connection(),
@@ -660,7 +740,7 @@ pub async fn mfa_recovery(
     };
     if !consumed {
         warn!(user_id = %principal.user_id, "MFA recovery code already used");
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
+        return commit_challenge_rejection(guard, StatusCode::UNAUTHORIZED).await;
     }
 
     if let Err(err) = storage::upsert_mfa_state(

@@ -247,3 +247,136 @@ async fn mfa_stale_bootstrap_loses_enrollment_authority_after_another_factor_fin
         .await?;
     Ok(())
 }
+
+/// Every full-session factor mutation rechecks authentication time under the session lock.
+#[tokio::test]
+async fn factor_enrollment_rejects_stale_full_session_but_keeps_bootstrap_path() -> Result<()> {
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let user = user(&db.pool).await?;
+    let full = storage::insert_session(&db.pool, user, 300).await?;
+    let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?;
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        user,
+        super::super::mfa::MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await?;
+    sqlx::query("UPDATE user_sessions SET created_at=clock_timestamp()-INTERVAL '11 minutes', auth_time=clock_timestamp()-INTERVAL '11 minutes' WHERE user_id=$1")
+        .bind(user)
+        .execute(&db.pool)
+        .await?;
+    assert!(matches!(
+        AuthorityGuard::acquire(&db.pool, &headers(&full)?, user, Policy::Enrollment, 1000).await,
+        Err(StatusCode::UNAUTHORIZED)
+    ));
+    AuthorityGuard::acquire(
+        &db.pool,
+        &headers(&bootstrap)?,
+        user,
+        Policy::Enrollment,
+        1000,
+    )
+    .await
+    .map_err(|_| anyhow!("bootstrap enrollment remains available"))?
+    .commit()
+    .await?;
+    sqlx::query("UPDATE user_sessions SET auth_time=clock_timestamp() WHERE user_id=$1")
+        .bind(user)
+        .execute(&db.pool)
+        .await?;
+    AuthorityGuard::acquire(&db.pool, &headers(&full)?, user, Policy::Enrollment, 1000)
+        .await
+        .map_err(|_| anyhow!("recent full session may change factors"))?
+        .commit()
+        .await?;
+    Ok(())
+}
+
+/// Independently acquired guards serialize attempts against one durable challenge row.
+#[tokio::test]
+async fn mfa_challenge_failure_limit_is_terminal_across_connections() -> Result<()> {
+    let Some(db) = TestDb::new().await? else {
+        return Ok(());
+    };
+    let user = user(&db.pool).await?;
+    let token = storage::insert_mfa_challenge_session(&db.pool, user, 300).await?;
+    let hash = hash_session_token(&token);
+    sqlx::query("UPDATE user_mfa_challenge_sessions SET max_attempts=2 WHERE session_hash=$1")
+        .bind(&hash)
+        .execute(&db.pool)
+        .await?;
+    let first = AuthorityGuard::acquire(&db.pool, &headers(&token)?, user, Policy::Challenge, 1000)
+        .await
+        .map_err(|_| anyhow!("first connection acquired challenge"))?;
+    let mut first = first;
+    assert!(
+        !first
+            .record_failed_challenge()
+            .await
+            .map_err(|_| anyhow!("first failure"))?
+    );
+    first.commit().await?;
+
+    let pool_a = db.pool.clone();
+    let pool_b = db.pool.clone();
+    let header_a = headers(&token)?;
+    let header_b = headers(&token)?;
+    let (a, b) = tokio::join!(
+        async move {
+            let mut guard =
+                AuthorityGuard::acquire(&pool_a, &header_a, user, Policy::Challenge, 5000).await?;
+            let terminal = guard.record_failed_challenge().await?;
+            guard
+                .commit()
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            Ok::<bool, StatusCode>(terminal)
+        },
+        async move {
+            let mut guard =
+                AuthorityGuard::acquire(&pool_b, &header_b, user, Policy::Challenge, 5000).await?;
+            let terminal = guard.record_failed_challenge().await?;
+            guard
+                .commit()
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            Ok::<bool, StatusCode>(terminal)
+        }
+    );
+    assert_eq!(
+        usize::from(matches!(a, Ok(true))) + usize::from(matches!(b, Ok(true))),
+        1
+    );
+    assert_eq!(
+        usize::from(matches!(a, Err(StatusCode::UNAUTHORIZED)))
+            + usize::from(matches!(b, Err(StatusCode::UNAUTHORIZED))),
+        1
+    );
+    let attempts: i32 = sqlx::query_scalar(
+        "SELECT failed_attempts FROM user_mfa_challenge_sessions WHERE session_hash=$1",
+    )
+    .bind(&hash)
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!(attempts, 2);
+    assert!(matches!(
+        AuthorityGuard::acquire(&db.pool, &headers(&token)?, user, Policy::Challenge, 1000).await,
+        Err(StatusCode::UNAUTHORIZED)
+    ));
+    assert!(
+        storage::lookup_mfa_challenge_session(&db.pool, &hash)
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?,
+        0
+    );
+    Ok(())
+}
