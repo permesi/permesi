@@ -264,7 +264,7 @@ async fn factor_enrollment_rejects_stale_full_session_but_keeps_bootstrap_path()
         None,
     )
     .await?;
-    sqlx::query("UPDATE user_sessions SET created_at=clock_timestamp()-INTERVAL '11 minutes', auth_time=clock_timestamp()-INTERVAL '11 minutes' WHERE user_id=$1")
+    sqlx::query("UPDATE user_sessions SET created_at=statement_timestamp()-INTERVAL '11 minutes', auth_time=statement_timestamp()-INTERVAL '11 minutes' WHERE user_id=$1")
         .bind(user)
         .execute(&db.pool)
         .await?;
