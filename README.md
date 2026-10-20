@@ -135,8 +135,9 @@ current checks, recovery boundary and remaining multi-host/load work.
 standard `openidconnect-rs` public/confidential clients and an owned HTTPS jobs API,
 including tenant/scopes, strict JWT rejection, real expiration and signing-key rotation.
 The full suite includes these cases; this coverage does not claim OIDC certification
-or immediate bearer-token revocation. `--suite refresh` covers explicit offline consent,
-cross-replica rotation/reuse, concurrency and current-grant lifecycle rejection.
+or immediate access-token revocation. `--suite refresh` covers explicit offline consent,
+cross-replica rotation/reuse, client-authenticated family revocation, concurrency and
+current-grant lifecycle rejection.
 
 The `Test & Build` workflow also runs `just web-test-browser-built` against its own
 frontend artifact, covering console fixtures and real PostgreSQL authorization/OPAQUE
@@ -309,16 +310,19 @@ return the matching subject plus current profile/email fields only when those sc
 were issued. The endpoint rechecks the user's credential revision and live tenant
 authority, with a shared PostgreSQL IP budget; older receipts without a revision or
 issued-scope snapshot cannot disclose claims. Immediate JWT revocation remains planned.
+`POST /revoke` authenticates the registered client and atomically revokes the exact
+refresh-token family across replicas. It returns the same empty success for unknown or
+already revoked tokens and does not retract already signed JWTs.
 The [authentication release validation record](docs/authentication-release-validation.md)
 tracks the completed shared-state, MFA, admission and refresh batch, independent review,
 regression evidence and remaining release boundaries.
 
 Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
 enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA versions;
-discovery advertises the implemented code/token endpoints, S256, Basic/public-none
+discovery advertises the implemented code/token and refresh revocation endpoints, S256, Basic/public-none
 methods and issuer response identification. Runtime signs but cannot rotate/export/retire
 keys. Confidential secret management includes one-time creation, overlap rotation and
-revocation at commit. Introspection/public token revocation,
+revocation at commit. Introspection and immediate access-token revocation,
 the `client_credentials` machine grant and OIDC conformance testing remain planned.
 See [token exchange](docs/oauth-token-exchange.md) for claims, configuration, rollout,
 cache/rotation behavior and finite-lifetime JWT revocation limits. Follow [TODO](TODO.md)

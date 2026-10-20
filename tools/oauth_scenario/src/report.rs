@@ -79,7 +79,7 @@ impl Report {
             cleanup_failures: Vec::new(),
             planned: [
                 "Broader OIDC conformance/client coverage",
-                "Introspection/revocation",
+                "Introspection and immediate access-token revocation",
                 "Client credentials/M2M grant",
             ],
             limitations: [

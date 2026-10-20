@@ -140,6 +140,7 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
         "refresh.rotation_reuse" => refresh::rotation(context, fixture).await,
         "refresh.replica_race" => refresh::race(context, fixture).await,
         "refresh.lifecycle" => refresh::lifecycle(context, fixture).await,
+        "refresh.client_revocation" => refresh::client_revocation(context, fixture).await,
         "token.public_claims" => token::public_claims(context, fixture).await,
         "token.confidential_credentials" => token::confidential(context, fixture).await,
         "token.validation" => token::validation(context, fixture).await,

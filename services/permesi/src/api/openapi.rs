@@ -153,6 +153,7 @@ fn oauth_router() -> OpenApiRouter<AppState> {
         .merge(
             OpenApiRouter::new()
                 .routes(routes!(token::token))
+                .routes(routes!(token::revoke))
                 .layer(axum::middleware::map_response(token::prevent_cache)),
         )
         .merge(
@@ -473,11 +474,12 @@ mod tests {
         ] {
             assert!(spec.paths.paths.contains_key(&format!("{base}{suffix}")));
         }
-        for path in ["/revoke", "/introspect", "/jwks"] {
+        for path in ["/introspect", "/jwks"] {
             assert!(!spec.paths.paths.contains_key(path));
         }
         for path in [
             "/token",
+            "/revoke",
             "/userinfo",
             "/authorize",
             "/authorize/resume",

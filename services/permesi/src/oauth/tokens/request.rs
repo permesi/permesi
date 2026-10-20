@@ -1,4 +1,4 @@
-//! Strict token form and Basic authentication parsing before database authority checks.
+//! Strict exchange/revocation forms and Basic authentication before database authority checks.
 //!
 //! Flow Overview: reject duplicates, ambiguous encoding and unsupported authority inputs,
 //! ignore unknown extensions, select one authentication method, and retain bearer material in redacted
@@ -34,6 +34,11 @@ pub(crate) struct RefreshRequest {
     pub scopes: Option<Vec<crate::oauth::scope::OAuthScope>>,
 }
 
+/// A revocation request carries only the presented bearer; the hint grants no authority.
+pub(crate) struct RevocationRequest {
+    pub token: SecretString,
+}
+
 /// Exclusive authentication choice, independent of internal authenticated sessions.
 pub(crate) enum ClientAuthentication {
     Basic { client: Uuid, secret: SecretString },
@@ -55,6 +60,42 @@ pub(crate) fn parse(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<(TokenRequest, ClientAuthentication), TokenError> {
+    let mut fields = parse_fields(headers, body)?;
+    let grant = take(&mut fields, "grant_type")?;
+    let client = fields
+        .remove("client_id")
+        .filter(|s| !s.is_empty())
+        .map(|s| client_id(&s))
+        .transpose()?;
+    let auth = authentication(headers, client)?;
+    let request = grant_request(&mut fields, &grant)?;
+    Ok((request, auth))
+}
+
+/// Parses RFC 7009 form credentials; an unknown token or hint still yields generic success
+/// after current client authentication, while duplicate and ambiguous fields fail closed.
+pub(crate) fn parse_revocation(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(RevocationRequest, ClientAuthentication), TokenError> {
+    let mut fields = parse_fields(headers, body)?;
+    let client = fields
+        .remove("client_id")
+        .filter(|s| !s.is_empty())
+        .map(|s| client_id(&s))
+        .transpose()?;
+    let auth = authentication(headers, client)?;
+    let token = take(&mut fields, "token")?;
+    Ok((
+        RevocationRequest {
+            token: token.into(),
+        },
+        auth,
+    ))
+}
+
+/// Applies the same strict encoding and credential-transport rules to exchange and revocation.
+fn parse_fields(headers: &HeaderMap, body: &[u8]) -> Result<BTreeMap<String, String>, TokenError> {
     let content = headers.get_all(CONTENT_TYPE).iter().collect::<Vec<_>>();
     if content.len() != 1
         || content
@@ -87,15 +128,7 @@ pub(crate) fn parse(
     {
         return Err(TokenError::InvalidRequest);
     }
-    let grant = take(&mut fields, "grant_type")?;
-    let client = fields
-        .remove("client_id")
-        .filter(|s| !s.is_empty())
-        .map(|s| client_id(&s))
-        .transpose()?;
-    let auth = authentication(headers, client)?;
-    let request = grant_request(&mut fields, &grant)?;
-    Ok((request, auth))
+    Ok(fields)
 }
 
 /// Parses only inputs belonging to the selected grant and rejects mixed authority fields.
@@ -289,6 +322,34 @@ mod tests {
         // An empty optional body identifier is absent, including with Basic authentication.
         let (_, auth) = parse(&headers, body("client_id=").as_bytes()).unwrap();
         assert_eq!(auth.client_id().to_string(), id);
+    }
+
+    /// Revocation reuses strict client authentication but treats a hint as non-authoritative.
+    #[test]
+    fn revocation_parser_rejects_ambiguous_credentials_and_fields() {
+        let id = "00000000-0000-4000-8000-000000000001";
+        let (request, auth) = parse_revocation(
+            &headers(),
+            format!("client_id={id}&token=opaque&token_type_hint=access_token").as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(auth.client_id().to_string(), id);
+        assert_eq!(request.token.expose_secret(), "opaque");
+        for body in [
+            format!("client_id={id}&token=one&token=two"),
+            format!("client_id={id}&token=%ZZ"),
+            format!("client_id={id}&token="),
+            format!("client_id={id}&token=opaque&organization_id=other"),
+        ] {
+            assert!(matches!(
+                parse_revocation(&headers(), body.as_bytes()),
+                Err(TokenError::InvalidRequest)
+            ));
+        }
+        assert!(matches!(
+            parse_revocation(&headers(), b"token=opaque"),
+            Err(TokenError::InvalidClient)
+        ));
     }
 
     /// Unknown extensions have no authority; RFC 6749 requires ignoring them.

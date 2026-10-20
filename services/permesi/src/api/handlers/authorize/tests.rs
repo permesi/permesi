@@ -1235,6 +1235,14 @@ async fn authorization_discovery_advertises_only_implemented_token_methods() -> 
         metadata["userinfo_endpoint"],
         "https://issuer.test/userinfo"
     );
+    assert_eq!(
+        metadata["revocation_endpoint"],
+        "https://issuer.test/revoke"
+    );
+    assert_eq!(
+        metadata["revocation_endpoint_auth_methods_supported"],
+        json!(["client_secret_basic", "none"])
+    );
     let disabled = crate::api::router()
         .split_for_parts()
         .0

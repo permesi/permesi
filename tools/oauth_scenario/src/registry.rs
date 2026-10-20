@@ -52,6 +52,11 @@ pub const CASES: &[Case] = &[
         group: "refresh",
     },
     Case {
+        id: "refresh.client_revocation",
+        description: "Hash-only refresh revocation on A disables a rotated successor on B after issuance on B/C",
+        group: "refresh",
+    },
+    Case {
         id: "authentication.shared_exchanges",
         description: "Real OPAQUE login/reauth handoffs across A/B/C, replay and same-user session isolation",
         group: "security",
@@ -253,7 +258,7 @@ mod tests {
         assert_eq!(select(Suite::Smoke, &[])?.len(), 3);
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
         assert_eq!(select(Suite::Interop, &[])?.len(), 7);
-        assert_eq!(select(Suite::Refresh, &[])?.len(), 3);
+        assert_eq!(select(Suite::Refresh, &[])?.len(), 4);
         assert_eq!(select(Suite::Ha, &[])?.len(), 7);
         assert!(
             select(Suite::Interop, &[])?

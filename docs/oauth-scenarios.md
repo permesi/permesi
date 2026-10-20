@@ -169,15 +169,16 @@ repetitions and parallel isolation with
 | `interop.invalid_access_tokens` | Malformed/tampered/ID/algorithm/header/unknown-kid negatives, 16 concurrent unknown keys produce one refresh; client disable preserves issued JWT authority only until actual expiry |
 | `interop.signing_key_rotation` | Rotate actual Vault authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
 | `interop.userinfo_cross_replica` | Browser consent on A and standard-client exchange on B; header-only GET/POST on C disclose only the issued subject and reject ID, malformed and missing Bearer tokens |
+| `refresh.client_revocation` | Offline consent on A, exchange on B, rotation on C and hash-only revocation on A despite an incorrect type hint; unknown/repeated requests remain generic, successor fails on B |
 
 `smoke` selects provisioning, consent and login resume. `security` selects shared
 authentication exchanges, authorization/redemption negatives and failover. `lifecycle`
 selects credentials/deletion and the six lifecycle revalidation cases. `token` selects
-the five HTTP issuance cases and three refresh cases; `refresh` selects only those three
+the five HTTP issuance cases and four refresh cases; `refresh` selects only those four
 refresh cases. `interop` selects seven standard-client/resource cases, including
 cross-replica `UserInfo` disclosure and rejection. `ha` selects
 seven provisioning, OPAQUE, code/refresh race, restart, outage and failover cases.
-`full` selects all 35 cases. Every case restores explicitly stopped slots afterward,
+`full` selects all 36 cases. Every case restores explicitly stopped slots afterward,
 including after assertion failure. Unexpected exits remain failures; recovery failure
 blocks the remaining selection instead of silently testing a smaller topology.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
@@ -267,8 +268,8 @@ and production resource-server revocation policy remain separately tracked.
 
 Broader scenario coverage for the implemented durable WebAuthn/passkey exchanges,
 MFA-required variants, richer consent/grants UX, Firefox/Safari, multi-host/load/fault
-tests, broader third-party OIDC clients, introspection/revocation, device flow
-and M2M remain in `TODO.md`. Current scenarios
+tests, broader third-party OIDC clients, introspection and immediate JWT revocation,
+device flow and M2M remain in `TODO.md`. Current scenarios
 preserve default MFA policy and require a genuine full session; they do not establish
 the full MFA matrix or formal OIDC conformance.
 

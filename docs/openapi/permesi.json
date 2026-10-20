@@ -494,6 +494,71 @@
         }
       }
     },
+    "/revoke": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Revokes only refresh-token families after current client authentication.\nUnknown, rotated, expired and already revoked tokens never disclose their status.",
+        "operationId": "revoke",
+        "requestBody": {
+          "description": "RFC 7009 token plus optional token_type_hint; public clients send client_id and confidential clients use HTTP Basic",
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "No revocable refresh token remains for this client"
+          },
+          "400": {
+            "description": "Malformed request or issued access/ID token cannot be revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid HTTP Basic client authentication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared revocation budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Revocation dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenFailure"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/token": {
       "post": {
         "tags": [
@@ -7064,6 +7129,7 @@
               "issuer",
               "authorization_endpoint",
               "token_endpoint",
+              "revocation_endpoint",
               "userinfo_endpoint",
               "jwks_uri",
               "response_types_supported",
@@ -7124,6 +7190,9 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "revocation_endpoint": {
+                "type": "string"
               },
               "subject_types_supported": {
                 "type": "array",
@@ -8158,11 +8227,18 @@
         "description": "Implemented client authentication and issuer identification capabilities.",
         "required": [
           "token_endpoint_auth_methods_supported",
+          "revocation_endpoint_auth_methods_supported",
           "authorization_response_iss_parameter_supported"
         ],
         "properties": {
           "authorization_response_iss_parameter_supported": {
             "type": "boolean"
+          },
+          "revocation_endpoint_auth_methods_supported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "token_endpoint_auth_methods_supported": {
             "type": "array",

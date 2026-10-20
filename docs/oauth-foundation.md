@@ -95,7 +95,7 @@ of OAuth request/code persistence. Reauthentication binds the exact original ful
 see [shared authentication exchanges](opaque-exchanges.md).
 Creation and deletion coordinate through transaction-owned PostgreSQL parent locks.
 Deleted ancestry cannot authorize outstanding requests or redeem old codes.
-Future token revocation and cache policy must account for these configuration changes;
+Future immediate JWT revocation and cache policy must account for these configuration changes;
 signed-token revocation limits are documented in [token exchange](oauth-token-exchange.md); refresh uses [rotating tenant-bound families](oauth-refresh-tokens.md).
 
 Apply the additive canonical `db/sql/02_permesi.sql` script to an existing database
@@ -477,7 +477,7 @@ transaction until their operation completes. Credentials establish no user conse
 boundaries and dependencies; README and the frontend documentation link back to it.
 A milestone is complete only after its implementation, required checks and independent
 review pass. Token exchange, signed access/ID tokens, accurate code-flow discovery,
-refresh families and limited UserInfo are implemented; formal conformance remains pending.
+refresh families, client-authenticated refresh revocation and limited UserInfo are implemented; formal conformance remains pending.
 
 Tenant deletion polish adds permission-aware controls and inline password reauthentication
 with an explicit final confirmation. Durable OPAQUE login/reauthentication is implemented in a separate shared PostgreSQL
@@ -508,9 +508,11 @@ Both GET and POST require a Bearer header;
 query/form tokens, ID tokens and tokens without `openid` fail. Active user, grant,
 membership, client, credential revision and ancestry are rechecked before disclosure. Historical receipts
 from before the per-token scope and revision migration cannot disclose UserInfo until clients obtain
-new short-lived access tokens. Introspection and public token revocation follow
-separately, with authenticated caller
-and disclosure policy. Family revocation does not retract an already signed JWT.
+new short-lived access tokens. `POST /revoke` now authenticates a public or confidential
+client and atomically revokes only that client's presented refresh family, including
+rotated successors. Unknown tokens receive the same empty success. Introspection and
+immediate access-token revocation follow separately, with an authenticated caller and
+resource disclosure policy. Family revocation does not retract an already signed JWT.
 
 Authorization UX now shows the signed-in account and registered callback origin,
 explains the cancel-and-restart account-switch policy, and shows a value-free restart
@@ -530,7 +532,7 @@ current ancestry during authorization.
 Record coverage actually exercised;
 local Chromium tests do not establish cross-browser or production load behavior.
 
-Broader administrator grant management, introspection, token revocation,
+Broader administrator grant management, introspection, immediate access-token revocation,
 device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
 and resource policy; possession of a confidential credential must not manufacture a user
 grant. Audit UI and tenant RLS remain tracked separately in TODO.md; the implemented

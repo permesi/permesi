@@ -6,17 +6,20 @@
 //! grant and every originally consented registry edge, consumes the old token and stores a
 //! hashed successor. Signing and immutable receipts commit with rotation. Reuse commits
 //! family revocation before returning `invalid_grant`, including a concurrent loser's reuse.
-//! No grace window or process-local state exists. Lost responses require reauthorization.
+//! Client revocation accepts any generation's exact hash and locks the same lineage so
+//! a rotated successor cannot outlive a committed revocation. No grace window or
+//! process-local state exists. Lost responses require reauthorization.
 
 use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret as _, SecretString};
+use sha2::{Digest as _, Sha256};
 use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 use super::{
     TokenError,
     claims::TokenResponse,
-    request::{CodeRequest, RefreshRequest},
+    request::{CodeRequest, RefreshRequest, RevocationRequest},
 };
 use crate::oauth::{
     authorization::{
@@ -243,6 +246,77 @@ async fn revoke(
 ) -> Result<(), TokenError> {
     sqlx::query("UPDATE oauth_refresh_families SET revoked_at=clock_timestamp(),revocation_reason=$2 WHERE id=$1 AND revoked_at IS NULL")
         .bind(family).bind(reason).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Revokes the presented client's entire lineage, including a rotated successor.
+/// Lookup is hash-only and tenant-bound; unknown, expired and foreign tokens are indistinguishable.
+/// The client lock precedes user and family locks, matching rotation on every replica.
+pub(super) async fn revoke_presented(
+    tx: &mut Transaction<'_, Postgres>,
+    client: Uuid,
+    application: Uuid,
+    organization: Uuid,
+    request: &RevocationRequest,
+) -> Result<(), TokenError> {
+    let context = lock_client(tx, client).await.map_err(|error| {
+        if error.database {
+            TokenError::Unavailable
+        } else {
+            TokenError::InvalidClient
+        }
+    })?;
+    if context.application_id != application || context.organization_id != organization {
+        return Err(TokenError::InvalidClient);
+    }
+    let raw = request.token.expose_secret();
+    let Ok(token) = SecretValue::parse(raw) else {
+        let issued: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM oauth_token_issuances
+             WHERE (access_token_hash=$1 OR id_token_hash=$1)
+               AND client_id=$2 AND application_id=$3 AND organization_id=$4)",
+        )
+        .bind(Sha256::digest(raw.as_bytes()).to_vec())
+        .bind(context.id)
+        .bind(application)
+        .bind(organization)
+        .fetch_one(&mut **tx)
+        .await?;
+        return if issued {
+            Err(TokenError::UnsupportedTokenType)
+        } else {
+            Ok(())
+        };
+    };
+    let identity: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT f.id,f.user_id FROM oauth_refresh_tokens t
+         JOIN oauth_refresh_families f ON f.id=t.family_id
+         WHERE t.token_hash=$1 AND f.client_id=$2 AND f.application_id=$3 AND f.organization_id=$4",
+    )
+    .bind(token.hash())
+    .bind(context.id)
+    .bind(application)
+    .bind(organization)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((family, user)) = identity else {
+        return Ok(());
+    };
+    let present: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE id=$1 FOR SHARE")
+        .bind(user)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if present.is_none() {
+        return Ok(());
+    }
+    let locked: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM oauth_refresh_families WHERE id=$1 FOR UPDATE")
+            .bind(family)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if locked.is_some() {
+        revoke(tx, family, "client").await?;
+    }
     Ok(())
 }
 

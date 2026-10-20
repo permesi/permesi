@@ -171,9 +171,10 @@ preceding release batch. HAProxy scripts
 and real transport/proxy tests were reviewed; an end-to-end HAProxy stack, multi-host
 load/fault benchmarks and Firefox/Safari were not exercised by this validation.
 
-UserInfo, introspection/public revocation and immediate resource-server revocation policy,
+At this checkpoint, UserInfo, introspection/public revocation and immediate resource-server revocation policy,
 broader grants UI, device authorization, M2M, formal OIDC conformance, ancestor mutation
-coordination/deadlines and independent exchange-key rotation remain tracked in TODO.
+coordination/deadlines and independent exchange-key rotation were tracked in TODO;
+see the current [roadmap](../TODO.md) for later completed work and remaining gaps.
 Recent authentication and terminal MFA challenge counters are implemented by the later
 follow-up below. Browser-target WASM Clippy
 now runs in CI; the remaining large-view line-count expectations are tracked there separately.

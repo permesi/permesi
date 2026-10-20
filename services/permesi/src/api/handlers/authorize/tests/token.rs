@@ -15,6 +15,7 @@ use vault_client::{VaultTarget, VaultTransport};
 
 /// Combines a production-router fixture with real nonexportable transit signing.
 mod refresh;
+mod revocation;
 mod userinfo;
 
 struct TokenFixture {

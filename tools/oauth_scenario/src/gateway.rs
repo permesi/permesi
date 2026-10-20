@@ -295,7 +295,12 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
         && !path.starts_with("/authorize")
         && !matches!(
             path,
-            "/.well-known/openid-configuration" | "/jwks.json" | "/health" | "/token" | "/userinfo"
+            "/.well-known/openid-configuration"
+                | "/jwks.json"
+                | "/health"
+                | "/token"
+                | "/userinfo"
+                | "/revoke"
         )
     {
         return proxy.assets.oneshot(request).await.map_or_else(
@@ -525,6 +530,7 @@ mod tests {
                 "/v1/auth/opaque/reauth/start",
                 "/v1/auth/opaque/reauth/finish",
                 "/userinfo",
+                "/revoke",
                 "/admission/token",
             ] {
                 let request = Request::builder()

@@ -50,6 +50,7 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
             issuer: issuer.clone(),
             authorization_endpoint: format!("{issuer}/authorize"),
             token_endpoint: format!("{issuer}/token"),
+            revocation_endpoint: format!("{issuer}/revoke"),
             userinfo_endpoint: format!("{issuer}/userinfo"),
             jwks_uri: format!("{issuer}/jwks.json"),
             response_types_supported: vec!["code"],
@@ -60,6 +61,7 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
             grant_types_supported: vec!["authorization_code", "refresh_token"],
             token_security: TokenSecurityMetadata {
                 token_endpoint_auth_methods_supported: vec!["client_secret_basic", "none"],
+                revocation_auth_methods: vec!["client_secret_basic", "none"],
                 authorization_response_iss_parameter_supported: true,
             },
             request_parameter_supported: false,

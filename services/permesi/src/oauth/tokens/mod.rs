@@ -1,4 +1,4 @@
-//! Transaction-owned authorization-code exchange, independent of session permissions.
+//! Transaction-owned code exchange, refresh rotation and client revocation, independent of sessions.
 //!
 //! Flow Overview: the HTTP adapter bounds/parses/throttles the request, this service
 //! authenticates its client in an owned PostgreSQL transaction, redeems the exact
@@ -6,7 +6,9 @@
 //! and commits once before exposing tokens. Failures before commit roll back the
 //! code and receipt. An interrupted commit can leave a consumed code without a response;
 //! retries still cannot issue twice. Authentication proofs cannot escape into a different transaction.
-//! JWTs carry delegated tenant authority; they never authenticate Permesi sessions.
+//! The same client proof can revoke only its own hash-matched refresh lineage under
+//! client, user and family locks. JWTs carry delegated tenant authority; they never
+//! authenticate Permesi sessions or become immediately retractable through `/revoke`.
 
 mod claims;
 mod refresh;
@@ -29,7 +31,7 @@ use super::{
     oidc::OAuthState,
 };
 pub(crate) use claims::TokenResponse;
-use request::{ClientAuthentication, CodeRequest, TokenRequest};
+use request::{ClientAuthentication, CodeRequest, RevocationRequest, TokenRequest};
 
 /// Dispatch-validated token lifetimes and complete-request resource limits.
 #[derive(Clone, Debug)]
@@ -119,6 +121,7 @@ pub(crate) enum TokenError {
     InvalidGrant,
     InvalidScope,
     UnsupportedGrant,
+    UnsupportedTokenType,
     Unavailable,
     Limited,
 }
@@ -132,6 +135,7 @@ impl TokenError {
             Self::InvalidGrant => "invalid_grant",
             Self::InvalidScope => "invalid_scope",
             Self::UnsupportedGrant => "unsupported_grant_type",
+            Self::UnsupportedTokenType => "unsupported_token_type",
             Self::Unavailable | Self::Limited => "temporarily_unavailable",
         }
     }
@@ -268,6 +272,27 @@ pub(crate) async fn exchange(
     refresh::check_output(&mut guard.tx, &issued.response).await?;
     guard.tx.commit().await?;
     Ok(issued.response)
+}
+
+/// Authenticates the client and commits a hash-only, tenant-bound refresh-family revocation.
+/// Unknown or already revoked bearers produce the same success as a live bearer.
+pub(crate) async fn revoke_refresh(
+    pool: &PgPool,
+    oauth: &OAuthState,
+    request: RevocationRequest,
+    auth: ClientAuthentication,
+) -> std::result::Result<(), TokenError> {
+    let mut guard = AuthenticatedExchange::authenticate(pool, oauth, auth).await?;
+    refresh::revoke_presented(
+        &mut guard.tx,
+        guard.client,
+        guard.application,
+        guard.organization,
+        &request,
+    )
+    .await?;
+    guard.tx.commit().await?;
+    Ok(())
 }
 
 /// User lifecycle transitions that revoke every existing refresh family.

@@ -286,6 +286,107 @@ pub(super) async fn lifecycle(context: &mut Context<'_>, fixture: &Fixture) -> R
     .await
 }
 
+/// Revokes a rotated refresh lineage on A after B/C issuance and rejects the successor on B.
+pub(super) async fn client_revocation(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
+    let issued = root(context, fixture).await?;
+    let original = text_field(&issued, "refresh_token")?;
+    let client = fixture.app()?.public.client_id.to_string();
+    context.gateway.replica_c();
+    let rotated = token::response(
+        context.api.token(&fields(&client, &original), None).await?,
+        StatusCode::OK,
+    )
+    .await?;
+    let successor = text_field(&rotated, "refresh_token")?;
+    context.gateway.replica_a();
+    for (index, presented) in ["unknown", original.as_str(), original.as_str()]
+        .into_iter()
+        .enumerate()
+    {
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.extend_pairs([
+            ("token", presented),
+            ("client_id", client.as_str()),
+            ("token_type_hint", "access_token"),
+        ]);
+        let reply = context
+            .api
+            .client
+            .post(format!("{}/revoke", context.api.origin))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(form.finish())
+            .send()
+            .await
+            .safe("Refresh revocation HTTP request failed.")?;
+        check(
+            reply.status() == StatusCode::OK
+                && reply
+                    .headers()
+                    .get(reqwest::header::CACHE_CONTROL)
+                    .is_some_and(|value| value == "no-store")
+                && reply.headers().get(reqwest::header::LOCATION).is_none(),
+            "Refresh revocation status or cache policy differs from protocol.",
+        )?;
+        check(
+            reply
+                .bytes()
+                .await
+                .safe("Cannot inspect revocation response size.")?
+                .is_empty(),
+            "Refresh revocation disclosed bearer state.",
+        )?;
+        if index == 0 {
+            let still_active: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM oauth_refresh_tokens t
+                 JOIN oauth_refresh_families f ON f.id=t.family_id
+                 WHERE t.token_hash=$1 AND f.revoked_at IS NULL)",
+            )
+            .bind(Sha256::digest(successor.as_bytes()).to_vec())
+            .fetch_one(context.pool)
+            .await
+            .safe("Cannot inspect family after unknown-token revocation.")?;
+            check(
+                still_active,
+                "Unknown-token revocation changed another refresh family.",
+            )?;
+        }
+    }
+    let revoked: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM oauth_refresh_tokens t
+         JOIN oauth_refresh_families f ON f.id=t.family_id
+         JOIN oauth_clients c ON c.id=f.client_id
+         WHERE t.token_hash=$1 AND t.previous_hash=$2 AND c.client_id=$3
+           AND f.organization_id=$4 AND f.application_id=$5 AND f.user_id=$6
+           AND f.revoked_at IS NOT NULL AND f.revocation_reason='client')",
+    )
+    .bind(Sha256::digest(successor.as_bytes()).to_vec())
+    .bind(Sha256::digest(original.as_bytes()).to_vec())
+    .bind(fixture.app()?.public.client_id)
+    .bind(fixture.org.id)
+    .bind(fixture.app()?.resource.id)
+    .bind(context.api.user_id)
+    .fetch_one(context.pool)
+    .await
+    .safe("Cannot inspect exact client revocation lineage.")?;
+    check(
+        revoked,
+        "Refresh revocation did not commit exact tenant lineage.",
+    )?;
+    context.gateway.replica_b();
+    token::failure(
+        context
+            .api
+            .token(&fields(&client, &successor), None)
+            .await?,
+        StatusCode::BAD_REQUEST,
+        "invalid_grant",
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

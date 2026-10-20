@@ -128,6 +128,7 @@ pub(crate) struct Discovery {
     pub issuer: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    pub revocation_endpoint: String,
     pub userinfo_endpoint: String,
     pub jwks_uri: String,
     pub response_types_supported: Vec<&'static str>,
@@ -147,6 +148,8 @@ pub(crate) struct Discovery {
 #[derive(Serialize, ToSchema)]
 pub(crate) struct TokenSecurityMetadata {
     pub token_endpoint_auth_methods_supported: Vec<&'static str>,
+    #[serde(rename = "revocation_endpoint_auth_methods_supported")]
+    pub revocation_auth_methods: Vec<&'static str>,
     pub authorization_response_iss_parameter_supported: bool,
 }
 

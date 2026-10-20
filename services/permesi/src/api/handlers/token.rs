@@ -1,8 +1,9 @@
 //! Bounded OAuth token adapter; session cookies never authenticate delegated clients.
 //!
 //! Flow Overview: enforce a complete-request deadline and body limit, parse strict form /
-//! Basic inputs, apply shared PostgreSQL budgets, and call the transaction-owning exchange.
-//! Only committed output reaches JSON. Every response prevents caching and contains no
+//! Basic inputs, apply distinct shared PostgreSQL budgets, and call the transaction-owned
+//! exchange or refresh-family revocation. Only committed issuance reaches JSON.
+//! Every response prevents caching and contains no
 //! redirects, SQL/Vault diagnostics, submitted secrets or internal authorization details.
 
 use super::auth::{AuthState, RateLimitAction, RateLimitConfig, extract_client_ip};
@@ -51,6 +52,84 @@ pub(crate) async fn token(
         Ok(response) => no_cache(Json(response).into_response()),
         Err(error) => failure(error, supplied_auth),
     }
+}
+
+#[utoipa::path(post,path="/revoke",request_body(content=String,content_type="application/x-www-form-urlencoded",description="RFC 7009 token plus optional token_type_hint; public clients send client_id and confidential clients use HTTP Basic"),responses((status=200,description="No revocable refresh token remains for this client"),(status=400,description="Malformed request or issued access/ID token cannot be revoked",body=TokenFailure),(status=401,description="Invalid HTTP Basic client authentication",body=TokenFailure),(status=429,description="Shared revocation budget exhausted",body=TokenFailure),(status=503,description="Revocation dependency unavailable",body=TokenFailure)),tag="oauth")]
+/// Revokes only refresh-token families after current client authentication.
+/// Unknown, rotated, expired and already revoked tokens never disclose their status.
+pub(crate) async fn revoke(
+    State(pool): State<PgPool>,
+    State(oauth): State<Arc<OAuthState>>,
+    State(auth): State<Arc<AuthState>>,
+    request: Request,
+) -> Response {
+    let supplied_auth = request
+        .headers()
+        .contains_key(axum::http::header::AUTHORIZATION);
+    let result = tokio::time::timeout(
+        Duration::from_millis(oauth.config.tokens.timeout_ms),
+        handle_revocation(&pool, &oauth, &auth, request),
+    )
+    .await
+    .unwrap_or(Err(TokenError::Unavailable));
+    match result {
+        Ok(()) => no_cache(StatusCode::OK.into_response()),
+        Err(error) => failure(error, supplied_auth),
+    }
+}
+
+/// Enforces a distinct shared PostgreSQL revocation budget before client proof or lookup.
+async fn handle_revocation(
+    pool: &PgPool,
+    oauth: &OAuthState,
+    auth: &AuthState,
+    request: Request,
+) -> Result<(), TokenError> {
+    if oauth.config.issuer.is_none() {
+        return Err(TokenError::Unavailable);
+    }
+    let (parts, body) = request.into_parts();
+    let ip = extract_client_ip(&parts.headers);
+    let policy = &oauth.config.tokens;
+    let limiter = auth.rate_limiter().configured(RateLimitConfig::new(
+        policy.rate_window,
+        policy.ip_attempts,
+        policy.client_ip_attempts,
+    ));
+    if let Some(status) = limiter
+        .check_ip(ip.as_deref(), RateLimitAction::TokenRevocation)
+        .await
+        .denial_status()
+    {
+        return Err(if status == StatusCode::SERVICE_UNAVAILABLE {
+            TokenError::Unavailable
+        } else {
+            TokenError::Limited
+        });
+    }
+    let body = axum::body::to_bytes(body, oauth.config.tokens.max_body_bytes)
+        .await
+        .map_err(|_| TokenError::InvalidRequest)?;
+    let (request, authentication) = request::parse_revocation(&parts.headers, &body)?;
+    if let Some(status) = limiter
+        .check_email(
+            &format!(
+                "token-client/{}/ip/{}",
+                authentication.client_id(),
+                ip.as_deref().unwrap_or("unknown")
+            ),
+            RateLimitAction::TokenRevocation,
+        )
+        .await
+        .denial_status()
+    {
+        return Err(if status == StatusCode::SERVICE_UNAVAILABLE {
+            TokenError::Unavailable
+        } else {
+            TokenError::Limited
+        });
+    }
+    tokens::revoke_refresh(pool, oauth, request, authentication).await
 }
 
 /// Bounds memory and throttles before Argon2 or signing; uses no browser/tenant authority.

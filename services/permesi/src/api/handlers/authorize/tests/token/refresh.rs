@@ -3,12 +3,12 @@
 use super::*;
 
 /// Only explicit offline consent may mint the original family, never a client allow-list alone.
-async fn issue(t: &TokenFixture) -> Result<Value> {
+pub(super) async fn issue(t: &TokenFixture) -> Result<Value> {
     issue_as(t, None).await
 }
 
 /// Uses the same real consent flow with confidential Basic proof when supplied.
-async fn issue_as(t: &TokenFixture, basic: Option<&str>) -> Result<Value> {
+pub(super) async fn issue_as(t: &TokenFixture, basic: Option<&str>) -> Result<Value> {
     let page =
         t.f.start(&[
             (
@@ -37,7 +37,7 @@ async fn issue_as(t: &TokenFixture, basic: Option<&str>) -> Result<Value> {
 }
 
 /// Supplies only the authenticated client, opaque token and optional narrowing scope.
-async fn refresh(
+pub(super) async fn refresh(
     router: &Router,
     client: Uuid,
     token: &str,

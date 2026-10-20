@@ -93,12 +93,34 @@ new authority afterward. Schema reapplication is idempotent; pre-upgrade codes l
 a revision fail closed, so finish or drain their short TTL before upgrading. Existing
 sessions and permanent password/factor records are not rewritten by this schema change.
 
-Family/grant revocation prevents future token issuance. Already signed access/ID JWTs
-remain valid until their short expiry under the current offline verifier policy.
-Immediate resource-server revocation, introspection, a public revocation endpoint,
-Limited UserInfo now rechecks the issued access-token receipt, signing proof, current
+Family/grant revocation prevents future token issuance. `POST /revoke` accepts an
+[RFC 7009](https://www.rfc-editor.org/rfc/rfc7009.html) form with `token` and an optional,
+non-authoritative `token_type_hint`. Public clients
+supply `client_id`; confidential clients use HTTP Basic. After current client
+authentication, an exact hashed refresh token from any generation irreversibly revokes
+its tenant-bound family in one transaction. Unknown, expired, already revoked and
+other-client tokens all return the same empty 200 response. An exact issued access
+or ID JWT for that client receives `unsupported_token_type`, so a caller is never told that
+the already signed JWT was revoked. A distinct shared PostgreSQL revocation budget
+prevents issuance traffic from exhausting this action's budget. Malformed requests,
+failed client authentication and dependency failures do not
+report token state. Revocation and rotation use the same client, user and family lock
+order, so no successor can survive either race outcome.
+
+The authenticated client's lookup treats a token issued to another client as invalid
+for this caller. This keeps cross-client token existence private while ensuring that
+the other client's token is never changed.
+
+Already signed access/ID JWTs remain valid until their short expiry under the current
+offline verifier policy. The endpoint does not revoke access JWTs or ID tokens.
+Limited UserInfo rechecks the issued access-token receipt, signing proof, current
 tenant authority and credential revision before disclosing scope-bound profile claims.
-Refresh-family management UI and sender-constrained tokens remain separate work.
+Immediate resource-server revocation, introspection, refresh-family management UI and
+sender-constrained tokens remain separate work.
+Apply the canonical PostgreSQL schema update, including the new `client` revocation
+reason and `token_revocation` rate-limit action, before rolling out a binary that
+advertises `/revoke`. An older schema rejects those writes and the endpoint fails
+closed with a dependency error rather than claiming success.
 This implementation does not claim OIDC certification or cross-browser/multi-host load coverage.
 
 ## Validation

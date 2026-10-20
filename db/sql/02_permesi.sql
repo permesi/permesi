@@ -613,7 +613,7 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_families (
     expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at>issued_at AND expires_at<=issued_at+INTERVAL '90 days'),
     idle_ttl_seconds BIGINT NOT NULL CHECK (idle_ttl_seconds BETWEEN 1 AND 7776000),
     revoked_at TIMESTAMPTZ CHECK (revoked_at>=issued_at),
-    revocation_reason TEXT CHECK (revocation_reason IN ('reuse','authority','password','recovery')),
+    revocation_reason TEXT CHECK (revocation_reason IN ('reuse','authority','password','recovery','client')),
     CHECK ((revoked_at IS NULL)=(revocation_reason IS NULL)),
     CHECK ('openid'=ANY(scope_names) AND 'offline_access'=ANY(scope_names)),
     FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
@@ -621,6 +621,9 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_families (
 );
 CREATE INDEX IF NOT EXISTS oauth_refresh_families_user_idx ON oauth_refresh_families(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS oauth_refresh_families_expiry_idx ON oauth_refresh_families(expires_at);
+ALTER TABLE oauth_refresh_families DROP CONSTRAINT IF EXISTS oauth_refresh_families_revocation_reason_check;
+ALTER TABLE oauth_refresh_families ADD CONSTRAINT oauth_refresh_families_revocation_reason_check
+    CHECK (revocation_reason IN ('reuse','authority','password','recovery','client'));
 
 CREATE OR REPLACE FUNCTION validate_oauth_refresh_family() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -956,7 +959,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
     dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
     subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
     action TEXT NOT NULL CHECK (action IN (
-        'signup', 'login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','userinfo','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
+        'signup', 'login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','token_revocation','userinfo','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
     )),
     attempts BIGINT NOT NULL CHECK (attempts > 0),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -966,7 +969,7 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
 -- Keep action policy current when upgrading an existing database.
 ALTER TABLE auth_rate_limits DROP CONSTRAINT IF EXISTS auth_rate_limits_action_check;
 ALTER TABLE auth_rate_limits ADD CONSTRAINT auth_rate_limits_action_check
-    CHECK (action IN ('signup','login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','userinfo','jwks_refresh','client_credentials_management','client_credentials_revocation'));
+    CHECK (action IN ('signup','login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','token_revocation','userinfo','jwks_refresh','client_credentials_management','client_credentials_revocation'));
 
 CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
 

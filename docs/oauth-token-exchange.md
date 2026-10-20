@@ -3,7 +3,7 @@
 `POST /token` exchanges an issued authorization code for a Vault-signed RS256 access
 token and, when `openid` was granted, an OIDC ID token. It also implements
 `grant_type=refresh_token` with [hashed rotating families](oauth-refresh-tokens.md) after
-explicit offline consent. UserInfo is implemented; introspection, a public revocation endpoint and the
+explicit offline consent. UserInfo and refresh-family revocation are implemented; introspection and the
 client-credentials machine grant remain separate milestones. This implementation does
 not claim OIDC certification.
 
@@ -84,8 +84,8 @@ Runtime Vault policy adds signing permission only; rotation/export/retirement re
 operator actions. Apply the repository policy/schema updates before deploying this
 binary, using the existing operator workflow; repository tests change only fresh stacks.
 
-Discovery advertises `/token`, `client_secret_basic` and public `none`, only the
-authorization-code grant and S256. Trusted authorization responses, including errors,
+Discovery advertises `/token`, `/revoke`, `client_secret_basic` and public `none`,
+the authorization-code and refresh-token grants, and S256. Trusted authorization responses, including errors,
 also carry the configured `iss`; clients must validate it alongside unchanged state,
 as specified by [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207.html). Untrusted
 redirects still receive direct errors. Registrations containing reserved response query
