@@ -5,7 +5,8 @@
 //! select a fresh shared version and locally verify Vault signatures before database commit.
 //! Vault owns private material and rotation. No process-local key/version confers authority.
 //! Unknown-kid refresh is explicitly rate limited; retirement is operator-only after all
-//! token lifetimes and downstream caches expire. `UserInfo` and refresh remain separate.
+//! token lifetimes and downstream caches expire. `UserInfo` uses exact issuance receipts;
+//! signing keys are not a second source of tenant or scope authority.
 
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -22,6 +23,8 @@ use vault_client::VaultTransport;
 
 use super::config::OAuthConfig;
 mod signing;
+mod verify;
+pub(crate) use verify::{AccessClaims, AccessVerifyError, MAX_ACCESS_JWT_BYTES};
 
 /// Immutable policy plus shared Vault connectivity; contains no locally generated keys.
 #[derive(Clone)]
@@ -125,6 +128,7 @@ pub(crate) struct Discovery {
     pub issuer: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    pub userinfo_endpoint: String,
     pub jwks_uri: String,
     pub response_types_supported: Vec<&'static str>,
     pub response_modes_supported: Vec<&'static str>,

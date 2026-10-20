@@ -50,6 +50,7 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
             issuer: issuer.clone(),
             authorization_endpoint: format!("{issuer}/authorize"),
             token_endpoint: format!("{issuer}/token"),
+            userinfo_endpoint: format!("{issuer}/userinfo"),
             jwks_uri: format!("{issuer}/jwks.json"),
             response_types_supported: vec!["code"],
             response_modes_supported: vec!["query"],

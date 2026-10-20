@@ -28,13 +28,19 @@ pub(super) async fn record(
         .id_token
         .as_ref()
         .map(|v| Sha256::digest(v.expose_secret().as_bytes()).to_vec());
+    let scopes = issued
+        .response
+        .scope
+        .split(' ')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     let result = sqlx::query("INSERT INTO oauth_token_issuances
-        (access_jti,code_hash,access_token_hash,id_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at,id_expires_at)
-        SELECT $1,c.code_hash,$3,$4,c.grant_id,c.client_id,c.application_id,c.organization_id,c.user_id,c.issuer,c.audience,$5,$6,$7
+        (access_jti,code_hash,access_token_hash,id_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at,id_expires_at,scope_names,authorization_revision)
+        SELECT $1,c.code_hash,$3,$4,c.grant_id,c.client_id,c.application_id,c.organization_id,c.user_id,c.issuer,c.audience,$5,$6,$7,$8,c.authorization_revision
         FROM oauth_authorization_codes c WHERE c.code_hash=$2 AND c.consumed_at IS NOT NULL
         AND $6>clock_timestamp() AND ($7::timestamptz IS NULL OR $7>clock_timestamp())")
         .bind(issued.jti).bind(code_hash).bind(access_hash).bind(id_hash).bind(issued.created_at)
-        .bind(issued.access_expires_at).bind(issued.id_expires_at).execute(&mut **tx).await?;
+        .bind(issued.access_expires_at).bind(issued.id_expires_at).bind(scopes).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(TokenError::Unavailable);
     }
@@ -49,12 +55,18 @@ pub(super) async fn record_refresh(
 ) -> Result<(), TokenError> {
     let source = Sha256::digest(request.token.expose_secret().as_bytes()).to_vec();
     let access = Sha256::digest(issued.response.access_token.expose_secret().as_bytes()).to_vec();
+    let scopes = issued
+        .response
+        .scope
+        .split(' ')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     let result = sqlx::query("INSERT INTO oauth_token_issuances
-        (access_jti,refresh_hash,access_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at)
-        SELECT $1,t.token_hash,$3,f.grant_id,f.client_id,f.application_id,f.organization_id,f.user_id,f.issuer,f.audience,$4,$5
+        (access_jti,refresh_hash,access_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at,scope_names,authorization_revision)
+        SELECT $1,t.token_hash,$3,f.grant_id,f.client_id,f.application_id,f.organization_id,f.user_id,f.issuer,f.audience,$4,$5,$6,f.authorization_revision
         FROM oauth_refresh_tokens t JOIN oauth_refresh_families f ON f.id=t.family_id
         WHERE t.token_hash=$2 AND t.consumed_at IS NOT NULL AND $5>clock_timestamp()")
-        .bind(issued.jti).bind(source).bind(access).bind(issued.created_at).bind(issued.access_expires_at)
+        .bind(issued.jti).bind(source).bind(access).bind(issued.created_at).bind(issued.access_expires_at).bind(scopes)
         .execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(TokenError::Unavailable);

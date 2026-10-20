@@ -56,7 +56,7 @@ async fn refresh(
 }
 
 /// Starts an independent signing/client service and pool, sharing only durable PostgreSQL/Vault authority.
-async fn replica(t: &TokenFixture) -> Result<Router> {
+pub(super) async fn replica(t: &TokenFixture) -> Result<Router> {
     let mut state = t.f.state.clone();
     state.pool = PgPoolOptions::new()
         .max_connections(2)

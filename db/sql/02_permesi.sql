@@ -722,6 +722,11 @@ END $$;
 -- One immutable receipt per consumed code OR refresh token; neither source is bearer plaintext.
 ALTER TABLE oauth_token_issuances ALTER COLUMN code_hash DROP NOT NULL;
 ALTER TABLE oauth_token_issuances ADD COLUMN IF NOT EXISTS refresh_hash BYTEA;
+-- Existing pre-UserInfo receipts lack a trustworthy per-token scope snapshot. They
+-- remain usable as signed JWTs until expiry but cannot disclose claims at UserInfo.
+ALTER TABLE oauth_token_issuances ADD COLUMN IF NOT EXISTS scope_names TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+-- Old receipts lack a verified credential epoch and cannot be used for UserInfo.
+ALTER TABLE oauth_token_issuances ADD COLUMN IF NOT EXISTS authorization_revision UUID;
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_token_issuances_refresh_idx ON oauth_token_issuances(refresh_hash) WHERE refresh_hash IS NOT NULL;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='oauth_token_issuances'::regclass AND conname='oauth_token_issuances_source_check') THEN
@@ -737,6 +742,8 @@ BEGIN
             WHERE c.code_hash=NEW.code_hash AND c.consumed_at IS NOT NULL
             AND (c.grant_id,c.client_id,c.application_id,c.organization_id,c.user_id,c.issuer,c.audience)
             IS NOT DISTINCT FROM (NEW.grant_id,NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.issuer,NEW.audience)
+            AND c.scope_names=NEW.scope_names
+            AND c.authorization_revision=NEW.authorization_revision
             AND (c.nonce IS NOT NULL)=(NEW.id_token_hash IS NOT NULL) FOR SHARE;
     ELSE
         PERFORM 1 FROM oauth_refresh_tokens t JOIN oauth_refresh_families f ON f.id=t.family_id
@@ -744,6 +751,9 @@ BEGIN
             AND f.expires_at>clock_timestamp() AND NEW.id_token_hash IS NULL
             AND (f.grant_id,f.client_id,f.application_id,f.organization_id,f.user_id,f.issuer,f.audience)
             IS NOT DISTINCT FROM (NEW.grant_id,NEW.client_id,NEW.application_id,NEW.organization_id,NEW.user_id,NEW.issuer,NEW.audience)
+            AND NEW.scope_names <@ f.scope_names AND oauth_scope_names_valid(NEW.scope_names)
+            AND f.authorization_revision=NEW.authorization_revision
+            AND cardinality(NEW.scope_names)>0
             FOR SHARE OF t,f;
     END IF;
     IF NOT FOUND THEN
@@ -946,17 +956,17 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
     dimension TEXT NOT NULL CHECK (dimension IN ('ip', 'account')),
     subject_hash BYTEA NOT NULL CHECK (octet_length(subject_hash) = 32),
     action TEXT NOT NULL CHECK (action IN (
-        'signup', 'login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
+        'signup', 'login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification', 'verify_email', 'resend_verification', 'mfa_recovery', 'authorize', 'token_exchange','userinfo','jwks_refresh', 'client_credentials_management','client_credentials_revocation'
     )),
     attempts BIGINT NOT NULL CHECK (attempts > 0),
     expires_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (dimension, subject_hash, action)
 );
 
--- Add the independent OAuth authorization counter without changing existing actions.
+-- Keep action policy current when upgrading an existing database.
 ALTER TABLE auth_rate_limits DROP CONSTRAINT IF EXISTS auth_rate_limits_action_check;
 ALTER TABLE auth_rate_limits ADD CONSTRAINT auth_rate_limits_action_check
-    CHECK (action IN ('signup','login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','jwks_refresh','client_credentials_management','client_credentials_revocation'));
+    CHECK (action IN ('signup','login','reauthenticate','passkey_login','webauthn_enrollment','mfa_verification','verify_email','resend_verification','mfa_recovery','authorize','token_exchange','userinfo','jwks_refresh','client_credentials_management','client_credentials_revocation'));
 
 CREATE INDEX IF NOT EXISTS auth_rate_limits_expires_at_idx ON auth_rate_limits (expires_at);
 

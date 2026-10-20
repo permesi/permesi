@@ -566,6 +566,116 @@
         }
       }
     },
+    "/userinfo": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Returns the token subject and only profile claims allowed by issued OIDC scopes.",
+        "operationId": "get",
+        "responses": {
+          "200": {
+            "description": "Current OIDC subject and authorized profile claims",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired or unauthorized access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared UserInfo budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "UserInfo dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oidc_access_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Supports OIDC POST with header-carried Bearer credentials, without form or URL tokens.",
+        "operationId": "post",
+        "responses": {
+          "200": {
+            "description": "Current OIDC subject and authorized profile claims",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired or unauthorized access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared UserInfo budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "UserInfo dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oidc_access_token": []
+          }
+        ]
+      }
+    },
     "/v1/auth/admin/bootstrap": {
       "post": {
         "tags": [
@@ -6954,6 +7064,7 @@
               "issuer",
               "authorization_endpoint",
               "token_endpoint",
+              "userinfo_endpoint",
               "jwks_uri",
               "response_types_supported",
               "response_modes_supported",
@@ -7021,6 +7132,9 @@
                 }
               },
               "token_endpoint": {
+                "type": "string"
+              },
+              "userinfo_endpoint": {
                 "type": "string"
               }
             }
@@ -8116,6 +8230,36 @@
           }
         }
       },
+      "UserInfo": {
+        "type": "object",
+        "description": "Minimal public subject and optional registry-authorized profile claims.",
+        "required": [
+          "sub"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email_verified": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sub": {
+            "type": "string"
+          }
+        }
+      },
       "UserRoleRequest": {
         "type": "object",
         "required": [
@@ -8271,6 +8415,13 @@
             "type": "string"
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "oidc_access_token": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     }
   },

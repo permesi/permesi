@@ -3,7 +3,7 @@
 `POST /token` exchanges an issued authorization code for a Vault-signed RS256 access
 token and, when `openid` was granted, an OIDC ID token. It also implements
 `grant_type=refresh_token` with [hashed rotating families](oauth-refresh-tokens.md) after
-explicit offline consent. UserInfo, introspection, a public revocation endpoint and the
+explicit offline consent. UserInfo is implemented; introspection, a public revocation endpoint and the
 client-credentials machine grant remain separate milestones. This implementation does
 not claim OIDC certification.
 
@@ -56,8 +56,19 @@ management APIs. They contain pseudonymous identifiers, not profile/email attrib
 ID tokens use `typ=JWT`, the public client ID as audience, bound user/issuer, original
 session `auth_time`, issued/expiration times, exact nonce and the RS256 `at_hash` of the
 returned access token, following [OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html).
-They are absent when `openid` was not granted. Profile/email/UserInfo disclosure is
-not implemented; registry entries alone do not promise those claims. Access and identity
+They are absent when `openid` was not granted. `GET` or `POST /userinfo` accepts a
+header-carried access token whose exact SHA-256 hash matches a committed issuance
+receipt. Permesi also verifies the fixed RS256 access-token signature, issuer, audience,
+type, lifetime against the database clock and every authority claim against the receipt
+before disclosure, so replica clock skew cannot reject freshly issued tokens.
+That receipt records the scopes and credential revision actually issued, including narrowed refresh
+exchanges; its current user, credential revision, grant, membership, client and tenant ancestry must still
+be active. The response always contains the ID token's public `sub` and adds current
+`name` only for `profile`, and current `email`/`email_verified` only for `email`. Address
+and phone claims are not stored and are omitted. Query/form bearer credentials and ID
+tokens are rejected; responses are `no-store`. Older receipts without an issued-scope
+snapshot or credential revision fail closed for UserInfo until a new access token is obtained. Resource servers
+still validate signed JWTs independently until expiry. Access and identity
 audiences/types are distinct and must not be substituted for each other.
 
 Each exchange fetches shared Vault metadata afresh, selects an explicit current

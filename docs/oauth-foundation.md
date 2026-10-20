@@ -385,7 +385,8 @@ Admission-token PASERK keys and internal admin signing keys remain separate trus
 `/.well-known/openid-configuration` advertises explicit issuer, working authorization/token
 endpoints, JWKS, code/query/S256/RS256/public-subject support, `client_secret_basic` and
 public `none`, authorization-code and refresh grants, plus RFC 9207 issuer response
-identification. It does not advertise UserInfo, implicit or machine grants. OIDC conformance and additional claim disclosure
+identification, plus the implemented UserInfo endpoint. It does not advertise implicit
+or machine grants. OIDC conformance and additional claim disclosure
 remain separately tracked; protocol metadata does not claim certification.
 
 ## Confidential-client credentials
@@ -475,7 +476,8 @@ transaction until their operation completes. Credentials establish no user conse
 [TODO.md](../TODO.md) is the authoritative completion checklist. This document explains
 boundaries and dependencies; README and the frontend documentation link back to it.
 A milestone is complete only after its implementation, required checks and independent
-review pass. Token exchange, signed access/ID tokens and accurate code-flow discovery are implemented; refresh families are implemented; UserInfo and conformance remain pending.
+review pass. Token exchange, signed access/ID tokens, accurate code-flow discovery,
+refresh families and limited UserInfo are implemented; formal conformance remains pending.
 
 Tenant deletion polish adds permission-aware controls and inline password reauthentication
 with an explicit final confirmation. Durable OPAQUE login/reauthentication is implemented in a separate shared PostgreSQL
@@ -499,8 +501,15 @@ and public-key rotation. This is a narrow interoperability foundation, not OIDC
 certification. Broader client/conformance coverage and production revocation/resource
 policy remain separate work; see [scenario coverage](oauth-scenarios.md).
 [Refresh families](oauth-refresh-tokens.md) persist hashed lineage, detect reuse, revoke
-families, recheck current tenant/consent and require explicit offline consent. UserInfo,
-introspection and public token revocation follow separately, with authenticated caller
+families, recheck current tenant/consent and require explicit offline consent. UserInfo
+returns only current `sub`, `profile` name and `email`/`email_verified` from an exact
+hash-only issued access-token receipt after RS256 and claim-to-receipt verification.
+Both GET and POST require a Bearer header;
+query/form tokens, ID tokens and tokens without `openid` fail. Active user, grant,
+membership, client, credential revision and ancestry are rechecked before disclosure. Historical receipts
+from before the per-token scope and revision migration cannot disclose UserInfo until clients obtain
+new short-lived access tokens. Introspection and public token revocation follow
+separately, with authenticated caller
 and disclosure policy. Family revocation does not retract an already signed JWT.
 
 Authorization UX now shows the signed-in account and registered callback origin,
@@ -521,7 +530,7 @@ current ancestry during authorization.
 Record coverage actually exercised;
 local Chromium tests do not establish cross-browser or production load behavior.
 
-Broader administrator grant management, UserInfo, introspection, token revocation,
+Broader administrator grant management, introspection, token revocation,
 device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
 and resource policy; possession of a confidential credential must not manufacture a user
 grant. Audit UI and tenant RLS remain tracked separately in TODO.md; the implemented

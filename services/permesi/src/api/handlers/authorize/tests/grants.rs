@@ -150,6 +150,24 @@ async fn saved_grants_cursor_is_scoped_and_malformed_cursor_rejected() -> Result
         )
         .await?;
     assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+    let rejected_query = fixture
+        .call(
+            &fixture.router,
+            "GET",
+            "/v1/me/oauth/grants?unexpected=1",
+            Some(&fixture.token),
+            None,
+            None,
+        )
+        .await?;
+    assert_eq!(rejected_query.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        rejected_query
+            .headers
+            .get(CACHE_CONTROL)
+            .context("cache policy")?,
+        "no-store"
+    );
     let foreign_cursor = Uuid::new_v4();
     let listed = fixture
         .call(

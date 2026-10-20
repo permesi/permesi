@@ -15,6 +15,7 @@ use vault_client::{VaultTarget, VaultTransport};
 
 /// Combines a production-router fixture with real nonexportable transit signing.
 mod refresh;
+mod userinfo;
 
 struct TokenFixture {
     f: Fixture,
@@ -96,6 +97,11 @@ fn router(state: &AppState) -> Router {
 
 /// Reapplies canonical policy and routes through a real non-superuser runtime login, never SET ROLE.
 async fn runtime_router(fixture: &Fixture) -> Result<Router> {
+    Ok(router(&runtime_state(fixture).await?))
+}
+
+/// Uses canonical runtime grants and a real non-superuser login for protocol tests.
+async fn runtime_state(fixture: &Fixture) -> Result<AppState> {
     fixture.postgres.bootstrap().await?;
     let login = format!("oauth_runtime_{}", Uuid::new_v4().simple());
     let password = Uuid::new_v4().simple().to_string();
@@ -127,7 +133,7 @@ async fn runtime_router(fixture: &Fixture) -> Result<Router> {
     );
     let mut state = fixture.state.clone();
     state.pool = pool;
-    Ok(router(&state))
+    Ok(state)
 }
 
 /// Current runtime grants permit committed code exchange, exact authority and single-use replay rejection.

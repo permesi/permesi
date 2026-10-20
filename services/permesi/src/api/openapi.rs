@@ -1,5 +1,6 @@
-use super::handlers::{auth, authorize, health, me, me_webauthn, orgs, token, users};
+use super::handlers::{auth, authorize, health, me, me_webauthn, orgs, token, userinfo, users};
 use super::state::AppState;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -53,8 +54,12 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(me::patch_me))
         .routes(routes!(me::list_sessions))
         .routes(routes!(me::revoke_session))
-        .routes(routes!(me::grants::list_grants))
-        .routes(routes!(me::grants::revoke_grant))
+        .merge(
+            OpenApiRouter::new()
+                .routes(routes!(me::grants::list_grants))
+                .routes(routes!(me::grants::revoke_grant))
+                .layer(axum::middleware::map_response(me::grants::prevent_cache)),
+        )
         .routes(routes!(me::disable_totp))
         .routes(routes!(me::list_security_keys))
         .routes(routes!(auth::mfa::webauthn::delete_key))
@@ -120,7 +125,26 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         Tag::new("oauth-scopes"),
     ]);
 
+    register_access_token_scheme(&mut router);
+
     router
+}
+
+/// Documents the issued Bearer credential accepted by OIDC `UserInfo` only.
+fn register_access_token_scheme(router: &mut OpenApiRouter<AppState>) {
+    router
+        .get_openapi_mut()
+        .components
+        .get_or_insert_with(Default::default)
+        .add_security_scheme(
+            "oidc_access_token",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("JWT")
+                    .build(),
+            ),
+        );
 }
 
 /// Registers credential management and the implemented code/token protocol routes.
@@ -130,6 +154,12 @@ fn oauth_router() -> OpenApiRouter<AppState> {
             OpenApiRouter::new()
                 .routes(routes!(token::token))
                 .layer(axum::middleware::map_response(token::prevent_cache)),
+        )
+        .merge(
+            OpenApiRouter::new()
+                .routes(routes!(userinfo::get))
+                .routes(routes!(userinfo::post))
+                .layer(axum::middleware::map_response(userinfo::prevent_cache)),
         )
         .routes(routes!(orgs::oauth::credentials::list_secrets))
         .routes(routes!(orgs::oauth::credentials::create_secret))
@@ -443,11 +473,12 @@ mod tests {
         ] {
             assert!(spec.paths.paths.contains_key(&format!("{base}{suffix}")));
         }
-        for path in ["/userinfo", "/revoke", "/introspect", "/jwks"] {
+        for path in ["/revoke", "/introspect", "/jwks"] {
             assert!(!spec.paths.paths.contains_key(path));
         }
         for path in [
             "/token",
+            "/userinfo",
             "/authorize",
             "/authorize/resume",
             "/authorize/consent",
@@ -463,6 +494,7 @@ mod tests {
         let document = serde_json::to_string(&spec)?;
         assert!(!document.contains("secret_hash"));
         let json = serde_json::to_value(&spec)?;
+        assert_userinfo_contract(&json)?;
         let schemas = json
             .get("components")
             .and_then(|v| v.get("schemas"))
@@ -517,6 +549,34 @@ mod tests {
             }
         }
         assert_eq!(document, serde_json::to_string(&openapi())?);
+        Ok(())
+    }
+
+    /// Checks the exact Bearer and error contract for both implemented `UserInfo` methods.
+    fn assert_userinfo_contract(json: &serde_json::Value) -> Result<()> {
+        assert_eq!(
+            json.pointer("/components/securitySchemes/oidc_access_token/scheme"),
+            Some(&serde_json::Value::String("bearer".into()))
+        );
+        for method in ["get", "post"] {
+            let operation = json
+                .pointer(&format!("/paths/~1userinfo/{method}"))
+                .context("missing UserInfo operation")?;
+            assert_eq!(
+                operation.pointer("/security/0/oidc_access_token"),
+                Some(&serde_json::json!([]))
+            );
+            for status in ["401", "429", "503"] {
+                assert_eq!(
+                    operation.pointer(&format!(
+                        "/responses/{status}/content/application~1json/schema/$ref"
+                    )),
+                    Some(&serde_json::Value::String(
+                        "#/components/schemas/ErrorEnvelope".into()
+                    ))
+                );
+            }
+        }
         Ok(())
     }
 }

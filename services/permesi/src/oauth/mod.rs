@@ -25,6 +25,7 @@ pub mod redirect_uri;
 pub mod scope;
 pub(crate) mod service;
 pub mod tokens;
+pub(crate) mod userinfo;
 
 /// Configuration validation failure with a stable message and no submitted values.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

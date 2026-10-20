@@ -96,7 +96,9 @@ sessions and permanent password/factor records are not rewritten by this schema 
 Family/grant revocation prevents future token issuance. Already signed access/ID JWTs
 remain valid until their short expiry under the current offline verifier policy.
 Immediate resource-server revocation, introspection, a public revocation endpoint,
-UserInfo, refresh-family management UI and sender-constrained tokens remain separate work.
+Limited UserInfo now rechecks the issued access-token receipt, signing proof, current
+tenant authority and credential revision before disclosing scope-bound profile claims.
+Refresh-family management UI and sender-constrained tokens remain separate work.
 This implementation does not claim OIDC certification or cross-browser/multi-host load coverage.
 
 ## Validation

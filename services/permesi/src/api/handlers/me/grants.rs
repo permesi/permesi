@@ -67,6 +67,11 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
+/// Covers malformed path/query and method failures before a handler can add cache policy.
+pub(crate) async fn prevent_cache(response: Response) -> Response {
+    no_store(response)
+}
+
 /// Lists the session user's current saved OAuth consent in bounded, cursor-based pages.
 #[utoipa::path(
     get,

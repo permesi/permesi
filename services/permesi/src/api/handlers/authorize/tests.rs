@@ -1231,7 +1231,10 @@ async fn authorization_discovery_advertises_only_implemented_token_methods() -> 
             .context("metadata cache policy")?,
         "public, max-age=30"
     );
-    assert!(metadata.get("userinfo_endpoint").is_none());
+    assert_eq!(
+        metadata["userinfo_endpoint"],
+        "https://issuer.test/userinfo"
+    );
     let disabled = crate::api::router()
         .split_for_parts()
         .0

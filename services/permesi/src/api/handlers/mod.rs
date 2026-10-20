@@ -11,6 +11,7 @@ pub mod me_webauthn;
 pub mod orgs;
 pub mod root;
 pub(crate) mod token;
+pub(crate) mod userinfo;
 pub mod users;
 
 use admission_token::{

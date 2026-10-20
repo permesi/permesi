@@ -304,7 +304,11 @@ and invalidate older codes. The signed-in user can review current saved OAuth co
 under Connected apps and revoke a grant through `GET /v1/me/oauth/grants` and
 `DELETE /v1/me/oauth/grants/{grant_id}`. Revocation blocks later code redemption and
 refresh across replicas; already-issued JWT access tokens remain valid until expiry.
-Immediate JWT revocation and UserInfo remain planned.
+`GET` and `POST /userinfo` accept only a header-carried issued OIDC access token and
+return the matching subject plus current profile/email fields only when those scopes
+were issued. The endpoint rechecks the user's credential revision and live tenant
+authority, with a shared PostgreSQL IP budget; older receipts without a revision or
+issued-scope snapshot cannot disclose claims. Immediate JWT revocation remains planned.
 The [authentication release validation record](docs/authentication-release-validation.md)
 tracks the completed shared-state, MFA, admission and refresh batch, independent review,
 regression evidence and remaining release boundaries.
@@ -314,7 +318,7 @@ enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA ver
 discovery advertises the implemented code/token endpoints, S256, Basic/public-none
 methods and issuer response identification. Runtime signs but cannot rotate/export/retire
 keys. Confidential secret management includes one-time creation, overlap rotation and
-revocation at commit. UserInfo/introspection/public token revocation,
+revocation at commit. Introspection/public token revocation,
 the `client_credentials` machine grant and OIDC conformance testing remain planned.
 See [token exchange](docs/oauth-token-exchange.md) for claims, configuration, rollout,
 cache/rotation behavior and finite-lifetime JWT revocation limits. Follow [TODO](TODO.md)

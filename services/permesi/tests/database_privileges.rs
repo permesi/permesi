@@ -438,7 +438,7 @@ async fn receipt_fixture(admin: &mut PgConnection) -> Result<(Uuid, Uuid)> {
     sqlx::query("UPDATE oauth_authorization_codes SET consumed_at=clock_timestamp()")
         .execute(&mut *admin)
         .await?;
-    sqlx::query("INSERT INTO oauth_token_issuances(access_jti,code_hash,access_token_hash,id_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at,id_expires_at) VALUES(uuidv4(),decode(repeat('33',32),'hex'),decode(repeat('44',32),'hex'),decode(repeat('55',32),'hex'),$1,$2,$3,$4,$5,'https://issuer.example','resource',clock_timestamp(),clock_timestamp()+INTERVAL '5 minutes',clock_timestamp()+INTERVAL '5 minutes')")
+    sqlx::query("INSERT INTO oauth_token_issuances(access_jti,code_hash,access_token_hash,id_token_hash,grant_id,client_id,application_id,organization_id,user_id,issuer,audience,issued_at,access_expires_at,id_expires_at,scope_names,authorization_revision) SELECT uuidv4(),c.code_hash,decode(repeat('44',32),'hex'),decode(repeat('55',32),'hex'),$1,$2,$3,$4,$5,'https://issuer.example','resource',clock_timestamp(),clock_timestamp()+INTERVAL '5 minutes',clock_timestamp()+INTERVAL '5 minutes',ARRAY['openid','offline_access'],c.authorization_revision FROM oauth_authorization_codes c WHERE c.code_hash=decode(repeat('33',32),'hex')")
         .bind(grant).bind(client).bind(app).bind(org).bind(user).execute(&mut *admin).await?;
     Ok((user, grant))
 }
