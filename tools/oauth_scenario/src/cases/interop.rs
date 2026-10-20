@@ -215,6 +215,75 @@ pub(super) async fn confidential(context: &mut Context<'_>, fixture: &Fixture) -
     .await
 }
 
+/// Calls `UserInfo` without session cookies and checks bounded protocol errors.
+async fn userinfo_response(
+    context: &Context<'_>,
+    method: Method,
+    token: Option<&str>,
+    expected: StatusCode,
+) -> Result<Value> {
+    let mut request = context
+        .api
+        .client
+        .request(method, format!("{}/userinfo", context.api.origin));
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send().await.safe("UserInfo HTTP request failed.")?;
+    check(
+        response.status() == expected
+            && response
+                .headers()
+                .get(reqwest::header::CACHE_CONTROL)
+                .is_some_and(|value| value == "no-store")
+            && (expected != StatusCode::UNAUTHORIZED
+                || response
+                    .headers()
+                    .get(reqwest::header::WWW_AUTHENTICATE)
+                    .is_some_and(|value| value == "Bearer error=\"invalid_token\"")),
+        "UserInfo status, cache or challenge differs from policy.",
+    )?;
+    response.json().await.safe("Invalid UserInfo response.")
+}
+
+/// Consent on A, code exchange on B and header-only `UserInfo` on C share durable authority.
+pub(super) async fn userinfo_cross_replica(
+    context: &mut Context<'_>,
+    fixture: &Fixture,
+) -> Result<()> {
+    let description = jobs_description(context, fixture).await?;
+    let party = party(context, fixture, false).await?;
+    let response = exchange(context, fixture, &party, &description, true).await?;
+    context.gateway.replica_c();
+    let expected_user = context
+        .api
+        .user_id
+        .ok_or_else(|| Failure::harness("Missing authenticated scenario subject."))?;
+    let token = response.access_token().secret();
+    for method in [Method::GET, Method::POST] {
+        let body = userinfo_response(context, method, Some(token), StatusCode::OK).await?;
+        check(
+            body == json!({"sub":expected_user.to_string()}),
+            "UserInfo disclosed an unissued scope or a different subject.",
+        )?;
+    }
+    let id_token = response
+        .id_token()
+        .ok_or_else(|| Failure::assertion("OIDC exchange omitted ID token."))?
+        .to_string();
+    for method in [Method::GET, Method::POST] {
+        for bad in [Some(id_token.as_str()), Some("malformed"), None] {
+            let body =
+                userinfo_response(context, method.clone(), bad, StatusCode::UNAUTHORIZED).await?;
+            check(
+                body == json!({"error":{"code":"unauthenticated","message":"authentication is required"}}),
+                "UserInfo error disclosed authority or omitted the stable envelope.",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Bad callback state/mix-up/destination/duplicates never exchange; ID nonce/hash/signature checks reject substitution.
 pub(super) async fn rejection(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let description = jobs_description(context, fixture).await?;

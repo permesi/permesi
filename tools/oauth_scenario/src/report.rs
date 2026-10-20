@@ -79,13 +79,13 @@ impl Report {
             cleanup_failures: Vec::new(),
             planned: [
                 "Broader OIDC conformance/client coverage",
-                "UserInfo/introspection/revocation",
+                "Introspection/revocation",
                 "Client credentials/M2M grant",
             ],
             limitations: [
                 "OPAQUE and WebAuthn/passkey ceremony state uses shared PostgreSQL; browser factor/account-switching scenarios remain a follow-up.",
                 "Lifecycle diagnostics include internal rollback controls; token cases exercise real runtime-role HTTP issuance.",
-                "JWT authority expires at its bounded TTL; immediate resource-server revocation and UserInfo are not implemented; refresh-family revocation does not retract an issued JWT.",
+                "JWT authority expires at its bounded TTL; UserInfo rechecks current authority, but immediate resource-server revocation and introspection are not implemented. Refresh-family revocation does not retract an issued JWT.",
             ],
         }
     }

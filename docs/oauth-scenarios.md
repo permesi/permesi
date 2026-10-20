@@ -168,14 +168,16 @@ repetitions and parallel isolation with
 | `interop.resource_scope_tenant` | Allow-list never grants unrequested jobs scope; 403 without jobs:read, 404 for another owned organization/application, 401 for cookie-only/absent bearer |
 | `interop.invalid_access_tokens` | Malformed/tampered/ID/algorithm/header/unknown-kid negatives, 16 concurrent unknown keys produce one refresh; client disable preserves issued JWT authority only until actual expiry |
 | `interop.signing_key_rotation` | Rotate actual Vault authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
+| `interop.userinfo_cross_replica` | Browser consent on A and standard-client exchange on B; header-only GET/POST on C disclose only the issued subject and reject ID, malformed and missing Bearer tokens |
 
 `smoke` selects provisioning, consent and login resume. `security` selects shared
 authentication exchanges, authorization/redemption negatives and failover. `lifecycle`
 selects credentials/deletion and the six lifecycle revalidation cases. `token` selects
 the five HTTP issuance cases and three refresh cases; `refresh` selects only those three
-refresh cases. `interop` selects the six standard-client/resource cases. `ha` selects
+refresh cases. `interop` selects seven standard-client/resource cases, including
+cross-replica `UserInfo` disclosure and rejection. `ha` selects
 seven provisioning, OPAQUE, code/refresh race, restart, outage and failover cases.
-`full` selects all 34 cases. Every case restores explicitly stopped slots afterward,
+`full` selects all 35 cases. Every case restores explicitly stopped slots afterward,
 including after assertion failure. Unexpected exits remain failures; recovery failure
 blocks the remaining selection instead of silently testing a smaller topology.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
@@ -259,13 +261,13 @@ bounded waits and secret-free reporting intact as scenarios grow.
 [Token exchange](oauth-token-exchange.md) now has real runtime-role HTTP scenarios,
 independent RS256/claim verification, current/retiring credentials, rollback, replay,
 concurrency and shared rotation. Refresh-family rotation/reuse/concurrency are now covered; next add broader MFA/account-switching
-coverage alongside its implementation. The six standard-library/resource scenarios
+coverage alongside its implementation. The seven standard-library/resource scenarios
 provide a narrow interoperability foundation; broader clients, formal OIDC conformance
 and production resource-server revocation policy remain separately tracked.
 
 Broader scenario coverage for the implemented durable WebAuthn/passkey exchanges,
 MFA-required variants, richer consent/grants UX, Firefox/Safari, multi-host/load/fault
-tests, broader third-party OIDC clients, UserInfo, introspection/revocation, device flow
+tests, broader third-party OIDC clients, introspection/revocation, device flow
 and M2M remain in `TODO.md`. Current scenarios
 preserve default MFA policy and require a genuine full session; they do not establish
 the full MFA matrix or formal OIDC conformance.

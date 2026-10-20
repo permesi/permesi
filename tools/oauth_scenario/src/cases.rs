@@ -136,6 +136,7 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
         "interop.resource_scope_tenant" => interop::resource(context, fixture).await,
         "interop.invalid_access_tokens" => interop::invalid_access(context, fixture).await,
         "interop.signing_key_rotation" => interop::rotation(context, fixture).await,
+        "interop.userinfo_cross_replica" => interop::userinfo_cross_replica(context, fixture).await,
         "refresh.rotation_reuse" => refresh::rotation(context, fixture).await,
         "refresh.replica_race" => refresh::race(context, fixture).await,
         "refresh.lifecycle" => refresh::lifecycle(context, fixture).await,

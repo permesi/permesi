@@ -196,6 +196,11 @@ pub const CASES: &[Case] = &[
         description: "Real Vault rotation, cached old keys, unknown-kid refresh and old/new protected-resource access",
         group: "interop",
     },
+    Case {
+        id: "interop.userinfo_cross_replica",
+        description: "Issued OIDC access token discloses only its subject at UserInfo on a third replica",
+        group: "interop",
+    },
 ];
 
 /// Validates explicit IDs before startup; unsupported IDs cannot silently reduce coverage.
@@ -247,7 +252,7 @@ mod tests {
         assert_eq!(select(Suite::Full, &[])?.len(), CASES.len());
         assert_eq!(select(Suite::Smoke, &[])?.len(), 3);
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
-        assert_eq!(select(Suite::Interop, &[])?.len(), 6);
+        assert_eq!(select(Suite::Interop, &[])?.len(), 7);
         assert_eq!(select(Suite::Refresh, &[])?.len(), 3);
         assert_eq!(select(Suite::Ha, &[])?.len(), 7);
         assert!(

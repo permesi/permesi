@@ -14,7 +14,7 @@ target/debug/permesi-oauth-scenario --replicas 5 --suite full --access-token-ttl
 just oauth-scenario-harness-test --replicas 5
 ```
 
-The full registry contains 34 cases. The focused `ha` suite selects seven cases:
+The full registry now contains 35 cases, including cross-replica `UserInfo`. The focused `ha` suite selects seven cases:
 provisioning, shared OPAQUE exchanges, authorization-code and refresh races, rolling
 restart, backend outage and persisted-consent failover. JSON reports record the
 configured replica count even when setup fails. CI runs separate three/five matrix
