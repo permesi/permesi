@@ -127,8 +127,11 @@ This batch does not yet claim a hosted run or a measured CI wall-time improvemen
 
 ## Remaining work
 
-Profile individual fixture groups and startup/teardown before changing database
-test concurrency or introducing reuse. Any reuse must preserve fresh authority,
+The [fixture runtime and provenance follow-up](ci-runtime-provenance.md) adds a
+four-worker phase benchmark, removes measured unconditional readiness delays and
+checks cached native build identity at producer/consumer boundaries. Profile
+further slow test groups before changing database concurrency or introducing
+reuse. Any reuse must preserve fresh authority,
 tenant isolation, rollback and ordering assertions. Compare several completed
 hosted runs, separating execution from dependency/runner wait and recording retry
 effects. Exact-commit cross-branch reuse, broader backend decomposition and

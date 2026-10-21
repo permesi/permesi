@@ -37,6 +37,9 @@ aggregate check.
   library/binary tests, then the complete all-feature workspace suite. Each configuration
   has a separate `--no-run --timings` compilation step, so job step durations distinguish
   compilation from execution; HTML compilation reports are uploaded even on test failure.
+  Cached build-identity regressions compile the actual service build scripts in
+  disposable Git-less/Git/worktree crates after the native suites; no live services
+  are required for this check.
   Development lint/check/native-test jobs use toolchain/environment/lockfile-aware
   dependency caches; PR jobs restore but do not save those caches. The reusable
   `cache` input defaults to false, preserving release callers' fresh native test
@@ -80,8 +83,11 @@ aggregate check.
   A required `Build scenario binaries` job checks out the exact workflow SHA and builds
   the services and runner once. Both matrix members download its SHA-named artifact from
   their own workflow run; a tar archive preserves executable modes. Packaging strips
-  only debugging sections from staged copies to reduce transfer size; the executable
-  code and build identity remain intact. Source is never
+  only debugging sections from staged copies to reduce transfer size. The scenario
+  job sets `PERMESI_SCENARIO_EXPECTED_COMMIT` to the workflow SHA for both full suites
+  and harness subprocesses; runner and service identities must match exactly before
+  infrastructure startup. Self-reported labels do not replace same-run artifact trust.
+  Executable code and build identity remain intact. Source is never
   replaced by an artifact from another branch or workflow. The matrix remains sequential
   to bound local fixture pressure. Each matrix member runs all current full-suite cases,
   recovery unit tests and harness checks, including rolling

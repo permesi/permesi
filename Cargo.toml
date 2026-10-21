@@ -98,6 +98,7 @@ utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-axum = "0.3.0"
 uuid = { version = "1.28", features = ["v1", "v4", "v7", "serde"] }
 built = { version = "0.8", features = ["git2"] }
+git2 = { version = "0.21", default-features = false }
 
 [profile.release]
 lto = "fat"

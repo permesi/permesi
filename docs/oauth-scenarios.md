@@ -76,8 +76,14 @@ engines are rejected. It never adopts existing resources or prunes the shared en
 The run CA is trusted only by its native clients and disposable Chromium container.
 TLS verification stays enabled. Chromium uses host networking to reach the owned
 loopback listeners; this local test transport does not provide network sandboxing.
-Build artifacts are trusted local inputs. Cached dependency/browser images remain
-available; cleanup removes run containers, networks and private files. The public HTTP loopback callback uses a different
+Build artifacts are trusted local inputs. `--expected-commit` (or
+`PERMESI_SCENARIO_EXPECTED_COMMIT`) optionally
+requires the runner and both services to match a full commit and workspace version
+before startup; CI always sets it to the workflow SHA. Commit labels detect
+accidental stale/mixed builds and do not attest hostile executables. See
+[cached-build checks](ci-runtime-provenance.md#cached-build-identity).
+Cached dependency/browser images remain available; cleanup removes run containers,
+networks and private files. The public HTTP loopback callback uses a different
 hostname from the issuer, so issuer cookies do not travel to the client. Browser
 worker content determines the image tag, preventing stale reuse between runner versions.
 
@@ -213,6 +219,8 @@ runtime HTTP service. Invalid/expired/foreign codes never consume the original a
 The CI `OAuth scenarios` matrix uses the same workflow's compiled Web artifact and native
 services/runner built once by the required producer job from the checked-out SHA.
 Both matrix members download the producer's executable archive from their own run.
+The runner and harness subprocesses enforce the expected workflow commit before
+starting infrastructure; mixed service versions or a stale runner block the run.
 Separate three- and five-replica jobs run the
 full suite and eight harness checks, upload distinct sanitized report artifacts, and
 both participate in `CI OK`. Matrix fail-fast is disabled so one result cannot hide

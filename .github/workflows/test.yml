@@ -171,6 +171,9 @@ jobs:
       - name: test (all features)
         run: cargo test --locked --workspace --all-features --no-fail-fast
 
+      - name: Verify cached build identity
+        run: python3 scripts/test-build-identity.py
+
       - name: Upload compilation timings
         if: always()
         uses: actions/upload-artifact@v7

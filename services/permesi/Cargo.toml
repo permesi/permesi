@@ -133,3 +133,4 @@ wiremock = "0.6"
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }
+git2.workspace = true

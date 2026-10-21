@@ -197,6 +197,8 @@ jobs:
     needs: [test, frontend-build, scenario-build]
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     timeout-minutes: 30
+    env:
+      PERMESI_SCENARIO_EXPECTED_COMMIT: ${{ github.sha }}
     strategy:
       fail-fast: false
       # Each topology runs several local PostgreSQL/Vault/service stacks, and the

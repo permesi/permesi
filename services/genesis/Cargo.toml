@@ -101,6 +101,7 @@ service_utils = { workspace = true }
 
 [build-dependencies]
 built = { workspace = true, features = ["git2"] }
+git2.workspace = true
 
 [dev-dependencies]
 hyper = { workspace = true, features = ["full"] }

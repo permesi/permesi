@@ -26,6 +26,9 @@ pub struct Options {
     pub replicas: u16,
     #[arg(long, default_value_t = 1)]
     pub seed: u64,
+    /// Requires runner and both service binaries to identify the same full commit before startup.
+    #[arg(long, env = "PERMESI_SCENARIO_EXPECTED_COMMIT", value_parser = crate::identity::parse_commit)]
+    pub expected_commit: Option<String>,
     #[arg(long)]
     pub permesi_bin: Option<PathBuf>,
     #[arg(long)]

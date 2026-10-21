@@ -12,6 +12,7 @@ mod client;
 mod error;
 mod files;
 mod gateway;
+mod identity;
 mod infrastructure;
 mod interop;
 mod journal;
@@ -103,14 +104,23 @@ async fn run(options: &Options) -> Result<bool> {
         }
     };
     let metadata = async {
-        Ok(Components {
-            permesi_commit: binary_version(&permesi).await?,
-            genesis_commit: binary_version(&genesis).await?,
+        let components = Components {
+            permesi_commit: identity::binary_version(&permesi).await?,
+            genesis_commit: identity::binary_version(&genesis).await?,
             web_sha256: web_fingerprint(&web)?,
             postgres_image: infrastructure::POSTGRES_IMAGE.into(),
             vault_image: infrastructure::VAULT_IMAGE.into(),
             browser_image: options.browser_image.clone(),
-        })
+        };
+        if let Some(expected) = &options.expected_commit {
+            identity::verify(
+                expected,
+                permesi::GIT_COMMIT_HASH,
+                &components.permesi_commit,
+                &components.genesis_commit,
+            )?;
+        }
+        Ok(components)
     }
     .await;
     match metadata {
@@ -165,27 +175,4 @@ async fn run(options: &Options) -> Result<bool> {
     let success = report.success();
     report.write(&directory)?;
     Ok(success)
-}
-
-/// Records only expected version/commit text; arbitrary subprocess output is not forwarded.
-async fn binary_version(path: &Path) -> Result<String> {
-    let bytes = process::output(
-        tokio::process::Command::new(path)
-            .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-            .arg("--version"),
-        10,
-    )
-    .await?;
-    let version = std::str::from_utf8(&bytes)
-        .safe("Invalid binary version output.")?
-        .trim();
-    error::check(
-        version.len() <= 160
-            && version
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b" .-_".contains(&byte)),
-        "Unexpected binary identity output.",
-    )?;
-    Ok(version.into())
 }

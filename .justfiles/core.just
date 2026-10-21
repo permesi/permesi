@@ -50,6 +50,9 @@ coverage:
 test-fixture-profile rounds="3":
   cargo run --locked -p test_support --example fixture_profile -- {{quote(rounds)}}
 
+[doc("Verify cached service build identity in Git-less crates, Git checkouts and worktrees")]
+test-build-identity:
+  python3 "{{root}}/scripts/test-build-identity.py"
 
 build:
   cargo build --workspace
