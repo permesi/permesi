@@ -10,9 +10,17 @@ on:
 permissions:
   contents: read
 
+# Superseded development pushes must not occupy scarce fixture runners. Keep
+# candidate/main runs independent so a newer run cannot cancel release evidence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.ref_name == 'sandbox' || github.ref_name == 'develop') && 'latest' || github.run_id }}
+  cancel-in-progress: ${{ github.ref_name == 'sandbox' || github.ref_name == 'develop' }}
+
 jobs:
   test:
     uses: ./.github/workflows/test.yml
+    with:
+      cache: true
 
   coverage:
     uses: ./.github/workflows/coverage.yml
@@ -42,6 +50,10 @@ jobs:
         uses: ./.github/actions/rust-toolchain
         with:
           targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-musl
 
       - run: sudo apt -y install musl-dev musl-tools
         if: matrix.build == 'linux'
@@ -132,6 +144,7 @@ jobs:
           name: frontend-dist
           path: apps/web/dist
           if-no-files-found: error
+          overwrite: true
 
   # The scratch `release` branch only exists for `just deploy` to test a release
   # candidate; it gets no Cloudflare Pages preview of its own.
@@ -146,9 +159,42 @@ jobs:
       attestations: write
     secrets: inherit
 
+  scenario-build:
+    name: Build scenario binaries
+    needs: test
+    runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/rust-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-tests
+      - name: Build exact checked-out service and runner binaries
+        env:
+          BUILD_GIT_COMMIT_HASH: ${{ github.sha }}
+        run: cargo build --locked --timings -p permesi -p genesis -p permesi-oauth-scenario
+      # A tar archive preserves executable permissions through artifact transport.
+      - name: Package scenario binaries
+        run: |
+          mkdir -p .tmp/scenario-binaries
+          for binary in permesi genesis permesi-oauth-scenario; do
+            objcopy --strip-debug "target/debug/${binary}" ".tmp/scenario-binaries/${binary}"
+          done
+          tar -czf .tmp/scenario-binaries.tar.gz -C .tmp/scenario-binaries permesi genesis permesi-oauth-scenario
+          stat -c 'Scenario archive: %s bytes' .tmp/scenario-binaries.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scenario-binaries-${{ github.sha }}
+          path: .tmp/scenario-binaries.tar.gz
+          if-no-files-found: error
+          overwrite: true
+
   oauth-scenarios:
     name: OAuth scenarios (${{ matrix.replicas }} replicas)
-    needs: [test, frontend-build]
+    needs: [test, frontend-build, scenario-build]
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     timeout-minutes: 30
     strategy:
@@ -163,17 +209,21 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: ./.github/actions/rust-toolchain
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: apps/web/dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: scenario-binaries-${{ github.sha }}
+          path: .tmp/scenario-binaries
+      - name: Unpack same-run scenario binaries
+        run: |
+          mkdir -p target/debug
+          tar -xzf .tmp/scenario-binaries/scenario-binaries.tar.gz -C target/debug
       - uses: ./.github/actions/ensure-container-runtime
         env:
           PERMESI_TEST_REQUIRE_PODMAN: '1'
-      - name: Build exact checked-out service and runner binaries
-        run: cargo build --locked -p permesi -p genesis -p permesi-oauth-scenario
       - name: Run all real OAuth scenarios
         run: target/debug/permesi-oauth-scenario --replicas ${{ matrix.replicas }} --suite full --access-token-ttl-seconds 10 --report-dir .tmp/oauth-scenario-ci
       - name: Verify recovery ownership guards
@@ -289,6 +339,7 @@ jobs:
       - test
       - build
       - frontend-build
+      - scenario-build
       - oauth-scenarios
       - browser-tests
     runs-on: ubuntu-latest

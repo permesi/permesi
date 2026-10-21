@@ -211,7 +211,9 @@ first passes a rolled-back domain control, then actually issues signed tokens th
 runtime HTTP service. Invalid/expired/foreign codes never consume the original authority. SQL does not seed or mutate authority in these cases.
 
 The CI `OAuth scenarios` matrix uses the same workflow's compiled Web artifact and native
-services/runner from the checked-out SHA. Separate three- and five-replica jobs run the
+services/runner built once by the required producer job from the checked-out SHA.
+Both matrix members download the producer's executable archive from their own run.
+Separate three- and five-replica jobs run the
 full suite and eight harness checks, upload distinct sanitized report artifacts, and
 both participate in `CI OK`. Matrix fail-fast is disabled so one result cannot hide
 the other. Existing database checks remain required in CI.

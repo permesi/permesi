@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
+import {checkSecuritySettings} from './security_settings.mjs';
 const webRoot = path.resolve(import.meta.dirname, '..');
 const root = process.env.PERMESI_WEB_TEST_DIST
   ? path.resolve(process.env.PERMESI_WEB_TEST_DIST)
@@ -52,6 +53,10 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
   if(p==='/v1/auth/logout'&&req.method==='POST'){sessionKind='none';return send(204);}
   if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
+  if(p==='/v1/me')return send(200,{id:'test-user',email:'ui@example.test',display_name:null,locale:null,created_at:time,updated_at:time,roles:[],scopes:[],mfa_enabled:true,totp_enabled:true});
+  if(p==='/v1/me/mfa/security-keys')return send(200,[{credential_id:'fixture-security-key',label:'Fixture hardware key',created_at:time,last_used_at:null}]);
+  if(p==='/v1/me/webauthn/credentials')return send(200,{preview_mode:false,credentials:[{id:'fixture-passkey',label:'Fixture passkey',created_at:time,last_used_at:null}]});
+  if(p==='/v1/me/webauthn/register/options'||p==='/v1/auth/opaque/reauth/start')return send(401,'Fixture password proof rejected.');
   if(p==='/v1/me/oauth/grants'&&req.method==='GET')return send(200,{grants:savedGrants,next_cursor:null});
   if(p===`/v1/me/oauth/grants/${grantId}`&&req.method==='DELETE'){savedGrants=[];return send(204);}
   if(p==='/v1/orgs/crono/capabilities'){if(delayCapabilities)await new Promise(resolve=>setTimeout(resolve,650));if(failCapabilities)return send(503,{error:{code:'unavailable',message:'Capability lookup unavailable.'}});return send(organizationActive?200:404,organizationActive?{organization_id:orgId,can_manage_resources:['owner','admin'].includes(memberRole),can_delete_organization:memberRole==='owner'}:undefined);}
@@ -131,6 +136,7 @@ const server=http.createServer(async(req,res)=>{
   res.writeHead(200,{'Content-Type':'text/html'});return res.end('<!doctype html><title>Resume fixture</title><p>Authorization resume reached</p>');
  }
  if(p==='/config.js'){res.writeHead(200,{'Content-Type':'application/javascript'});return res.end(`window.PERMESI_CONFIG={api_base_url:location.origin,token_base_url:location.origin,client_id:'00000000-0000-0000-0000-000000000000',opaque_server_id:'api.permesi.dev'};`);}
+ if(p==='/token')return send(200,{token:'fixture-admission'});
  const target=path.join(root,p==='/'?'index.html':p);
  const file=fs.existsSync(target)&&fs.statSync(target).isFile()?target:path.join(root,'index.html');
  res.writeHead(200,{'Content-Type':file.endsWith('.wasm')?'application/wasm':file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.svg')?'image/svg+xml':'text/html'});
@@ -173,6 +179,7 @@ try {
  await click('Revoke access');await wait("document.querySelector('dialog[open]') && document.body.innerText.includes('Already-issued access tokens remain valid until they expire.')");
  await click('Revoke access');await wait("document.body.innerText.includes('No saved application access on this page.')");
  assert.equal(savedGrants.length,0);
+ await checkSecuritySettings({goto,wait,click,fill,evaluate,call,requests});
  await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
  assert.equal(await evaluate('window.PERMESI_CONFIG.token_base_url'),origin,'Admission requests must stay on the owned fixture origin');
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/console/orgs/crono')).click()");await wait("document.body.innerText.includes('Jobs')");
@@ -477,6 +484,6 @@ try {
  for(const endpoint of [route.replace('/console','/v1'),'/v1/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs','/v1/orgs/crono'])assert(requests.some(value=>value.method==='DELETE'&&value.path===endpoint&&value.input===null));
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: connected-app consent display/revocation, Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
+ console.log('Browser smoke passed: composed security settings, five rejected OPAQUE mutation proofs with unchanged factors, keyboard authenticator controls, connected-app consent display/revocation, Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
  fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

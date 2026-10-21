@@ -177,7 +177,9 @@ coordination/deadlines and independent exchange-key rotation were tracked in TOD
 see the current [roadmap](../TODO.md) for later completed work and remaining gaps.
 Recent authentication and terminal MFA challenge counters are implemented by the later
 follow-up below. Browser-target WASM Clippy
-now runs in CI; the remaining large-view line-count expectations are tracked there separately.
+now runs in CI; the later six-view component split removed the scoped line-count expectations.
+Further module separation and CI profiling are tracked in the current
+[maintainability batch](maintainability-ci.md).
 The current Chromium, real-dependency and A/B tests establish the exercised
 boundaries, not certification or production throughput. Release promotion should use an
 exact green commit and the documented schema/configuration rollout requirements.

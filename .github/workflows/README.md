@@ -10,6 +10,10 @@ Most workflows are configured to use a flexible runner selection logic:
 runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
 ```
 
+Native scenario producers run on Linux and require GNU binutils (`objcopy`) in
+addition to the Rust toolchain. Missing tooling fails the producer and required
+aggregate check.
+
 ### How to use:
 
 1.  **Default (Self-Hosted):** By default (when the variable is unset), workflows will attempt to run on a **self-hosted** runner. This is preferred for performance and cost.
@@ -30,7 +34,13 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   contracts and compares them byte-for-byte with the committed artifacts; failure
   blocks the reusable test workflow and `CI OK`. Web auditing includes development/build dependencies so
   source-map and stylesheet-tooling advisories are covered. The unit job runs default
-  library/binary tests, then the complete all-feature workspace suite. The separate
+  library/binary tests, then the complete all-feature workspace suite. Each configuration
+  has a separate `--no-run --timings` compilation step, so job step durations distinguish
+  compilation from execution; HTML compilation reports are uploaded even on test failure.
+  Development lint/check/native-test jobs use toolchain/environment/lockfile-aware
+  dependency caches; PR jobs restore but do not save those caches. The reusable
+  `cache` input defaults to false, preserving release callers' fresh native test
+  builds; `build.yml` opts in. The separate
   default integration job selects standalone `tests/` targets with `--test '*'` and
   continues across test binaries with `--no-fail-fast`, preserving Permesi results
   when a Genesis dependency fails. Both database-heavy test jobs cap Rust test threads
@@ -67,11 +77,23 @@ runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
   alongside tests, service/frontend builds and OAuth scenarios, so failure, cancellation or skipping
   the browser gate cannot produce a successful aggregate check.
   OAuth scenarios run as a required three/five-replica matrix with fail-fast disabled.
-  Each matrix member runs all 34 cases, six recovery unit tests and eight harness checks, including rolling
+  A required `Build scenario binaries` job checks out the exact workflow SHA and builds
+  the services and runner once. Both matrix members download its SHA-named artifact from
+  their own workflow run; a tar archive preserves executable modes. Packaging strips
+  only debugging sections from staged copies to reduce transfer size; the executable
+  code and build identity remain intact. Source is never
+  replaced by an artifact from another branch or workflow. The matrix remains sequential
+  to bound local fixture pressure. Each matrix member runs all current full-suite cases,
+  recovery unit tests and harness checks, including rolling
   replacements, backend loss and SIGKILL recovery of a replacement process. Sanitized
   report artifact names include the replica count. Harness failures identify the
   source line and exception class without printing captured subprocess output. This covers one-host process/state
   availability and does not establish multi-host load or network-failure behavior.
+  New `sandbox`/`develop` runs cancel superseded runs on the same branch. Other refs,
+  including release candidates and `main`, use independent run-specific groups; these
+  runs cannot be cancelled by development pushes. Different branches still run their
+  own checks, even for an identical SHA. `CI_RUNNER` selection and the aggregate failure
+  policy are unchanged. See [measurement and remaining work](../../docs/maintainability-ci.md).
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
   It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed

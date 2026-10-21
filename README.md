@@ -724,6 +724,9 @@ We welcome contributions of all kinds!
 
 ## CI Commands
 
+See [focused modules and CI measurement](docs/maintainability-ci.md) for the current
+module boundaries, compilation/execution timing reports and remaining performance work.
+
 Container jobs verify the API endpoint used by tests before proceeding. Each
 self-hosted job starts a Podman service with its own runtime and Unix socket under
 the user runtime directory, plus private image storage under `RUNNER_TEMP`.

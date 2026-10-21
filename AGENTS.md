@@ -92,6 +92,8 @@ Container builds (local):
 - Do not add `#[allow(...)]` in production code; only acceptable inside test modules when needed.
 - File/module names `snake_case`; types `UpperCamelCase`; constants `SCREAMING_SNAKE_CASE`.
 - Keep functions small; prefer explicit structs over loose maps; use builder-style constructors for configs where appropriate.
+- Keep production modules and test suites focused on one responsibility. Routes compose views; ceremony, persistence and authorization logic stay in their existing owning layers. Split mixed responsibilities when touching large modules, preserving behavior and visibility boundaries.
+- Use size as a review signal rather than a rigid file-length quota. Avoid unnecessary wrappers or tiny files, and do not suppress complexity or line-count lints to accommodate growing components.
 - Group imports from the same crate/namespace (e.g., `use std::{...};`) rather than many single-line imports.
 
 ## Frontend UX Conventions
