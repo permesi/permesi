@@ -38,6 +38,7 @@ pub(crate) mod operations;
 pub(crate) mod passkeys;
 pub(crate) mod principal;
 mod rate_limit;
+pub(crate) mod registration;
 pub(crate) mod session;
 mod session_kind;
 mod state;

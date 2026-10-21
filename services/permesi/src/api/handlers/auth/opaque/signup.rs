@@ -1,7 +1,9 @@
 //! OPAQUE authentication handlers for user registration.
 //!
 //! This module provides endpoints for starting and finishing the OPAQUE PAKE
-//! registration flow. It handles user creation and initial credential storage.
+//! registration flow. Both endpoints apply server-owned signup eligibility independently;
+//! finish atomically stores only a pending user, hashed verifier and protected email outbox.
+//! Admission is not proof of mailbox control, tenant membership or user consent.
 
 use crate::api::handlers::{
     AdmissionVerifier,
@@ -29,6 +31,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::error;
 
+/// Starts registration only after server-owned domain/mode, shared limits and admission checks.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/signup/start",
@@ -39,6 +42,8 @@ use tracing::error;
     responses(
         (status = 200, description = "OPAQUE signup started", body = OpaqueSignupStartResponse),
         (status = 400, description = "Validation error", body = String),
+        (status = 403, description = "Registration not available", body = String),
+        (status = 503, description = "Registration storage unavailable", body = String),
         (status = 429, description = "Rate limited", body = String)
     ),
     tag = "auth"
@@ -57,6 +62,14 @@ pub async fn opaque_signup_start(
     let email = normalize_email(&request.email);
     if !valid_email(&email) {
         return (StatusCode::BAD_REQUEST, "Invalid email".to_string()).into_response();
+    }
+
+    if !auth_state.config().registration().permits(&email) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Registration not available".to_owned(),
+        )
+            .into_response();
     }
 
     // Rate-limit before zero-token verification to keep abuse cheap to reject.
@@ -121,6 +134,7 @@ pub async fn opaque_signup_start(
         .into_response()
 }
 
+/// Rechecks signup admission independently; browser fields cannot activate the pending account.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/signup/finish",
@@ -131,6 +145,8 @@ pub async fn opaque_signup_start(
     responses(
         (status = 201, description = "Signup accepted", body = OpaqueSignupFinishResponse),
         (status = 400, description = "Validation error", body = String),
+        (status = 403, description = "Registration not available", body = String),
+        (status = 503, description = "Registration storage unavailable", body = String),
         (status = 429, description = "Rate limited", body = String)
     ),
     tag = "auth"
@@ -150,6 +166,14 @@ pub async fn opaque_signup_finish(
     let email = normalize_email(&request.email);
     if !valid_email(&email) {
         return (StatusCode::BAD_REQUEST, "Invalid email".to_string()).into_response();
+    }
+
+    if !auth_state.config().registration().permits(&email) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Registration not available".to_owned(),
+        )
+            .into_response();
     }
 
     // Rate-limit before zero-token verification to keep abuse cheap to reject.
@@ -208,10 +232,15 @@ pub async fn opaque_signup_finish(
             Json(OpaqueSignupFinishResponse { message }),
         )
             .into_response(),
-        Err(err) => {
-            error!("Signup failed: {err}");
+        Ok(SignupOutcome::Rejected) => (
+            StatusCode::FORBIDDEN,
+            "Registration not available".to_owned(),
+        )
+            .into_response(),
+        Err(_err) => {
+            error!("Signup persistence unavailable");
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(OpaqueSignupFinishResponse {
                     message: "Signup failed".to_string(),
                 }),

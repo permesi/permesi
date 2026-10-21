@@ -607,6 +607,20 @@ BEGIN
     INSERT INTO email_outbox (id, to_email, template, payload_json)
     VALUES (uuidv4(), 'notify-' || suffix || '@example.com', 'verify', '{}'::jsonb);
 
+    -- A lease must be paired and can belong only to pending mail.
+    BEGIN
+        INSERT INTO email_outbox(to_email,template,payload_json,claim_id)
+        VALUES ('notify-' || suffix || '@example.com','verify','{}'::jsonb,uuidv4());
+        RAISE EXCEPTION 'expected unpaired email lease to fail';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO email_outbox(to_email,template,payload_json,status,claim_id,claim_expires_at)
+        VALUES ('notify-' || suffix || '@example.com','verify','{}'::jsonb,'sent',uuidv4(),NOW()+INTERVAL '1 minute');
+        RAISE EXCEPTION 'expected terminal email lease to fail';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+
     -- Reject uppercase to_email in outbox entries.
     BEGIN
         INSERT INTO email_outbox (id, to_email, template, payload_json)

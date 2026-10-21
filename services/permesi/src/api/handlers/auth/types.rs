@@ -6,6 +6,7 @@ use utoipa::ToSchema;
 use super::session_kind::SessionKind;
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct OpaqueSignupStartRequest {
     pub email: String,
     pub registration_request: String,
@@ -17,6 +18,7 @@ pub struct OpaqueSignupStartResponse {
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct OpaqueSignupFinishRequest {
     pub email: String,
     pub registration_record: String,

@@ -5,6 +5,90 @@ pub mod logging;
 pub mod tls;
 pub mod vault;
 
+/// Whole-operation persistence deadline for signup, verification and resend.
+pub(crate) const DEFAULT_REGISTRATION_TIMEOUT_MS: i64 = 1000;
+/// Lease budget exceeds the default network and finalization deadlines.
+pub(crate) const DEFAULT_EMAIL_LEASE_SECONDS: i64 = 60;
+
+/// Defines signup admission and explicit outbox/SMTP delivery without runtime environment reads.
+pub(crate) fn with_registration_args(mut command: clap::Command) -> clap::Command {
+    use clap::{Arg, ArgAction};
+    command = command.arg(
+        Arg::new("signup-mode")
+            .long("signup-mode")
+            .env("PERMESI_SIGNUP_MODE")
+            .default_value("public")
+            .value_parser(["public", "restricted", "closed"]),
+    );
+    for (name, env) in [
+        ("signup-allowed-domain", "PERMESI_SIGNUP_ALLOWED_DOMAINS"),
+        (
+            "signup-development-domain",
+            "PERMESI_SIGNUP_DEVELOPMENT_DOMAINS",
+        ),
+    ] {
+        command = command.arg(
+            Arg::new(name)
+                .long(name)
+                .env(env)
+                .action(ArgAction::Append)
+                .value_delimiter(',')
+                .value_parser(crate::api::handlers::auth::registration::parse_domain),
+        );
+    }
+    command = command.arg(
+        Arg::new("email-delivery")
+            .long("email-delivery")
+            .env("PERMESI_EMAIL_DELIVERY")
+            .default_value("outbox")
+            .value_parser(["outbox", "smtp"]),
+    );
+    for (name, env) in [
+        ("smtp-host", "PERMESI_SMTP_HOST"),
+        ("smtp-from", "PERMESI_SMTP_FROM"),
+        ("smtp-username", "PERMESI_SMTP_USERNAME"),
+        ("smtp-password", "PERMESI_SMTP_PASSWORD"),
+    ] {
+        command = command.arg(Arg::new(name).long(name).env(env).hide_env_values(true));
+    }
+    command
+        .arg(
+            Arg::new("smtp-port")
+                .long("smtp-port")
+                .env("PERMESI_SMTP_PORT")
+                .default_value("465")
+                .value_parser(clap::value_parser!(u16).range(1..)),
+        )
+        .arg(
+            Arg::new("smtp-tls")
+                .long("smtp-tls")
+                .env("PERMESI_SMTP_TLS")
+                .default_value("implicit")
+                .value_parser(["implicit", "starttls"]),
+        )
+        .arg(
+            Arg::new("smtp-timeout-seconds")
+                .long("smtp-timeout-seconds")
+                .env("PERMESI_SMTP_TIMEOUT_SECONDS")
+                .default_value("10")
+                .value_parser(clap::value_parser!(u64).range(1..=60)),
+        )
+        .arg(
+            Arg::new("email-lease-seconds")
+                .long("email-lease-seconds")
+                .env("PERMESI_EMAIL_LEASE_SECONDS")
+                .default_value("60")
+                .value_parser(clap::value_parser!(i64).range(5..=600)),
+        )
+        .arg(
+            Arg::new("auth-registration-timeout-ms")
+                .long("auth-registration-timeout-ms")
+                .env("PERMESI_AUTH_REGISTRATION_TIMEOUT_MS")
+                .default_value("1000")
+                .value_parser(clap::value_parser!(i64).range(1..=10000)),
+        )
+}
+
 /// Default per-lock/per-statement deadline for shared OPAQUE exchange transactions.
 pub(crate) const DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS: i64 = 1000;
 

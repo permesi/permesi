@@ -21,7 +21,7 @@ pub(super) fn valid_email(email_normalized: &str) -> bool {
 
 /// Create a new verification token for email links.
 ///
-/// Returned token is only sent to the user; we store a hash in the database.
+/// The verifier table stores its hash; the protected outbox carries the delivery link.
 pub(super) fn generate_verification_token() -> Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).context("failed to generate verification token")?;
@@ -37,7 +37,7 @@ pub(crate) fn generate_session_token() -> Result<String> {
     Ok(general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// Hash a verification token so we never store the raw token in the database.
+/// Hash a verification token for lookup; delivery material stays in the protected outbox.
 pub(super) fn hash_verification_token(token: &str) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());

@@ -24,6 +24,7 @@ const DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS: i64 = 10;
 
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
+    registration: super::registration::Policy,
     operations: super::operations::OperationsConfig,
     frontend_base_url: String,
     /// All allowed CORS origins (includes the primary `frontend_base_url`).
@@ -57,6 +58,7 @@ impl AuthConfig {
         let rp_origin = frontend_base_url.trim_end_matches('/').to_string();
 
         Self {
+            registration: super::registration::Policy::default(),
             operations: super::operations::OperationsConfig::defaults(),
             cors_allowed_origins: vec![frontend_base_url.clone()],
             frontend_base_url,
@@ -76,6 +78,17 @@ impl AuthConfig {
             webauthn_rp_id: rp_id,
             webauthn_rp_origin: rp_origin,
         }
+    }
+
+    /// Installs validated signup-only admission and bounded persistence policy.
+    pub(crate) fn with_registration(mut self, policy: super::registration::Policy) -> Self {
+        self.registration = policy;
+        self
+    }
+
+    /// Server-owned signup policy; it never changes existing login identity semantics.
+    pub(crate) fn registration(&self) -> &super::registration::Policy {
+        &self.registration
     }
 
     /// Installs dispatch-validated `WebAuthn` configuration; no runtime environment parsing.

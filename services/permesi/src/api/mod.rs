@@ -10,9 +10,9 @@
 //! 2) Build state and the router, then start the email outbox worker.
 //! 3) Serve until SIGTERM/SIGINT or a fail-closed signal starts a drain bounded
 //!    by `shutdown::DRAIN_TIMEOUT`.
-//! 4) Stop the email worker at a batch boundary before returning, so a batch
-//!    that is being delivered is committed rather than cut off, then close the
-//!    PostgreSQL pool so the database sees clean disconnects.
+//! 4) Cancel the email worker and bound its drain before closing PostgreSQL.
+//!    A delivery interrupted after claim commit leaves a durable lease that another
+//!    worker can recover on expiry; network delivery never holds a SQL transaction.
 //!
 //! A platform-requested stop returns `Ok` (clean exit); a fail-closed stop
 //! returns an error so the supervisor restarts the process with fresh Vault
@@ -88,6 +88,8 @@ pub struct AppConfig {
     pub admin: auth::AdminConfig,
     /// Email module configuration.
     pub email: email::EmailWorkerConfig,
+    /// Explicit outbox/SMTP transport with bounded durable claims.
+    pub(crate) email_delivery: email::DeliveryConfig,
     /// Vault KV module configuration.
     pub kv: VaultKvConfig,
     /// PostgreSQL pool shape shared by handlers and the email outbox worker.
@@ -201,15 +203,14 @@ pub async fn new(
         passkeys: Arc::new(passkey_service),
     })?;
 
-    // Background worker polls email_outbox (DB-backed queue) for pending rows,
-    // delivers/logs them, and retries failures with exponential backoff.
+    // Explicit outbox mode retains messages; SMTP uses durable claims and bounded retries.
     let workers = CancellationToken::new();
     let email_worker = email::spawn_outbox_worker(
         pool.clone(),
-        Arc::new(email::LogEmailSender),
+        config.email_delivery,
         config.email,
         workers.child_token(),
-    );
+    )?;
 
     let served = match socket_path {
         Some(path) => serve_socket(app, path, rx).await,
@@ -622,7 +623,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .header("origin", "https://permesi.dev")
                     .body(axum::body::Body::from(
-                        r#"{"email":"user@example.com","registration_request":"AA"}"#,
+                        r#"{"email":"user@permesi.dev","registration_request":"AA"}"#,
                     ))?,
             )
             .await?;

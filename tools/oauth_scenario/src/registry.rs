@@ -27,6 +27,11 @@ pub struct Case {
 
 pub const CASES: &[Case] = &[
     Case {
+        id: "authentication.registration_policy",
+        description: "Reserved signup rejection, cross-replica pending/disabled verification, one-time activation and replay isolation",
+        group: "security",
+    },
+    Case {
         id: "ha.rolling_restart",
         description: "Every replica is gracefully replaced; durable OPAQUE/code state, identity and replay protection survive new processes",
         group: "ha",

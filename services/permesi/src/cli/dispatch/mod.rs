@@ -96,6 +96,21 @@ fn mfa_challenge_limit(matches: &clap::ArgMatches) -> Result<i32> {
     Ok(limit)
 }
 
+/// Revalidates pending-state capacity against both process and PostgreSQL integer bounds.
+fn pending_state_limit(value: u64) -> Result<usize> {
+    let auth_max_pending_states = usize::try_from(value)
+        .context("--auth-max-pending-states exceeds this platform's capacity")?;
+    if auth_max_pending_states == 0 {
+        return Err(anyhow!(
+            "invalid argument: --{} must be greater than zero",
+            auth::ARG_AUTH_MAX_PENDING_STATES
+        ));
+    }
+    i64::try_from(auth_max_pending_states)
+        .context("--auth-max-pending-states exceeds PostgreSQL capacity")?;
+    Ok(auth_max_pending_states)
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -131,16 +146,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
             auth::ARG_OPAQUE_EXCHANGE_TIMEOUT
         ));
     }
-    let auth_max_pending_states = usize::try_from(auth_opts.max_pending_states)
-        .context("--auth-max-pending-states exceeds this platform's capacity")?;
-    if auth_max_pending_states == 0 {
-        return Err(anyhow!(
-            "invalid argument: --{} must be greater than zero",
-            auth::ARG_AUTH_MAX_PENDING_STATES
-        ));
-    }
-    i64::try_from(auth_max_pending_states)
-        .context("--auth-max-pending-states exceeds PostgreSQL capacity")?;
+    let auth_max_pending_states = pending_state_limit(auth_opts.max_pending_states)?;
     let auth_rate_limit_window_seconds = require_positive(
         auth::ARG_AUTH_RATE_LIMIT_WINDOW,
         auth_opts.rate_limit.window_seconds,
@@ -162,7 +168,11 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let oauth = crate::oauth::config::OAuthConfig::from_matches(matches)?;
     let tenant_mutations = tenant_mutation_policy(matches)?;
 
+    let registration = crate::api::handlers::auth::registration::Policy::from_matches(matches)?;
+    let email_delivery = crate::api::email::DeliveryConfig::from_matches(matches)?;
     Ok(Action::Server(Args {
+        registration,
+        email_delivery,
         port,
         socket_path,
         dsn,

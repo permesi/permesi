@@ -1891,6 +1891,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Rechecks signup admission independently; browser fields cannot activate the pending account.",
         "operationId": "opaque_signup_finish",
         "parameters": [
           {
@@ -1934,8 +1935,28 @@
               }
             }
           },
+          "403": {
+            "description": "Registration not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Registration storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1952,6 +1973,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Starts registration only after server-owned domain/mode, shared limits and admission checks.",
         "operationId": "opaque_signup_start",
         "parameters": [
           {
@@ -1995,8 +2017,28 @@
               }
             }
           },
+          "403": {
+            "description": "Registration not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Registration storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -2160,7 +2202,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Resend a verification email (always returns 204 to avoid user enumeration).",
+        "summary": "Resends opaquely for unknown accounts/cooldowns; storage failure is a generic 503.",
         "operationId": "resend_verification",
         "parameters": [
           {
@@ -2186,6 +2228,16 @@
         "responses": {
           "204": {
             "description": "Resend accepted"
+          },
+          "503": {
+            "description": "Verification storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -2267,6 +2319,16 @@
           },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Verification storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -7632,7 +7694,8 @@
           "registration_record": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "OpaqueSignupFinishResponse": {
         "type": "object",
@@ -7658,7 +7721,8 @@
           "registration_request": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "OpaqueSignupStartResponse": {
         "type": "object",

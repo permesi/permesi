@@ -1,61 +1,27 @@
-//! Email outbox worker and delivery abstractions.
+//! Verification email delivery with durable PostgreSQL leases and no secret-bearing logs.
 //!
-//! Signup and verification flows enqueue rows in `email_outbox` with status `pending`.
-//! A background task periodically polls that table, locks a batch via
-//! `FOR UPDATE SKIP LOCKED`, and hands each row to an `EmailSender`.
-//! The sender decides how to deliver (SMTP, API, etc.) and returns `Ok`/`Err`.
-//! The worker then updates the outbox row to `sent` or `failed`.
-//!
-//! ### Consistency & Scalability
-//!
-//! This is a lightweight transactional outbox (DB-backed queue) used to keep API
-//! latency low and ensure atomicity between user creation and email enqueuing.
-//!
-//! - **Throughput:** For current scale, the DB outbox keeps infrastructure minimal.
-//!   If higher throughput or multi-service fan-out is needed, the `EmailSender`
-//!   trait can be implemented to publish to a broker (e.g., NATS `JetStream`, `RabbitMQ`).
-//! - **Retries:** Failed rows are retried with exponential backoff and jitter
-//!   until a max attempt threshold is reached, then marked `failed`.
-//!
-//! The default sender for local dev is `LogEmailSender`, which logs and returns `Ok(())`.
-//! Poll interval and retry/backoff settings are configurable via `EmailWorkerConfig`.
+//! Flow Overview: outbox mode retains messages for explicit local inspection. SMTP
+//! workers claim one row and commit, send under a network deadline, then acknowledge
+//! only their live claim. No network call holds a database lock or pool connection.
+//! Delivery is at least once across crashes; verification capabilities remain single-use.
+
+mod config;
+mod storage;
+#[cfg(test)]
+mod tests;
+mod transport;
 use anyhow::{Context, Result};
+pub use config::DeliveryConfig;
 use rand::RngExt;
-use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use sqlx::PgPool;
 use std::time::Duration;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, error, info, info_span};
-use uuid::Uuid;
 
-#[derive(Clone, Debug)]
-pub struct EmailMessage {
-    pub to_email: String,
-    pub template: String,
-    pub payload_json: String,
-}
-
-/// Email delivery abstraction used by the outbox worker.
-pub trait EmailSender: Send + Sync {
-    /// Deliver a message or return an error to mark it as failed.
-    fn send(&self, message: &EmailMessage) -> Result<()>;
-}
-
-/// Local dev sender that logs the payload instead of sending real email.
-#[derive(Clone, Debug)]
-pub struct LogEmailSender;
-
-impl EmailSender for LogEmailSender {
-    fn send(&self, message: &EmailMessage) -> Result<()> {
-        info!(
-            to_email = %message.to_email,
-            template = %message.template,
-            payload = %message.payload_json,
-            "email outbox send stub"
-        );
-        Ok(())
-    }
+/// Secret-bearing outbox content has no Debug implementation and is never emitted to telemetry.
+pub(super) struct EmailMessage {
+    to_email: String,
+    template: String,
+    payload_json: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -175,193 +141,79 @@ impl Default for EmailWorkerConfig {
     }
 }
 
-/// Spawn a background task that polls and processes the email outbox.
-///
-/// `cancel` is checked only between batches, so a batch that has started is
-/// delivered and committed before the task returns. The caller bounds how long
-/// it waits; if it gives up, the open transaction rolls back and the claimed rows
-/// stay pending for the next poll.
-pub fn spawn_outbox_worker(
+/// Starts a worker only for configured SMTP; outbox mode leaves rows pending without delivery claims.
+pub(crate) fn spawn_outbox_worker(
     pool: PgPool,
-    sender: Arc<dyn EmailSender>,
+    delivery: DeliveryConfig,
     config: EmailWorkerConfig,
     cancel: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let config = config.normalize();
-        let poll_interval = config.poll_interval();
-
+) -> Result<tokio::task::JoinHandle<()>> {
+    let sender = delivery
+        .smtp
+        .clone()
+        .map(transport::Sender::new)
+        .transpose()?;
+    Ok(tokio::spawn(async move {
+        let Some(sender) = sender else {
+            cancel.cancelled().await;
+            return;
+        };
         loop {
-            // Poll the outbox table on a fixed cadence; sender handles delivery or logging.
-            let batch_result = process_outbox_batch(&pool, sender.as_ref(), &config).await;
-            if let Err(err) = batch_result {
-                error!("email outbox batch failed: {err}");
+            if cancel.is_cancelled() {
+                break;
             }
-
+            if process_outbox_batch(&pool, &sender, &delivery, &config, &cancel)
+                .await
+                .is_err()
+            {
+                tracing::error!("email outbox storage unavailable");
+            }
             tokio::select! {
                 () = cancel.cancelled() => break,
-                () = sleep(poll_interval) => {}
+                () = tokio::time::sleep(config.poll_interval()) => {}
             }
         }
-        info!("email outbox worker stopped");
-    })
+    }))
 }
 
-/// Claims an outbox batch under cancellation-safe transaction startup and SKIP LOCKED.
+/// Delivers a bounded number of independently leased messages; network errors never enter SQL/logs.
 async fn process_outbox_batch(
     pool: &PgPool,
-    sender: &dyn EmailSender,
+    sender: &transport::Sender,
+    delivery: &DeliveryConfig,
     config: &EmailWorkerConfig,
-) -> Result<usize> {
-    let mut tx = service_utils::database::begin(pool)
-        .await
-        .context("failed to start email outbox transaction")?;
-
-    // Grab a locked batch so multiple workers can run without double-sending.
-    let query = r"
-        SELECT id, to_email, template, payload_json::text AS payload_json, attempts
-        FROM email_outbox
-        WHERE status = 'pending'
-          AND next_attempt_at <= NOW()
-        ORDER BY next_attempt_at ASC, created_at ASC
-        LIMIT $1
-        FOR UPDATE SKIP LOCKED
-    ";
-    let span = info_span!(
-        "db.query",
-        db.system = "postgresql",
-        db.operation = "SELECT",
-        db.statement = query
-    );
-    let rows = sqlx::query(query)
-        .bind(i64::try_from(config.batch_size()).unwrap_or(0))
-        .fetch_all(&mut *tx)
-        .instrument(span)
-        .await
-        .context("failed to load email outbox batch")?;
-
-    if rows.is_empty() {
-        // Commit even on empty to release locks and keep poll loop consistent.
-        tx.commit()
-            .await
-            .context("failed to commit empty outbox batch")?;
-        return Ok(0);
-    }
-
-    let row_count = rows.len();
-    for row in rows {
-        let id: Uuid = row.get("id");
-        let attempts: i32 = row.get("attempts");
-        let attempts = u32::try_from(attempts).unwrap_or(0);
-        let message = EmailMessage {
-            to_email: row.get("to_email"),
-            template: row.get("template"),
-            payload_json: row.get("payload_json"),
+    cancel: &CancellationToken,
+) -> Result<()> {
+    for _ in 0..config.batch_size() {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let Some(claim) = storage::claim(pool, delivery, config).await? else {
+            break;
         };
-
-        let send_result = sender.send(&message);
-        update_outbox_status(&mut tx, id, attempts, send_result, config).await?;
+        let sent = sender.send(&claim.message).await.is_ok();
+        tracing::info!(
+            outcome = if sent { "sent" } else { "delivery_failed" },
+            "email delivery attempt"
+        );
+        if !storage::complete(pool, delivery, config, &claim, sent).await? {
+            tracing::warn!("email delivery claim expired before acknowledgement");
+        }
     }
-
-    tx.commit()
-        .await
-        .context("failed to commit email outbox batch")?;
-
-    Ok(row_count)
+    Ok(())
 }
 
-async fn update_outbox_status(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    id: Uuid,
-    attempts: u32,
-    send_result: Result<()>,
-    config: &EmailWorkerConfig,
-) -> Result<()> {
-    // Retry failures with exponential backoff and jitter until max_attempts.
-    let next_attempt = attempts.saturating_add(1);
-    let next_attempts_i32 = i32::try_from(next_attempt).unwrap_or(i32::MAX);
-    match send_result {
-        Ok(()) => {
-            let query = r"
-                UPDATE email_outbox
-                SET status = 'sent',
-                    attempts = $2,
-                    last_error = NULL,
-                    sent_at = NOW(),
-                    next_attempt_at = NOW()
-                WHERE id = $1
-            ";
-            let span = info_span!(
-                "db.query",
-                db.system = "postgresql",
-                db.operation = "UPDATE",
-                db.statement = query
-            );
-            sqlx::query(query)
-                .bind(id)
-                .bind(next_attempts_i32)
-                .execute(&mut **tx)
-                .instrument(span)
-                .await
-                .context("failed to update outbox status to sent")?;
-        }
-        Err(err) => {
-            let max_attempts = config.max_attempts();
-            if next_attempt >= max_attempts {
-                let query = r"
-                    UPDATE email_outbox
-                    SET status = 'failed',
-                        attempts = $2,
-                        last_error = $3,
-                        next_attempt_at = NOW()
-                    WHERE id = $1
-                ";
-                let span = info_span!(
-                    "db.query",
-                    db.system = "postgresql",
-                    db.operation = "UPDATE",
-                    db.statement = query
-                );
-                sqlx::query(query)
-                    .bind(id)
-                    .bind(next_attempts_i32)
-                    .bind(err.to_string())
-                    .execute(&mut **tx)
-                    .instrument(span)
-                    .await
-                    .context("failed to update outbox status to failed")?;
-            } else {
-                let delay =
-                    backoff_delay(next_attempt, config.backoff_base(), config.backoff_max());
-                let delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX);
-                let query = r"
-                    UPDATE email_outbox
-                    SET status = 'pending',
-                        attempts = $2,
-                        last_error = $3,
-                        next_attempt_at = NOW() + ($4 * INTERVAL '1 millisecond')
-                    WHERE id = $1
-                ";
-                let span = info_span!(
-                    "db.query",
-                    db.system = "postgresql",
-                    db.operation = "UPDATE",
-                    db.statement = query
-                );
-                sqlx::query(query)
-                    .bind(id)
-                    .bind(next_attempts_i32)
-                    .bind(err.to_string())
-                    .bind(delay_ms)
-                    .execute(&mut **tx)
-                    .instrument(span)
-                    .await
-                    .context("failed to update outbox retry schedule")?;
-            }
-        }
-    }
-
-    Ok(())
+/// Bounds each complete SQL phase including acquisition, lock waits and commit.
+async fn bounded<T>(
+    config: &DeliveryConfig,
+    operation: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::time::timeout(
+        Duration::from_millis(u64::try_from(config.database_timeout_ms)?),
+        operation,
+    )
+    .await
+    .context("email database deadline exceeded")?
 }
 
 fn backoff_delay(attempt: u32, base: Duration, max: Duration) -> Duration {
@@ -380,39 +232,4 @@ fn jitter_delay(delay: Duration) -> Duration {
     let half = delay_ms / 2;
     let jitter = rand::rng().random_range(0..=half);
     Duration::from_millis(half + jitter)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{EmailWorkerConfig, LogEmailSender, spawn_outbox_worker};
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
-    use std::{sync::Arc, time::Duration};
-    use tokio::time::timeout;
-    use tokio_util::sync::CancellationToken;
-
-    #[tokio::test]
-    async fn outbox_worker_stops_when_cancelled() {
-        // An unreachable database makes each batch fail fast; the loop must still
-        // honor cancellation between batches instead of sleeping out its interval.
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(1)
-            .username("invalid")
-            .database("invalid")
-            .ssl_mode(PgSslMode::Disable);
-        let pool = PgPoolOptions::new()
-            .acquire_timeout(Duration::from_millis(200))
-            .connect_lazy_with(options);
-        let config = EmailWorkerConfig::new().with_poll_interval_seconds(3600);
-        let cancel = CancellationToken::new();
-
-        let worker = spawn_outbox_worker(pool, Arc::new(LogEmailSender), config, cancel.clone());
-        cancel.cancel();
-
-        let stopped = timeout(Duration::from_secs(5), worker).await;
-        assert!(
-            matches!(stopped, Ok(Ok(()))),
-            "worker must stop after cancellation"
-        );
-    }
 }

@@ -139,6 +139,7 @@ repetitions and parallel isolation with
 | --- | --- |
 | `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, accurate code/token discovery and public JWKS |
 | `authorization.consent` | Real browser S256 consent, exact scopes/state/nonce/redirect/TTL, high-entropy code and hash-only row |
+| `authentication.registration_policy` | Reserved-domain signup has no side effects; pending activation and verifier replay cross replicas, and mailbox links cannot reactivate disabled users |
 | `authentication.shared_exchanges` | Real OPAQUE login A→B, reauthentication B→C, actual session verification and replay/same-user session-binding rejection across A/B/C |
 | `ha.rolling_restart` | Replace every configured process with SIGTERM and a clean exit; preserve pending code/reauthentication, session identity and cross-incarnation OPAQUE/code replay rejection |
 | `ha.replica_outage` | Abruptly stop the last backend; issuer returns 503 and direct exchange fails without consuming a code; surviving code/refresh races commit once and recovered replicas reject replay |
@@ -460,3 +461,12 @@ binding and its discoverability on the actual PostgreSQL/Vault builders and both
 Claude independently ran all three browser stages on Podman 4.9.3 and 5.4.2; removing either
 explicit binding makes the regression fail. The [corrected hosted run](https://github.com/permesi/permesi/actions/runs/37426417421)
 on e78ae6f passes every required job, including browser and isolated OAuth scenarios.
+
+## Registration policy regression
+
+`authentication.registration_policy` runs real signup and verification endpoints
+across replicas. Ninety-two reserved-domain attempts create no accounts or mail;
+verification succeeds across processes, replay fails on another process, and a live
+link cannot undo local account suspension. The fixture explicitly uses outbox mode
+and the exact `example.test` development exception. No test grants mailbox authority
+from a browser claim or sends email to external recipients.

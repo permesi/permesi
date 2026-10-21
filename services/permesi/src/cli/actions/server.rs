@@ -8,6 +8,8 @@ use url::Url;
 
 #[derive(Debug)]
 pub struct Args {
+    pub registration: crate::api::handlers::auth::registration::Policy,
+    pub email_delivery: api::email::DeliveryConfig,
     pub auth_operations: crate::api::handlers::auth::operations::OperationsConfig,
     pub port: u16,
     pub socket_path: Option<String>,
@@ -143,6 +145,7 @@ pub async fn execute(args: Args) -> Result<()> {
 
 fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
     let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url.clone())
+        .with_registration(args.registration.clone())
         .with_operations(args.auth_operations.clone())
         .with_cors_allowed_origins(args.cors_allowed_origins.clone())
         .with_email_token_ttl_seconds(args.email_token_ttl_seconds)
@@ -181,6 +184,7 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         auth: auth_config,
         admin: admin_config,
         email: email_config,
+        email_delivery: args.email_delivery.clone(),
         kv: kv_config,
         database: args.db_pool,
         oauth: args.oauth.clone(),
@@ -416,6 +420,8 @@ mod tests {
 
     fn default_args() -> anyhow::Result<Args> {
         Ok(Args {
+            registration: crate::api::handlers::auth::registration::Policy::default(),
+            email_delivery: api::email::DeliveryConfig::default(),
             port: 8080,
             socket_path: None,
             dsn: "postgres://user:pass@localhost:5432/db".to_string(),

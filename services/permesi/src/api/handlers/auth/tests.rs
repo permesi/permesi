@@ -3,6 +3,7 @@
 mod mfa_lifecycle;
 mod opaque_exchange;
 mod password_lifecycle;
+mod registration;
 mod tenant_deletion;
 mod webauthn_exchange;
 
@@ -124,6 +125,7 @@ async fn apply_schema(postgres: &PostgresContainer) -> Result<()> {
 
 fn auth_config() -> AuthConfig {
     AuthConfig::new("https://permesi.dev".to_string())
+        .with_registration(super::registration::Policy::development())
         .with_email_token_ttl_seconds(60)
         .with_resend_cooldown_seconds(300)
 }
@@ -378,7 +380,9 @@ async fn verify_token_reuse_rejected() -> Result<()> {
 
     match outcome {
         SignupOutcome::Created => {}
-        SignupOutcome::Conflict => return Err(anyhow!("unexpected conflict")),
+        SignupOutcome::Conflict | SignupOutcome::Rejected => {
+            return Err(anyhow!("unexpected conflict"));
+        }
     }
     let user_id = lookup_user_id(&db.pool, &email_normalized).await?;
     let token = issue_verification_token(&db.pool, user_id, &email_normalized, &config).await?;
@@ -410,7 +414,9 @@ async fn verify_token_expired_rejected() -> Result<()> {
         insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config).await?;
     match outcome {
         SignupOutcome::Created => {}
-        SignupOutcome::Conflict => return Err(anyhow!("unexpected conflict")),
+        SignupOutcome::Conflict | SignupOutcome::Rejected => {
+            return Err(anyhow!("unexpected conflict"));
+        }
     }
     let user_id = lookup_user_id(&db.pool, &email_normalized).await?;
     let token = issue_verification_token(&db.pool, user_id, &email_normalized, &config).await?;
@@ -462,6 +468,7 @@ fn auth_state() -> Arc<AuthState> {
 
 fn auth_state_with_pending_limit(max_pending_logins: usize) -> Arc<AuthState> {
     let config = AuthConfig::new("https://permesi.dev".to_string())
+        .with_registration(super::registration::Policy::development())
         .with_email_token_ttl_seconds(60)
         .with_resend_cooldown_seconds(300);
     let opaque_state = OpaqueState::from_seed(

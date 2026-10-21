@@ -4,6 +4,9 @@
 //! transaction using the connection-level insertion helpers. Pool wrappers serve
 //! existing independent session flows. Session tokens remain random, hash-only
 //! capabilities; callers disclose them only after their transaction commits.
+//! Registration applies server-owned admission before a bounded transaction. User-first
+//! activation/resend locks coordinate all replicas without holding a network operation;
+//! only pending identities activate, and sibling mailbox capabilities retire together.
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::json;
@@ -25,6 +28,7 @@ use super::{
 pub(super) enum SignupOutcome {
     Created,
     Conflict,
+    Rejected,
 }
 
 /// Outcome for a resend request (always 204 to avoid account probing).
@@ -75,53 +79,60 @@ pub(super) async fn lookup_login_record(pool: &PgPool, email: &str) -> Result<Op
     }))
 }
 
+/// Applies signup policy and commits the pending account, hashed verifier and outbox atomically.
 pub(super) async fn insert_user_and_verification(
     pool: &PgPool,
     email: &str,
     opaque_record: &[u8],
     config: &AuthConfig,
 ) -> Result<SignupOutcome> {
-    // Transaction ensures user creation, verification token, and email outbox row
-    // stay consistent even if something fails.
-    let mut tx = service_utils::database::begin(pool)
-        .await
-        .context("begin signup transaction")?;
+    if !config.registration().permits(email) {
+        return Ok(SignupOutcome::Rejected);
+    }
+    super::registration::bounded(config.registration().timeout_ms, async {
+        // Transaction ensures user creation, verification token, and email outbox row
+        // stay consistent even if something fails.
+        let mut tx = super::operations::begin(pool, config.registration().timeout_ms)
+            .await
+            .context("begin signup transaction")?;
 
-    let query = r"
+        let query = r"
         INSERT INTO users
             (email, opaque_registration_record)
         VALUES ($1, $2)
         RETURNING id
     ";
-    let span = tracing::info_span!(
-        "db.query",
-        db.system = "postgresql",
-        db.operation = "INSERT",
-        db.statement = query
-    );
-    let row = sqlx::query(query)
-        .bind(email)
-        .bind(opaque_record)
-        .fetch_one(&mut *tx)
-        .instrument(span)
-        .await;
+        let span = tracing::info_span!(
+            "db.query",
+            db.system = "postgresql",
+            db.operation = "INSERT",
+            db.statement = query
+        );
+        let row = sqlx::query(query)
+            .bind(email)
+            .bind(opaque_record)
+            .fetch_one(&mut *tx)
+            .instrument(span)
+            .await;
 
-    let user_id: Uuid = match row {
-        Ok(row) => row.get("id"),
-        Err(err) => {
-            if is_unique_violation(&err) {
-                let _ = tx.rollback().await;
-                return Ok(SignupOutcome::Conflict);
+        let user_id: Uuid = match row {
+            Ok(row) => row.get("id"),
+            Err(err) => {
+                if is_unique_violation(&err) {
+                    let _ = tx.rollback().await;
+                    return Ok(SignupOutcome::Conflict);
+                }
+                return Err(err).context("failed to insert user");
             }
-            return Err(err).context("failed to insert user");
-        }
-    };
+        };
 
-    let _token = insert_verification_records(&mut tx, user_id, email, config).await?;
+        let _token = insert_verification_records(&mut tx, user_id, email, config).await?;
 
-    tx.commit().await.context("commit signup transaction")?;
+        tx.commit().await.context("commit signup transaction")?;
 
-    Ok(SignupOutcome::Created)
+        Ok(SignupOutcome::Created)
+    })
+    .await
 }
 
 pub(super) async fn insert_verification_records(
@@ -653,62 +664,43 @@ pub(super) async fn delete_mfa_challenge_session(pool: &PgPool, token_hash: &[u8
     Ok(())
 }
 
+/// Activates only a pending account under identity-first locking; a token cannot undo suspension.
+/// Expiry is checked after lock acquisition, and every sibling verifier is retired atomically.
 pub(super) async fn consume_verification_token(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     token_hash: &[u8],
 ) -> Result<bool> {
-    // Mark the token consumed if still valid; then activate the user in the same transaction.
-    let query = r"
-        UPDATE email_verification_tokens
-        SET consumed_at = NOW()
-        WHERE token_hash = $1
-          AND consumed_at IS NULL
-          AND expires_at > NOW()
-        RETURNING user_id
-    ";
-    let span = tracing::info_span!(
-        "db.query",
-        db.system = "postgresql",
-        db.operation = "UPDATE",
-        db.statement = query
-    );
-    let row = sqlx::query(query)
-        .bind(token_hash)
-        .fetch_optional(&mut **tx)
-        .instrument(span)
-        .await
-        .context("failed to consume verification token")?;
-
-    let Some(row) = row else {
+    let user: Option<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM email_verification_tokens WHERE token_hash=$1")
+            .bind(token_hash)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some(user) = user else {
         return Ok(false);
     };
-
-    let user_id: Uuid = row.get("user_id");
-    let query = r"
-        UPDATE users
-        SET email_verified_at = NOW(),
-            status = 'active',
-            updated_at = NOW()
-        WHERE id = $1
-    ";
-    let span = tracing::info_span!(
-        "db.query",
-        db.system = "postgresql",
-        db.operation = "UPDATE",
-        db.statement = query
-    );
-    sqlx::query(query)
-        .bind(user_id)
-        .execute(&mut **tx)
-        .instrument(span)
-        .await
-        .context("failed to update user status")?;
-
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status::text FROM users WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(user)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if status.as_deref() != Some("pending_verification") {
+        return Ok(false);
+    }
+    let consumed = sqlx::query("UPDATE email_verification_tokens SET consumed_at=clock_timestamp() WHERE token_hash=$1 AND user_id=$2 AND consumed_at IS NULL AND expires_at>clock_timestamp()")
+        .bind(token_hash).bind(user).execute(&mut **tx).await?;
+    if consumed.rows_affected() != 1 {
+        return Ok(false);
+    }
+    sqlx::query("UPDATE users SET email_verified_at=clock_timestamp(),status='active' WHERE id=$1 AND status='pending_verification'")
+        .bind(user).execute(&mut **tx).await?;
+    sqlx::query("UPDATE email_verification_tokens SET consumed_at=clock_timestamp() WHERE user_id=$1 AND consumed_at IS NULL")
+        .bind(user).execute(&mut **tx).await?;
     Ok(true)
 }
 
+/// Resolves only the rate-limit bucket before a transaction; activation revalidates identity under lock.
 pub(super) async fn lookup_email_by_token_hash(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    pool: &PgPool,
     token_hash: &[u8],
 ) -> Result<Option<String>> {
     // Used for per-email rate limiting during verification.
@@ -727,63 +719,67 @@ pub(super) async fn lookup_email_by_token_hash(
     );
     let row = sqlx::query(query)
         .bind(token_hash)
-        .fetch_optional(&mut **tx)
+        .fetch_optional(pool)
         .instrument(span)
         .await
         .context("failed to lookup email for token")?;
     Ok(row.map(|row| row.get("email")))
 }
 
+/// Queues only pending-account mail, serializing cooldown and enqueue against activation.
 pub(super) async fn enqueue_resend_verification(
     pool: &PgPool,
     email: &str,
     config: &AuthConfig,
 ) -> Result<ResendOutcome> {
-    // Resend is intentionally opaque: callers always get 204 to avoid account probing.
-    let mut tx = service_utils::database::begin(pool)
-        .await
-        .context("begin resend transaction")?;
+    super::registration::bounded(config.registration().timeout_ms, async {
+        // Resend is intentionally opaque: callers always get 204 to avoid account probing.
+        let mut tx = super::operations::begin(pool, config.registration().timeout_ms)
+            .await
+            .context("begin resend transaction")?;
 
-    let query = r"
+        let query = r"
         SELECT id, email, status::text AS status
         FROM users
         WHERE email = $1
-        LIMIT 1
+        FOR NO KEY UPDATE
     ";
-    let span = tracing::info_span!(
-        "db.query",
-        db.system = "postgresql",
-        db.operation = "SELECT",
-        db.statement = query
-    );
-    let row = sqlx::query(query)
-        .bind(email)
-        .fetch_optional(&mut *tx)
-        .instrument(span)
-        .await
-        .context("failed to lookup user for resend")?;
+        let span = tracing::info_span!(
+            "db.query",
+            db.system = "postgresql",
+            db.operation = "SELECT",
+            db.statement = query
+        );
+        let row = sqlx::query(query)
+            .bind(email)
+            .fetch_optional(&mut *tx)
+            .instrument(span)
+            .await
+            .context("failed to lookup user for resend")?;
 
-    let Some(row) = row else {
-        tx.commit().await.context("commit resend noop")?;
-        return Ok(ResendOutcome::Noop);
-    };
+        let Some(row) = row else {
+            tx.commit().await.context("commit resend noop")?;
+            return Ok(ResendOutcome::Noop);
+        };
 
-    let status: String = row.get("status");
-    if status != "pending_verification" {
-        tx.commit().await.context("commit resend noop")?;
-        return Ok(ResendOutcome::Noop);
-    }
+        let status: String = row.get("status");
+        if status != "pending_verification" {
+            tx.commit().await.context("commit resend noop")?;
+            return Ok(ResendOutcome::Noop);
+        }
 
-    let user_id: Uuid = row.get("id");
-    if resend_cooldown_active(&mut tx, user_id, config.resend_cooldown_seconds()).await? {
-        tx.commit().await.context("commit resend cooldown")?;
-        return Ok(ResendOutcome::Cooldown);
-    }
+        let user_id: Uuid = row.get("id");
+        if resend_cooldown_active(&mut tx, user_id, config.resend_cooldown_seconds()).await? {
+            tx.commit().await.context("commit resend cooldown")?;
+            return Ok(ResendOutcome::Cooldown);
+        }
 
-    let email: String = row.get("email");
-    let _ = insert_verification_records(&mut tx, user_id, &email, config).await?;
-    tx.commit().await.context("commit resend enqueue")?;
-    Ok(ResendOutcome::Queued)
+        let email: String = row.get("email");
+        let _ = insert_verification_records(&mut tx, user_id, &email, config).await?;
+        tx.commit().await.context("commit resend enqueue")?;
+        Ok(ResendOutcome::Queued)
+    })
+    .await
 }
 
 async fn resend_cooldown_active(
@@ -796,7 +792,7 @@ async fn resend_cooldown_active(
         SELECT 1
         FROM email_verification_tokens
         WHERE user_id = $1
-          AND created_at > NOW() - ($2 * INTERVAL '1 second')
+          AND created_at > clock_timestamp() - ($2 * INTERVAL '1 second')
         LIMIT 1
     ";
     let span = tracing::info_span!(

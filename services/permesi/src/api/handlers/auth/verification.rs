@@ -1,4 +1,9 @@
-//! Email verification endpoints.
+//! Mailbox verification and opaque resend endpoints with bounded shared persistence.
+//!
+//! Flow Overview: admission and shared limits precede a user-first transaction.
+//! Only a live single-use verifier activates a pending user; all sibling links retire.
+//! Resend serializes status/cooldown and enqueue against activation. Mailbox proof
+//! never overrides disabled state or supplies tenant/application authorization.
 
 use axum::{
     Json,
@@ -33,7 +38,8 @@ use super::zero_token::{require_zero_token, zero_token_error_response};
     responses(
         (status = 204, description = "Email verified"),
         (status = 400, description = "Invalid/expired token", body = String),
-        (status = 429, description = "Rate limited", body = String)
+        (status = 429, description = "Rate limited", body = String),
+        (status = 503, description = "Verification storage unavailable", body = String)
     ),
     tag = "auth"
 )]
@@ -70,61 +76,42 @@ pub async fn verify_email(
         return (status, message).into_response();
     }
 
-    // Hash the token before lookup; raw tokens are never stored server-side.
+    // Only the hash is used for verification; delivery payloads stay in the protected outbox.
     let token_hash = hash_verification_token(token);
-    let mut tx = match service_utils::database::begin(&pool).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            error!("Failed to start verify-email transaction: {err}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Verification failed".to_string(),
-            )
-                .into_response();
-        }
-    };
-
-    if let Ok(Some(email)) = lookup_email_by_token_hash(&mut tx, &token_hash).await
-        && let Some(status) = auth_state
-            .rate_limiter()
-            .check_email(&email, RateLimitAction::VerifyEmail)
-            .await
-            .denial_status()
-    {
-        // Email-based limits reduce repeated verification attempts for the same address.
-        let _ = tx.rollback().await;
-        return (status, "Rate limited".to_string()).into_response();
-    }
-
-    match consume_verification_token(&mut tx, &token_hash).await {
-        Ok(true) => {
-            if let Err(err) = tx.commit().await {
-                error!("Failed to commit verify-email transaction: {err}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Verification failed".to_string(),
-                )
-                    .into_response();
+    let result =
+        super::registration::bounded(auth_state.config().registration().timeout_ms, async {
+            // Rate-limit before checking out a transaction: one-connection pools must progress.
+            if let Some(email) = lookup_email_by_token_hash(&pool, &token_hash).await?
+                && let Some(status) = auth_state
+                    .rate_limiter()
+                    .check_email(&email, RateLimitAction::VerifyEmail)
+                    .await
+                    .denial_status()
+            {
+                return Ok(status);
             }
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => {
-            let _ = tx.rollback().await;
-            (StatusCode::BAD_REQUEST, "Invalid token".to_string()).into_response()
-        }
-        Err(err) => {
-            error!("Failed to verify email: {err}");
-            let _ = tx.rollback().await;
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Verification failed".to_string(),
-            )
-                .into_response()
+            let mut tx =
+                super::operations::begin(&pool, auth_state.config().registration().timeout_ms)
+                    .await?;
+            if !consume_verification_token(&mut tx, &token_hash).await? {
+                return Ok(StatusCode::BAD_REQUEST);
+            }
+            tx.commit().await?;
+            Ok(StatusCode::NO_CONTENT)
+        })
+        .await;
+    match result {
+        Ok(StatusCode::NO_CONTENT) => StatusCode::NO_CONTENT.into_response(),
+        Ok(StatusCode::BAD_REQUEST) => (StatusCode::BAD_REQUEST, "Invalid token").into_response(),
+        Ok(status) => (status, "Verification unavailable").into_response(),
+        Err(_) => {
+            error!("Email verification storage unavailable");
+            (StatusCode::SERVICE_UNAVAILABLE, "Verification unavailable").into_response()
         }
     }
 }
 
-/// Resend a verification email (always returns 204 to avoid user enumeration).
+/// Resends opaquely for unknown accounts/cooldowns; storage failure is a generic 503.
 #[utoipa::path(
     post,
     path = "/v1/auth/resend-verification",
@@ -133,7 +120,8 @@ pub async fn verify_email(
         ("X-Permesi-Zero-Token" = String, Header, description = "Genesis zero token")
     ),
     responses(
-        (status = 204, description = "Resend accepted")
+        (status = 204, description = "Resend accepted"),
+        (status = 503, description = "Verification storage unavailable", body = String)
     ),
     tag = "auth"
 )]
@@ -193,10 +181,9 @@ pub async fn resend_verification(
         Ok(ResendOutcome::Queued | ResendOutcome::Cooldown | ResendOutcome::Noop) => {
             StatusCode::NO_CONTENT.into_response()
         }
-        Err(err) => {
-            error!("Failed to enqueue resend verification: {err}");
-            // Avoid leaking failures; always return 204 to callers.
-            StatusCode::NO_CONTENT.into_response()
+        Err(_) => {
+            error!("Verification resend storage unavailable");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
 }

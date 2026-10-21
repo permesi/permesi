@@ -44,6 +44,7 @@ mod ha;
 mod interop;
 mod lifecycle;
 mod refresh;
+mod registration;
 mod token;
 
 /// Already authenticated actors and owned infrastructure; no case shares another case's tenant.
@@ -143,6 +144,7 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
     match id {
         "ha.rolling_restart" => ha::rolling_restart(context, fixture).await,
         "ha.replica_outage" => ha::replica_outage(context, fixture).await,
+        "authentication.registration_policy" => registration::security(context).await,
         "authentication.shared_exchanges" => authentication::shared_exchanges(context).await,
         "interop.public_client" => interop::public(context, fixture).await,
         "interop.confidential_client" => interop::confidential(context, fixture).await,

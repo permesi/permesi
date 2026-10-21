@@ -231,7 +231,7 @@ impl Api {
     }
 
     /// Send admission-protected account requests, retaining the original session for reauthentication.
-    async fn auth_response(&self, path: &str, body: Value) -> Result<reqwest::Response> {
+    pub(crate) async fn auth_response(&self, path: &str, body: Value) -> Result<reqwest::Response> {
         let token = self.admission_token().await?;
         let mut request = self
             .client
@@ -335,8 +335,8 @@ impl Actor {
             flow,
         })
     }
-    /// Registers and verifies a new account through real admission-protected product endpoints.
-    pub async fn signup(api: &Api, pool: &PgPool) -> Result<Self> {
+    /// Registers a pending account and reads its capability only from the owned test outbox.
+    pub(crate) async fn pending_signup(api: &Api, pool: &PgPool) -> Result<(Self, SecretString)> {
         let email = format!("scenario-{}@example.test", Uuid::new_v4().simple());
         let password = random()?;
         let mut rng = OsRng;
@@ -374,16 +374,25 @@ impl Actor {
             .find(|(key, _)| key == "token")
             .map(|(_, value)| value.into_owned())
             .ok_or_else(|| Failure::harness("Verification capability missing."))?;
+        Ok((
+            Self {
+                email,
+                password: SecretString::from(password),
+            },
+            SecretString::from(token),
+        ))
+    }
+
+    /// Verifies the mailbox capability through the real HTTP endpoint before any login.
+    pub async fn signup(api: &Api, pool: &PgPool) -> Result<Self> {
+        let (actor, token) = Self::pending_signup(api, pool).await?;
         api.auth_post(
             "/v1/auth/verify-email",
-            json!({"token":token}),
+            json!({"token":token.expose_secret()}),
             StatusCode::NO_CONTENT,
         )
         .await?;
-        Ok(Self {
-            email,
-            password: SecretString::from(password),
-        })
+        Ok(actor)
     }
 
     /// Establishes a fresh real browser context; no session row or role claim is seeded.

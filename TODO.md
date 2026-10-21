@@ -1,5 +1,10 @@
 # TODO
 
+- [x] Registration security: reserved domains/subdomains denied by default, public/restricted/closed admission, pending-only single-use verification, credential-free logging and TLS SMTP with durable leases. Default/all-feature suites (745/775), schema/runtime-role, browser, lint/OpenAPI and both 37-case HA topologies pass. Two independent Herdr/OMP `xai-oauth/grok-4.7` reviews confirmed the verification pool-starvation fix; the final review found no remaining confirmed defects. See [registration security](docs/registration-security.md).
+- [ ] Registration follow-ups: CAPTCHA integration, distributed signup analytics/alerts, pending-account/outbox retention and safe reactivation policy. Verified email is not proof of human identity, KYC or external resource ownership.
+- [ ] Auditable account suspension and containment: define privileged, recent-authenticated suspension/reactivation and atomic invalidation of sessions, pending authorization state and refresh authority, with cross-replica regressions. Immediate rejection of existing access JWTs requires the separately tracked introspection/revocation policy.
+
+
 This is the authoritative milestone checklist. README summarizes the implemented status;
 [OAuth documentation](docs/oauth-foundation.md#roadmap) describes milestone dependencies
 and completion boundaries. Completed entries require passing checks and review evidence.

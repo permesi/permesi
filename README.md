@@ -401,6 +401,14 @@ sequenceDiagram
 
  Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
 
+Signup admission rejects reserved/example email domains and subdomains by default.
+Operators can select public, exact-domain restricted or closed registration. Accounts
+remain pending until mailbox verification; a link cannot reactivate a disabled user.
+Email defaults to a local outbox, with explicit TLS SMTP delivery for production.
+Verification links are never logged. See [registration security](docs/registration-security.md)
+for configuration, bounded per-user coordination, durable worker leases and upgrade steps.
+
+
 ## Passkey + MFA Login Flow
 
 Users sign up with email and password, then can register passkeys from `/console/me/security` once they are logged in. Passkey login is discoverable and does not send an email or account-specific credential list during the start request; the authenticator returns an opaque user handle that Permesi binds to the stored credential before verification. Email is required only when the user expands the password form and uses OPAQUE.

@@ -949,6 +949,15 @@ CREATE TABLE IF NOT EXISTS email_outbox (
         CHECK (sent_at IS NULL OR sent_at >= created_at)
 );
 
+-- Short-lived worker leases avoid holding SQL locks during SMTP network operations.
+ALTER TABLE email_outbox ADD COLUMN IF NOT EXISTS claim_id UUID;
+ALTER TABLE email_outbox ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
+ALTER TABLE email_outbox DROP CONSTRAINT IF EXISTS email_outbox_claim_pair;
+ALTER TABLE email_outbox ADD CONSTRAINT email_outbox_claim_pair CHECK (
+    (claim_id IS NULL AND claim_expires_at IS NULL)
+    OR (claim_id IS NOT NULL AND claim_expires_at IS NOT NULL AND status='pending')
+);
+
 CREATE INDEX IF NOT EXISTS email_outbox_status_idx ON email_outbox (status);
 CREATE INDEX IF NOT EXISTS email_outbox_next_attempt_idx ON email_outbox (status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS email_outbox_created_at_idx ON email_outbox (created_at);
