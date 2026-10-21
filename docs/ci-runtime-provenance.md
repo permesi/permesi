@@ -120,3 +120,68 @@ The reviewer inspected primary HA/harness evidence but did not rerun long suites
 Hosted comparisons must distinguish queue/dependency waits, compilation,
 test execution, artifact transfer and retries. A single completed run is useful
 evidence, but several comparable runs are needed before claiming a CI speedup.
+
+## Hosted timing reports
+
+Use `just ci-timings <run-id>` to collect JSON timing metadata through the existing
+authenticated GitHub CLI. Python 3.11+ and `gh` with Actions read access are required;
+organization-wide runner administration is unnecessary. The helper performs only
+GET requests against github.com and never downloads logs, artifacts or credentials.
+It returns nonzero if collection fails. A successful collection is not a CI pass:
+the JSON retains workflow and attempt status/conclusion, including failed attempts.
+
+For example, compare the same commit before and after a runner change:
+
+```sh
+python3 scripts/ci-timings.py 39656089350 39670752583 > .tmp/ci-comparison.json
+python3 scripts/test-ci-timings.py
+```
+
+`--attempt 1` selects the original attempt; the default reports every attempt
+separately. `--repo owner/repository` selects another GitHub repository. Every jobs
+page is collected. GitHub can carry successful jobs into a partial rerun and
+rewrite their creation/attempt fields while preserving their original step times.
+The helper uses execution timestamps to exclude that carried work from the retry.
+Skipped jobs have no measured runner execution. Missing/in-progress durations
+remain null; an unfinished attempt has no final wall time.
+
+Each job records its runner name, labels, release delay from the attempt start,
+delay from job creation to its first executing step, execution duration and
+individual step durations. Release delay includes dependencies and scheduling;
+assignment delay includes runner queue/setup. These API measurements do not
+isolate pure queue time or process CPU time. Parallel job times are not summed to
+claim workflow wall time. Compare the explicit native test compilation and
+execution steps separately; coverage's combined build/test step cannot provide
+that split. Runner names identify execution slots, not independently provisioned
+physical hosts, so they cannot justify raising fixture concurrency by themselves.
+
+## New-runner comparison, 2026-10-21
+
+The [original attempt](https://github.com/permesi/permesi/actions/runs/39656089350/attempts/1)
+and [runner comparison](https://github.com/permesi/permesi/actions/runs/39670752583)
+use the same application/workflow commit, `247272b`. Both new execution slots,
+`github-runner-1` and `github-runner-2`, accepted jobs. Native execution retained
+four test threads, fresh fixtures and both feature configurations.
+
+| Native test step | Original runners | New runners |
+| --- | ---: | ---: |
+| Build default test executables | 40s | 29s |
+| Default test execution | 21m06s | 4m05s |
+| Build all-feature test executables | 49s | 39s |
+| All-feature test execution | 22m11s | 4m33s |
+
+Both test configurations passed. This is one observed same-commit comparison,
+not a controlled hardware benchmark or a guarantee for future runs. Organization
+runner inventory requires additional administration access; job assignments
+establish that these slots worked, not the total number of available hosts.
+
+The comparison exposed a separate setup failure: the Linux build unconditionally
+ran `sudo apt install`, but the new build user could not prompt for a password.
+The comparison was later superseded by a retry of the earlier workflow while its
+five-replica job was running. It cannot establish successful end-to-end pipeline
+speed. The shared
+`ensure-musl-toolchain` action now reuses a preinstalled compiler without sudo,
+installs only missing packages under existing noninteractive privileges and
+verifies headers/static linking. Its seven isolated regressions, real local C
+probe and the timing helper's fourteen regressions pass; the format job runs both
+helper suites. This does not grant sudo privileges or provision external runners.

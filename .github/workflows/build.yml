@@ -55,8 +55,9 @@ jobs:
         with:
           shared-key: native-musl
 
-      - run: sudo apt -y install musl-dev musl-tools
+      - uses: ./.github/actions/ensure-musl-toolchain
         if: matrix.build == 'linux'
+        timeout-minutes: 5
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis --features permesi/telemetry,genesis/telemetry

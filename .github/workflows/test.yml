@@ -37,6 +37,11 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+      - name: Test CI metadata and toolchain helpers
+        run: |
+          python3 scripts/test-ci-timings.py
+          python3 .github/actions/ensure-musl-toolchain/test_runtime.py
+
   lint:
     name: Clippy
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}

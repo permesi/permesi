@@ -27,6 +27,12 @@ aggregate check.
     *   `deploy.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
     *   `schemathesis.yml`: This workflow is hardcoded to use `ubuntu-latest` so API contract checks always run on GitHub-hosted runners.
 
+Verify runner usage with `just ci-timings <run-id>`. This read-only metadata report
+records actual job assignments and step durations, separating retry attempts and
+retaining incomplete/failed status. Runner names do not establish independent
+physical hosts. See [timing reports](../../docs/ci-runtime-provenance.md#hosted-timing-reports)
+before interpreting queue or wall-time differences as a speedup.
+
 ## Workflow Overview
 
 - **`test.yml`**: Handles formatting, strict native and browser-target WASM Clippy, dependency auditing for the web app, and
@@ -133,6 +139,19 @@ false`), the reusable workflows are read-only by default, and every Cargo comman
 - **`PERMESI_HELM_APP_ID`**: Numeric GitHub App ID used by `.github/actions/dispatch-helm`.
 
 ## Composite Actions
+
+### `ensure-musl-toolchain`
+
+Native Linux builds reuse an installed `musl-gcc` without invoking sudo. When the
+compiler is missing, Debian package installation requires root or an existing
+noninteractive sudo policy; the action never prompts or changes that policy.
+Prefer provisioning `musl-dev` and `musl-tools` in the runner image/bootstrap so
+the build user does not need installation privileges. A missing or broken
+toolchain fails with provisioning guidance. A C/header/static-link probe verifies
+the compiler before Cargo, and both development and fresh release builds use the
+same action with a five-minute setup limit. Test its decisions without host
+package changes using `python3 .github/actions/ensure-musl-toolchain/test_runtime.py`.
+The format job runs these regressions and the metadata helper's tests.
 
 ### `ensure-browser-runtime`
 

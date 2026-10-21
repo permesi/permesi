@@ -1,0 +1,8 @@
+name: Ensure MUSL toolchain
+description: Reuse a working MUSL compiler or install missing Debian packages noninteractively.
+runs:
+  using: composite
+  steps:
+    - name: Verify MUSL compiler and static linking
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/runtime.sh"

@@ -54,6 +54,10 @@ test-fixture-profile rounds="3":
 test-build-identity:
   python3 "{{root}}/scripts/test-build-identity.py"
 
+[doc("Report job/step timings and runner assignments for every attempt of a GitHub run")]
+ci-timings run_id:
+  python3 "{{root}}/scripts/ci-timings.py" {{quote(run_id)}}
+
 build:
   cargo build --workspace
 
