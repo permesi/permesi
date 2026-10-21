@@ -726,6 +726,8 @@ We welcome contributions of all kinds!
 
 See [focused modules and CI measurement](docs/maintainability-ci.md) for the current
 module boundaries, compilation/execution timing reports and remaining performance work.
+The [fixture runtime guide](docs/ci-runtime-provenance.md) documents
+`just test-fixture-profile` and its measurement boundaries.
 
 Container jobs verify the API endpoint used by tests before proceeding. Each
 self-hosted job starts a Podman service with its own runtime and Unix socket under

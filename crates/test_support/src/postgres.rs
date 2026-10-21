@@ -175,6 +175,17 @@ pub struct PostgresContainer {
 }
 
 impl PostgresContainer {
+    /// Removes this owned fixture explicitly so cleanup failure cannot count as benchmark success.
+    ///
+    /// # Errors
+    /// Returns an error when the local container engine cannot remove the fixture.
+    pub async fn remove(self) -> Result<()> {
+        self.container
+            .rm()
+            .await
+            .context("Postgres fixture removal failed")
+    }
+
     /// Runs the canonical psql bootstrap inside this owned container, including relative includes.
     ///
     /// # Errors
@@ -276,9 +287,8 @@ impl PostgresContainer {
         let mut host_port = None;
         let mut last_error = None;
 
-        // Give the runtime a moment to initialize network mappings
-        sleep(Duration::from_millis(500)).await;
-
+        // Probe immediately after container readiness; retain retries for engines
+        // that have not published their port metadata yet.
         for i in 0..60 {
             if let Ok(ports) = container.ports().await {
                 if let Some(port) = ports.map_to_host_port_ipv4(POSTGRES_PORT.tcp()) {

@@ -1636,6 +1636,7 @@ async fn authorize_expired_database_request_shows_restart_without_redirect() -> 
 }
 
 #[tokio::test]
+/// Checks actual PostgreSQL blockers instead of treating host scheduling latency as lock contention.
 async fn authorize_review_regression_client_readers_do_not_serialize_other_users() -> Result<()> {
     let f = Fixture::new().await?;
     let mut reader = f.pool.begin().await?;
@@ -1643,7 +1644,16 @@ async fn authorize_review_regression_client_readers_do_not_serialize_other_users
         .bind(f.client_internal)
         .fetch_one(&mut *reader)
         .await?;
-    let reply = timeout(Duration::from_millis(500), f.start(&[])).await;
+    let reader_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *reader)
+        .await?;
+    let reply = timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            reply = f.start(&[]) => reply,
+            blocked = wait_for_client_reader_blocker(&f.pool, reader_pid) => blocked,
+        }
+    })
+    .await;
     reader.rollback().await?;
     assert_eq!(
         reply
@@ -1665,6 +1675,20 @@ async fn authorize_review_regression_client_readers_do_not_serialize_other_users
             .await?;
     assert_eq!(grants, 1);
     Ok(())
+}
+
+/// Fails immediately when another backend waits on this test's held client reader.
+async fn wait_for_client_reader_blocker(pool: &sqlx::PgPool, reader_pid: i32) -> Result<Reply> {
+    loop {
+        let blocked: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))",
+        )
+        .bind(reader_pid)
+        .fetch_one(pool)
+        .await?;
+        anyhow::ensure!(!blocked, "authorization waits on the held client reader");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]

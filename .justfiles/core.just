@@ -46,6 +46,11 @@ verify-release: fmt clippy test web-build
 coverage:
   cargo llvm-cov --all-features --workspace
 
+[doc("Measure fresh PostgreSQL/Vault fixture phases with four concurrent workers (1..10 rounds)")]
+test-fixture-profile rounds="3":
+  cargo run --locked -p test_support --example fixture_profile -- {{quote(rounds)}}
+
+
 build:
   cargo build --workspace
 
