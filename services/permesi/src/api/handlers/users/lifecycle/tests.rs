@@ -222,6 +222,40 @@ async fn lifecycle_retires_sessions_verifiers_and_pending_proofs_with_runtime_pr
 }
 
 #[tokio::test]
+async fn lifecycle_suspension_and_reactivation_retire_old_admin_revisions() -> Result<()> {
+    let f = Fixture::new().await?;
+    let before: Uuid = sqlx::query_scalar(
+        "INSERT INTO platform_operators(user_id) VALUES($1) RETURNING token_revision",
+    )
+    .bind(f.target)
+    .fetch_one(&f.admin)
+    .await?;
+    assert_eq!(
+        f.call(f.target, "suspend", &f.cookie).await?.status(),
+        StatusCode::NO_CONTENT
+    );
+    let suspended: (bool, Uuid) =
+        sqlx::query_as("SELECT enabled,token_revision FROM platform_operators WHERE user_id=$1")
+            .bind(f.target)
+            .fetch_one(&f.admin)
+            .await?;
+    assert!(suspended.0);
+    assert_ne!(suspended.1, before);
+    assert_eq!(
+        f.call(f.target, "reactivate", &f.cookie).await?.status(),
+        StatusCode::NO_CONTENT
+    );
+    let restored: Uuid =
+        sqlx::query_scalar("SELECT token_revision FROM platform_operators WHERE user_id=$1")
+            .bind(f.target)
+            .fetch_one(&f.admin)
+            .await?;
+    assert_ne!(restored, suspended.1);
+    assert_ne!(restored, before);
+    Ok(())
+}
+
+#[tokio::test]
 async fn lifecycle_reactivation_never_bypasses_mailbox_verification() -> Result<()> {
     let f = Fixture::new().await?;
     let pending = account(&f.admin, false).await?;

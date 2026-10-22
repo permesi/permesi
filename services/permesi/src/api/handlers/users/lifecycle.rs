@@ -243,8 +243,10 @@ async fn retire_authority(connection: &mut PgConnection, user: Uuid) -> Result<(
     )
     .await?;
     for query in [
+        "UPDATE platform_operators SET token_revision=uuidv4() WHERE user_id=$1",
         "UPDATE oauth_grants SET revoked_at=clock_timestamp() WHERE user_id=$1 AND revoked_at IS NULL",
         "DELETE FROM user_sessions WHERE user_id=$1",
+        "DELETE FROM platform_operator_enable_requests WHERE target_id=$1 OR requested_by=$1",
         "DELETE FROM user_mfa_bootstrap_sessions WHERE user_id=$1",
         "DELETE FROM user_mfa_challenge_sessions WHERE user_id=$1",
         "DELETE FROM opaque_exchanges WHERE user_id=$1",

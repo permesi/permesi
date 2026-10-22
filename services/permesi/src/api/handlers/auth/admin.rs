@@ -25,9 +25,10 @@ use uuid::Uuid;
 use super::{
     admin_rate_limit::{AdminRateLimitError, AdminRateLimiter},
     admin_storage::{
-        BootstrapOutcome, bootstrap_operator, operator_enabled, platform_operator_count,
+        BootstrapOutcome, bootstrap_operator, enabled_operator_revision, operator_enabled,
+        platform_operator_count,
     },
-    admin_token::AdminTokenSigner,
+    admin_token::{AdminTokenIdentity, AdminTokenSigner},
     principal::{Principal, require_auth},
     types::{
         AdminBootstrapRequest, AdminBootstrapResponse, AdminElevateRequest, AdminElevateResponse,
@@ -200,7 +201,7 @@ pub async fn admin_status(
     responses(
         (status = 200, description = "Detailed infrastructure status.", body = AdminInfraResponse),
         (status = 401, description = "Missing or invalid admin token."),
-        (status = 403, description = "Not an operator."),
+        (status = 403, description = "Inactive account, disabled operator, or stale designation revision."),
     ),
     tag = "auth"
 )]
@@ -209,14 +210,14 @@ pub async fn admin_infra(
     pool: State<sqlx::PgPool>,
     admin_state: State<Arc<AdminState>>,
 ) -> impl IntoResponse {
-    let user_id = match verify_admin_token(&headers, &admin_state) {
-        Ok(id) => id,
+    let identity = match verify_admin_token(&headers, &admin_state) {
+        Ok(identity) => identity,
         Err(status) => return status.into_response(),
     };
 
-    match operator_enabled(&pool, user_id).await {
-        Ok(true) => {}
-        Ok(false) => return StatusCode::FORBIDDEN.into_response(),
+    match enabled_operator_revision(&pool, identity.user_id).await {
+        Ok(Some(revision)) if revision == identity.operator_revision => {}
+        Ok(_) => return StatusCode::FORBIDDEN.into_response(),
         Err(err) => {
             error!("Failed to lookup operator status: {err}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -290,7 +291,7 @@ async fn database_size_bytes(pool: &PgPool, name: &str) -> Option<i64> {
 pub fn verify_admin_token(
     headers: &HeaderMap,
     admin_state: &AdminState,
-) -> Result<Uuid, StatusCode> {
+) -> Result<AdminTokenIdentity, StatusCode> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -480,16 +481,25 @@ pub async fn admin_elevate(
     // than our configured maximum.
     let ttl_seconds = admin_state.config().admin_ttl_seconds().min(vault_info.ttl);
 
-    let admin_token = match admin_state
-        .token_signer()
-        .issue(principal.user_id, ttl_seconds)
-    {
-        Ok(token) => token,
+    let revision = match enabled_operator_revision(&pool, principal.user_id).await {
+        Ok(Some(revision)) => revision,
+        Ok(None) => return StatusCode::FORBIDDEN.into_response(),
         Err(err) => {
-            error!("Failed to mint admin token: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            error!("Failed to lookup operator revision: {err}");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
+    let admin_token =
+        match admin_state
+            .token_signer()
+            .issue(principal.user_id, revision, ttl_seconds)
+        {
+            Ok(token) => token,
+            Err(err) => {
+                error!("Failed to mint admin token: {err}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
 
     admin_state.rate_limiter().record_success(attempt_id).await;
     let response = AdminElevateResponse {
@@ -846,7 +856,10 @@ mod tests {
             create_transport(&server.uri()),
         )?);
 
-        let admin_token = state.token_signer().issue(user_id, 60)?.token;
+        let admin_token = state
+            .token_signer()
+            .issue(user_id, Uuid::new_v4(), 60)?
+            .token;
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Bearer {admin_token}").parse()?);
 
@@ -854,6 +867,88 @@ mod tests {
             .await
             .into_response();
 
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn admin_infra_rejects_token_from_prior_designation_revision() -> Result<()> {
+        use crate::api::handlers::auth::admin::admin_infra;
+        use axum::{extract::State, http::header::AUTHORIZATION, response::IntoResponse};
+        use std::sync::Arc;
+
+        if !can_bind_localhost() || runtime::ensure_container_runtime().is_err() {
+            eprintln!("Skipping integration test: localhost or container runtime unavailable");
+            return Ok(());
+        }
+        let (pool, _container) = get_test_pool().await?;
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,status,opaque_registration_record) VALUES($1,$2,'active',$3)")
+            .bind(user).bind(format!("{user}@example.test")).bind(vec![1_u8])
+            .execute(&pool).await?;
+        let revision: Uuid = sqlx::query_scalar(
+            "INSERT INTO platform_operators(user_id) VALUES($1) RETURNING token_revision",
+        )
+        .bind(user)
+        .fetch_one(&pool)
+        .await?;
+        let server = MockServer::start().await;
+        let state = Arc::new(AdminState::new(
+            AdminConfig::new(server.uri()),
+            pool.clone(),
+            create_transport(&server.uri()),
+        )?);
+        let token = state.token_signer().issue(user, revision, 60)?.token;
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
+        sqlx::query("UPDATE platform_operators SET token_revision=uuidv4() WHERE user_id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await?;
+        let response = admin_infra(headers, State(pool), State(state))
+            .await
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn admin_infra_rejects_suspended_operator_with_current_revision() -> Result<()> {
+        use crate::api::handlers::auth::admin::admin_infra;
+        use axum::{extract::State, http::header::AUTHORIZATION, response::IntoResponse};
+        use std::sync::Arc;
+
+        if !can_bind_localhost() || runtime::ensure_container_runtime().is_err() {
+            eprintln!("Skipping integration test: localhost or container runtime unavailable");
+            return Ok(());
+        }
+        let (pool, _container) = get_test_pool().await?;
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,status,opaque_registration_record) VALUES($1,$2,'active',$3)")
+            .bind(user).bind(format!("{user}@example.test")).bind(vec![1_u8])
+            .execute(&pool).await?;
+        let revision: Uuid = sqlx::query_scalar(
+            "INSERT INTO platform_operators(user_id) VALUES($1) RETURNING token_revision",
+        )
+        .bind(user)
+        .fetch_one(&pool)
+        .await?;
+        let server = MockServer::start().await;
+        let state = Arc::new(AdminState::new(
+            AdminConfig::new(server.uri()),
+            pool.clone(),
+            create_transport(&server.uri()),
+        )?);
+        let token = state.token_signer().issue(user, revision, 60)?.token;
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
+        sqlx::query("UPDATE users SET status='disabled' WHERE id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await?;
+        let response = admin_infra(headers, State(pool), State(state))
+            .await
+            .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
         Ok(())
     }

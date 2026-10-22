@@ -3,12 +3,30 @@
 
 use crate::{
     app_lib::{AppError, get_json_with_credentials},
-    features::users::types::{UserDetail, UserSummary},
+    features::users::types::{OperatorStatus, UserDetail, UserSummary},
 };
 
 /// Fetches the user list from the API.
 pub async fn list_users() -> Result<Vec<UserSummary>, AppError> {
     get_json_with_credentials("/v1/users").await
+}
+
+/// Reads designation state through the operator-only API.
+pub async fn get_operator(id: &str) -> Result<OperatorStatus, AppError> {
+    get_json_with_credentials(&format!("/v1/users/{id}/operator")).await
+}
+
+/// Sends one fixed, recently authenticated designation operation.
+pub async fn operator_action(id: &str, action: &str, reason: &str) -> Result<(), AppError> {
+    if !matches!(action, "request-enable" | "enable" | "disable") {
+        return Err(AppError::Config("Unsupported operator action.".to_owned()));
+    }
+    crate::app_lib::post_json_with_headers_with_credentials(
+        &format!("/v1/users/{id}/operator/{action}"),
+        &serde_json::json!({"reason":reason}),
+        &[],
+    )
+    .await
 }
 
 /// Fetches user details by id after basic input validation.

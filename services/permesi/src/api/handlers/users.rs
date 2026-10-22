@@ -4,6 +4,7 @@
 //! deleting user records, as well as managing global user roles.
 
 pub mod lifecycle;
+pub mod operator;
 
 use axum::{
     Json,

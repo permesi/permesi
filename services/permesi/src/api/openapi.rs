@@ -73,8 +73,7 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(users::patch_user))
         .routes(routes!(users::delete_user))
         .routes(routes!(users::set_user_role))
-        .routes(routes!(users::lifecycle::suspend))
-        .routes(routes!(users::lifecycle::reactivate))
+        .merge(user_lifecycle_routes())
         .merge(tenant_routes())
         .routes(routes!(orgs::oauth::clients::create_client))
         .routes(routes!(orgs::oauth::clients::list_clients))
@@ -130,6 +129,17 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
     register_access_token_scheme(&mut router);
 
     router
+}
+
+/// Keep account and designation lifecycle routes in the generated live contract.
+fn user_lifecycle_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(users::lifecycle::suspend))
+        .routes(routes!(users::lifecycle::reactivate))
+        .routes(routes!(users::operator::get_operator))
+        .routes(routes!(users::operator::request_enable))
+        .routes(routes!(users::operator::enable))
+        .routes(routes!(users::operator::disable))
 }
 
 /// Documents the issued Bearer credential accepted by OIDC `UserInfo` only.

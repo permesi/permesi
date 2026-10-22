@@ -93,6 +93,8 @@ fn render_user_detail(detail: UserDetail, on_success: Callback<()>) -> impl Into
         .clone()
         .unwrap_or_else(|| "Default".to_string());
     let role = detail.role.clone().unwrap_or_else(|| "none".to_string());
+    let operator_id = detail.id.clone();
+    let operator_email = detail.email.clone();
 
     view! {
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -124,6 +126,8 @@ fn render_user_detail(detail: UserDetail, on_success: Callback<()>) -> impl Into
                         </div>
                     </div>
                 </div>
+
+                <super::operator::OperatorManager user_id=operator_id email=operator_email />
 
                 <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                     <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">

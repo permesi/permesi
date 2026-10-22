@@ -26,6 +26,14 @@ BEGIN
         OR has_table_privilege('permesi_runtime','user_lifecycle_audit_log','UPDATE')
         OR has_table_privilege('permesi_runtime','user_lifecycle_audit_log','DELETE')
         OR NOT has_column_privilege('permesi_runtime','platform_operators','enabled','UPDATE')
+        OR NOT has_column_privilege('permesi_runtime','platform_operators','token_revision','UPDATE')
+        OR NOT has_table_privilege('permesi_runtime','platform_operator_enable_requests','INSERT')
+        OR NOT has_table_privilege('permesi_runtime','platform_operator_enable_requests','DELETE')
+        OR NOT has_column_privilege('permesi_runtime','platform_operator_enable_requests','reason','UPDATE')
+        OR has_column_privilege('permesi_runtime','platform_operator_enable_requests','target_id','UPDATE')
+        OR NOT has_table_privilege('permesi_runtime','platform_operator_audit_log','INSERT')
+        OR has_table_privilege('permesi_runtime','platform_operator_audit_log','UPDATE')
+        OR has_table_privilege('permesi_runtime','platform_operator_audit_log','DELETE')
         OR has_column_privilege('permesi_runtime','platform_operators','user_id','UPDATE')) THEN
         RAISE EXCEPTION 'invalid runtime containment audit/operator lock privileges';
     END IF;

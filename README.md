@@ -415,6 +415,13 @@ fresh login/consent and preserves mailbox verification. See
 [account containment](docs/account-containment.md) for authorization, audit, rollout
 and the remaining offline-JWT revocation boundary.
 
+Operator designation can be requested, approved or disabled from the user-detail
+console. Restoration requires a different enabled operator's approval; only the
+sole bootstrap operator may approve the first new peer. Changes retire target
+sessions and invalidate earlier admin elevation tokens. See
+[operator designation](docs/operator-designation.md) for incident recovery and
+multi-replica rules.
+
 
 ## Passkey + MFA Login Flow
 

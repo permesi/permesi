@@ -56,6 +56,15 @@ pub async fn operator_enabled(pool: &PgPool, user_id: Uuid) -> Result<bool> {
     Ok(row.is_some_and(|row| row.get::<bool, _>("enabled")))
 }
 
+/// Returns an active account's enabled designation revision for admin elevation checks.
+pub async fn enabled_operator_revision(pool: &PgPool, user_id: Uuid) -> Result<Option<Uuid>> {
+    sqlx::query_scalar("SELECT po.token_revision FROM platform_operators po JOIN users u ON u.id=po.user_id WHERE po.user_id=$1 AND po.enabled AND u.status='active'")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .context("failed to lookup operator revision")
+}
+
 /// Bootstraps the first operator under the existing advisory lock and safe transaction startup.
 /// Callers must enforce the bootstrap endpoint's session and admission policy.
 pub async fn bootstrap_operator(
@@ -119,6 +128,12 @@ pub async fn bootstrap_operator(
         .instrument(insert_span)
         .await
         .context("failed to insert platform operator")?;
+
+    sqlx::query("INSERT INTO platform_operator_audit_log(actor_id,target_id,action,reason) VALUES($1,$1,'bootstrap','administrative')")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to audit initial operator bootstrap")?;
 
     tx.commit()
         .await
@@ -189,6 +204,13 @@ mod tests {
         assert_eq!(first, BootstrapOutcome::Inserted);
         assert_eq!(second, BootstrapOutcome::Closed);
         assert_eq!(count, 1);
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM platform_operator_audit_log WHERE target_id=$1 AND action='bootstrap'",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 

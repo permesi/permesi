@@ -73,9 +73,14 @@ revocation remain a separate milestone; suspension does not add them.
 
 Persistent role assignments, organization memberships and an enabled platform-operator
 designation are retained. If a suspended operator is reactivated, a fresh login can
-exercise that designation again; incident response must separately decide whether
-to disable the operator record before restoring account eligibility. No operator
-designation management API is introduced here.
+exercise that designation again. Incident responders can use the separately
+audited [operator-designation lifecycle](operator-designation.md) to disable the
+operator record before restoring account eligibility; restoration of a disabled
+designation requires a new request and a distinct operator's approval. Infrastructure
+access rechecks active account status, so a suspended operator cannot use an
+otherwise unexpired admin elevation token. Suspension and reactivation also
+rotate the retained designation revision, so a token issued before suspension
+does not revive after account recovery.
 
 ## Audit, permissions and rollout
 
@@ -89,9 +94,9 @@ already eligible account is a recorded no-op.
 
 The canonical bootstrap adds the cutoff, audit table/index and `suspension` refresh
 revocation reason. PostgreSQL requires an UPDATE privilege for `SELECT FOR SHARE`;
-the runtime role receives only `UPDATE(enabled)` on `platform_operators` to lock
-that current authority record, without permission to rewrite its identity/history
-columns. No public operator-management endpoint is added.
+the runtime role receives only column-scoped `UPDATE` on `platform_operators`,
+without permission to rewrite its identity/history columns. The separate
+designation-management API rotates a token revision under the same narrow grant.
 
 Apply the schema before the binaries, then replace every old replica before relying
 on containment/recovery. Earlier login implementations do not enforce the new

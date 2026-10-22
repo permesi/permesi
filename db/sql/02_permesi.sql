@@ -84,10 +84,52 @@ CREATE TABLE IF NOT EXISTS role_audit_log (
 CREATE TABLE IF NOT EXISTS platform_operators (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    token_revision UUID NOT NULL DEFAULT uuidv4(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_by UUID NULL REFERENCES users(id),
     note TEXT NULL
 );
+ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS token_revision UUID NOT NULL DEFAULT uuidv4();
+
+-- A second enabled operator must approve designation/restoration. The bootstrap
+-- operator may approve only the first new designation, never a disabled one.
+CREATE TABLE IF NOT EXISTS platform_operator_enable_requests (
+    target_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE RESTRICT,
+    requested_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    reason TEXT NOT NULL DEFAULT 'administrative' CHECK (reason IN ('administrative','incident_recovery','suspected_compromise')),
+    CHECK (target_id <> requested_by)
+);
+ALTER TABLE platform_operator_enable_requests ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT 'administrative';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='platform_operator_enable_requests_reason_check') THEN
+        ALTER TABLE platform_operator_enable_requests ADD CONSTRAINT platform_operator_enable_requests_reason_check
+            CHECK (reason IN ('administrative','incident_recovery','suspected_compromise'));
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS platform_operator_requests_proposer_idx ON platform_operator_enable_requests(requested_by);
+
+CREATE TABLE IF NOT EXISTS platform_operator_audit_log (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    actor_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    action TEXT NOT NULL CHECK (action IN ('bootstrap','request_enable','enable','disable')),
+    reason TEXT NOT NULL CHECK (reason IN ('administrative','incident_recovery','suspected_compromise')),
+    requested_by UUID REFERENCES users(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CHECK ((action='bootstrap')=(actor_id=target_id)),
+    CHECK ((action='enable')=(requested_by IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS platform_operator_audit_target_idx ON platform_operator_audit_log(target_id,created_at);
+-- Reapply cleanly if a pre-release local schema created the audit table before
+-- bootstrap events were recorded alongside ordinary designation transitions.
+ALTER TABLE platform_operator_audit_log DROP CONSTRAINT IF EXISTS platform_operator_audit_log_action_check;
+ALTER TABLE platform_operator_audit_log ADD CONSTRAINT platform_operator_audit_log_action_check
+    CHECK (action IN ('bootstrap','request_enable','enable','disable'));
+ALTER TABLE platform_operator_audit_log DROP CONSTRAINT IF EXISTS platform_operator_audit_log_check;
+ALTER TABLE platform_operator_audit_log DROP CONSTRAINT IF EXISTS platform_operator_audit_bootstrap_actor_check;
+ALTER TABLE platform_operator_audit_log ADD CONSTRAINT platform_operator_audit_bootstrap_actor_check
+    CHECK ((action='bootstrap')=(actor_id=target_id));
 
 -- Append-only operator lifecycle history; fixed reason codes exclude arbitrary secret-bearing text.
 CREATE TABLE IF NOT EXISTS user_lifecycle_audit_log (
@@ -1228,18 +1270,21 @@ BEGIN
             auth_rate_limits,user_mfa_state,user_mfa_recovery_codes,user_mfa_bootstrap_sessions,
             user_mfa_challenge_sessions,totp_deks,totp_credentials,security_keys,passkeys
             TO permesi_runtime;
-        GRANT INSERT ON TABLE platform_operators,role_audit_log,user_lifecycle_audit_log,oauth_grant_scopes,
+        GRANT INSERT ON TABLE platform_operators,platform_operator_enable_requests,
+            platform_operator_audit_log,role_audit_log,user_lifecycle_audit_log,oauth_grant_scopes,
             oauth_client_secrets,oauth_token_issuances,oauth_refresh_families,oauth_refresh_tokens,
             opaque_exchanges,webauthn_exchanges,admin_attempts,totp_audit_log,
             security_key_audit_log,passkey_audit_log TO permesi_runtime;
-        GRANT DELETE ON TABLE users,user_sessions,oauth_client_redirect_uris,oauth_client_scopes,
+        GRANT DELETE ON TABLE users,user_sessions,platform_operator_enable_requests,
+            oauth_client_redirect_uris,oauth_client_scopes,
             oauth_scopes,auth_rate_limits,opaque_exchanges,webauthn_exchanges,
             user_mfa_bootstrap_sessions,user_mfa_challenge_sessions,totp_credentials,security_keys,passkeys
             TO permesi_runtime;
         GRANT UPDATE (expires_at,revoked_at) ON TABLE oauth_client_secrets TO permesi_runtime;
         GRANT UPDATE (is_failure) ON TABLE admin_attempts TO permesi_runtime;
         -- SELECT FOR SHARE needs an UPDATE privilege; identities/history remain immutable.
-        GRANT UPDATE (enabled) ON TABLE platform_operators TO permesi_runtime;
+        GRANT UPDATE (enabled,token_revision) ON TABLE platform_operators TO permesi_runtime;
+        GRANT UPDATE (requested_by,requested_at,reason) ON TABLE platform_operator_enable_requests TO permesi_runtime;
         GRANT UPDATE (scope_id) ON TABLE oauth_grant_scopes TO permesi_runtime;
         GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
         GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;

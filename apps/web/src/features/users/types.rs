@@ -21,3 +21,15 @@ pub struct UserDetail {
     pub created_at: String,
     pub updated_at: String,
 }
+
+/// Server-issued operator designation state; browser controls are only UX hints.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperatorStatus {
+    pub designation: String,
+    pub pending_enable: bool,
+    pub requested_by_me: bool,
+    pub requested_by_email: Option<String>,
+    pub requested_reason: Option<String>,
+    pub requested_at: Option<String>,
+    pub can_approve: bool,
+}

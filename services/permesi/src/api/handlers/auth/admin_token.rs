@@ -29,8 +29,15 @@ struct AdminTokenClaims {
     step_up: String,
     iat: String,
     exp: String,
-    user_id: String,
+    sub: String,
     jti: String,
+}
+
+/// The identity and exact designation revision authenticated by a signed admin token.
+#[derive(Clone, Copy, Debug)]
+pub struct AdminTokenIdentity {
+    pub user_id: Uuid,
+    pub operator_revision: Uuid,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,7 +79,12 @@ impl AdminTokenSigner {
     ///
     /// # Errors
     /// Returns an error if timestamp formatting or signing fails.
-    pub fn issue(&self, user_id: Uuid, ttl_seconds: i64) -> Result<AdminToken> {
+    pub fn issue(
+        &self,
+        user_id: Uuid,
+        operator_revision: Uuid,
+        ttl_seconds: i64,
+    ) -> Result<AdminToken> {
         if ttl_seconds <= 0 {
             return Err(anyhow!("admin token ttl must be positive"));
         }
@@ -100,8 +112,8 @@ impl AdminTokenSigner {
             step_up: ADMIN_STEP_UP.to_string(),
             iat,
             exp: exp_str.clone(),
-            user_id: user_id.to_string(),
-            jti: user_id.to_string(),
+            sub: user_id.to_string(),
+            jti: operator_revision.to_string(),
         };
         let footer = AdminTokenFooter {
             kid: self.key_id.clone(),
@@ -128,7 +140,7 @@ impl AdminTokenSigner {
     ///
     /// # Errors
     /// Returns an error if verification fails or claims are invalid.
-    pub fn verify(&self, token: &str) -> Result<Uuid> {
+    pub fn verify(&self, token: &str) -> Result<AdminTokenIdentity> {
         let verifying_key = self.signing_key.verifying_key();
         let keyset = PaserkKeySet {
             version: "v4".to_string(),
@@ -156,7 +168,17 @@ impl AdminTokenSigner {
 
         let claims = verify_v4_public(token, &keyset, &options).map_err(|e| anyhow!("{e}"))?;
 
-        Uuid::parse_str(&claims.jti).context("invalid session jti in admin token")
+        Ok(AdminTokenIdentity {
+            user_id: Uuid::parse_str(
+                claims
+                    .sub
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("missing admin token subject"))?,
+            )
+            .context("invalid admin token subject")?,
+            operator_revision: Uuid::parse_str(&claims.jti)
+                .context("invalid admin token designation revision")?,
+        })
     }
 }
 
@@ -193,9 +215,14 @@ mod tests {
     #[test]
     fn admin_token_signer_mints_token() -> Result<()> {
         let signer = AdminTokenSigner::new()?;
-        let token = signer.issue(Uuid::new_v4(), 60)?;
+        let user = Uuid::new_v4();
+        let revision = Uuid::new_v4();
+        let token = signer.issue(user, revision, 60)?;
         assert!(token.token.starts_with("v4.public."));
         assert_ne!(token.expires_at, "");
+        let identity = signer.verify(&token.token)?;
+        assert_eq!(identity.user_id, user);
+        assert_eq!(identity.operator_revision, revision);
         Ok(())
     }
 }

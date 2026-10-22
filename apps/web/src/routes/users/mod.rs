@@ -2,6 +2,7 @@
 
 mod detail;
 mod list;
+mod operator;
 
 pub(crate) use detail::UserDetailPage;
 pub(crate) use list::UsersListPage;
