@@ -461,7 +461,7 @@ try {
  await goto(route);await wait("document.body.innerText.includes('Danger Zone') && !document.body.innerText.includes('Checking OAuth clients')");
  await click('Delete Application');await fill('resource-delete-confirmation','Crono');denyNextResourceDelete=true;await click('Delete Application');
  await evaluate("document.querySelector('#delete-resource').close()");await delay(100);assert(await evaluate("document.querySelector('#delete-resource').open"),'Pending deletion must resist dismissal');
- await wait("document.querySelector('#resource-delete-error').innerText.includes('Active children appeared')");assert(applicationActive,'Conflict must leave application active');assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'Crono');await click('Cancel');
+ await wait("document.querySelector('#delete-resource')?.open && document.querySelector('#resource-delete-error')?.innerText.includes('Active children appeared') && document.querySelector('#resource-delete-confirmation')?.value==='Crono'");assert(applicationActive,'Conflict must leave application active');await click('Cancel');
  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});
  await click('Delete Application');assert(await evaluate('document.documentElement.scrollWidth <= 390'));await fill('resource-delete-confirmation','Crono');await click('Delete Application');await wait("location.pathname==='/console/orgs/crono/projects/jobs/envs/production' && document.body.innerText.includes('No applications')");
  await confirmDeletion('Delete Environment','production','/console/orgs/crono/projects/jobs');
@@ -472,8 +472,8 @@ try {
  await wait("document.body.innerText.includes('No environments')");await confirmDeletion('Delete Project','jobs','/console/orgs/crono');await wait("document.body.innerText.includes('No projects')");
  // A concurrent project blocks deletion and refreshes the empty-list hint without losing confirmation.
  await click('Delete Organization');await fill('resource-delete-confirmation','crono');projectActive=true;await click('Delete Organization');
- await wait("document.querySelector('#resource-delete-error').innerText.includes('Organization contains active projects.') && document.querySelector('#resource-delete-blocker').innerText.includes('Delete all projects') && document.querySelector('#delete-resource button[type=submit]').disabled");
- assert.equal(await evaluate("document.querySelector('#resource-delete-confirmation').value"),'crono');await click('Cancel');
+ await wait("document.querySelector('#delete-resource')?.open && document.querySelector('#resource-delete-error')?.innerText.includes('Organization contains active projects.') && document.querySelector('#resource-delete-blocker')?.innerText.includes('Delete all projects') && document.querySelector('#delete-resource button[type=submit]')?.disabled && document.querySelector('#resource-delete-confirmation')?.value==='crono'");
+ await click('Cancel');
  await goto('/console/orgs/crono/projects/jobs');await wait("document.body.innerText.includes('No environments')");await confirmDeletion('Delete Project','jobs','/console/orgs/crono');await wait("document.body.innerText.includes('No projects')");
  requireRecentOrgAuthentication=true;await click('Delete Organization');await fill('resource-delete-confirmation','crono');await click('Delete Organization');
  await wait("document.querySelector('#resource-delete-password') && document.querySelector('#resource-delete-error').innerText.includes('Verify your password')");assert(organizationActive);
