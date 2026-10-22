@@ -723,6 +723,9 @@ pushes, pull requests and release candidates without rewriting the artifacts.
 - `podman build -f services/genesis/Dockerfile -t genesis:dev .`
 - `podman build -f apps/web/Dockerfile -t web:dev .`
 
+The Dockerfiles use fully qualified Docker Hub base images, so these builds do
+not depend on the host's unqualified registry search configuration.
+
 ## Local Tracing (Jaeger)
 
 The development environment sends OTLP traces to the local Jaeger collector at

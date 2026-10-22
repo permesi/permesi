@@ -1,5 +1,5 @@
 # Stage 1: build a static binary with musl.
-FROM messense/rust-musl-cross:x86_64-musl AS builder
+FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder
 ARG TARGET=x86_64-unknown-linux-musl
 ARG BUILD_GIT_COMMIT_HASH=unknown
 ENV BUILD_GIT_COMMIT_HASH=${BUILD_GIT_COMMIT_HASH}
@@ -17,7 +17,7 @@ RUN cargo build --release --locked -p genesis --features telemetry --target "${T
     strip "target/${TARGET}/release/genesis"
 
 # Stage 2: grab CA certs from Alpine (for TLS).
-FROM alpine:3.21 AS certs
+FROM docker.io/library/alpine:3.21 AS certs
 RUN apk add --no-cache ca-certificates
 
 # Stage 3: ultra-small runtime (scratch + binary + certs).
