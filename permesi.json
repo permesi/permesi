@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.4.2"
+    "version": "0.4.3"
   },
   "paths": {
     "/.well-known/openid-configuration": {
@@ -929,7 +929,7 @@
             }
           },
           "403": {
-            "description": "Not an operator.",
+            "description": "Inactive account, disabled operator, or stale designation revision.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1891,6 +1891,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Rechecks signup admission independently; browser fields cannot activate the pending account.",
         "operationId": "opaque_signup_finish",
         "parameters": [
           {
@@ -1934,8 +1935,28 @@
               }
             }
           },
+          "403": {
+            "description": "Registration not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Registration storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1952,6 +1973,7 @@
         "tags": [
           "auth"
         ],
+        "summary": "Starts registration only after server-owned domain/mode, shared limits and admission checks.",
         "operationId": "opaque_signup_start",
         "parameters": [
           {
@@ -1995,8 +2017,28 @@
               }
             }
           },
+          "403": {
+            "description": "Registration not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Registration storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -2160,7 +2202,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Resend a verification email (always returns 204 to avoid user enumeration).",
+        "summary": "Resends opaquely for unknown accounts/cooldowns; storage failure is a generic 503.",
         "operationId": "resend_verification",
         "parameters": [
           {
@@ -2186,6 +2228,16 @@
         "responses": {
           "204": {
             "description": "Resend accepted"
+          },
+          "503": {
+            "description": "Verification storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -2267,6 +2319,16 @@
           },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Verification storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -6676,6 +6738,508 @@
         }
       }
     },
+    "/v1/users/{id}/operator": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Reads designation state only after server-side operator authorization.",
+        "operationId": "get_operator",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Designation and pending approval.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled platform operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/operator/disable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Removes another operator's live authority without changing tenant or OAuth scopes.",
+        "operationId": "disable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Designation disabled; sessions and elevation revision retired."
+          },
+          "400": {
+            "description": "Invalid UUID or JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Recent full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Self-action, last operator, or designation missing/already disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unavailable; no partial transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/operator/enable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Approves another operator's durable request; the sole bootstrap operator may add a second.",
+        "operationId": "enable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Distinct approval enabled designation and retired prior sessions."
+          },
+          "400": {
+            "description": "Invalid UUID or JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Recent full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Missing/expired request, invalid proposer, self-approval, or unverified/inactive/already-enabled target.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unavailable; no partial transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/operator/request-enable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Proposes one active verified account for operator designation without granting it.",
+        "operationId": "request_enable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Durable designation request recorded."
+          },
+          "400": {
+            "description": "Invalid UUID or JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Recent full session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Self-action, unverified/inactive or already-enabled target, or another current requester.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unavailable; no partial transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/reactivate": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Restores verified accounts to active and unverified accounts to pending, without reviving authority.",
+        "operationId": "reactivate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Account eligible again; unverified accounts remain pending. Retired authority is never restored."
+          },
+          "400": {
+            "description": "Invalid UUID or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session with authentication in the last ten minutes required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled platform operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found, disclosed only after operator authorization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Self-containment is forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing/unknown reason or unexpected JSON field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bounded database operation unavailable; no partial transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/users/{id}/role": {
       "put": {
         "tags": [
@@ -6746,6 +7310,111 @@
           },
           "404": {
             "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/suspend": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Suspends only with current enabled platform authority and exact recent full-session authentication.",
+        "operationId": "suspend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Suspended; account authority retired atomically, including repeated requests."
+          },
+          "400": {
+            "description": "Invalid UUID or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session with authentication in the last ten minutes required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled platform operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found, disclosed only after operator authorization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Self-containment is forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing/unknown reason or unexpected JSON field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bounded database operation unavailable; no partial transition.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7377,6 +8046,29 @@
           }
         }
       },
+      "LifecycleReason": {
+        "type": "string",
+        "description": "Fixed audit classifications: no free-form credential, token or personal-data field.",
+        "enum": [
+          "suspected_compromise",
+          "abuse",
+          "administrative",
+          "incident_resolved"
+        ]
+      },
+      "LifecycleRequest": {
+        "type": "object",
+        "description": "A reason is mandatory; role, status and authority are selected only by the server.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/LifecycleReason"
+          }
+        },
+        "additionalProperties": false
+      },
       "MeResponse": {
         "type": "object",
         "required": [
@@ -7632,7 +8324,8 @@
           "registration_record": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "OpaqueSignupFinishResponse": {
         "type": "object",
@@ -7658,7 +8351,8 @@
           "registration_request": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "OpaqueSignupStartResponse": {
         "type": "object",
@@ -7668,6 +8362,70 @@
         "properties": {
           "registration_response": {
             "type": "string"
+          }
+        }
+      },
+      "OperatorReason": {
+        "type": "string",
+        "description": "Fixed audit reason; arbitrary text is excluded from operator history.",
+        "enum": [
+          "administrative",
+          "incident_recovery",
+          "suspected_compromise"
+        ]
+      },
+      "OperatorRequest": {
+        "type": "object",
+        "description": "The actor supplies only a fixed reason, never authority or approval identity.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/OperatorReason"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperatorStatus": {
+        "type": "object",
+        "description": "Current designation and request state visible only to enabled operators.",
+        "required": [
+          "designation",
+          "pending_enable",
+          "requested_by_me",
+          "can_approve"
+        ],
+        "properties": {
+          "can_approve": {
+            "type": "boolean"
+          },
+          "designation": {
+            "type": "string"
+          },
+          "pending_enable": {
+            "type": "boolean"
+          },
+          "requested_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_by_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_by_me": {
+            "type": "boolean"
+          },
+          "requested_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
