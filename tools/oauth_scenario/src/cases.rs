@@ -40,6 +40,7 @@ mod hierarchy;
 use hierarchy::{deletion, failover};
 
 mod authentication;
+mod containment;
 mod ha;
 mod interop;
 mod lifecycle;
@@ -145,6 +146,7 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
         "ha.rolling_restart" => ha::rolling_restart(context, fixture).await,
         "ha.replica_outage" => ha::replica_outage(context, fixture).await,
         "authentication.registration_policy" => registration::security(context).await,
+        "authentication.account_containment" => containment::account_containment(context).await,
         "authentication.shared_exchanges" => authentication::shared_exchanges(context).await,
         "interop.public_client" => interop::public(context, fixture).await,
         "interop.confidential_client" => interop::confidential(context, fixture).await,

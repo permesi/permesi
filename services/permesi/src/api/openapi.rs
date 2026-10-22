@@ -73,6 +73,8 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(users::patch_user))
         .routes(routes!(users::delete_user))
         .routes(routes!(users::set_user_role))
+        .routes(routes!(users::lifecycle::suspend))
+        .routes(routes!(users::lifecycle::reactivate))
         .merge(tenant_routes())
         .routes(routes!(orgs::oauth::clients::create_client))
         .routes(routes!(orgs::oauth::clients::list_clients))

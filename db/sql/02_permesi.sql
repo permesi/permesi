@@ -39,9 +39,15 @@ CREATE INDEX IF NOT EXISTS idx_users_status ON users (status);
 
 -- An authentication revision invalidates pending delegated authority after password/recovery changes.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS authorization_revision UUID NOT NULL DEFAULT uuidv4();
+-- Database-clock cutoff also invalidates consumed-but-not-yet-issued login proofs.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS authentication_not_before TIMESTAMPTZ NOT NULL DEFAULT '-infinity';
 CREATE OR REPLACE FUNCTION advance_user_authorization_revision() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 BEGIN
+    IF NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.authentication_not_before := clock_timestamp();
+        NEW.authorization_revision := uuidv4();
+    END IF;
     IF NEW.opaque_registration_record IS DISTINCT FROM OLD.opaque_registration_record
         OR NEW.authorization_revision IS DISTINCT FROM OLD.authorization_revision THEN
         NEW.authorization_revision := uuidv4();
@@ -82,6 +88,24 @@ CREATE TABLE IF NOT EXISTS platform_operators (
     created_by UUID NULL REFERENCES users(id),
     note TEXT NULL
 );
+
+-- Append-only operator lifecycle history; fixed reason codes exclude arbitrary secret-bearing text.
+CREATE TABLE IF NOT EXISTS user_lifecycle_audit_log (
+    id UUID PRIMARY KEY DEFAULT uuidv4(),
+    actor_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    action TEXT NOT NULL CHECK (action IN ('suspend','reactivate')),
+    reason TEXT NOT NULL CHECK (reason IN ('suspected_compromise','abuse','administrative','incident_resolved')),
+    previous_status user_status NOT NULL,
+    new_status user_status NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('changed','unchanged')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CHECK (actor_id <> target_id),
+    CHECK ((outcome='changed')=(previous_status<>new_status)),
+    CHECK ((action='suspend' AND new_status='disabled') OR
+           (action='reactivate' AND new_status IN ('active','pending_verification')))
+);
+CREATE INDEX IF NOT EXISTS user_lifecycle_audit_target_idx ON user_lifecycle_audit_log(target_id,created_at);
 
 CREATE TABLE IF NOT EXISTS organizations (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
@@ -613,7 +637,7 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_families (
     expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at>issued_at AND expires_at<=issued_at+INTERVAL '90 days'),
     idle_ttl_seconds BIGINT NOT NULL CHECK (idle_ttl_seconds BETWEEN 1 AND 7776000),
     revoked_at TIMESTAMPTZ CHECK (revoked_at>=issued_at),
-    revocation_reason TEXT CHECK (revocation_reason IN ('reuse','authority','password','recovery','client')),
+    revocation_reason TEXT CHECK (revocation_reason IN ('reuse','authority','password','recovery','client','suspension')),
     CHECK ((revoked_at IS NULL)=(revocation_reason IS NULL)),
     CHECK ('openid'=ANY(scope_names) AND 'offline_access'=ANY(scope_names)),
     FOREIGN KEY (grant_id,client_id,application_id,organization_id,user_id)
@@ -623,7 +647,7 @@ CREATE INDEX IF NOT EXISTS oauth_refresh_families_user_idx ON oauth_refresh_fami
 CREATE INDEX IF NOT EXISTS oauth_refresh_families_expiry_idx ON oauth_refresh_families(expires_at);
 ALTER TABLE oauth_refresh_families DROP CONSTRAINT IF EXISTS oauth_refresh_families_revocation_reason_check;
 ALTER TABLE oauth_refresh_families ADD CONSTRAINT oauth_refresh_families_revocation_reason_check
-    CHECK (revocation_reason IN ('reuse','authority','password','recovery','client'));
+    CHECK (revocation_reason IN ('reuse','authority','password','recovery','client','suspension'));
 
 CREATE OR REPLACE FUNCTION validate_oauth_refresh_family() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -1204,7 +1228,7 @@ BEGIN
             auth_rate_limits,user_mfa_state,user_mfa_recovery_codes,user_mfa_bootstrap_sessions,
             user_mfa_challenge_sessions,totp_deks,totp_credentials,security_keys,passkeys
             TO permesi_runtime;
-        GRANT INSERT ON TABLE platform_operators,role_audit_log,oauth_grant_scopes,
+        GRANT INSERT ON TABLE platform_operators,role_audit_log,user_lifecycle_audit_log,oauth_grant_scopes,
             oauth_client_secrets,oauth_token_issuances,oauth_refresh_families,oauth_refresh_tokens,
             opaque_exchanges,webauthn_exchanges,admin_attempts,totp_audit_log,
             security_key_audit_log,passkey_audit_log TO permesi_runtime;
@@ -1214,6 +1238,8 @@ BEGIN
             TO permesi_runtime;
         GRANT UPDATE (expires_at,revoked_at) ON TABLE oauth_client_secrets TO permesi_runtime;
         GRANT UPDATE (is_failure) ON TABLE admin_attempts TO permesi_runtime;
+        -- SELECT FOR SHARE needs an UPDATE privilege; identities/history remain immutable.
+        GRANT UPDATE (enabled) ON TABLE platform_operators TO permesi_runtime;
         GRANT UPDATE (scope_id) ON TABLE oauth_grant_scopes TO permesi_runtime;
         GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;
         GRANT UPDATE (consumed_at) ON TABLE oauth_refresh_tokens TO permesi_runtime;

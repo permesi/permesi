@@ -3,6 +3,8 @@
 //! This module provides endpoints for listing, retrieving, updating, and
 //! deleting user records, as well as managing global user roles.
 
+pub mod lifecycle;
+
 use axum::{
     Json,
     extract::{Path, State},

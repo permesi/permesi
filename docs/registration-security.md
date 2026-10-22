@@ -203,3 +203,12 @@ DNS authentication records or production configuration is certified by these tes
 Outbox mode remains the default until an operator configures SMTP. The documented
 commit-acknowledgement ambiguity, at-least-once email delivery, replacement of legacy
 workers, and broader distributed-abuse/retention roadmap remain explicit limits.
+
+
+## Incident containment
+
+The [operator account lifecycle](account-containment.md) complements registration
+prevention with auditable suspension and explicit recovery. It revokes durable
+session/delegated authority across replicas without letting old verification or
+login proofs reactivate an account. Immediate rejection of already-issued access
+JWTs at offline resource servers remains separately planned.

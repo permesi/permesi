@@ -1004,6 +1004,14 @@ async fn authorization_codes_require_exact_client_redirect_pkce_and_current_auth
         );
         sqlx::query(restore).bind(id).execute(&f.pool).await?;
     }
+    // Status recovery never resurrects an old code. A fresh code keeps the
+    // subsequent membership and rollback assertions independent of that rejection.
+    assert!(
+        f.redeem(&f.pool, &code, f.client, REDIRECT, VERIFIER, f.organization)
+            .await?
+            .is_none()
+    );
+    let code = f.issue().await?;
     sqlx::query("UPDATE org_memberships SET status='suspended' WHERE org_id=$1 AND user_id=$2")
         .bind(f.organization)
         .bind(f.user)

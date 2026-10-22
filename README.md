@@ -408,6 +408,13 @@ Email defaults to a local outbox, with explicit TLS SMTP delivery for production
 Verification links are never logged. See [registration security](docs/registration-security.md)
 for configuration, bounded per-user coordination, durable worker leases and upgrade steps.
 
+Enabled platform operators can suspend/reactivate accounts through recently
+authenticated management APIs. Suspension atomically retires sessions, pending
+proofs, saved consent and refresh authority across replicas; recovery requires
+fresh login/consent and preserves mailbox verification. See
+[account containment](docs/account-containment.md) for authorization, audit, rollout
+and the remaining offline-JWT revocation boundary.
+
 
 ## Passkey + MFA Login Flow
 

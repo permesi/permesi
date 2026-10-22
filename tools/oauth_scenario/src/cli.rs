@@ -53,6 +53,15 @@ pub struct Options {
     /// Gives bulk fixture traffic a finite shared budget without changing product defaults.
     #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(i64).range(1..=100_000))]
     pub auth_rate_limit_ip_attempts: i64,
+    /// Keeps repeated fixture logins from exhausting the product's per-account budget.
+    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(i64).range(1..=100_000))]
+    pub auth_rate_limit_account_attempts: i64,
+    /// Keeps bulk cross-replica token requests within a finite fixture-only IP budget.
+    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(i64).range(1..=100_000))]
+    pub oauth_token_rate_ip_attempts: i64,
+    /// Keeps repeated shared-client race cases within a finite fixture-only budget.
+    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(i64).range(1..=100_000))]
+    pub oauth_token_rate_client_ip_attempts: i64,
     #[arg(long, default_value = "localhost/permesi-scenario-browser:1")]
     pub browser_image: String,
 }

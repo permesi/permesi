@@ -408,7 +408,7 @@ async fn opaque_exchange_uses_configured_deadline_and_restores_connection_policy
         user_id: f.user,
         credential_hash: Sha256::digest(record).into(),
     };
-    let mut guard = lock_identity(&single, &identity, 5000)
+    let mut guard = lock_identity(&single, &identity, chrono::Utc::now(), 5000)
         .await?
         .context("verified identity")?;
     let configured: (String, String) = sqlx::query_as(settings).fetch_one(&mut *guard).await?;
@@ -1560,7 +1560,7 @@ async fn opaque_identity_lock_prevents_password_rotation_from_racing_issuance() 
         user_id: f.user,
         credential_hash: Sha256::digest(&record).into(),
     };
-    let mut guard = lock_identity(&f.db.pool, &identity, 1000)
+    let mut guard = lock_identity(&f.db.pool, &identity, chrono::Utc::now(), 1000)
         .await?
         .context("verified identity lock")?;
     let pool = f.db.pool.clone();
@@ -1788,6 +1788,71 @@ async fn opaque_schema_reapplication_preserves_pending_exchange_and_runtime_perm
             &f.b,
             "/v1/auth/opaque/login/finish",
             proof.payload(),
+            &f.zero,
+            None
+        )
+        .await?
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    Ok(())
+}
+
+/// A consumed proof and a still-pending proof both remain unusable after status recovery.
+#[tokio::test]
+async fn opaque_login_containment_cutoff_rejects_consumed_and_pending_old_proofs() -> Result<()> {
+    let f = Fixture::new(Duration::from_secs(300), 100)
+        .await?
+        .context("Containment regression requires PostgreSQL")?;
+    let consumed = f.proof(None).await?;
+    let state = auth_state()
+        .opaque()
+        .take_login_state(&f.db.pool, consumed.id, ExchangePurpose::Login, 1000)
+        .await?
+        .context("real sealed proof")?;
+    let identity = state.identity.context("bound identity")?;
+    let control = lock_identity(&f.db.pool, &identity, state.created_at, 1000)
+        .await?
+        .context("Proof was not initially valid")?;
+    control.rollback().await?;
+    let pending = f.proof(None).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_sessions WHERE user_id=$1")
+        .bind(f.user)
+        .fetch_one(&f.db.pool)
+        .await?;
+    for status in ["disabled", "active"] {
+        sqlx::query("UPDATE users SET status=$2::user_status WHERE id=$1")
+            .bind(f.user)
+            .bind(status)
+            .execute(&f.db.pool)
+            .await?;
+    }
+    assert!(
+        lock_identity(&f.db.pool, &identity, state.created_at, 1000)
+            .await?
+            .is_none()
+    );
+    let response = post(
+        &f.b,
+        "/v1/auth/opaque/login/finish",
+        pending.payload(),
+        &f.zero,
+        None,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(!response.headers().contains_key(SET_COOKIE));
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM user_sessions WHERE user_id=$1")
+        .bind(f.user)
+        .fetch_one(&f.db.pool)
+        .await?;
+    assert_eq!(count, after);
+    let fresh = f.proof(None).await?;
+    assert_eq!(
+        post(
+            &f.b,
+            "/v1/auth/opaque/login/finish",
+            fresh.payload(),
             &f.zero,
             None
         )

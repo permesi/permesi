@@ -27,6 +27,11 @@ pub struct Case {
 
 pub const CASES: &[Case] = &[
     Case {
+        id: "authentication.account_containment",
+        description: "Operator suspension/recovery retires sessions, code/refresh authority and old proofs on every replica",
+        group: "security",
+    },
+    Case {
         id: "authentication.registration_policy",
         description: "Reserved signup rejection, cross-replica pending/disabled verification, one-time activation and replay isolation",
         group: "security",
@@ -240,6 +245,7 @@ pub fn select(suite: Suite, ids: &[String]) -> Result<Vec<Case>> {
                             c.id,
                             "foundation.provisioning"
                                 | "authentication.shared_exchanges"
+                                | "authentication.account_containment"
                                 | "token.replica_replay_race"
                                 | "refresh.replica_race"
                                 | "authorization.replica_failover"
@@ -264,7 +270,7 @@ mod tests {
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
         assert_eq!(select(Suite::Interop, &[])?.len(), 7);
         assert_eq!(select(Suite::Refresh, &[])?.len(), 4);
-        assert_eq!(select(Suite::Ha, &[])?.len(), 7);
+        assert_eq!(select(Suite::Ha, &[])?.len(), 8);
         assert!(
             select(Suite::Interop, &[])?
                 .iter()

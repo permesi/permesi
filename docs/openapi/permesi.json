@@ -6738,6 +6738,111 @@
         }
       }
     },
+    "/v1/users/{id}/reactivate": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Restores verified accounts to active and unverified accounts to pending, without reviving authority.",
+        "operationId": "reactivate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Account eligible again; unverified accounts remain pending. Retired authority is never restored."
+          },
+          "400": {
+            "description": "Invalid UUID or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session with authentication in the last ten minutes required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled platform operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found, disclosed only after operator authorization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Self-containment is forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing/unknown reason or unexpected JSON field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bounded database operation unavailable; no partial transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/users/{id}/role": {
       "put": {
         "tags": [
@@ -6808,6 +6913,111 @@
           },
           "404": {
             "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/{id}/suspend": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Suspends only with current enabled platform authority and exact recent full-session authentication.",
+        "operationId": "suspend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target account UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Suspended; account authority retired atomically, including repeated requests."
+          },
+          "400": {
+            "description": "Invalid UUID or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Full session with authentication in the last ten minutes required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Enabled platform operator required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found, disclosed only after operator authorization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Self-containment is forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing/unknown reason or unexpected JSON field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bounded database operation unavailable; no partial transition.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7438,6 +7648,29 @@
             }
           }
         }
+      },
+      "LifecycleReason": {
+        "type": "string",
+        "description": "Fixed audit classifications: no free-form credential, token or personal-data field.",
+        "enum": [
+          "suspected_compromise",
+          "abuse",
+          "administrative",
+          "incident_resolved"
+        ]
+      },
+      "LifecycleRequest": {
+        "type": "object",
+        "description": "A reason is mandatory; role, status and authority are selected only by the server.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/LifecycleReason"
+          }
+        },
+        "additionalProperties": false
       },
       "MeResponse": {
         "type": "object",

@@ -76,6 +76,8 @@ impl ExchangePurpose {
 /// Decrypted library state cannot be logged or serialized by an HTTP DTO.
 pub(in crate::api::handlers::auth) struct OpaqueLoginState {
     pub(in crate::api::handlers::auth) state: ServerLogin<OpaqueSuite>,
+    /// AEAD-authenticated database creation time, checked against the account containment cutoff.
+    pub(in crate::api::handlers::auth) created_at: DateTime<Utc>,
     pub(in crate::api::handlers::auth) identity: Option<ExchangeIdentity>,
 }
 
@@ -330,7 +332,11 @@ impl OpaqueState {
             _ => return Ok(None),
         };
         observation.outcome = "success";
-        Ok(Some(OpaqueLoginState { state, identity }))
+        Ok(Some(OpaqueLoginState {
+            state,
+            identity,
+            created_at: row.created_at,
+        }))
     }
 }
 
@@ -340,18 +346,21 @@ pub(in crate::api::handlers::auth) fn hash_id(id: Uuid) -> [u8; 32] {
 }
 
 /// Prevent credential/status mutations racing successful session issuance or elevation.
+/// The authenticated proof timestamp must also follow the current account containment cutoff.
 /// Hold the returned transaction through the session write, then commit. Failed bindings
 /// return no guard; callers must never issue authority without one.
 pub(in crate::api::handlers::auth) async fn lock_identity<'a>(
     pool: &'a PgPool,
     identity: &ExchangeIdentity,
+    created_at: DateTime<Utc>,
     timeout_ms: i64,
 ) -> Result<Option<Transaction<'a, Postgres>>> {
     let mut tx = begin(pool, timeout_ms).await?;
     let record: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT opaque_registration_record FROM users WHERE id=$1 AND status='active' FOR SHARE",
+        "SELECT opaque_registration_record FROM users WHERE id=$1 AND status='active' AND authentication_not_before<$2 FOR SHARE",
     )
     .bind(identity.user_id)
+    .bind(created_at)
     .fetch_optional(&mut *tx)
     .await?;
     let valid = record.is_some_and(|record| {

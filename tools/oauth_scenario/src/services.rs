@@ -27,6 +27,49 @@ pub struct Policy {
     pub credential_grace_seconds: i64,
     pub access_token_ttl_seconds: i64,
     pub auth_rate_limit_ip_attempts: i64,
+    pub auth_rate_limit_account_attempts: i64,
+    pub oauth_token_rate_ip_attempts: i64,
+    pub oauth_token_rate_client_ip_attempts: i64,
+}
+
+impl Policy {
+    /// Reads only product-validated CLI values so the report matches every launched replica.
+    fn from_matches(
+        matches: &clap::ArgMatches,
+        oauth: OAuthConfig,
+        auth_rate_limit_ip_attempts: i64,
+    ) -> Result<Self> {
+        let required = |name: &'static str, message: &'static str| {
+            matches
+                .get_one::<i64>(name)
+                .copied()
+                .ok_or_else(|| Failure::harness(message))
+        };
+        Ok(Self {
+            oauth,
+            auth_rate_limit_ip_attempts,
+            auth_rate_limit_account_attempts: required(
+                "auth-rate-limit-account-attempts",
+                "Missing account budget policy.",
+            )?,
+            oauth_token_rate_ip_attempts: required(
+                "oauth-token-rate-ip-attempts",
+                "Missing token IP budget policy.",
+            )?,
+            oauth_token_rate_client_ip_attempts: required(
+                "oauth-token-rate-client-ip-attempts",
+                "Missing token client budget policy.",
+            )?,
+            access_token_ttl_seconds: required(
+                "oauth-access-token-ttl-seconds",
+                "Missing access lifetime policy.",
+            )?,
+            credential_grace_seconds: required(
+                "oauth-client-secret-grace-seconds",
+                "Missing credential grace policy.",
+            )?,
+        })
+    }
 }
 
 /// Fault injection distinguishes a graceful rolling replacement from sudden backend loss.
@@ -161,6 +204,12 @@ impl Services {
                     options.access_token_ttl_seconds.to_string(),
                     "--auth-rate-limit-ip-attempts".into(),
                     options.auth_rate_limit_ip_attempts.to_string(),
+                    "--auth-rate-limit-account-attempts".into(),
+                    options.auth_rate_limit_account_attempts.to_string(),
+                    "--oauth-token-rate-ip-attempts".into(),
+                    options.oauth_token_rate_ip_attempts.to_string(),
+                    "--oauth-token-rate-client-ip-attempts".into(),
+                    options.oauth_token_rate_client_ip_attempts.to_string(),
                     "--email-delivery".into(),
                     "outbox".into(),
                     "--signup-development-domain".into(),
@@ -213,16 +262,7 @@ impl Services {
             .safe("Cannot parse isolated service policy.")?;
         let Action::Server(args) = permesi::cli::dispatch::handler(&matches)
             .safe("Cannot validate isolated service policy.")?;
-        Ok(Policy {
-            oauth: args.oauth,
-            auth_rate_limit_ip_attempts: args.auth_rate_limit_ip_attempts,
-            access_token_ttl_seconds: *matches
-                .get_one::<i64>("oauth-access-token-ttl-seconds")
-                .ok_or_else(|| Failure::harness("Missing access lifetime policy."))?,
-            credential_grace_seconds: *matches
-                .get_one::<i64>("oauth-client-secret-grace-seconds")
-                .ok_or_else(|| Failure::harness("Missing credential grace policy."))?,
-        })
+        Policy::from_matches(&matches, args.oauth, args.auth_rate_limit_ip_attempts)
     }
 
     /// Stores and journals the replacement before readiness awaits; a live slot cannot be overwritten.

@@ -341,7 +341,7 @@ impl PasskeyService {
         response: PublicKeyCredential,
         credentials: &[DiscoverableKey],
     ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
-        let authentication = self.consume_authentication(auth_id, origin).await?;
+        let (authentication, _) = self.consume_authentication(auth_id, origin).await?;
         self.verify_consumed_authentication(origin, &response, authentication, credentials)
     }
 
@@ -350,10 +350,13 @@ impl PasskeyService {
         &self,
         auth_id: Uuid,
         origin: &str,
-    ) -> Result<DiscoverableAuthentication, PasskeyAuthenticationError> {
+    ) -> Result<
+        (DiscoverableAuthentication, chrono::DateTime<chrono::Utc>),
+        PasskeyAuthenticationError,
+    > {
         let authentication = self
             .exchanges
-            .take::<DiscoverableAuthentication>(
+            .take_with_created_at::<DiscoverableAuthentication>(
                 auth_id,
                 Binding {
                     purpose: Purpose::PasskeyLogin,

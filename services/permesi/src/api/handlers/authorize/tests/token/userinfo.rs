@@ -313,6 +313,23 @@ async fn userinfo_rejects_inactive_user_and_tenant_ancestors() -> Result<()> {
         .bind(t.f.user)
         .execute(&t.f.pool)
         .await?;
+    assert_eq!(
+        call_userinfo(&replica, "GET", "/userinfo", Some(&bearer), "")
+            .await?
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let fresh = oidc_tokens(&t, "openid profile jobs:read").await?;
+    let bearer = format!(
+        "Bearer {}",
+        fresh["access_token"].as_str().context("fresh token")?
+    );
+    assert_eq!(
+        call_userinfo(&replica, "GET", "/userinfo", Some(&bearer), "")
+            .await?
+            .0,
+        StatusCode::OK
+    );
     for (delete, restore, id) in [
         (
             "UPDATE applications SET deleted_at=clock_timestamp() WHERE id=$1",

@@ -532,6 +532,9 @@ current ancestry during authorization.
 Record coverage actually exercised;
 local Chromium tests do not establish cross-browser or production load behavior.
 
+[Platform-operator account containment](account-containment.md) now retires user sessions,
+pending proofs, saved grants and refresh authority atomically across replicas.
+Reactivation requires fresh authentication/consent and does not restore old authority.
 Broader administrator grant management, introspection, immediate access-token revocation,
 device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
 and resource policy; possession of a confidential credential must not manufacture a user

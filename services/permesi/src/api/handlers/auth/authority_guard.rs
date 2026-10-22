@@ -1,11 +1,13 @@
-//! Transactional session authority for password rotation and MFA lifecycle mutations.
+//! Transactional session authority for password/MFA lifecycle and operator containment.
 //!
 //! Flow Overview: after ordinary principal authentication, lock the current user
 //! and exact original session again, verify the factor, mutate MFA state and issue
 //! replacement authority on this transaction. Password rotation takes the same user
 //! lock before revoking sessions, so either elevation commits first and is revoked,
 //! or rotation wins and the old session cannot elevate. No browser field supplies
-//! the session kind, identity or authorization decision.
+//! the session kind, identity or authorization decision. Cross-account mutations
+//! lock both identities in UUID order before the exact actor session. Callers
+//! separately recheck their operation-specific privileged authority.
 
 use super::{session::extract_session_token, session_kind::SessionKind, utils::hash_session_token};
 use axum::http::{HeaderMap, StatusCode};
@@ -54,6 +56,36 @@ impl AuthorityGuard {
         policy: Policy,
         timeout_ms: i64,
     ) -> Result<Self, StatusCode> {
+        Self::acquire_with_target(pool, headers, user, policy, timeout_ms, None).await
+    }
+
+    /// Locks actor and target identities in UUID order before exact recent session validation.
+    /// The target lock alone grants no authority; callers must recheck operator privileges.
+    pub(crate) async fn acquire_for_target(
+        pool: &PgPool,
+        headers: &HeaderMap,
+        user: Uuid,
+        target: Uuid,
+        timeout_ms: i64,
+    ) -> Result<Self, StatusCode> {
+        let mut guard =
+            Self::acquire_with_target(pool, headers, user, Policy::Full, timeout_ms, Some(target))
+                .await?;
+        guard
+            .require_recent_auth(FACTOR_RECENT_AUTH_SECONDS)
+            .await?;
+        Ok(guard)
+    }
+
+    /// Uses one identity-first ordering for ordinary and cross-account lifecycle mutations.
+    async fn acquire_with_target(
+        pool: &PgPool,
+        headers: &HeaderMap,
+        user: Uuid,
+        policy: Policy,
+        timeout_ms: i64,
+        target: Option<Uuid>,
+    ) -> Result<Self, StatusCode> {
         let token = extract_session_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
         let kind = SessionKind::from_token(&token);
         let allowed = match policy {
@@ -70,13 +102,27 @@ impl AuthorityGuard {
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         // NO KEY UPDATE serializes lifecycle writers/elevations while permitting FK
         // key-share locks taken by separate factor/storage services.
-        let status: Option<String> =
-            sqlx::query_scalar("SELECT status::text FROM users WHERE id=$1 FOR NO KEY UPDATE")
-                .bind(user)
-                .fetch_optional(&mut *transaction)
-                .await
-                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        if status.as_deref() != Some("active") {
+        let active = if let Some(target) = target {
+            let identities: Vec<(Uuid, String)> = sqlx::query_as(
+                "SELECT id,status::text FROM users WHERE id=ANY($1) ORDER BY id FOR NO KEY UPDATE",
+            )
+            .bind(vec![user, target])
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            identities
+                .iter()
+                .any(|(id, status)| *id == user && status == "active")
+        } else {
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status::text FROM users WHERE id=$1 FOR NO KEY UPDATE")
+                    .bind(user)
+                    .fetch_optional(&mut *transaction)
+                    .await
+                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            status.as_deref() == Some("active")
+        };
+        if !active {
             return Err(StatusCode::UNAUTHORIZED);
         }
         let query = match kind {

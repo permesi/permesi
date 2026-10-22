@@ -98,8 +98,14 @@ authorization-code lifetimes retain product defaults. No test changes stored tim
 the existing product CLI on every disposable replica and the effective value appears
 in `report.json`. The full suite makes more than the production default's 100
 authorization requests per window through one fixture identity, so it needs an explicit
-bulk-test IP budget. Production defaults, account/action separation, token budgets and
-pending-state quotas stay unchanged; rate limiting remains PostgreSQL-backed and enabled.
+bulk-test IP budget. The separate `--auth-rate-limit-account-attempts`,
+`--oauth-token-rate-ip-attempts` and `--oauth-token-rate-client-ip-attempts`
+also default to 1,000, accept 1–100,000 and appear in the report. Repeated owner
+logins and all-replica token races otherwise exhaust the product's per-account
+or per-client budget during a five-replica full run. These are finite fixture-only
+settings passed through the existing Permesi CLI; production defaults,
+account/action separation and pending-state quotas remain unchanged. Rate limiting
+remains PostgreSQL-backed and enabled.
 Use `--auth-rate-limit-ip-attempts 100` to reproduce the full suite's 429 negative control.
 Dedicated product HTTP/database regressions independently verify rejection and outage
 behavior with low budgets. The runner never resets counters or retries denied assertions.
@@ -184,8 +190,8 @@ selects credentials/deletion and the six lifecycle revalidation cases. `token` s
 the five HTTP issuance cases and four refresh cases; `refresh` selects only those four
 refresh cases. `interop` selects seven standard-client/resource cases, including
 cross-replica `UserInfo` disclosure and rejection. `ha` selects
-seven provisioning, OPAQUE, code/refresh race, restart, outage and failover cases.
-`full` selects all 36 cases. Every case restores explicitly stopped slots afterward,
+eight provisioning, OPAQUE, account-containment, code/refresh race, restart, outage and failover cases.
+`full` selects all 38 cases. Every case restores explicitly stopped slots afterward,
 including after assertion failure. Unexpected exits remain failures; recovery failure
 blocks the remaining selection instead of silently testing a smaller topology.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
@@ -470,3 +476,12 @@ verification succeeds across processes, replay fails on another process, and a l
 link cannot undo local account suspension. The fixture explicitly uses outbox mode
 and the exact `example.test` development exception. No test grants mailbox authority
 from a browser claim or sends email to external recipients.
+
+
+The `authentication.account_containment` case uses dedicated verified accounts and
+a local fixture-bootstrap operator. Real HTTP suspension on A and reactivation on
+B permanently retire old cookies, codes, grants, refresh families and pending proofs
+on every configured replica. Browser recovery proves fresh authentication and
+consent still work. The case runs in `security`, `ha` and `full`; see
+[account containment](account-containment.md) for the current boundary, independent
+review and validation details.

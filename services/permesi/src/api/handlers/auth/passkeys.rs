@@ -8,6 +8,8 @@
 //! Security boundaries:
 //! - Origin and RP ID validation are enforced on every request.
 //! - Authentication challenges are single-use and expire quickly.
+//! - Authenticated exchange time must follow the account containment cutoff, even
+//!   when consumption preceded suspension and identity validation follows recovery.
 //! - Passkey data and raw `WebAuthn` payloads are never logged.
 
 use crate::api::handlers::{
@@ -265,7 +267,7 @@ async fn verify_passkey_assertion<'a>(
     request_id: &str,
     timeout_ms: i64,
 ) -> Result<(Uuid, AuthenticationResult, Transaction<'a, Postgres>), HandlerError> {
-    let authentication = passkey_service
+    let (authentication, created_at) = passkey_service
         .consume_authentication(auth_id, origin)
         .await
         .map_err(|error| {
@@ -294,12 +296,14 @@ async fn verify_passkey_assertion<'a>(
         .await
         .map_err(|_| Box::new(login_storage_error()))?;
     // Lock identity before credential, consistently with password/status mutation paths.
-    let status =
-        sqlx::query_scalar::<_, String>("SELECT status::text FROM users WHERE id=$1 FOR SHARE")
-            .bind(user_id)
-            .fetch_optional(&mut *guard)
-            .await
-            .map_err(|_| Box::new(login_storage_error()))?;
+    let status = sqlx::query_scalar::<_, String>(
+        "SELECT status::text FROM users WHERE id=$1 AND authentication_not_before<$2 FOR SHARE",
+    )
+    .bind(user_id)
+    .bind(created_at)
+    .fetch_optional(&mut *guard)
+    .await
+    .map_err(|_| Box::new(login_storage_error()))?;
     let row = sqlx::query_as::<_, PasskeyCredential>(
         "SELECT * FROM passkeys WHERE user_id=$1 AND credential_id=$2 FOR UPDATE",
     )

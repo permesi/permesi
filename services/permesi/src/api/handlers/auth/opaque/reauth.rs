@@ -340,6 +340,7 @@ pub async fn opaque_reauth_finish(
     let mut tx = match lock_identity(
         &pool,
         &identity,
+        login_state.created_at,
         auth_state.config().opaque_exchange_timeout_ms(),
     )
     .await

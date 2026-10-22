@@ -3,6 +3,34 @@
 
 BEGIN;
 
+-- Containment must survive status recovery and keep operator audit append-only at runtime.
+DO $$
+DECLARE
+    account UUID;
+    revision UUID;
+    changed_revision UUID;
+BEGIN
+    INSERT INTO users(email,opaque_registration_record,status)
+        VALUES ('containment-schema-'||uuidv4()::text||'@test.invalid',decode('01','hex'),'active')
+        RETURNING id,authorization_revision INTO account,revision;
+    UPDATE users SET status='disabled' WHERE id=account;
+    SELECT authorization_revision INTO changed_revision FROM users WHERE id=account;
+    IF revision=changed_revision THEN RAISE EXCEPTION 'suspension must advance authorization revision'; END IF;
+    UPDATE users SET status='active' WHERE id=account;
+    IF EXISTS(SELECT 1 FROM users WHERE id=account AND (authorization_revision=changed_revision OR authentication_not_before='-infinity')) THEN
+        RAISE EXCEPTION 'recovery must advance authority and login cutoff';
+    END IF;
+    IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') AND (
+        NOT has_table_privilege('permesi_runtime','user_lifecycle_audit_log','SELECT')
+        OR NOT has_table_privilege('permesi_runtime','user_lifecycle_audit_log','INSERT')
+        OR has_table_privilege('permesi_runtime','user_lifecycle_audit_log','UPDATE')
+        OR has_table_privilege('permesi_runtime','user_lifecycle_audit_log','DELETE')
+        OR NOT has_column_privilege('permesi_runtime','platform_operators','enabled','UPDATE')
+        OR has_column_privilege('permesi_runtime','platform_operators','user_id','UPDATE')) THEN
+        RAISE EXCEPTION 'invalid runtime containment audit/operator lock privileges';
+    END IF;
+END $$;
+
 -- Tenant parents cannot physically cascade-delete retained authority. User deletion
 -- remains available, but both retained-history foreign keys must reject its cascade.
 DO $$

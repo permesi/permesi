@@ -14,6 +14,7 @@ use test_support::vault::VaultContainer;
 use vault_client::{VaultTarget, VaultTransport};
 
 /// Combines a production-router fixture with real nonexportable transit signing.
+mod containment;
 mod refresh;
 mod revocation;
 mod userinfo;

@@ -108,7 +108,7 @@ impl Runtime {
             &tls.ca,
             options,
         )?;
-        report.auth_rate_limit_ip_attempts = Some(policy.auth_rate_limit_ip_attempts);
+        report.record_rate_budgets(&policy);
         self.resource =
             Some(start_resource(&tls, gateway, &policy.oauth, options.request_seconds).await?);
         self.services.resource_origin(

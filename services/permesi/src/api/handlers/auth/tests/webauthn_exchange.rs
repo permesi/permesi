@@ -1393,3 +1393,94 @@ async fn webauthn_http_concurrent_logins_do_not_starve_the_issuance_pool() -> Re
     );
     Ok(())
 }
+
+/// An anonymous assertion consumed before suspension cannot issue authority after recovery.
+#[tokio::test]
+async fn webauthn_http_login_cutoff_rechecks_consumed_proof_after_identity_wait() -> Result<()> {
+    use crate::api::{handlers::auth::passkeys, state::AppState};
+    use crate::webauthn::{PasskeyRepo, serialize_passkey};
+    use service_utils::request_id::with_request_correlation;
+    let db = TestDb::new()
+        .await?
+        .context("Containment regression requires PostgreSQL")?;
+    let user = insert_test_user(&db.pool).await?;
+    let service = self::passkeys(db.pool.clone(), 300, 100)?;
+    let mut authenticator = Authenticator::new()?;
+    let (id, challenge) = service
+        .register_begin(user, "user@example.com", "User", vec![1; 32], ORIGIN)
+        .await?;
+    let key = service
+        .register_finish(
+            id,
+            user,
+            &[1; 32],
+            ORIGIN,
+            authenticator.register(&challenge)?,
+        )
+        .await
+        .map_err(|_| anyhow!("registration"))?;
+    PasskeyRepo::create_passkey(
+        &db.pool,
+        user,
+        &authenticator.id,
+        &serialize_passkey(&key)?,
+        None,
+    )
+    .await?;
+    let (admission, signer, kid) = test_admission_context()?;
+    let zero = issue_zero_token(&signer, &kid)?;
+    let state = AppState {
+        admission,
+        passkeys: Arc::new(service),
+        ..AppState::for_tests(db.pool.clone())?
+    };
+    let (id, challenge) = state.passkeys.auth_begin(ORIGIN).await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    let router = with_request_correlation(
+        Router::new()
+            .route("/finish", post(passkeys::passkey_login_finish))
+            .with_state(state),
+    );
+    let mut blocker = db.pool.begin().await?;
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(user)
+        .execute(&mut *blocker)
+        .await?;
+    let task = tokio::spawn(async move {
+        router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/finish")
+                    .header("Origin", ORIGIN)
+                    .header("X-Permesi-Zero-Token", zero)
+                    .body(Body::from(serde_json::to_vec(
+                        &json!({"auth_id":id,"response":proof}),
+                    )?))?,
+            )
+            .await
+            .map_err(anyhow::Error::from)
+    });
+    tokio::time::timeout(Duration::from_secs(5),async {
+        loop {
+            let waiting: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'SELECT status::text FROM users WHERE id=$1 AND authentication_not_before%')").fetch_one(&db.pool).await?;
+            if waiting {return Ok::<_,anyhow::Error>(());}
+            tokio::task::yield_now().await;
+        }
+    }).await.context("Passkey login did not consume proof before identity lock")??;
+    for status in ["disabled", "active"] {
+        sqlx::query("UPDATE users SET status=$2::user_status WHERE id=$1")
+            .bind(user)
+            .bind(status)
+            .execute(&mut *blocker)
+            .await?;
+    }
+    blocker.commit().await?;
+    let reply = task.await??;
+    assert_eq!(reply.status(), StatusCode::UNAUTHORIZED);
+    assert!(!reply.headers().contains_key(SET_COOKIE));
+    let authority: (i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM user_sessions WHERE user_id=$1),(SELECT count(*) FROM passkey_audit_log WHERE user_id=$1 AND action='verify_success')")
+        .bind(user).fetch_one(&db.pool).await?;
+    assert_eq!(authority, (0, 0));
+    Ok(())
+}

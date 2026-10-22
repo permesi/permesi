@@ -52,6 +52,9 @@ pub struct Report {
     pub replicas: u16,
     /// Effective product-parsed fixture budget; absent when startup never established policy.
     pub auth_rate_limit_ip_attempts: Option<i64>,
+    pub auth_rate_limit_account_attempts: Option<i64>,
+    pub oauth_token_rate_ip_attempts: Option<i64>,
+    pub oauth_token_rate_client_ip_attempts: Option<i64>,
     pub manifest_sha256: String,
     pub components: Components,
     pub cases: Vec<CaseReport>,
@@ -62,6 +65,14 @@ pub struct Report {
 }
 
 impl Report {
+    /// Records the product-validated fixture budgets so the report explains workload admission.
+    pub fn record_rate_budgets(&mut self, policy: &crate::services::Policy) {
+        self.auth_rate_limit_ip_attempts = Some(policy.auth_rate_limit_ip_attempts);
+        self.auth_rate_limit_account_attempts = Some(policy.auth_rate_limit_account_attempts);
+        self.oauth_token_rate_ip_attempts = Some(policy.oauth_token_rate_ip_attempts);
+        self.oauth_token_rate_client_ip_attempts = Some(policy.oauth_token_rate_client_ip_attempts);
+    }
+
     /// Creates the report before setup, keeping planned capabilities outside pass counts.
     pub fn new(run_id: String, seed: u64, manifest_sha256: String, replicas: u16) -> Self {
         Self {
@@ -72,6 +83,9 @@ impl Report {
             fixture_seed: seed,
             replicas,
             auth_rate_limit_ip_attempts: None,
+            auth_rate_limit_account_attempts: None,
+            oauth_token_rate_ip_attempts: None,
+            oauth_token_rate_client_ip_attempts: None,
             manifest_sha256,
             components: Components::default(),
             cases: Vec::new(),

@@ -232,6 +232,17 @@ impl ExchangeStore {
         id: Uuid,
         binding: Binding<'_>,
     ) -> Result<T> {
+        self.take_with_created_at(id, binding)
+            .await
+            .map(|(state, _)| state)
+    }
+
+    /// Returns authenticated database creation time so anonymous login cannot cross containment.
+    pub(crate) async fn take_with_created_at<T: DeserializeOwned>(
+        &self,
+        id: Uuid,
+        binding: Binding<'_>,
+    ) -> Result<(T, DateTime<Utc>)> {
         let mut observation = crate::api::handlers::auth::operations::Observation::new(
             binding.purpose.name(),
             "finish",
@@ -278,7 +289,7 @@ impl ExchangeStore {
         );
         let result = serde_json::from_slice(&plain).map_err(|_| ExchangeError::Invalid)?;
         observation.outcome = "success";
-        Ok(result)
+        Ok((result, row.try_get("created_at")?))
     }
 
     /// Deletes a failed pre-verification attempt without exposing its stored bindings.

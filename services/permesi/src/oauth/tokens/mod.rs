@@ -299,6 +299,7 @@ pub(crate) async fn revoke_refresh(
 pub(crate) enum UserRevocation {
     Password,
     Recovery,
+    Suspension,
 }
 
 /// Revokes user refresh authority on the caller's identity-locked transaction; never commits separately.
@@ -310,6 +311,7 @@ pub(crate) async fn revoke_user_authority(
     let reason = match cause {
         UserRevocation::Password => "password",
         UserRevocation::Recovery => "recovery",
+        UserRevocation::Suspension => "suspension",
     };
     sqlx::query("UPDATE oauth_refresh_families SET revoked_at=clock_timestamp(),revocation_reason=$2 WHERE user_id=$1 AND revoked_at IS NULL")
         .bind(user).bind(reason).execute(connection).await?;
