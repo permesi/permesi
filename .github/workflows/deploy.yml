@@ -754,6 +754,9 @@ jobs:
       genesis_digest: ${{ steps.tag.outputs.genesis_digest }}
       web_digest: ${{ steps.tag.outputs.web_digest }}
       latest: ${{ steps.latest.outputs.latest }}
+    env:
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ACTOR: ${{ github.actor }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -777,6 +780,12 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Authenticate to GHCR
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${TOKEN}" | cosign login ghcr.io -u "${ACTOR}" --password-stdin
 
       # Verify every immutable digest was keylessly signed by this repository's Deploy
       # workflow on the candidate branch before retagging it. A missing or wrong
@@ -802,8 +811,6 @@ jobs:
         id: tag
         shell: bash
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
           VERSION: ${{ needs.guard.outputs.version }}
           LATEST: ${{ steps.latest.outputs.latest }}
         run: |
