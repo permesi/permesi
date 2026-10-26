@@ -57,7 +57,7 @@ pub fn with_args(command: Command) -> Command {
         .arg(
             Arg::new(ARG_VAULT_URL)
                 .long(ARG_VAULT_URL)
-                .help("Vault base URL (http(s)://host:port) or unix socket path (unix:///path or /path)")
+                .help("Vault base URL (http(s)://host:port), AppRole login URL, or unix socket path (unix:///path or /path)")
                 .env("PERMESI_VAULT_URL")
                 .required(true),
         )

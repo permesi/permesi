@@ -95,19 +95,19 @@ pub async fn execute(args: Args) -> Result<()> {
             .vault_role_id
             .as_deref()
             .ok_or_else(|| anyhow!("Vault role-id is required for TCP mode"))?;
+        let login_url = vault::approle_login_url(&globals.vault_url)?;
         // If vault wrapped token try to unwrap, otherwise use secret-id.
         let vault_token: String = if let Some(wrapped) = &args.vault_wrapped_token {
             let vault_session_id = vault::unwrap(&globals.vault_url, wrapped).await?;
             let (token, _) =
-                vault::approle_login(&globals.vault_url, &vault_session_id, vault_role_id).await?;
+                vault::approle_login(&login_url, &vault_session_id, vault_role_id).await?;
             token
         } else {
             let secret_id = args
                 .vault_secret_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("Vault secret-id is required"))?;
-            let (token, _) =
-                vault::approle_login(&globals.vault_url, secret_id, vault_role_id).await?;
+            let (token, _) = vault::approle_login(&login_url, secret_id, vault_role_id).await?;
             token
         };
 

@@ -69,6 +69,25 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
     Ok(endpoint_url)
 }
 
+/// Resolve the `AppRole` login URL from a Vault base URL or an explicit login URL.
+///
+/// If `url` already targets a Vault auth login endpoint (a path of the form
+/// `/v1/auth/<mount>/login`, covering the default `approle` mount and custom
+/// auth mounts), it is returned unchanged. Otherwise it is treated as a base URL
+/// and the standard `AppRole` login path (`/v1/auth/approle/login`) is appended.
+///
+/// # Errors
+/// Returns an error if the URL cannot be parsed, has no host, or uses an unsupported scheme.
+pub fn approle_login_url(url: &str) -> Result<String> {
+    let parsed = Url::parse(url)?;
+    let path = parsed.path();
+    let is_login_url = path.starts_with("/v1/auth/") && path.ends_with("/login");
+    if is_login_url {
+        return Ok(url.to_string());
+    }
+    endpoint_url(url, "/v1/auth/approle/login")
+}
+
 /// Unwrap a wrapped Vault response (typically containing a secret-id).
 ///
 /// # Errors
@@ -378,6 +397,47 @@ mod tests {
             .err()
             .ok_or_else(|| anyhow!("expected error"))?;
         assert!(err.to_string().contains("unsupported scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_base_url() -> Result<()> {
+        assert_eq!(
+            approle_login_url("https://vault.example")?,
+            "https://vault.example:443/v1/auth/approle/login"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_base_url_with_trailing_slash() -> Result<()> {
+        assert_eq!(
+            approle_login_url("https://vault.example/")?,
+            "https://vault.example:443/v1/auth/approle/login"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_defaults_http_port() -> Result<()> {
+        assert_eq!(
+            approle_login_url("http://vault.example")?,
+            "http://vault.example:80/v1/auth/approle/login"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_full_login_url() -> Result<()> {
+        let url = "https://vault.example:8200/v1/auth/approle/login";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_custom_mount_login_url() -> Result<()> {
+        let url = "https://vault.example:8200/v1/auth/custom/login";
+        assert_eq!(approle_login_url(url)?, url);
         Ok(())
     }
 

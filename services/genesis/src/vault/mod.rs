@@ -15,14 +15,11 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
     vault_client::endpoint_url(url, path)
 }
 
-/// Resolve the `AppRole` login URL from a base URL or full login URL.
+/// Resolve the `AppRole` login URL from a base URL or an explicit login URL.
 /// # Errors
 /// Returns an error if the URL cannot be parsed or uses an unsupported scheme.
 pub fn approle_login_url(url: &str) -> Result<String> {
-    if url.contains("/v1/auth/approle/login") {
-        return Ok(url.to_string());
-    }
-    endpoint_url(url, "/v1/auth/approle/login")
+    vault_client::approle_login_url(url)
 }
 
 /// Unwrap a wrapped Vault client token
