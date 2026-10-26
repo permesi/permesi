@@ -221,3 +221,23 @@ production back. Any GitHub API error fails the step instead of changing the ans
 Validates a release's version, source commit and image digests, mints a GitHub App token and sends
 the `permesi-release` repository dispatch to `permesi/permesi-helm`. Used by `deploy.yml`'s Helm
 job and by `dispatch-helm-release.yml`.
+
+The automatic release always supplies all three lowercase `sha256:<64 hex>`
+digests and sets `tag_only: 'false'`. The manual and reusable dispatch workflow
+accepts the same full-digest inputs by default. A legacy tag-only release requires
+the caller to explicitly select the boolean `tag_only` input and leave **all three**
+digest inputs empty. Empty inputs alone never authorize tag-only dispatch; partial
+digest sets and tag-only acknowledgement combined with any digest fail before a
+GitHub App token is minted. The generated payload always includes a JSON boolean
+`client_payload.tag_only`, the normalized image tags and exact service repositories.
+
+For an intentional legacy release, run
+`gh workflow run dispatch-helm-release.yml -f version=vX.Y.Z -f source_sha=<40-hex-commit> -f tag_only=true`
+or select the tag-only checkbox in the manual workflow UI. Reusable workflow callers
+must pass `tag_only: true` explicitly; omitting it with empty digests is rejected.
+
+Run the local sender/receiver regression matrix with
+`python3 scripts/test-dispatch-helm.py --receiver ../permesi-helm/scripts/ci/release-event.sh -v`
+(Bash, jq and PyYAML required). It executes the action's real validation and JSON
+generation blocks, captures curl locally without any dispatch, then runs the
+supplied Helm receiver against valid and malformed payloads, including injection inputs.

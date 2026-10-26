@@ -945,6 +945,7 @@ jobs:
           permesi_digest: ${{ needs.images-publish.outputs.permesi_digest }}
           genesis_digest: ${{ needs.images-publish.outputs.genesis_digest }}
           web_digest: ${{ needs.images-publish.outputs.web_digest }}
+          tag_only: 'false'
           app_id: ${{ vars.PERMESI_HELM_APP_ID }}
           private_key: ${{ secrets.PERMESI_HELM_APP_PRIVATE_KEY }}
 

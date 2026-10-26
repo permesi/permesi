@@ -28,6 +28,11 @@ on:
         required: false
         default: ''
         type: string
+      tag_only:
+        description: Acknowledge a tag-only release (all three digest inputs must be empty).
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
@@ -54,6 +59,11 @@ on:
         required: false
         default: ''
         type: string
+      tag_only:
+        description: Acknowledge a tag-only release (all three digest inputs must be empty).
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: dispatch-helm-release-${{ inputs.version }}
@@ -80,5 +90,6 @@ jobs:
           permesi_digest: ${{ inputs.permesi_digest }}
           genesis_digest: ${{ inputs.genesis_digest }}
           web_digest: ${{ inputs.web_digest }}
+          tag_only: ${{ inputs.tag_only }}
           app_id: ${{ vars.PERMESI_HELM_APP_ID }}
           private_key: ${{ secrets.PERMESI_HELM_APP_PRIVATE_KEY }}

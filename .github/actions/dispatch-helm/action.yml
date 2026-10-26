@@ -23,6 +23,10 @@ inputs:
     description: Digest of ghcr.io/permesi/web for this release.
     required: false
     default: ''
+  tag_only:
+    description: Explicitly acknowledge a tag-only release; requires all three digests empty.
+    required: false
+    default: 'false'
   app_id:
     description: GitHub App id allowed to dispatch to permesi-helm.
     required: true
@@ -41,6 +45,7 @@ runs:
         PERMESI_DIGEST: ${{ inputs.permesi_digest }}
         GENESIS_DIGEST: ${{ inputs.genesis_digest }}
         WEB_DIGEST: ${{ inputs.web_digest }}
+        TAG_ONLY: ${{ inputs.tag_only }}
       run: |
         set -euo pipefail
         version="${RAW_VERSION#v}"
@@ -48,12 +53,33 @@ runs:
           echo "Unsupported release tag '${RAW_VERSION}'. Expected X.Y.Z or vX.Y.Z." >&2
           exit 1
         fi
+        if [[ "${GITHUB_REPOSITORY}" != "permesi/permesi" ]]; then
+          echo "Helm releases must originate from permesi/permesi." >&2
+          exit 1
+        fi
+        if [[ "${TAG_ONLY}" != "true" && "${TAG_ONLY}" != "false" ]]; then
+          echo "tag_only must be true or false." >&2
+          exit 1
+        fi
+        digest_count=0
         for digest in "${PERMESI_DIGEST}" "${GENESIS_DIGEST}" "${WEB_DIGEST}"; do
           if [[ -n "${digest}" && ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Invalid digest '${digest}'." >&2
             exit 1
           fi
+          if [[ -n "${digest}" ]]; then
+            digest_count=$((digest_count + 1))
+          fi
         done
+        if [[ "${TAG_ONLY}" == "true" ]]; then
+          if [[ "${digest_count}" -ne 0 ]]; then
+            echo "tag_only=true requires all three digests empty." >&2
+            exit 1
+          fi
+        elif [[ "${digest_count}" -ne 3 ]]; then
+          echo "Provide all three digests, or explicitly set tag_only=true with all three empty." >&2
+          exit 1
+        fi
         if [[ ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
           echo "Invalid source commit '${SOURCE_SHA}'." >&2
           exit 1
@@ -61,6 +87,7 @@ runs:
         {
           echo "version=${version}"
           echo "source_tag=${RAW_VERSION}"
+          echo "tag_only=${TAG_ONLY}"
         } >> "$GITHUB_OUTPUT"
 
     - name: Create GitHub App token
@@ -78,6 +105,7 @@ runs:
         TOKEN: ${{ steps.app-token.outputs.token }}
         VERSION: ${{ steps.meta.outputs.version }}
         SOURCE_TAG: ${{ steps.meta.outputs.source_tag }}
+        TAG_ONLY: ${{ steps.meta.outputs.tag_only }}
         SOURCE_SHA: ${{ inputs.source_sha }}
         PERMESI_DIGEST: ${{ inputs.permesi_digest }}
         GENESIS_DIGEST: ${{ inputs.genesis_digest }}
@@ -89,6 +117,7 @@ runs:
           --arg repo "${GITHUB_REPOSITORY}" \
           --arg sha "${SOURCE_SHA}" \
           --arg tag "${SOURCE_TAG}" \
+          --argjson tag_only "${TAG_ONLY}" \
           --arg permesi "${PERMESI_DIGEST}" \
           --arg genesis "${GENESIS_DIGEST}" \
           --arg web "${WEB_DIGEST}" \
@@ -99,6 +128,7 @@ runs:
               source_repo: $repo,
               source_sha: $sha,
               source_tag: $tag,
+              tag_only: $tag_only,
               images: {
                 permesi: {repository: "ghcr.io/permesi/permesi", tag: $version, digest: $permesi},
                 genesis: {repository: "ghcr.io/permesi/genesis", tag: $version, digest: $genesis},
