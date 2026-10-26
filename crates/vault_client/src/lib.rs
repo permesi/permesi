@@ -498,6 +498,30 @@ mod tests {
     }
 
     #[test]
+    fn approle_login_url_preserves_origin_query() -> Result<()> {
+        assert_eq!(approle_login_url("https://h?x=1")?, "https://h?x=1");
+        assert_eq!(approle_login_url("https://h/?x=1")?, "https://h/?x=1");
+        assert_eq!(approle_login_url("https://h/?")?, "https://h/?");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_login_path_suffix() -> Result<()> {
+        let url = "https://h/v1/auth/approle/login/extra";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_hostless_url() -> Result<()> {
+        let err = approle_login_url("https://")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("host"));
+        Ok(())
+    }
+
+    #[test]
     fn approle_login_url_rejects_unsupported_scheme() -> Result<()> {
         let err = approle_login_url("ftp://vault.example")
             .err()

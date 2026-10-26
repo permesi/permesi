@@ -124,6 +124,22 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn approle_login_url_preserves_login_url_query() -> Result<()> {
+        let url = approle_login_url("https://h/v1/auth/approle/login?namespace=dev")?;
+        assert_eq!(url, "https://h/v1/auth/approle/login?namespace=dev");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_hostless_url() -> Result<()> {
+        let err = approle_login_url("https://")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("host"));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unwrap_returns_secret_id() -> Result<()> {
         if !can_bind_localhost() {
