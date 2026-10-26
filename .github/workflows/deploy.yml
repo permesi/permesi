@@ -61,6 +61,7 @@ jobs:
       tag: ${{ steps.classify.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
       candidate_run: ${{ steps.release.outputs.candidate_run }}
+      candidate_branch: ${{ steps.release.outputs.candidate_branch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -160,15 +161,20 @@ jobs:
             echo "::error::Tag ${TAG} names no candidate run; refusing to publish untested artifacts."
             exit 1
           fi
-          read -r head_sha event conclusion path <<<"$(gh api "repos/${repo}/actions/runs/${candidate_run}" \
-            --jq '"\(.head_sha) \(.event) \(.conclusion) \(.path)"')"
+          read -r head_sha event conclusion path head_branch <<<"$(gh api "repos/${repo}/actions/runs/${candidate_run}" \
+            --jq '"\(.head_sha) \(.event) \(.conclusion) \(.path) \(.head_branch)"')"
           if [[ "${head_sha}" != "${commit}" || "${event}" != workflow_dispatch || "${conclusion}" != success || "${path}" != .github/workflows/deploy.yml* ]]; then
             echo "::error::Run ${candidate_run} is not a successful candidate run of ${commit} (${head_sha} ${event} ${conclusion} ${path})."
+            exit 1
+          fi
+          if [[ "${head_branch}" != release && "${head_branch}" != develop ]]; then
+            echo "::error::Run ${candidate_run} ran on branch '${head_branch}', which is not an allowed release branch (release or develop)."
             exit 1
           fi
           {
             echo "commit=${commit}"
             echo "candidate_run=${candidate_run}"
+            echo "candidate_branch=${head_branch}"
           } >> "$GITHUB_OUTPUT"
           echo "Tag ${TAG}: ${commit} is on main, passed Test & Build (run ${passed}) and candidate run ${candidate_run}."
 
@@ -773,17 +779,21 @@ jobs:
         uses: sigstore/cosign-installer@v4.1.2
 
       # Verify every immutable digest was keylessly signed by this repository's Deploy
-      # workflow on the candidate (`release`) branch before retagging it. A missing or
-      # wrong signer blocks the release instead of falling back to a tag.
+      # workflow on the candidate branch before retagging it. A missing or wrong
+      # signer blocks the release instead of falling back to a tag.
       - name: Verify the images were signed by this workflow
         shell: bash
+        env:
+          CANDIDATE_BRANCH: ${{ needs.guard.outputs.candidate_branch }}
+          CANDIDATE_COMMIT: ${{ needs.guard.outputs.commit }}
         run: |
           set -euo pipefail
           while read -r service digest; do
             [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Bad digest for ${service}: ${digest}"; exit 1; }
             cosign verify \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/release" \
+              --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/${CANDIDATE_BRANCH}" \
+              --certificate-github-workflow-sha "${CANDIDATE_COMMIT}" \
               "ghcr.io/permesi/${service}@${digest}"
             echo "Verified signature of ghcr.io/permesi/${service}@${digest}"
           done < "${RUNNER_TEMP}/manifest/IMAGES"
