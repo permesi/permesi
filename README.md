@@ -594,9 +594,10 @@ just deploy
  3. two CI runs     Test & Build, and a candidate run of the Deploy workflow: tests, the
                     musl archives and Debian packages, the signed production web build,
                     and the permesi, genesis and web images pushed to GHCR only as
-                    `:sha-<commit>`, all recorded in a manifest (SHA-256 sums, image
-                    digests) with build-provenance attestations for the release files;
-                    nothing is published, and nothing is built from a cache
+                    `:sha-<commit>`, keylessly signed and OCI-attested, all recorded in a
+                    manifest (SHA-256 sums, image digests) with build-provenance
+                    attestations for the release files; nothing is published, and nothing
+                    is built from a cache
  4. pre-tag check   the manifest and every artifact are downloaded and checked
  5. promotion       one atomic push of develop, main and the signed tag, which names the
                     candidate run
@@ -654,6 +655,22 @@ token, and every Cargo command uses `--locked`. To check a downloaded release fi
 sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify <file> --repo permesi/permesi --signer-workflow permesi/permesi/.github/workflows/deploy.yml
 ```
+
+Every image digest is also keylessly signed by the Deploy workflow and carries an OCI
+build-provenance attestation. Verify a published image against the digest recorded in the
+candidate manifest (constraining the OIDC issuer and the exact workflow identity, never a
+permissive certificate-identity regex):
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/release" \
+  "ghcr.io/permesi/permesi@sha256:<digest>"
+```
+
+The release promotion runs this same check against the manifest's immutable digests before
+retagging or dispatching Helm, and a failed verification blocks the release. Real OIDC
+signing and publication require an authorized workflow run; they cannot be produced locally.
 
 The same flow, and how to set it up in another repository, is documented in
 [cron-when's RELEASING.md](https://github.com/nbari/cron-when/blob/main/RELEASING.md),

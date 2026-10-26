@@ -382,6 +382,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     outputs:
       permesi_digest: ${{ steps.push.outputs.permesi_digest }}
       genesis_digest: ${{ steps.push.outputs.genesis_digest }}
@@ -455,6 +457,52 @@ jobs:
           for service in permesi genesis web; do
             echo "${service}_digest=$(resolve_digest "${service}")" >> "$GITHUB_OUTPUT"
           done
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Sign each immutable image digest keylessly. The release verifies these signatures
+      # against the same workflow identity before it retags the digests.
+      - name: Sign the images
+        shell: bash
+        env:
+          PERMESI_DIGEST: ${{ steps.push.outputs.permesi_digest }}
+          GENESIS_DIGEST: ${{ steps.push.outputs.genesis_digest }}
+          WEB_DIGEST: ${{ steps.push.outputs.web_digest }}
+        run: |
+          set -euo pipefail
+          for service in permesi genesis web; do
+            case "${service}" in
+              permesi) digest="${PERMESI_DIGEST}" ;;
+              genesis) digest="${GENESIS_DIGEST}" ;;
+              web) digest="${WEB_DIGEST}" ;;
+            esac
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Bad digest for ${service}: ${digest}"; exit 1; }
+            cosign sign --yes "ghcr.io/permesi/${service}@${digest}"
+          done
+
+      # Attest each image's OCI provenance in the registry; the attestations carry the
+      # same subject digests the manifest records and the release publishes.
+      - name: Attest permesi image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/permesi/permesi
+          subject-digest: ${{ steps.push.outputs.permesi_digest }}
+          push-to-registry: true
+
+      - name: Attest genesis image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/permesi/genesis
+          subject-digest: ${{ steps.push.outputs.genesis_digest }}
+          push-to-registry: true
+
+      - name: Attest web image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/permesi/web
+          subject-digest: ${{ steps.push.outputs.web_digest }}
+          push-to-registry: true
 
   # The candidate's manifest: the SHA-256 of every release file, the image digests, the
   # version, the commit and the artifacts the release needs. `just deploy` checks it and
@@ -720,6 +768,25 @@ jobs:
           github-token: ${{ github.token }}
           name: release-manifest
           path: ${{ runner.temp }}/manifest
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Verify every immutable digest was keylessly signed by this repository's Deploy
+      # workflow on the candidate (`release`) branch before retagging it. A missing or
+      # wrong signer blocks the release instead of falling back to a tag.
+      - name: Verify the images were signed by this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r service digest; do
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Bad digest for ${service}: ${digest}"; exit 1; }
+            cosign verify \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/release" \
+              "ghcr.io/permesi/${service}@${digest}"
+            echo "Verified signature of ghcr.io/permesi/${service}@${digest}"
+          done < "${RUNNER_TEMP}/manifest/IMAGES"
 
       - name: Tag the tested digests
         id: tag
