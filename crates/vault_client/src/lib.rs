@@ -441,6 +441,27 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn approle_login_url_preserves_query_for_login_url() -> Result<()> {
+        let url = "https://vault.example:8200/v1/auth/approle/login?redirect=yes";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_unsupported_scheme() -> Result<()> {
+        let err = approle_login_url("ftp://vault.example")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unsupported scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_malformed_url() {
+        assert!(approle_login_url("http://").is_err());
+    }
+
     #[tokio::test]
     async fn unwrap_returns_secret_id() -> Result<()> {
         if !can_bind_localhost() {
