@@ -16,9 +16,13 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
     vault_client::endpoint_url(url, path)
 }
 
-/// Resolve the `AppRole` login URL from a base URL or an explicit login URL.
+/// Resolve the `AppRole` login URL from a Vault origin or an explicit login URL.
+///
+/// An origin (an HTTP(S) URL whose path is empty or `/` and which carries no
+/// query) is completed to the standard `AppRole` login path; any other URL is
+/// used as-is.
 /// # Errors
-/// Returns an error if the URL cannot be parsed or uses an unsupported scheme.
+/// Returns an error if the URL cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn approle_login_url(url: &str) -> Result<String> {
     vault_client::approle_login_url(url)
 }

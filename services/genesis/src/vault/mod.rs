@@ -3,8 +3,9 @@ pub mod renew;
 pub mod transit;
 
 use crate::APP_USER_AGENT;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tracing::instrument;
+use url::Url;
 
 pub use vault_client::{VaultMode, VaultTarget, VaultTransport};
 
@@ -16,10 +17,27 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
 }
 
 /// Resolve the `AppRole` login URL from a base URL or an explicit login URL.
+///
+/// An explicit URL containing the standard `/v1/auth/approle/login` path is used
+/// verbatim, including any suffix or trailing slash. Any other URL is treated as
+/// a base URL and the standard `AppRole` login path is appended.
 /// # Errors
-/// Returns an error if the URL cannot be parsed or uses an unsupported scheme.
+/// Returns an error if the URL cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn approle_login_url(url: &str) -> Result<String> {
-    vault_client::approle_login_url(url)
+    let parsed = Url::parse(url)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!(
+            "Error parsing URL: unsupported scheme {}",
+            parsed.scheme()
+        ));
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(anyhow!("Error parsing URL: no host specified"));
+    }
+    if url.contains("/v1/auth/approle/login") {
+        return Ok(url.to_string());
+    }
+    endpoint_url(url, "/v1/auth/approle/login")
 }
 
 /// Unwrap a wrapped Vault client token
@@ -73,6 +91,36 @@ mod tests {
     fn approle_login_url_accepts_full_login_url() -> Result<()> {
         let url = approle_login_url("https://vault.example:8200/v1/auth/approle/login")?;
         assert_eq!(url, "https://vault.example:8200/v1/auth/approle/login");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_discards_base_path_prefix() -> Result<()> {
+        let url = approle_login_url("https://h/vault")?;
+        assert_eq!(url, "https://h:443/v1/auth/approle/login");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_login_path_suffix() -> Result<()> {
+        let url = approle_login_url("https://h/v1/auth/approle/login/extra")?;
+        assert_eq!(url, "https://h/v1/auth/approle/login/extra");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_trailing_slash_login_path() -> Result<()> {
+        let url = approle_login_url("https://h/v1/auth/approle/login/")?;
+        assert_eq!(url, "https://h/v1/auth/approle/login/");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_unsupported_scheme() -> Result<()> {
+        let err = approle_login_url("ftp://h/v1/auth/approle/login")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unsupported scheme"));
         Ok(())
     }
 

@@ -29,7 +29,7 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
 
 ### TCP Mode (AppRole)
 
-`--vault-url` accepts a Vault base URL (normalized to `/v1/auth/approle/login`) or an explicit AppRole login URL, including custom auth mounts. Requires role-id and secret-id (or wrapped token).
+`--vault-url` accepts a Vault origin (`http(s)://host[:port]`) or an explicit AppRole login URL. An origin is completed to the standard AppRole login path; any other URL is used as-is (its path and query preserved). Requires role-id and secret-id (or wrapped token).
 
 ```sh
  cargo run -p permesi --bin permesi -- \
