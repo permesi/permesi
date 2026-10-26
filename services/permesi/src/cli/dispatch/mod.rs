@@ -7,6 +7,9 @@ use crate::cli::actions::{Action, server::Args};
 use crate::cli::commands::{admission, auth, database, tls, vault};
 use anyhow::{Context, Result, anyhow};
 
+#[cfg(test)]
+mod native_tests;
+
 /// Normalize a Vault mount path received from CLI/env.
 ///
 /// Mounts are stored without leading/trailing slashes and must not be empty
@@ -111,6 +114,87 @@ fn pending_state_limit(value: u64) -> Result<usize> {
     Ok(auth_max_pending_states)
 }
 
+/// Revalidate auth selection at dispatch; Kubernetes settings never activate fallback.
+/// Auto sockets retain Agent behavior, including ignored legacy `AppRole` arguments.
+pub(crate) fn vault_auth(
+    matches: &clap::ArgMatches,
+) -> Result<Option<vault_client::kubernetes::KubernetesAuth>> {
+    let url = matches
+        .get_one::<String>("vault-url")
+        .context("missing --vault-url")?;
+    let target = vault_client::VaultTarget::parse(url)?;
+    let method = matches
+        .get_one::<String>("vault-auth-method")
+        .context("missing --vault-auth-method")?;
+    let role_id = matches.get_one::<String>("vault-role-id");
+    let secret_id = matches.get_one::<String>("vault-secret-id");
+    let wrapped = matches.get_one::<String>("vault-wrapped-token");
+    let mount = matches
+        .get_one::<String>("vault-kubernetes-auth-mount")
+        .context("missing Kubernetes auth mount")?;
+    vault_client::kubernetes::validate_auth_mount(mount).map_err(|e| anyhow!(e))?;
+    let role = matches.get_one::<String>("vault-kubernetes-role");
+    let token_path = matches
+        .get_one::<String>("vault-kubernetes-token-path")
+        .context("missing Kubernetes token path")?;
+    if token_path.trim().is_empty() {
+        return Err(anyhow!("--vault-kubernetes-token-path must not be empty"));
+    }
+    if !matches!(method.as_str(), "auto" | "approle" | "kubernetes") {
+        return Err(anyhow!("invalid --vault-auth-method"));
+    }
+    if method != "auto" && !target.is_tcp() {
+        return Err(anyhow!(
+            "explicit --vault-auth-method requires a TCP Vault URL"
+        ));
+    }
+    if method == "kubernetes" {
+        if role_id.is_some() || secret_id.is_some() || wrapped.is_some() {
+            return Err(anyhow!(
+                "AppRole credentials are forbidden with --vault-auth-method kubernetes"
+            ));
+        }
+        let role = role
+            .filter(|r| !r.trim().is_empty())
+            .context("--vault-kubernetes-role is required for Kubernetes authentication")?;
+        vault_client::kubernetes::kubernetes_login_url(url, mount)?;
+        return Ok(Some(vault_client::kubernetes::KubernetesAuth {
+            mount: mount.clone(),
+            role: role.clone(),
+            token_path: token_path.into(),
+        }));
+    }
+    if role.is_some()
+        || ["vault-kubernetes-auth-mount", "vault-kubernetes-token-path"]
+            .iter()
+            .any(|arg| {
+                matches
+                    .value_source(arg)
+                    .is_some_and(|source| source != clap::parser::ValueSource::DefaultValue)
+            })
+    {
+        return Err(anyhow!(
+            "Kubernetes settings require --vault-auth-method kubernetes"
+        ));
+    }
+    if target.is_tcp() {
+        if role_id.is_none_or(|r| r.trim().is_empty()) {
+            return Err(anyhow!("--vault-role-id is required for AppRole TCP mode"));
+        }
+        if secret_id.is_some() && wrapped.is_some() {
+            return Err(anyhow!(
+                "--vault-secret-id conflicts with --vault-wrapped-token"
+            ));
+        }
+        if secret_id.or(wrapped).is_none_or(|s| s.trim().is_empty()) {
+            return Err(anyhow!(
+                "--vault-secret-id or --vault-wrapped-token is required for AppRole TCP mode"
+            ));
+        }
+    }
+    Ok(None)
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -122,8 +206,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .cloned()
         .context("missing required argument: --dsn")?;
 
-    // Validate vault auth arguments relative to the URL scheme
-    crate::cli::commands::validate(matches).map_err(|e| anyhow::anyhow!(e))?;
+    let vault_kubernetes = vault_auth(matches)?;
 
     let vault_opts = vault::Options::parse(matches)?;
     let vault_kv_mount = normalize_vault_mount(vault::ARG_VAULT_KV_MOUNT, &vault_opts.kv_mount)?;
@@ -181,6 +264,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         tenant_mutations,
         vault_url: vault_opts.url,
         vault_target,
+        vault_kubernetes,
         vault_role_id: vault_opts.role_id,
         vault_secret_id: vault_opts.secret_id,
         vault_wrapped_token: vault_opts.wrapped_token,

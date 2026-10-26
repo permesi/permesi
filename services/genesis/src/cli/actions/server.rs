@@ -13,6 +13,7 @@ pub struct Args {
     pub db_pool: PoolConfig,
     pub vault_url: String,
     pub vault_target: vault::VaultTarget,
+    pub vault_kubernetes: Option<vault_client::kubernetes::KubernetesAuth>,
     pub vault_role_id: Option<String>,
     pub vault_secret_id: Option<String>,
     pub vault_wrapped_token: Option<String>,
@@ -20,7 +21,9 @@ pub struct Args {
     pub tls_pem_bundle: Option<String>,
 }
 
-/// Execute the server action.
+/// Start with Agent, `AppRole`, or the explicitly selected Kubernetes login.
+/// Kubernetes token renewal uses the existing fail-closed shutdown; a supervisor
+/// restart reads the current JWT and reacquires all credentials, without hot replacement.
 /// # Errors
 /// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
@@ -36,7 +39,15 @@ pub async fn execute(args: Args) -> Result<()> {
     let mut globals = GlobalArgs::new(args.vault_url, vault_transport);
     globals.vault_transit_mount = args.vault_transit_mount;
 
-    if matches!(args.vault_target, vault::VaultTarget::Tcp { .. }) {
+    if let Some(config) = &args.vault_kubernetes {
+        let (token, _) = vault_client::kubernetes::kubernetes_login(
+            crate::APP_USER_AGENT,
+            &globals.vault_url,
+            config,
+        )
+        .await?;
+        globals.set_token(token);
+    } else if matches!(args.vault_target, vault::VaultTarget::Tcp { .. }) {
         let vault_role_id = args
             .vault_role_id
             .as_deref()
@@ -103,6 +114,17 @@ fn log_startup_args(args: &Args) {
         ("db_pool", args.db_pool.to_string()),
         ("vault_url", args.vault_url.clone()),
         ("vault_mode", mode.to_string()),
+        (
+            "vault_auth_method",
+            if args.vault_kubernetes.is_some() {
+                "kubernetes"
+            } else if args.vault_target.is_tcp() {
+                "approle"
+            } else {
+                "agent"
+            }
+            .to_string(),
+        ),
         (
             "vault_role_id",
             args.vault_role_id

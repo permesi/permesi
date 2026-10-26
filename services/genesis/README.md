@@ -15,12 +15,12 @@ Token Zero generator (edge admission token mint).
 - Issues short-lived **Admission Tokens** (PASETO v4.public signed via Vault Transit)
 - Publishes its public keys as a **PASERK keyset** at `GET /paserk.json` so `permesi` can verify tokens offline
 - Persists minted token IDs (`jti`) and request metadata in Postgres for short-term validation/auditing
-- Uses Vault (AppRole) to obtain DB credentials and keeps Vault leases renewed at runtime
+- Uses Vault (AppRole, Agent, or opt-in native Kubernetes auth) to obtain DB credentials and keeps Vault leases renewed at runtime
 - Acts as the **Zero Token** mint for user-facing auth flows; `permesi` validates these tokens offline via the PASERK keyset
 
 ## Vault requirement
 
-Vault is required in production for AppRole auth, dynamic DB creds, and transit encryption. Running without Vault is not supported.
+Vault is required in production for authentication, dynamic DB creds, and transit encryption. Running without Vault is not supported.
 See the canonical checklist in `../../README.md#vault-dependency` and the Vault ops notes in `../../vault/README.md`.
 TL;DR:
 - Run Vault in HA with tested failover.
@@ -78,9 +78,9 @@ CLI args (also available via env vars):
 - `GENESIS_DSN` (required) base DSN; username/password are overwritten with Vault DB creds (e.g. `postgres://postgres@localhost:5432/genesis`)
 - `GENESIS_VAULT_URL` (required) Vault base URL (`https://vault.tld:8200`) or unix socket path (`/run/vault/proxy.sock` or `unix:///run/vault/proxy.sock`)
 - `GENESIS_TLS_PEM_BUNDLE` (required) Path to TLS bundle (Key + Cert + CA) (PEM)
-- `GENESIS_VAULT_ROLE_ID` (required for TCP mode)
-- `GENESIS_VAULT_SECRET_ID` (required for TCP mode unless `GENESIS_VAULT_WRAPPED_TOKEN` is set)
-- `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id for TCP mode)
+- `GENESIS_VAULT_ROLE_ID` (required for AppRole TCP mode only)
+- `GENESIS_VAULT_SECRET_ID` (required for AppRole unless `GENESIS_VAULT_WRAPPED_TOKEN` is set)
+- `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id for AppRole)
 - `GENESIS_LOG_LEVEL` (optional) numeric or string log level (e.g. `info`) / `-v` flags
 
 PostgreSQL pool (also CLI flags):
@@ -127,12 +127,40 @@ cargo run -p genesis --bin genesis -- \
   --vault-url "/run/vault/proxy.sock"
 ```
 
+**3. Native Kubernetes authentication (opt-in)**
+
+`--vault-auth-method` / `GENESIS_VAULT_AUTH_METHOD` defaults to `auto`: sockets use
+Agent and TCP uses AppRole. Explicit `approle` or `kubernetes` requires TCP; failed
+login never falls back. Agent remains recommended when it also renders PKI.
+
+For native login, set `--vault-url https://vault.example:8200 --vault-auth-method kubernetes
+--vault-kubernetes-role genesis`. The URL must be a Vault origin without credentials,
+path, query or fragment. Omit all AppRole role-id, secret-id and wrapped-token settings.
+`--vault-kubernetes-auth-mount` / `GENESIS_VAULT_KUBERNETES_AUTH_MOUNT` defaults to
+`kubernetes` and accepts a relative mount (including nested mounts), without `/v1/auth/`,
+traversal, query or empty segments. `--vault-kubernetes-role` /
+`GENESIS_VAULT_KUBERNETES_ROLE` is required only in Kubernetes mode.
+`--vault-kubernetes-token-path` / `GENESIS_VAULT_KUBERNETES_TOKEN_PATH` defaults to
+`/var/run/secrets/kubernetes.io/serviceaccount/token`; use a read-only audience-scoped
+projected token instead of broad default automount. Kubernetes-only settings are
+rejected in other auth modes.
+
+Each login reads the current JWT file and requires a usable renewable Vault token
+with a positive lease. The existing renewal worker owns that token; repeated token
+or database renewal failure shuts down fail-closed. A supervisor restart logs in with
+the current projection and reacquires database credentials. This is restart-based
+reauthentication, not seamless hot token replacement. See the
+[Vault native-auth operations notes](../../vault/README.md#native-kubernetes-authentication)
+for role/audience boundaries and reviewer permissions; the application ServiceAccount
+must not receive TokenReview privileges.
+
+
 Startup behavior:
 
-- Logs into Vault (direct secret-id or unwrap wrapped token) when using TCP mode
+- Logs into Vault via the selected AppRole or Kubernetes method when using TCP mode
 - Fetches DB creds from Vault and injects them into the DSN
 - Starts the HTTP server
-- Spawns background renew loops for the Vault token and the DB lease (skipped in Agent mode)
+- Spawns background renew loops for the Vault token (skipped in Agent mode) and the DB lease (all modes)
 
 ### Admission Token Signing
 

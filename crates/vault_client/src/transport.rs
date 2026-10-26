@@ -30,8 +30,8 @@ use std::{
 use tokio::time::timeout;
 use tracing::debug;
 
-const VAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const VAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const VAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const VAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultMode {

@@ -8,26 +8,36 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
 };
 
-/// Validate that TCP mode requirements are met if the URL implies TCP.
+/// Validate auth-mode requirements without attempting login or falling back.
 ///
 /// # Errors
-/// Returns an error string if `vault-url` is HTTP(S) but auth arguments are missing.
+/// Rejects incompatible transport/credential settings and missing mode requirements.
 pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
-    let Some(url) = matches.get_one::<String>("vault-url") else {
-        return Ok(()); // Should be handled by required=true in clap
-    };
+    crate::cli::dispatch::vault_auth(matches)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
 
-    if url.starts_with("http://") || url.starts_with("https://") {
-        if !matches.contains_id("vault-role-id") {
-            return Err(
-                "Missing required argument: --vault-role-id (required for TCP mode)".to_string(),
-            );
-        }
-        if !matches.contains_id("vault-secret-id") && !matches.contains_id("vault-wrapped-token") {
-            return Err("Missing required argument: --vault-secret-id or --vault-wrapped-token (required for TCP mode)".to_string());
-        }
-    }
-    Ok(())
+/// Define opt-in native login settings; auto preserves the existing auth selection.
+fn with_native_vault_args(command: Command) -> Command {
+    command
+        .arg(Arg::new("vault-auth-method").long("vault-auth-method")
+            .env("GENESIS_VAULT_AUTH_METHOD").default_value("auto")
+            .value_parser(["auto", "approle", "kubernetes"])
+            .help("Vault auth: auto selects Agent for sockets and AppRole for TCP; explicit methods require TCP"))
+        .arg(Arg::new("vault-kubernetes-auth-mount").long("vault-kubernetes-auth-mount")
+            .env("GENESIS_VAULT_KUBERNETES_AUTH_MOUNT").default_value("kubernetes")
+            .value_parser(vault_client::kubernetes::validate_auth_mount)
+            .help("Relative Kubernetes auth mount, without /v1/auth/ (Kubernetes mode only)"))
+        .arg(Arg::new("vault-kubernetes-role").long("vault-kubernetes-role")
+            .env("GENESIS_VAULT_KUBERNETES_ROLE")
+            .value_parser(clap::builder::NonEmptyStringValueParser::new())
+            .help("Vault Kubernetes role (required only for Kubernetes mode)"))
+        .arg(Arg::new("vault-kubernetes-token-path").long("vault-kubernetes-token-path")
+            .env("GENESIS_VAULT_KUBERNETES_TOKEN_PATH")
+            .default_value("/var/run/secrets/kubernetes.io/serviceaccount/token")
+            .value_parser(clap::builder::NonEmptyStringValueParser::new())
+            .help("JWT file read at login; prefer an audience-scoped projected token"))
 }
 
 #[must_use]
@@ -77,6 +87,7 @@ pub fn new() -> Command {
         );
 
     let command = vault::with_args(command);
+    let command = with_native_vault_args(command);
     let command = tls::with_args(command);
     let command = database::with_args(command);
     logging::with_args(command)

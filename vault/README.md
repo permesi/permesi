@@ -167,7 +167,7 @@ If the Vault container can’t reach Postgres, adjust `VAULT_POSTGRES_HOST` (the
 
 ## Vault requirement
 
-Vault is required in production for AppRole auth, dynamic DB creds, and transit encryption. Running without Vault is not supported.
+Vault is required in production for authentication, dynamic DB creds, and transit encryption. Running without Vault is not supported.
 Rotation in production is typically operator-driven; the dev bootstrap defaults to a 30d auto-rotate period.
 
 Production readiness checklist:
@@ -175,3 +175,50 @@ Production readiness checklist:
 - Automated unseal or a documented unseal runbook.
 - Backups plus restore drills (e.g., raft snapshots or storage backups).
 - Monitoring and alerts for health, sealed state, and token/lease renew failures.
+
+## Native Kubernetes authentication
+
+Both services support opt-in direct Kubernetes login independently of Vault Agent.
+Agent remains the recommended Kubernetes deployment profile when PKI templates are
+needed; native auth does not render inbound TLS bundles or rotate PKI material.
+The default `--vault-auth-method auto` retains socket-to-Agent and TCP-to-AppRole
+selection. Explicit `approle` and `kubernetes` require a TCP Vault URL and never
+fall back to another method. For Kubernetes, configure an HTTP(S) Vault origin
+(HTTPS with verified trust in production), not an AppRole login endpoint.
+
+Set `<PREFIX>_VAULT_AUTH_METHOD=kubernetes` and
+`<PREFIX>_VAULT_KUBERNETES_ROLE` for each workload (`PERMESI` or `GENESIS`).
+`<PREFIX>_VAULT_KUBERNETES_AUTH_MOUNT` defaults to `kubernetes`; it is a relative
+mount such as `cluster/kubernetes`, not `/v1/auth/...`, and forbids empty/traversal
+segments and URL query/fragment syntax. `<PREFIX>_VAULT_KUBERNETES_TOKEN_PATH`
+defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token`. Each environment
+setting has an equivalent `--vault-*` flag. Kubernetes mode rejects all AppRole
+credentials; Kubernetes-only settings are rejected in other modes.
+
+Provision separate least-privilege Vault roles for the two services, bound to the
+exact ServiceAccount name, namespace, and audience. Attach the existing
+service-specific transit/KV/database policies, not an operator/admin policy.
+Configure renewable service tokens with a positive TTL; batch/nonrenewable tokens
+cannot satisfy the application renewal contract. Vault receives `{role,jwt}` at
+`/v1/auth/<mount>/login`; JWTs, issued tokens and raw remote login errors are not
+included in application diagnostics. Login redirects are refused.
+
+Disable the application's broad ServiceAccount automount and mount an explicit
+read-only projected `serviceAccountToken` with an audience matching the Vault role
+and an appropriate expiration. Mount the directory rather than a `subPath` file
+so Kubernetes can replace the projection. Point the token-path flag at that file.
+Only the **Vault server's reviewer ServiceAccount** needs TokenReview privileges
+(typically `system:auth-delegator`); the application ServiceAccount needs no
+TokenReview or Secret-read privileges. Configure Vault's Kubernetes auth backend
+with its cluster API/trust/reviewer identity, separately from application roles.
+
+Startup reads the JWT afresh and refuses missing, unreadable or empty files and
+tokens without a usable renewable lease. The existing application worker renews
+the resulting Vault token. At max TTL, revocation or repeated renewal failure,
+the service shuts down fail-closed after its bounded retries and normal drain.
+Configure Kubernetes/supervisor restart so the next process reads the latest
+projection, logs in again and fetches new dynamic database credentials. This is
+**restart-based reauthentication**, not seamless hot token replacement: a live
+process does not swap token clones, pools or operator-token precedence. Revoked
+database credentials likewise require restart/reacquisition. Account for restart
+availability with replicas and tested readiness/drain behavior.

@@ -4,7 +4,7 @@ Core IAM/OIDC authority.
 
 ## Vault requirement
 
-Vault is required in production for AppRole auth, dynamic DB creds, and transit encryption. Running without Vault is not supported.
+Vault is required in production for authentication, dynamic DB creds, and transit encryption. Running without Vault is not supported.
 See the canonical checklist in `../../README.md#vault-dependency` and the Vault ops notes in `../../vault/README.md`.
 TL;DR:
 - Run Vault in HA with tested failover.
@@ -54,6 +54,34 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
    --tls-pem-bundle "/run/permesi/tls.bundle.pem" \
    --vault-url "/run/vault/proxy.sock"
  ```
+
+### Native Kubernetes authentication (opt-in)
+
+`--vault-auth-method` / `PERMESI_VAULT_AUTH_METHOD` defaults to `auto`: sockets use
+Agent and TCP uses AppRole. Explicit `approle` or `kubernetes` requires TCP; failed
+login never falls back. Agent remains recommended when it also renders PKI.
+
+For native login, set `--vault-url https://vault.example:8200 --vault-auth-method kubernetes
+--vault-kubernetes-role permesi`. The URL must be a Vault origin without credentials,
+path, query or fragment. Omit all AppRole role-id, secret-id and wrapped-token settings.
+`--vault-kubernetes-auth-mount` / `PERMESI_VAULT_KUBERNETES_AUTH_MOUNT` defaults to
+`kubernetes` and accepts a relative mount (including nested mounts), without `/v1/auth/`,
+traversal, query or empty segments. `--vault-kubernetes-role` /
+`PERMESI_VAULT_KUBERNETES_ROLE` is required only in Kubernetes mode.
+`--vault-kubernetes-token-path` / `PERMESI_VAULT_KUBERNETES_TOKEN_PATH` defaults to
+`/var/run/secrets/kubernetes.io/serviceaccount/token`; use a read-only audience-scoped
+projected token instead of broad default automount. Kubernetes-only settings are
+rejected in other auth modes.
+
+Each login reads the current JWT file and requires a usable renewable Vault token
+with a positive lease. The existing renewal worker owns that token; repeated token
+or database renewal failure shuts down fail-closed. A supervisor restart logs in with
+the current projection and reacquires database credentials. This is restart-based
+reauthentication, not seamless hot token replacement. See the
+[Vault native-auth operations notes](../../vault/README.md#native-kubernetes-authentication)
+for role/audience boundaries and reviewer permissions; the application ServiceAccount
+must not receive TokenReview privileges.
+
 ## Database schema
 
 The base schema lives in `db/sql/02_permesi.sql`. Load it into Postgres with (only if you did not

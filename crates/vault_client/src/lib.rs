@@ -2,8 +2,8 @@
 //!
 //! This crate provides low-level connectivity to `HashiCorp` Vault, supporting
 //! both direct TCP (HTTP/S) and Vault Agent Sidecar (Unix Socket) modes.
-//! It handles `AppRole` authentication, secret unwrapping, and dynamic database
-//! credential retrieval.
+//! It handles `AppRole` and opt-in Kubernetes authentication, secret unwrapping,
+//! and dynamic database credential retrieval.
 
 use anyhow::{Result, anyhow};
 use reqwest::Client;
@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use tracing::{Instrument, debug, info_span};
 use url::Url;
 
+pub mod kubernetes;
 pub mod transport;
 pub use transport::{VaultMode, VaultTarget, VaultTransport};
 

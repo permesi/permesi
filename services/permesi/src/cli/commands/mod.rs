@@ -207,32 +207,39 @@ use clap::{
 
 #[cfg(test)]
 use self::vault::{ARG_VAULT_KV_MOUNT, ARG_VAULT_KV_PATH, ARG_VAULT_TRANSIT_MOUNT};
-use self::vault::{ARG_VAULT_ROLE_ID, ARG_VAULT_SECRET_ID, ARG_VAULT_URL, ARG_VAULT_WRAPPED_TOKEN};
+#[cfg(test)]
+use self::vault::{ARG_VAULT_ROLE_ID, ARG_VAULT_SECRET_ID, ARG_VAULT_URL};
 
-/// Validate that TCP mode requirements are met if the URL implies TCP.
+/// Validate auth-mode requirements without attempting login or falling back.
 ///
 /// # Errors
-/// Returns an error string if `vault-url` is HTTP(S) but auth arguments are missing.
+/// Rejects incompatible transport/credential settings and missing mode requirements.
 pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
-    let Some(url) = matches.get_one::<String>(ARG_VAULT_URL) else {
-        return Ok(()); // Should be handled by required=true in clap
-    };
+    crate::cli::dispatch::vault_auth(matches)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
 
-    if url.starts_with("http://") || url.starts_with("https://") {
-        if !matches.contains_id(ARG_VAULT_ROLE_ID) {
-            return Err(format!(
-                "Missing required argument: --{ARG_VAULT_ROLE_ID} (required for TCP mode)"
-            ));
-        }
-        if !matches.contains_id(ARG_VAULT_SECRET_ID)
-            && !matches.contains_id(ARG_VAULT_WRAPPED_TOKEN)
-        {
-            return Err(format!(
-                "Missing required argument: --{ARG_VAULT_SECRET_ID} or --{ARG_VAULT_WRAPPED_TOKEN} (required for TCP mode)"
-            ));
-        }
-    }
-    Ok(())
+/// Define opt-in native login settings; auto preserves the existing auth selection.
+fn with_native_vault_args(command: Command) -> Command {
+    command
+        .arg(Arg::new("vault-auth-method").long("vault-auth-method")
+            .env("PERMESI_VAULT_AUTH_METHOD").default_value("auto")
+            .value_parser(["auto", "approle", "kubernetes"])
+            .help("Vault auth: auto selects Agent for sockets and AppRole for TCP; explicit methods require TCP"))
+        .arg(Arg::new("vault-kubernetes-auth-mount").long("vault-kubernetes-auth-mount")
+            .env("PERMESI_VAULT_KUBERNETES_AUTH_MOUNT").default_value("kubernetes")
+            .value_parser(vault_client::kubernetes::validate_auth_mount)
+            .help("Relative Kubernetes auth mount, without /v1/auth/ (Kubernetes mode only)"))
+        .arg(Arg::new("vault-kubernetes-role").long("vault-kubernetes-role")
+            .env("PERMESI_VAULT_KUBERNETES_ROLE")
+            .value_parser(clap::builder::NonEmptyStringValueParser::new())
+            .help("Vault Kubernetes role (required only for Kubernetes mode)"))
+        .arg(Arg::new("vault-kubernetes-token-path").long("vault-kubernetes-token-path")
+            .env("PERMESI_VAULT_KUBERNETES_TOKEN_PATH")
+            .default_value("/var/run/secrets/kubernetes.io/serviceaccount/token")
+            .value_parser(clap::builder::NonEmptyStringValueParser::new())
+            .help("JWT file read at login; prefer an audience-scoped projected token"))
 }
 
 #[must_use]
@@ -285,6 +292,7 @@ pub fn new() -> Command {
     let command = admission::with_args(command);
     let command = tls::with_args(command);
     let command = vault::with_args(command);
+    let command = with_native_vault_args(command);
     let command = auth::with_args(command);
     let command = database::with_args(command);
     logging::with_args(command)
