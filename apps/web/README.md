@@ -323,7 +323,10 @@ All values are public, so never store secrets in this file.
 
 The container image (`apps/web/Dockerfile`) serves the built assets with nginx using a production cache profile:
 `config.js` and `index.html` are `no-store`, while fingerprinted assets (`*.wasm`, `*.js`, `*.css`) are served with
-long-lived immutable caching headers.
+long-lived immutable caching headers. The `security-headers.conf` snippet sets
+`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` and `Permissions-Policy` on every response; it is
+included at server level and re-included in every location that declares its own cache headers, because nginx drops
+inherited `add_header` directives from a location that declares any of its own.
 
 ## Admission token configuration
 
