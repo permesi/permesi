@@ -148,6 +148,27 @@ fn build_admission() -> anyhow::Result<(Arc<AdmissionVerifier>, String)> {
     Ok((admission, token))
 }
 
+/// Check the browser capability policy without treating it as proof of identity.
+fn assert_discoverable_registration(payload: &serde_json::Value) -> anyhow::Result<()> {
+    let selection = payload
+        .pointer("/challenge/publicKey/authenticatorSelection")
+        .ok_or_else(|| anyhow::anyhow!("missing authenticator selection"))?;
+    assert_eq!(
+        selection.get("residentKey"),
+        Some(&serde_json::json!("required"))
+    );
+    assert_eq!(
+        selection.get("requireResidentKey"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        selection.get("userVerification"),
+        Some(&serde_json::json!("required"))
+    );
+    Ok(())
+}
+
+/// Fresh authenticated enrollment requests a discoverable credential with user verification.
 #[tokio::test]
 async fn register_options_returns_public_key() -> anyhow::Result<()> {
     let Some(db) = TestDb::new().await? else {
@@ -245,12 +266,7 @@ async fn register_options_returns_public_key() -> anyhow::Result<()> {
     let body = to_bytes(response.into_body(), usize::MAX).await?;
     let payload: serde_json::Value = serde_json::from_slice(&body)?;
     assert!(payload.get("reg_id").and_then(|v| v.as_str()).is_some());
-    assert!(
-        payload
-            .get("challenge")
-            .and_then(|v| v.get("publicKey"))
-            .is_some()
-    );
+    assert_discoverable_registration(&payload)?;
 
     Ok(())
 }

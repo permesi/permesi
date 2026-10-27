@@ -15,3 +15,21 @@ updates:
         patterns:
           - "*"
     open-pull-requests-limit: 5
+
+  # Watch the parent libraries that must move together before the crypto-bigint
+  # launch blocker can be removed. Compatibility aliases stay under manual control.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    target-branch: "sandbox"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-name: "opaque-ke"
+      - dependency-name: "webauthn-rs"
+      - dependency-name: "webauthn-rs-proto"
+      - dependency-name: "openidconnect"
+    groups:
+      authentication-libraries:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3

@@ -126,7 +126,13 @@ the code a workflow runs, so only actions whose maintainers are trusted belong h
 `sigstore/cosign-installer` has no major tag and is referenced by its exact version.
 `.github/dependabot.yml` proposes new major versions once a week, grouped into one pull
 request into `sandbox` (never `main`, which only holds releases), for the workflows and
-the composite actions. No checkout keeps the GitHub token (`persist-credentials:
+the composite actions. A separate weekly Cargo group watches the OPAQUE, WebAuthn
+and OAuth-client parent libraries involved in the crypto-bigint launch blocker.
+Those proposals also target `sandbox`; protocol compatibility aliases remain
+under manual control and the audit must pass before a production release.
+GitHub reads Dependabot configuration from the default branch, so a prepared
+watch on `sandbox` becomes active only after that configuration is promoted.
+No checkout keeps the GitHub token (`persist-credentials:
 false`), the reusable workflows are read-only by default, and every Cargo command uses
 `--locked`. The release workflow uses no build cache.
 

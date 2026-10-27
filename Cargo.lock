@@ -3851,6 +3851,7 @@ dependencies = [
  "uuid",
  "vault_client",
  "webauthn-rs",
+ "webauthn-rs-proto",
  "wiremock",
 ]
 

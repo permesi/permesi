@@ -5,7 +5,7 @@
 //! primary credentials and may be stored separately when persistence exists.
 //!
 //! Flow Overview:
-//! 1) Create registration options bound to the authenticated user/session.
+//! 1) Request a discoverable credential bound to the authenticated user/session.
 //! 2) Persist the in-progress registration state with a short TTL.
 //! 3) Finish registration by verifying the authenticator response.
 //! 4) Persist the credential when preview mode is disabled.
@@ -17,6 +17,9 @@
 //!   Origin header checks before options/finish are served.
 //! - Registration challenges are single-use and tied to the user + session token
 //!   hash to prevent replay across sessions.
+//! - Resident-key creation is a browser capability requirement for usernameless
+//!   login; it is not an authenticated claim about authenticator storage. RP,
+//!   origin, user-verification and proof checks remain owned by `webauthn-rs`.
 //! - Passkey responses are never logged or stored in plaintext.
 
 use super::exchange::{Binding, ExchangeStore, Purpose};
@@ -25,6 +28,7 @@ use std::{collections::HashMap, time::Duration};
 use url::Url;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
+use webauthn_rs_proto::ResidentKeyRequirement;
 
 #[derive(Clone, Debug)]
 pub struct PasskeyConfig {
@@ -193,10 +197,13 @@ impl PasskeyService {
             .ok_or_else(|| anyhow!("Passkey origin not allowed"))
     }
 
-    /// Begin passkey registration for a user/session.
+    /// Request a discoverable passkey for the authenticated user/session.
+    /// Keeps the library-issued RP, challenge and required user verification intact;
+    /// resident-key storage is requested from the browser, not trusted as identity proof.
     ///
     /// # Errors
-    /// Returns error if origin is invalid or `WebAuthn` fails.
+    /// Returns error if the origin or required registration selection is invalid,
+    /// or `WebAuthn` fails.
     pub async fn register_begin(
         &self,
         user_id: Uuid,
@@ -206,8 +213,15 @@ impl PasskeyService {
         origin: &str,
     ) -> Result<(Uuid, CreationChallengeResponse)> {
         let webauthn = self.webauthn_for_origin(origin)?;
-        let (challenge, registration) =
+        let (mut challenge, registration) =
             webauthn.start_passkey_registration(user_id, user_name, user_display_name, None)?;
+        let selection = challenge
+            .public_key
+            .authenticator_selection
+            .as_mut()
+            .ok_or_else(|| anyhow!("Passkey registration has no authenticator selection"))?;
+        selection.resident_key = Some(ResidentKeyRequirement::Required);
+        selection.require_resident_key = true;
 
         let reg_id = self
             .exchanges

@@ -17,6 +17,15 @@ when applicable, and PostgreSQL-issued creation/expiry timestamps. Discoverable 
 starts anonymously and sends no account-specific credential list. The authenticator's
 user handle becomes trusted only after verification against the current stored key.
 
+New passkey enrollment requests `residentKey: required` and the legacy
+`requireResidentKey: true`, retaining required user verification. Discoverable login
+needs the authenticator to retain a user handle; a nonresident credential cannot
+satisfy that flow. These are browser capability requirements, not authenticated
+claims about storage. Registration proof, RP, origin, session binding and single-use
+checks remain enforced by the library and exchange store. Existing credential rows
+are preserved. Users with an older nonresident test credential must sign in with
+password/MFA and enroll a new discoverable passkey; hardware-key MFA is unchanged.
+
 Finish atomically deletes and commits the pending row before checking its bindings
 and cryptographic proof. One concurrent request can obtain the state; invalid proofs,
 changed origins/sessions, altered ciphertext/metadata and replay cannot reuse it.
