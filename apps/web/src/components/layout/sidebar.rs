@@ -71,6 +71,11 @@ pub fn Sidebar() -> impl IntoView {
                                 label="Admin Overview"
                             />
                             <SidebarLink
+                                href={paths::ADMIN_ORGS}
+                                icon="corporate_fare"
+                                label="Global Organizations"
+                            />
+                            <SidebarLink
                                 href={paths::USERS}
                                 icon="group"
                                 label="Global Users"
@@ -171,10 +176,18 @@ fn ProfileSubLink(href: &'static str, icon: &'static str, label: &'static str) -
     }
 }
 
+/// Highlights one section; overview/claim retain their own state outside the inspection subtree.
 #[component]
 fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> impl IntoView {
     let location = use_location();
-    let is_active = move || location.pathname.get().starts_with(href);
+    let is_active = move || {
+        let pathname = location.pathname.get();
+        if href == paths::ADMIN {
+            pathname == paths::ADMIN || pathname == paths::ADMIN_CLAIM
+        } else {
+            pathname.starts_with(href)
+        }
+    };
     let active_1 = is_active;
     let active_4 = is_active;
 
@@ -182,7 +195,7 @@ fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> i
         <A
             href=move || href.to_string()
             {..}
-            attr:class="group relative flex items-center gap-3 rounded-lg px-3 py-1 text-sm transition"
+            attr:class="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-1 text-sm transition"
             class:bg-slate-200=move || active_1()
             class:text-slate-900=move || active_4()
             class:text-slate-700=move || !is_active()

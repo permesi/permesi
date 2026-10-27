@@ -59,14 +59,14 @@ pub fn AdminPage() -> impl IntoView {
                         </div>
                     </div>
                 </A>
-                <A href={paths::ORGS} {..} class="group p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:border-blue-500 transition-all">
+                <A href={paths::ADMIN_ORGS} {..} class="group cursor-pointer p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:border-blue-500 transition-all">
                     <div class="flex items-center gap-4">
                         <div class="p-3 bg-green-50 dark:bg-green-900/30 rounded-lg text-green-600 dark:text-green-400 group-hover:scale-110 transition-transform">
                             <span class="material-symbols-outlined">"corporate_fare"</span>
                         </div>
                         <div>
                             <h2 class="font-semibold text-gray-900 dark:text-white">"Organizations"</h2>
-                            <p class="text-sm text-gray-500">"Manage tenants and projects."</p>
+                            <p class="text-sm text-gray-500">"Inspect all active tenants and their resources."</p>
                         </div>
                     </div>
                 </A>

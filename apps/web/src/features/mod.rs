@@ -2,6 +2,7 @@
 //! import these modules to keep view code focused while keeping security and API
 //! handling in dedicated feature areas.
 
+pub(crate) mod admin_tenants;
 pub(crate) mod auth;
 pub(crate) mod me;
 pub(crate) mod oauth;

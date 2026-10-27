@@ -3,6 +3,7 @@
 
 mod admin;
 mod admin_claim;
+mod admin_tenants;
 mod dashboard;
 mod health;
 mod login;
@@ -55,6 +56,7 @@ pub mod paths {
     pub const MFA_CHALLENGE: &str = "/console/mfa/challenge";
     pub const ADMIN: &str = "/console/admin";
     pub const ADMIN_CLAIM: &str = "/console/admin/claim";
+    pub const ADMIN_ORGS: &str = "/console/admin/orgs";
     pub const ORGS: &str = "/console/orgs";
     pub const USERS: &str = "/console/users";
 
@@ -103,6 +105,11 @@ pub fn AppRoutes() -> impl IntoView {
                 <ParentRoute path=path!("admin") view=|| view! { <AdminLayout/> }>
                     <Route path=path!("") view=AdminPage />
                     <Route path=path!("claim") view=AdminClaimPage />
+                    <Route path=path!("orgs") view=admin_tenants::AdminTenantsPage />
+                    <Route path=path!("orgs/:slug") view=admin_tenants::AdminTenantsPage />
+                    <Route path=path!("orgs/:slug/projects/:project_slug") view=admin_tenants::AdminTenantsPage />
+                    <Route path=path!("orgs/:slug/projects/:project_slug/envs/:env_slug") view=admin_tenants::AdminTenantsPage />
+                    <Route path=path!("orgs/:slug/projects/:project_slug/envs/:env_slug/apps/:app_id") view=admin_tenants::AdminTenantsPage />
                 </ParentRoute>
 
                 <Route path=path!("orgs") view=OrgsListPage />

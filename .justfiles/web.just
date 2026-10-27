@@ -105,8 +105,9 @@ web-test-browser-built dist_dir="dist":
   tests=(
     api::handlers::authorize::tests::authorize_browser_real_postgres_consent_and_redirect
     api::handlers::auth::tests::tenant_deletion::organization_deletion_browser_real_opaque_and_postgres
+    api::handlers::orgs::tests::admin::browser::admin_inspection_browser_real_postgres
   )
-  # libtest exits successfully when a filter matches nothing; require both exact tests first.
+  # libtest exits successfully when a filter matches nothing; require every exact test first.
   for test_name in "${tests[@]}"; do
     listed="$(cargo test --locked -p permesi --lib -- --ignored --list --format terse --exact "$test_name")"
     if [[ "$listed" != "${test_name}: test" ]]; then

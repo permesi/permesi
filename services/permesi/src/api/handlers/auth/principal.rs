@@ -47,6 +47,8 @@ pub enum Permission {
     Delete,
     /// Account suspension/reactivation, restricted to enabled platform operators.
     ManageStatus,
+    /// Read-only tenant metadata inspection, restricted to enabled platform operators.
+    InspectTenants,
     /// Ability to assign roles to users.
     AssignRole,
 }
@@ -55,7 +57,8 @@ impl Principal {
     /// Returns `true` if the principal holds the requested permission.
     ///
     /// Authorization is deny-by-default. Only server-issued scopes are trusted.
-    /// Account-status management requires platform operator authority; global user roles do not suffice.
+    /// Account-status management and tenant inspection require platform operator authority;
+    /// global user roles do not suffice.
     #[must_use]
     pub fn allows(&self, permission: Permission) -> bool {
         let has = |scope: &str| self.scopes.iter().any(|value| value == scope);
@@ -66,7 +69,7 @@ impl Principal {
                         || has(SCOPE_USERS_DELETE)
                         || has(SCOPE_USERS_ASSIGN_ROLE)
                 }
-                Permission::ManageStatus => false,
+                Permission::ManageStatus | Permission::InspectTenants => false,
                 Permission::Write => has(SCOPE_USERS_WRITE),
                 Permission::Delete => has(SCOPE_USERS_DELETE),
                 Permission::AssignRole => has(SCOPE_USERS_ASSIGN_ROLE),
@@ -252,6 +255,7 @@ mod tests {
         assert!(principal.allows(Permission::Delete));
         assert!(principal.allows(Permission::AssignRole));
         assert!(principal.allows(Permission::ManageStatus));
+        assert!(principal.allows(Permission::InspectTenants));
     }
 
     #[test]
@@ -264,8 +268,22 @@ mod tests {
             Permission::Delete,
             Permission::AssignRole,
             Permission::ManageStatus,
+            Permission::InspectTenants,
         ] {
             assert!(!principal.allows(permission));
+        }
+    }
+
+    /// User-management capabilities must never confer cross-tenant inspection authority.
+    #[test]
+    fn user_management_scopes_do_not_authorize_tenant_inspection() {
+        for scopes in [
+            vec![],
+            vec![SCOPE_USERS_WRITE],
+            vec![SCOPE_USERS_DELETE],
+            vec![SCOPE_USERS_ASSIGN_ROLE],
+        ] {
+            assert!(!principal_with_scopes(&scopes).allows(Permission::InspectTenants));
         }
     }
 }

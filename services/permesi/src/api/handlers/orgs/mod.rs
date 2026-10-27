@@ -19,6 +19,7 @@
 //! 3) Enforce org-scoped roles for write operations.
 //! 4) Perform scoped CRUD for projects, environments, and applications.
 
+pub(crate) mod admin;
 pub(crate) mod applications;
 pub(crate) mod capabilities;
 pub(crate) mod environments;

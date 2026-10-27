@@ -75,6 +75,7 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(users::set_user_role))
         .merge(user_lifecycle_routes())
         .merge(tenant_routes())
+        .merge(admin_tenant_routes())
         .routes(routes!(orgs::oauth::clients::create_client))
         .routes(routes!(orgs::oauth::clients::list_clients))
         .routes(routes!(orgs::oauth::clients::get_client))
@@ -269,6 +270,19 @@ fn tenant_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(orgs::projects::delete_project))
         .routes(routes!(orgs::environments::delete_environment))
         .routes(routes!(orgs::applications::delete_application))
+}
+
+/// Registers only read operations; tenant-management routes retain their membership boundary.
+fn admin_tenant_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(orgs::admin::list_organizations))
+        .routes(routes!(orgs::admin::get_organization))
+        .routes(routes!(orgs::admin::list_projects))
+        .routes(routes!(orgs::admin::get_project))
+        .routes(routes!(orgs::admin::list_environments))
+        .routes(routes!(orgs::admin::get_environment))
+        .routes(routes!(orgs::admin::list_applications))
+        .routes(routes!(orgs::admin::get_application))
 }
 
 #[cfg(test)]

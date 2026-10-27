@@ -24,6 +24,7 @@ commits, GitHub results and compatibility limits. Publication remains paused.
 
 ## Other milestones
 
+- [x] Read-only platform tenant inspection: separate operator-authorized global organization/project/environment/application views, active-ancestry filtering and bounded pagination; retain existing tenant membership and mutation rules. See [design and regression protection](docs/admin-tenant-inspection.md).
 - [ ] Audit Logs: Implement a view to see `admin_attempts` and other audit trails directly in the dashboard.
 - [x] OAuth foundation: application-owned public/confidential clients, redirect and scope allow-lists, delegated scope registry, tenant-bound grant persistence, and session-authenticated management APIs.
 - [x] OAuth configuration console: nested application navigation, client lifecycle, redirect allow-lists, scope registry, and client scope assignment; system OIDC entries remain read-only.

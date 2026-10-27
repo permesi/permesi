@@ -452,7 +452,14 @@ flowchart TD
   Challenge --> Success
 ```
 
+### Platform tenant inspection
+
+Platform operators can use [read-only tenant inspection](docs/admin-tenant-inspection.md)
+to browse all active organizations and their resource hierarchy from Global
+Organizations. Workspace Organizations retains membership-scoped management.
+
 ### Admin Rate Limiting
+
 Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against Vault token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
 
 Unauthenticated authentication flows also use PostgreSQL-backed fixed-window

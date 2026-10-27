@@ -24,6 +24,7 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
     "/../../db/sql/02_permesi.sql"
 ));
 
+mod admin;
 mod environments;
 
 pub(super) struct TestDb {

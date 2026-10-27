@@ -70,6 +70,17 @@ pub fn router() -> OpenApiRouter<AppState> {
     openapi::api_router()
 }
 
+/// Installs error fallbacks before privacy policy so unsupported methods cannot bypass it.
+/// Admin metadata responses prohibit caching; other routes retain their existing headers.
+pub(crate) fn with_response_policy<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    api_error::with_error_envelope(router).layer(axum::middleware::map_response(
+        handlers::orgs::admin::prevent_cache,
+    ))
+}
+
 /// Configuration for Vault KV-v2 configuration secrets.
 #[derive(Debug, Clone)]
 pub struct VaultKvConfig {
@@ -272,7 +283,7 @@ fn build_router(state: AppState) -> Result<Router> {
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
     // Error responses get the JSON envelope inside CORS, so browsers can read them.
     let (router, _openapi) = router().split_for_parts();
-    let app = api_error::with_error_envelope(
+    let app = with_response_policy(
         router
             .route("/", get(root::root))
             .route("/health", options(health::health)),

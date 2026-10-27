@@ -71,8 +71,11 @@ before interpreting queue or wall-time differences as a speedup.
   excludes `.git`, and the binaries would otherwise report an unknown commit.
   Its required `Browser tests` job downloads the same run's `frontend-dist` artifact and invokes
   `just web-test-browser-built` without rebuilding WASM or running npm installation. It runs the console
-  fixture suite and explicitly executes both normally ignored real PostgreSQL browser tests for
-  authorization consent/redirects and OPAQUE organization-deletion reauthentication. Node 24, pinned
+  fixture suite and explicitly executes the ignored real PostgreSQL browser tests for
+  authorization consent/redirects, OPAQUE organization-deletion reauthentication and
+  read-only platform tenant inspection. The inspection test follows the admin dashboard
+  through foreign resources and checks that ordinary owner controls remain available.
+  Node 24, pinned
   Just 1.58.0 and zsh run on the hosted job; the existing container action requires a private Podman
   API and owns dependency cleanup. The thirty-minute job timeout bounds setup and execution. Backend
   test names are checked by exact discovery before execution, so a renamed or missing test fails the job.
