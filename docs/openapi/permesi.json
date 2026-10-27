@@ -747,7 +747,7 @@
           "admin-tenants"
         ],
         "summary": "Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "list_organizations",
+        "operationId": "admin_list_organizations",
         "parameters": [
           {
             "name": "after",
@@ -828,7 +828,7 @@
           "admin-tenants"
         ],
         "summary": "Inspects one active resource for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "get_organization",
+        "operationId": "admin_get_organization",
         "parameters": [
           {
             "name": "org_slug",
@@ -909,7 +909,7 @@
           "admin-tenants"
         ],
         "summary": "Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "list_projects",
+        "operationId": "admin_list_projects",
         "parameters": [
           {
             "name": "org_slug",
@@ -999,7 +999,7 @@
           "admin-tenants"
         ],
         "summary": "Inspects one active resource for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "get_project",
+        "operationId": "admin_get_project",
         "parameters": [
           {
             "name": "org_slug",
@@ -1089,7 +1089,7 @@
           "admin-tenants"
         ],
         "summary": "Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "list_environments",
+        "operationId": "admin_list_environments",
         "parameters": [
           {
             "name": "org_slug",
@@ -1188,7 +1188,7 @@
           "admin-tenants"
         ],
         "summary": "Inspects one active resource for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "get_environment",
+        "operationId": "admin_get_environment",
         "parameters": [
           {
             "name": "org_slug",
@@ -1287,7 +1287,7 @@
           "admin-tenants"
         ],
         "summary": "Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "list_applications",
+        "operationId": "admin_list_applications",
         "parameters": [
           {
             "name": "org_slug",
@@ -1395,7 +1395,7 @@
           "admin-tenants"
         ],
         "summary": "Inspects one active resource for enabled operators with a full session; grants no tenant write authority.",
-        "operationId": "get_application",
+        "operationId": "admin_get_application",
         "parameters": [
           {
             "name": "org_slug",

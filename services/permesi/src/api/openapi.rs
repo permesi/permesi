@@ -295,6 +295,65 @@ mod tests {
     };
     use tower::ServiceExt;
 
+    /// New inspection operations must not shadow identifiers used by existing generated clients.
+    #[test]
+    fn admin_inspection_operation_ids_do_not_shadow_tenant_operations() -> Result<()> {
+        let document = serde_json::to_value(openapi())?;
+        let paths = document
+            .get("paths")
+            .and_then(serde_json::Value::as_object)
+            .context("OpenAPI paths")?;
+        let mut identifiers = std::collections::HashMap::<&str, Vec<&str>>::new();
+        for (path, item) in paths {
+            for operation in item.as_object().context("path item")?.values() {
+                if let Some(id) = operation
+                    .get("operationId")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    identifiers.entry(id).or_default().push(path);
+                }
+            }
+        }
+        let inspection = paths
+            .iter()
+            .filter(|(path, _)| path.starts_with("/v1/admin/orgs"))
+            .collect::<Vec<_>>();
+        assert_eq!(inspection.len(), 8);
+        for (path, item) in inspection {
+            let id = item
+                .get("get")
+                .and_then(|operation| operation.get("operationId"))
+                .and_then(serde_json::Value::as_str)
+                .context("inspection operation ID")?;
+            assert_eq!(
+                identifiers.get(id).map(Vec::len),
+                Some(1),
+                "inspection operation {path} shadows {id}"
+            );
+        }
+        for (path, expected) in [
+            ("/v1/orgs/{org_slug}/projects", "list_projects"),
+            (
+                "/v1/orgs/{org_slug}/projects/{project_slug}/envs",
+                "list_environments",
+            ),
+            (
+                "/v1/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps",
+                "list_applications",
+            ),
+        ] {
+            assert_eq!(
+                paths
+                    .get(path)
+                    .and_then(|item| item.get("get"))
+                    .and_then(|operation| operation.get("operationId"))
+                    .and_then(serde_json::Value::as_str),
+                Some(expected)
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn openapi_info_from_cargo() {
         let spec = openapi();

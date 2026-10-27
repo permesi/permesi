@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs",
+#[utoipa::path(get, operation_id = "admin_list_organizations", path = "/v1/admin/orgs",
     params(("after" = Option<String>, Query, description = "Last item UUID from the previous page")),
     responses((status = 200, body = AdminPage),
         (status = 400, description = "Invalid path or cursor"),
@@ -27,7 +27,7 @@ pub(crate) async fn list_organizations(
 }
 
 /// Inspects one active resource for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}",
+#[utoipa::path(get, operation_id = "admin_get_organization", path = "/v1/admin/orgs/{org_slug}",
     params(("org_slug" = String, Path, description = "Resource ancestry")),
     responses((status = 200, body = AdminMetadata),
         (status = 400, description = "Invalid path or cursor"),
@@ -44,7 +44,7 @@ pub(crate) async fn get_organization(
 }
 
 /// Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}/projects",
+#[utoipa::path(get, operation_id = "admin_list_projects", path = "/v1/admin/orgs/{org_slug}/projects",
     params(("org_slug" = String, Path, description = "Resource ancestry"),("after" = Option<String>, Query, description = "Last item UUID from the previous page")),
     responses((status = 200, body = AdminPage),
         (status = 400, description = "Invalid path or cursor"),
@@ -62,7 +62,7 @@ pub(crate) async fn list_projects(
 }
 
 /// Inspects one active resource for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}",
+#[utoipa::path(get, operation_id = "admin_get_project", path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}",
     params(("org_slug" = String, Path, description = "Resource ancestry"),("project_slug" = String, Path, description = "Resource ancestry")),
     responses((status = 200, body = AdminMetadata),
         (status = 400, description = "Invalid path or cursor"),
@@ -79,7 +79,7 @@ pub(crate) async fn get_project(
 }
 
 /// Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs",
+#[utoipa::path(get, operation_id = "admin_list_environments", path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs",
     params(("org_slug" = String, Path, description = "Resource ancestry"),("project_slug" = String, Path, description = "Resource ancestry"),("after" = Option<String>, Query, description = "Last item UUID from the previous page")),
     responses((status = 200, body = AdminPage),
         (status = 400, description = "Invalid path or cursor"),
@@ -97,7 +97,7 @@ pub(crate) async fn list_environments(
 }
 
 /// Inspects one active resource for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}",
+#[utoipa::path(get, operation_id = "admin_get_environment", path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}",
     params(("org_slug" = String, Path, description = "Resource ancestry"),("project_slug" = String, Path, description = "Resource ancestry"),("env_slug" = String, Path, description = "Resource ancestry")),
     responses((status = 200, body = AdminMetadata),
         (status = 400, description = "Invalid path or cursor"),
@@ -120,7 +120,7 @@ pub(crate) async fn get_environment(
 }
 
 /// Lists bounded metadata for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps",
+#[utoipa::path(get, operation_id = "admin_list_applications", path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps",
     params(("org_slug" = String, Path, description = "Resource ancestry"),("project_slug" = String, Path, description = "Resource ancestry"),("env_slug" = String, Path, description = "Resource ancestry"),("after" = Option<String>, Query, description = "Last item UUID from the previous page")),
     responses((status = 200, body = AdminPage),
         (status = 400, description = "Invalid path or cursor"),
@@ -144,7 +144,7 @@ pub(crate) async fn list_applications(
 }
 
 /// Inspects one active resource for enabled operators with a full session; grants no tenant write authority.
-#[utoipa::path(get, path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}",
+#[utoipa::path(get, operation_id = "admin_get_application", path = "/v1/admin/orgs/{org_slug}/projects/{project_slug}/envs/{env_slug}/apps/{app_id}",
     params(("org_slug" = String, Path, description = "Resource ancestry"),("project_slug" = String, Path, description = "Resource ancestry"),("env_slug" = String, Path, description = "Resource ancestry"),("app_id" = String, Path, description = "Resource ancestry")),
     responses((status = 200, body = AdminMetadata),
         (status = 400, description = "Invalid path or cursor"),

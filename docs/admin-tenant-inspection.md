@@ -77,3 +77,10 @@ ancestry scoping or broadening the ordinary membership query made the correspond
 tests fail at their intended assertions. Those deliberate mutations were restored;
 the corrected implementation and final browser artifact passed. Browser checks
 also require malicious metadata to remain text before any document reload.
+
+The OpenAPI contract also has a regression for unique administrator operation IDs
+and unchanged tenant operation IDs. It failed when new inspection operations
+shadowed existing tenant names, then passed with explicit `admin_` identifiers.
+This changes only the new operation metadata; existing tenant/auth operation IDs
+are preserved. The pre-existing WebAuthn `register_finish` name collision is
+tracked separately in TODO rather than silently renaming existing operations.
