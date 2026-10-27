@@ -11,6 +11,19 @@ This is the authoritative milestone checklist. README summarizes the implemented
 [OAuth documentation](docs/oauth-foundation.md#roadmap) describes milestone dependencies
 and completion boundaries. Completed entries require passing checks and review evidence.
 
+## Current release qualification
+
+The [2026-10-27 readiness record](docs/release-readiness.md) links the exact tested
+commits, GitHub results and compatibility limits. Publication remains paused.
+
+- [x] Require discoverable passkeys and verify enrollment, credential preservation and authentication after Helm reinstall/pod replacement. Existing nonresident credentials need fresh enrollment.
+- [x] Qualify the Helm release preparation: aligned 0.4.6 chart versions, matching image/SQL pins, shared release guards and a real packaged-stack Kind gate. Application and Helm build/test CI pass.
+- [ ] Resolve `crypto-bigint 0.5.5` / `RUSTSEC-2026-0387` through compatible published parent-library updates. Recheck around **2026-11-03**; retain the failing audit and add no exception. This is a review target, not an automatic release date.
+- [ ] Activate the prepared weekly Cargo Dependabot watch when its configuration can reach the default branch. Until then, check upstream manually; the existing weekly audit does not update dependencies.
+- [ ] After the dependency blocker clears, rerun the security audit, full application CI and exact-image/SQL Helm upgrade qualification. Promote/publish only when authorized; Helm `main` CI can trigger chart publication.
+
+## Other milestones
+
 - [ ] Audit Logs: Implement a view to see `admin_attempts` and other audit trails directly in the dashboard.
 - [x] OAuth foundation: application-owned public/confidential clients, redirect and scope allow-lists, delegated scope registry, tenant-bound grant persistence, and session-authenticated management APIs.
 - [x] OAuth configuration console: nested application navigation, client lifecycle, redirect allow-lists, scope registry, and client scope assignment; system OIDC entries remain read-only.

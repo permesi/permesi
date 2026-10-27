@@ -316,6 +316,8 @@ already revoked tokens and does not retract already signed JWTs.
 The [authentication release validation record](docs/authentication-release-validation.md)
 tracks the completed shared-state, MFA, admission and refresh batch, independent review,
 regression evidence and remaining release boundaries.
+The [current release-readiness record](docs/release-readiness.md) covers the
+2026-10-27 Helm/passkey qualification and the unresolved dependency audit blocker.
 
 Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
 enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA versions;

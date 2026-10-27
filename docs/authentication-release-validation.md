@@ -7,6 +7,10 @@ families. It prepares the workspace for release; it does not create a release ta
 promote a deployment or claim OIDC certification. [TODO.md](../TODO.md) remains the
 authoritative roadmap.
 
+For the later 2026-10-27 dependency, passkey and Helm qualification, use the
+[current readiness record](release-readiness.md). Its Rust audit remains blocked
+by `crypto-bigint`; the successful audit below belongs to the earlier batch.
+
 ## Implemented boundaries
 
 OPAQUE and all four WebAuthn ceremonies use bounded, AEAD-sealed PostgreSQL state,
