@@ -345,6 +345,7 @@ impl PasskeyService {
     }
 
     /// Finish passkey authentication against the server-loaded credential.
+    /// The library requires its ID to match the assertion and verifies the proof.
     ///
     /// # Errors
     /// Returns error if the authentication state is missing, expired, or mismatched.
@@ -353,10 +354,10 @@ impl PasskeyService {
         auth_id: Uuid,
         origin: &str,
         response: PublicKeyCredential,
-        credentials: &[DiscoverableKey],
+        credential: &Passkey,
     ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
         let (authentication, _) = self.consume_authentication(auth_id, origin).await?;
-        self.verify_consumed_authentication(origin, &response, authentication, credentials)
+        self.verify_consumed_authentication(origin, &response, authentication, credential)
     }
 
     /// Commits single-use consumption before a caller reserves a credential/session transaction.
@@ -393,19 +394,20 @@ impl PasskeyService {
         Ok(authentication)
     }
 
-    /// Verifies the consumed proof against currently locked credentials without acquiring SQL connections.
+    /// Verifies the consumed proof against the currently locked credential without SQL access.
+    /// Its ID must match the assertion; RP, origin and required user verification stay library-enforced.
     pub(crate) fn verify_consumed_authentication(
         &self,
         origin: &str,
         response: &PublicKeyCredential,
         authentication: DiscoverableAuthentication,
-        credentials: &[DiscoverableKey],
+        credential: &Passkey,
     ) -> Result<AuthenticationResult, PasskeyAuthenticationError> {
         let webauthn = self
             .webauthn_for_origin(origin)
             .map_err(|_| PasskeyAuthenticationError::OriginMismatch)?;
         webauthn
-            .finish_discoverable_authentication(response, authentication, credentials)
+            .finish_discoverable_authentication_v2(response, authentication, credential)
             .map_err(PasskeyAuthenticationError::Webauthn)
     }
 }

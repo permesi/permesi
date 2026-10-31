@@ -16,6 +16,9 @@ purpose, exact validated origin, RP ID, authenticated user and original session 
 when applicable, and PostgreSQL-issued creation/expiry timestamps. Discoverable login
 starts anonymously and sends no account-specific credential list. The authenticator's
 user handle becomes trusted only after verification against the current stored key.
+WebAuthn 0.6.2 verifies discoverable login through its single-credential API: the
+locked, server-loaded passkey is passed directly, and the library rejects an
+assertion whose credential ID does not match it before verifying the proof.
 
 New passkey enrollment requests `residentKey: required` and the legacy
 `requireResidentKey: true`, retaining required user verification. Discoverable login

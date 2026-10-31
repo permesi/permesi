@@ -1,6 +1,7 @@
 //! Unit and integration tests for the auth module.
 
 mod mfa_lifecycle;
+mod opaque_compatibility;
 mod opaque_exchange;
 mod password_lifecycle;
 mod registration;

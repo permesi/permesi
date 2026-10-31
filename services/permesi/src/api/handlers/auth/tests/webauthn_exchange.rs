@@ -8,7 +8,7 @@ use rsa::{Pkcs1v15Sign, RsaPrivateKey, traits::PublicKeyParts};
 use serde_cbor_2::Value as Cbor;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use webauthn_rs::prelude::{DiscoverableKey, PublicKeyCredential, RegisterPublicKeyCredential};
+use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential, WebauthnError};
 
 const ORIGIN: &str = "https://example.com";
 
@@ -423,17 +423,59 @@ async fn webauthn_passkey_registration_and_login_survive_replica_restart() -> Re
     let proof = authenticator.authenticate(&challenge, user)?;
     drop(b);
     let c = passkeys(db.pool.clone(), 300, 100)?;
-    let credentials = [DiscoverableKey::from(&key)];
     let verified = c
-        .auth_finish(id, ORIGIN, proof.clone(), &credentials)
+        .auth_finish(id, ORIGIN, proof.clone(), &key)
         .await
         .map_err(|_| anyhow!("authentication failed"))?;
     assert_eq!(verified.cred_id().as_slice(), authenticator.id);
-    assert!(
-        c.auth_finish(id, ORIGIN, proof, &credentials)
-            .await
-            .is_err()
-    );
+    assert!(c.auth_finish(id, ORIGIN, proof, &key).await.is_err());
+    Ok(())
+}
+
+/// The single-credential API rejects a substituted ID and consumes the challenge before retry.
+#[tokio::test]
+async fn webauthn_passkey_login_rejects_mismatched_credential_and_consumes_state() -> Result<()> {
+    use crate::webauthn::{PasskeyAuthenticationError, serialize_passkey};
+    let db = TestDb::new()
+        .await?
+        .context("WebAuthn credential matching requires a container runtime")?;
+    let user = insert_test_user(&db.pool).await?;
+    let service = passkeys(db.pool.clone(), 300, 100)?;
+    let mut authenticator = Authenticator::new()?;
+    let (id, challenge) = service
+        .register_begin(user, "user@example.com", "User", vec![1; 32], ORIGIN)
+        .await?;
+    let key = service
+        .register_finish(
+            id,
+            user,
+            &[1; 32],
+            ORIGIN,
+            authenticator.register(&challenge)?,
+        )
+        .await
+        .map_err(|_| anyhow!("registration failed"))?;
+    let stored = serialize_passkey(&key)?;
+    let (id, challenge) = service.auth_begin(ORIGIN).await?;
+    let proof = authenticator.authenticate(&challenge, user)?;
+    let mut substituted = proof.clone();
+    substituted.raw_id = vec![0; 32];
+    assert!(matches!(
+        service.auth_finish(id, ORIGIN, substituted, &key).await,
+        Err(PasskeyAuthenticationError::Webauthn(
+            WebauthnError::CredentialNotFound
+        ))
+    ));
+    assert!(matches!(
+        service.auth_finish(id, ORIGIN, proof, &key).await,
+        Err(PasskeyAuthenticationError::NotFound)
+    ));
+    assert_eq!(serialize_passkey(&key)?, stored);
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(&db.pool)
+        .await?;
+    assert_eq!(sessions, 0);
     Ok(())
 }
 

@@ -40,7 +40,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use webauthn_rs::prelude::{AuthenticationResult, DiscoverableKey, Passkey, PublicKeyCredential};
+use webauthn_rs::prelude::{AuthenticationResult, Passkey, PublicKeyCredential};
 
 const MAX_WEBAUTHN_JSON_BYTES: usize = 32 * 1024;
 type HandlerError = Box<axum::response::Response>;
@@ -321,9 +321,8 @@ async fn verify_passkey_assertion<'a>(
             return Err(response);
         }
     };
-    let credentials = [DiscoverableKey::from(&passkey)];
     let auth_result = passkey_service
-        .verify_consumed_authentication(origin, &auth_response, authentication, &credentials)
+        .verify_consumed_authentication(origin, &auth_response, authentication, &passkey)
         .map_err(|err| {
             warn!(request_id = %request_id, "passkey login failed: {err:?}");
             Box::new((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response())

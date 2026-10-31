@@ -117,9 +117,9 @@ uuid = { workspace = true, features = ["v1", "v4", "v7"] }
 chacha20poly1305 = "0.11.0"
 # webauthn-rs 0.6 uses RustCrypto (via crypto-glue) instead of OpenSSL, which keeps
 # the whole workspace OpenSSL-free. Credentials serialized by 0.5 load unchanged.
-webauthn-rs = { version = "0.6.1-dev", features = ["conditional-ui", "danger-allow-state-serialisation"] }
+webauthn-rs = { version = "0.6.2", features = ["conditional-ui", "danger-allow-state-serialisation"] }
 # Public registration-option types must match webauthn-rs's protocol version.
-webauthn-rs-proto = "=0.6.1-dev"
+webauthn-rs-proto = "=0.6.2"
 hex = "0.4"
 hmac = { workspace = true }
 service_utils = { workspace = true }

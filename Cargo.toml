@@ -33,8 +33,8 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["allo
 getrandom = "0.4"
 hmac = "0.13"
 pasetors = "0.8"
-opaque-ke = { version = "4.0.1", features = ["argon2", "std"] }
-# opaque-ke 4.x exposes protocol traits from the older digest, password-hash, and
+opaque-ke = { version = "4.1.0-pre.2", features = ["argon2", "std"] }
+# opaque-ke's TripleDh suite exposes traits from the older digest, password-hash, and
 # rand_core ecosystems. Keep those versions isolated behind explicit aliases while
 # the rest of the workspace uses the current crates below. `cargo upgrade --pinned`
 # proposes bumping them; that fails until opaque-ke moves to digest 0.11 and

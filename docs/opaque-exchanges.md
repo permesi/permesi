@@ -7,6 +7,12 @@ writer, Vault `opaque_server_seed` and OPAQUE server identifier. Pending exchang
 never depend on a process-local map, sticky sessions or a local file. WebAuthn/passkey
 ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges.md).
 
+The backend, browser client and scenario runner share `opaque-ke 4.1.0-pre.2` while
+retaining the existing Ristretto255/TripleDH/SHA-512/Argon2 suite. Its optional KEM
+feature is disabled. The `opaque_*` aliases stay on Argon2 0.5, rand_chacha 0.3,
+rand_core 0.6 and SHA-2 0.10 because the library still requires their older traits;
+the current versions used elsewhere in the workspace cannot replace those types.
+
 ## Flow and trust boundary
 
 Start validates the existing request and builds the library's credential response.
@@ -91,6 +97,12 @@ and upgrade policy in [authentication operations](authentication-operations.md).
 Independent Vault exchange-key rotation remains separate from permanent OPAQUE setup.
 
 ## Regression checks
+
+`cargo test --locked -p permesi --lib opaque_compatibility` checks public,
+deterministic fixtures generated with `opaque-ke 4.0.1`. It verifies production
+seed-to-setup derivation, stored registration bytes, pending client/server states,
+handshake messages and matching session keys, and rejects an altered finalization
+MAC. These fixtures guard library upgrades without changing the cipher suite.
 
 Run the real PostgreSQL regressions with
 `cargo test --locked -p permesi --lib api::handlers::auth::tests::opaque_exchange`.
