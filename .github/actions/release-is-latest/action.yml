@@ -56,7 +56,8 @@ runs:
             echo "Ignoring ${candidate}: ${commit} is not on main (${status})."
             continue
           fi
-          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = /{print $2; exit}')"
+          # Drain the response so early version selection cannot break the decoder.
+          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = / && !found {print $2; found=1}')"
           if [[ "${version}" != "${candidate}" ]]; then
             echo "Ignoring ${candidate}: its commit carries version ${version}."
             continue

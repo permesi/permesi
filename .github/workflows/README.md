@@ -16,14 +16,18 @@ retrying. A recovery run uses the workflow on `main` and the original candidate'
 tested artifacts; the existing version tag must stay fixed. Once the workflow fix
 is validated and reaches `main`, run `just release-republish X.Y.Z`.
 
-The release guard and local recorded-version reader consume the entire manifest
-stream while selecting only the first matching version. Exiting the parser early
+The release guard, shared latest-release action and local recorded-version reader
+consume the entire manifest stream while selecting only the first matching version.
+Exiting the parser early
 can give `base64` or `git show` a broken pipe, causing `pipefail` to reject valid
 release evidence. Draining the stream also preserves upstream failures, including
 invalid base64 or an unreadable commit. Version mismatches still reject publishing.
 `python3 scripts/test-release-version.py` exercises the checked-in shell against
 oversized manifests, later version fields, missing/mismatched versions, corrupt
-base64 and failed Git reads. The required format job runs these regressions.
+base64 and failed Git reads. It discovers all API-based version readers in workflows
+and composite actions so a copied reader cannot escape coverage. The required format
+job runs these regressions. Whole-action tests preserve the higher-version check
+and require corrupt or unavailable evidence to fail without a latest-release output.
 
 ## Runner Configuration (`CI_RUNNER`)
 
