@@ -2,9 +2,9 @@
 // PostgreSQL and an HTTP loopback listener; production dispatch still requires HTTPS.
 // No external site, plaintext code storage, token endpoint or TLS bypass is used.
 import fs from 'node:fs';
-import path from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
+import {createBrowserWorkspace,devToolsListUrl} from './browser_files.mjs';
 const origin=process.env.PERMESI_AUTHORIZE_TEST_ORIGIN;
 const issuer=process.env.PERMESI_AUTHORIZE_TEST_ISSUER;
 const callbackOrigin=process.env.PERMESI_AUTHORIZE_TEST_CALLBACK_ORIGIN;
@@ -13,15 +13,14 @@ const session=process.env.PERMESI_AUTHORIZE_TEST_SESSION;
 const otherSession=process.env.PERMESI_AUTHORIZE_TEST_OTHER_SESSION;
 assert(origin&&issuer&&callbackOrigin&&authorizationUrl&&session&&otherSession,'Run through just web-test-browser');
 assert.notEqual(origin,callbackOrigin,'The registered client must use a distinct origin');
-const profile=path.resolve(import.meta.dirname,'../../../.tmp',`authorize-browser-${process.pid}`);
-fs.mkdirSync(profile,{recursive:true});
+const workspace=createBrowserWorkspace('permesi-authorize-');
+const profile=workspace.profile;
 const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost, EXCLUDE ::1, EXCLUDE [::1]','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let socket;
 try {
  for(let i=0;i<100&&!fs.existsSync(`${profile}/DevToolsActivePort`);i++)await delay(100);
- const port=fs.readFileSync(`${profile}/DevToolsActivePort`,'utf8').split('\n')[0];
- const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+ const targets=await(await fetch(devToolsListUrl(profile))).json();
  socket=new WebSocket(targets.find(value=>value.type==='page').webSocketDebuggerUrl);
  await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
  let sequence=0;const pending=new Map();const exceptions=[];const responses=[];const submissions=[];
@@ -60,7 +59,8 @@ try {
  await navigate(authorizationUrl);await consentPage();
  const form=await evaluate("new URLSearchParams(new FormData(document.querySelector('form'))).toString()+'&decision=allow'");
  const consentScreenshot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
- fs.writeFileSync(path.resolve(profile,'../authorize-consent.png'),Buffer.from(consentScreenshot.data,'base64'));
+ workspace.writeScreenshot('authorize-consent.png',Buffer.from(consentScreenshot.data,'base64'));
+ console.log('Consent screenshot: '+workspace.directory);
  await evaluate("document.querySelector('button[value=allow]').click()");await callback();
  assert.equal(await evaluate("new URLSearchParams(location.search).get('state')"),'opaque + / & = % ü');
  assert(await evaluate("/^[A-Za-z0-9_-]{43}$/.test(new URLSearchParams(location.search).get('code'))"));

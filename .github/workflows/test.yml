@@ -26,7 +26,7 @@ jobs:
     name: Format
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -39,6 +39,7 @@ jobs:
 
       - name: Test CI metadata and toolchain helpers
         run: |
+          python3 scripts/check-action-pins.py
           python3 scripts/test-ci-timings.py
           python3 .github/actions/ensure-musl-toolchain/test_runtime.py
 
@@ -46,7 +47,7 @@ jobs:
     name: Clippy
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
@@ -55,7 +56,7 @@ jobs:
           components: clippy
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: inputs.cache || github.event_name == 'pull_request'
         with:
           shared-key: native-and-wasm-lint
@@ -73,13 +74,13 @@ jobs:
     name: Check
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
       - uses: ./.github/actions/rust-toolchain
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: inputs.cache || github.event_name == 'pull_request'
         with:
           shared-key: native-check
@@ -93,11 +94,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust-toolchain
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Verify committed OpenAPI artifacts
         run: ./scripts/check-openapi
@@ -106,13 +107,13 @@ jobs:
     name: Security Audit (Web)
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: npm
@@ -125,6 +126,9 @@ jobs:
       - name: NPM audit
         working-directory: apps/web
         run: npm audit --audit-level=high
+
+      - name: Test browser file isolation
+        run: node apps/web/tests/browser_files.test.mjs
 
   test:
     name: Unit Tests
@@ -148,13 +152,13 @@ jobs:
       - db-schema
       - integration
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
       - uses: ./.github/actions/rust-toolchain
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: inputs.cache || github.event_name == 'pull_request'
         with:
           shared-key: native-tests
@@ -181,7 +185,7 @@ jobs:
 
       - name: Upload compilation timings
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-compilation-timings-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/cargo-timings/*.html
@@ -198,13 +202,13 @@ jobs:
       - check
       - db-schema
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace
       - uses: ./.github/actions/rust-toolchain
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: inputs.cache || github.event_name == 'pull_request'
         with:
           shared-key: native-tests
@@ -224,7 +228,7 @@ jobs:
       - check
       - npm-audit
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/pre-clean-workspace

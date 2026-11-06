@@ -117,8 +117,13 @@ smoke test against isolated local API fixtures. It exercises navigation, public 
 copy feedback, retained validation drafts, scope assignment, system scope controls,
 lifecycle and credential confirmations, one-time secret clearing/copy, rotation overlap,
 response-loss recovery, forced closure during pending mutations, disabled buttons,
-and a fixed 390px layout. It also captures desktop/mobile/dark screenshots under
-`/tmp/permesi-oauth-ui-client-*.png`. It uses no dev session or database data; real
+and a fixed 390px layout. It also captures desktop/mobile/dark screenshots in a
+private, randomly named directory under the OS temporary directory and prints its
+location. Screenshots are created exclusively with owner-only permissions; existing
+files and symlinks are rejected. Browser profiles are private and removed after
+the run, and request bodies stay in memory. The shared file-isolation regression
+also rejects malformed Chromium discovery ports before any network request.
+It uses no dev session or database data; real
 tenant enforcement and database invariants stay covered by the backend integration
 tests. Node 22 or later and `chromium` in PATH are required. Set
 `PERMESI_WEB_TEST_DIST` to select an already built distribution explicitly when

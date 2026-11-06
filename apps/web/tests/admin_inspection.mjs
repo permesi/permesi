@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
+import {createBrowserWorkspace,devToolsListUrl} from './browser_files.mjs';
 
 const api=process.env.PERMESI_INSPECTION_TEST_API;
 const session=process.env.PERMESI_INSPECTION_TEST_SESSION;
@@ -37,14 +38,14 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
-const profile=fs.mkdtempSync(path.resolve(import.meta.dirname,'../../../.tmp/admin-inspection-browser-'));
+const workspace=createBrowserWorkspace('permesi-admin-inspection-');
+const profile=workspace.profile;
 const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost, EXCLUDE ::1, EXCLUDE [::1]','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let socket;
 try {
  for(let i=0;i<100&&!fs.existsSync(`${profile}/DevToolsActivePort`);i++)await delay(100);
- const port=fs.readFileSync(`${profile}/DevToolsActivePort`,'utf8').split('\n')[0];
- const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+ const targets=await(await fetch(devToolsListUrl(profile))).json();
  socket=new WebSocket(targets.find(value=>value.type==='page').webSocketDebuggerUrl);
  await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
  let sequence=0;const pending=new Map();const exceptions=[];
@@ -98,5 +99,5 @@ try {
 } finally {
  socket?.close();browser.kill('SIGTERM');await delay(150);if(browser.exitCode===null)browser.kill('SIGKILL');
  await new Promise(resolve=>browser.exitCode!==null?resolve():browser.once('exit',resolve));
- await new Promise(resolve=>server.close(resolve));fs.rmSync(profile,{recursive:true,force:true});
+ await new Promise(resolve=>server.close(resolve));fs.rmSync(workspace.directory,{recursive:true,force:true});
 }

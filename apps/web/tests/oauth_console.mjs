@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
+import {createBrowserWorkspace,devToolsListUrl} from './browser_files.mjs';
 import {checkSecuritySettings} from './security_settings.mjs';
 const webRoot = path.resolve(import.meta.dirname, '..');
 const root = process.env.PERMESI_WEB_TEST_DIST
@@ -149,15 +150,14 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
-const profile=`/tmp/permesi-oauth-ui-browser-${process.pid}`;
-fs.mkdirSync(profile);
+const workspace=createBrowserWorkspace('permesi-oauth-ui-');
+const profile=workspace.profile;
 const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost, EXCLUDE ::1, EXCLUDE [::1]','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
 let socket;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try {
  for(let i=0;i<100&&!fs.existsSync(`${profile}/DevToolsActivePort`);i++)await delay(100);
- const port=fs.readFileSync(`${profile}/DevToolsActivePort`,'utf8').split('\n')[0];
- const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+ const targets=await(await fetch(devToolsListUrl(profile))).json();
  socket=new WebSocket(targets.find(value=>value.type==='page').webSocketDebuggerUrl);
  await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
  let sequence=0;const pending=new Map();const exceptions=[];
@@ -202,7 +202,7 @@ try {
  assert.equal(await evaluate("document.querySelector('#environment-name').value"),'QA');assert.equal(await evaluate("document.querySelector('#environment-slug').value"),'qa');assert.equal(environments.length,3);mutationForbidden=false;
  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
  assert(await evaluate('document.documentElement.scrollWidth <= 390'),'Environment form must fit narrow screens');
- const environmentForm=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('/tmp/permesi-environment-create-mobile.png',Buffer.from(environmentForm.data,'base64'));
+ const environmentForm=await call('Page.captureScreenshot',{format:'png'});workspace.writeScreenshot('permesi-environment-create-mobile.png',Buffer.from(environmentForm.data,'base64'));
  await click('Create Environment');await wait("!document.querySelector('#create-environment').open && document.body.innerText.includes('QA')");
  assert.equal(environments.length,4);assert.equal(environments.filter(value=>value.tier==='production').length,1);
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
@@ -246,10 +246,10 @@ try {
  await fill('redirect-uri-input','https://EXAMPLE:443/a/../callback?x=%2f');await click('Add URI');
  assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent==='Save Redirect URIs').disabled"),'Unchanged URI set must not be saved');
  await fill('client-edit-name','renamed-web');await click('Save Name');await wait("document.body.innerText.includes('Client name saved.')");
- const desktop=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-oauth-ui-client-desktop.png',Buffer.from(desktop.data,'base64'));
+ const desktop=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-oauth-ui-client-desktop.png',Buffer.from(desktop.data,'base64'));
  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});await delay(400);
  assert(await evaluate('document.documentElement.scrollWidth <= 390'), 'Mobile page overflows the configured 390px viewport');
- const mobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-oauth-ui-client-mobile.png',Buffer.from(mobile.data,'base64'));
+ const mobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-oauth-ui-client-mobile.png',Buffer.from(mobile.data,'base64'));
  denyNextLifecycle=true;await click('Disable Client');await wait("document.querySelector('#client-lifecycle').open");await click('Confirm');
  for(let i=0;i<2;i++){await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});}
  await evaluate("document.querySelector('#client-lifecycle').close()");await delay(150);
@@ -264,7 +264,7 @@ try {
  assert(await evaluate("matchMedia('(prefers-color-scheme: dark)').matches"));
  assert.notEqual(await evaluate("getComputedStyle(document.querySelector('#client-settings-heading').closest('section')).backgroundColor"), lightCardColor, 'Cards must render the dark theme');
  assert.notEqual(await evaluate("getComputedStyle(document.querySelector('#client-settings-heading')).color"), lightTextColor, 'Headings must remain readable in dark mode');
- const dark=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-oauth-ui-client-dark.png',Buffer.from(dark.data,'base64'));
+ const dark=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-oauth-ui-client-dark.png',Buffer.from(dark.data,'base64'));
  await call('Emulation.setEmulatedMedia',{features:[]});
  await click('Scopes');await wait("document.body.innerText.includes('No application scopes')");await assertNavigation('Scopes');
  assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(e=>e.getClientRects().length&&e.querySelector('.material-symbols-outlined')?.textContent==='edit').length"),0);
@@ -275,11 +275,11 @@ try {
  assert.equal(requests.filter(value=>value.method==='POST'&&value.path===`${base}/scopes`).length,0);
  await fill('scope-action','read');assert.equal(await evaluate("document.querySelector('#create-scope-error').textContent"),'');assert.equal(await evaluate("document.querySelector('#scope-preview').textContent"),'OAuth scope: jobs:read');
  await fill('scope-description','Read scheduled jobs');
- const creation=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-resource-action-create.png',Buffer.from(creation.data,'base64'));
+ const creation=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-resource-action-create.png',Buffer.from(creation.data,'base64'));
  await click('Create Scope');await wait("document.body.innerText.includes('Read scheduled jobs')");
  assert.deepEqual(requests.find(value=>value.method==='POST'&&value.path===`${base}/scopes`).input,{name:'jobs:read',description:'Read scheduled jobs'});
  assert(await evaluate("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Resource' && e.nextElementSibling.textContent==='jobs') && [...document.querySelectorAll('dt')].some(e=>e.textContent==='Action' && e.nextElementSibling.textContent==='read')"),'Scope registry must show derived resource and action');
- const scopeList=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-resource-action-scopes.png',Buffer.from(scopeList.data,'base64'));
+ const scopeList=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-resource-action-scopes.png',Buffer.from(scopeList.data,'base64'));
  const scopeActions=()=>`(()=>{const row=[...document.querySelectorAll('h3')].find(e=>e.textContent==='jobs:read').closest('div.rounded-lg');return [...row.querySelectorAll('button')].filter(e=>!e.closest('dialog'));})()`;
  assert.deepEqual(await evaluate(`${scopeActions()}.map(e=>{const label=e.cloneNode(true);label.querySelectorAll('[aria-hidden=true]').forEach(n=>n.remove());return {label:label.textContent.trim(),icon:e.querySelector('.material-symbols-outlined[aria-hidden=true]')?.textContent};})`),[{label:'Edit',icon:'edit'},{label:'Delete',icon:'delete'}]);
  const scopeColors=await evaluate(`${scopeActions()}.map(e=>getComputedStyle(e).color)`);assert.notEqual(scopeColors[0],scopeColors[1],'Delete must visibly communicate destructive intent');
@@ -289,7 +289,7 @@ try {
  const destructiveContrast=await evaluate(`(()=>{const action=${scopeActions()}[1];const luminance=color=>{const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const context=canvas.getContext('2d',{colorSpace:'srgb'});context.fillStyle=color;context.fillRect(0,0,1,1);const channels=[...context.getImageData(0,0,1,1).data].slice(0,3).map(value=>value/255).map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4);return 0.2126*channels[0]+0.7152*channels[1]+0.0722*channels[2];};const fg=luminance(getComputedStyle(action).color),bg=luminance(getComputedStyle(action.closest('div.rounded-lg')).backgroundColor);return (Math.max(fg,bg)+0.05)/(Math.min(fg,bg)+0.05);})()`);
  console.log('Dark destructive scope contrast:',destructiveContrast);
  assert(destructiveContrast>=4.5,'Destructive scope labels must have readable dark-mode contrast');
- const scopeDarkMobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-scope-actions-dark-mobile.png',Buffer.from(scopeDarkMobile.data,'base64'));
+ const scopeDarkMobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-scope-actions-dark-mobile.png',Buffer.from(scopeDarkMobile.data,'base64'));
 
  await evaluate(`${scopeActions()}[0].focus()`);assert(await evaluate(`document.activeElement===${scopeActions()}[0]`),'Edit action must accept keyboard focus');await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
  await wait("document.querySelector('#edit-scope-scope-api').open");assert.equal(await evaluate("document.querySelector('#edit-scope-scope-api h2 .material-symbols-outlined[aria-hidden=true]').textContent"),'edit');
@@ -306,7 +306,7 @@ try {
  assert(await evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent==='Save Allowed Scopes').disabled"));
  await click('Remove unavailable scope old.opaque');assert(allowed.includes('old.opaque'),'Removal must stay in the draft until explicit Save');
  await click('Save Allowed Scopes');await wait("document.body.innerText.includes('Allowed scopes saved.')");assert(!allowed.includes('old.opaque'));registry=registry.filter(scope=>scope.name!=='old.opaque');
- const assignment=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync('/tmp/permesi-resource-action-assignment.png',Buffer.from(assignment.data,'base64'));
+ const assignment=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-resource-action-assignment.png',Buffer.from(assignment.data,'base64'));
  mutationForbidden=true;await fill('client-edit-name','must-stay-draft');await click('Save Name');await wait("document.querySelector('#client-settings-error').innerText.includes('organization role')");assert.equal(await evaluate("document.getElementById('client-edit-name').value"),'must-stay-draft');mutationForbidden=false;
  await click('Scopes');await wait("document.body.innerText.includes('Read jobs and execution history')");await assertNavigation('Scopes');await evaluate(`${scopeActions()}[1].focus()`);await call('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',text:' ',windowsVirtualKeyCode:32});await call('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});await wait("document.querySelector('#delete-scope-scope-api').open");assert.equal(await evaluate("document.querySelector('#delete-scope-scope-api h2 .material-symbols-outlined[aria-hidden=true]').textContent"),'delete');
  assert(await evaluate("[...document.querySelectorAll('#delete-scope-scope-api button')].find(e=>e.textContent==='Delete Scope').disabled"));await fill('scope-confirmation-scope-api','jobs:read');await click('Delete Scope');await wait("document.body.innerText.includes('No application scopes')");assert(!allowed.includes('jobs:read'));
@@ -485,5 +485,5 @@ try {
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
  console.log('Browser smoke passed: composed security settings, five rejected OPAQUE mutation proofs with unchanged factors, keyboard authenticator controls, connected-app consent display/revocation, Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
- fs.writeFileSync('/tmp/permesi-oauth-ui-browser-requests.json',JSON.stringify(requests,null,2));
+ console.log('Browser screenshots: '+workspace.directory);
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

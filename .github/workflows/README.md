@@ -2,6 +2,12 @@
 
 This directory contains the CI/CD workflows for the Permesi workspace.
 
+Remote actions, including steps in local composite actions, are pinned to full
+commit hashes. The adjacent comments record the tags resolved when pinning;
+Dependabot maintains the pins. `python3 scripts/check-action-pins.py` rejects
+mutable remote references in the required format job. Resolve updates against the
+upstream repository and retain the full hash when accepting an action update.
+
 ## Runner Configuration (`CI_RUNNER`)
 
 Most workflows are configured to use a flexible runner selection logic:

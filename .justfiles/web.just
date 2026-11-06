@@ -115,6 +115,7 @@ web-test-browser-built dist_dir="dist":
       exit 1
     fi
   done
+  node {{root}}/apps/web/tests/browser_files.test.mjs
   PERMESI_WEB_TEST_DIST="${dist}" node {{root}}/apps/web/tests/oauth_console.mjs
   for test_name in "${tests[@]}"; do
     PERMESI_WEB_TEST_DIST="${dist}" cargo test --locked -p permesi --lib -- --ignored --exact "$test_name"

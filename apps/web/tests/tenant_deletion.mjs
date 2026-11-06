@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
+import {createBrowserWorkspace,devToolsListUrl} from './browser_files.mjs';
 const api=process.env.PERMESI_DELETION_TEST_API;
 const session=process.env.PERMESI_DELETION_TEST_SESSION;
 const otherSession=process.env.PERMESI_DELETION_TEST_OTHER_SESSION;
@@ -37,13 +38,13 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
-const profile=path.resolve(import.meta.dirname,'../../../.tmp',`tenant-deletion-browser-${process.pid}`);fs.mkdirSync(profile,{recursive:true});
+const workspace=createBrowserWorkspace('permesi-tenant-deletion-');
+const profile=workspace.profile;
 const browser=spawn('chromium',['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost, EXCLUDE ::1, EXCLUDE [::1]','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:'ignore'});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));let socket;
 try {
  for(let i=0;i<100&&!fs.existsSync(`${profile}/DevToolsActivePort`);i++)await delay(100);
- const port=fs.readFileSync(`${profile}/DevToolsActivePort`,'utf8').split('\n')[0];
- const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+ const targets=await(await fetch(devToolsListUrl(profile))).json();
  socket=new WebSocket(targets.find(v=>v.type==='page').webSocketDebuggerUrl);
  await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
  let sequence=0;const pending=new Map();const exceptions=[];
@@ -108,4 +109,4 @@ try {
  await evaluate("document.querySelector('#resource-delete-confirmation').focus()");await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13,text:'\r',unmodifiedText:'\r',autoRepeat:false});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13});await wait("location.pathname==='/console/orgs'");assert((await fixture('status')).active);
  assert.deepEqual(exceptions,[]);
  console.log('Real OPAQUE/PostgreSQL deletion browser passed: wrong password, throttle/network failures, secret clearing, busy Escape, dark/mobile/focus, refreshed child blockers, role loss, account switch, immutable target, explicit final deletion.');
-} finally {socket?.close();browser.kill('SIGTERM');await delay(500);fs.rmSync(profile,{recursive:true,force:true});await new Promise(resolve=>server.close(resolve));}
+} finally {socket?.close();browser.kill('SIGTERM');await delay(500);fs.rmSync(workspace.directory,{recursive:true,force:true});await new Promise(resolve=>server.close(resolve));}
