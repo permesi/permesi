@@ -304,7 +304,7 @@ fn verify(token: &str, keys: &Value, typ: &str) -> Result<Value> {
     )?;
     let input = format!("{}.{}", parts[0], parts[1]);
     rsa.verify(
-        Pkcs1v15Sign::new::<opaque_sha2::Sha256>(),
+        Pkcs1v15Sign::new::<rsa_sha2::Sha256>(),
         &Sha256::digest(input.as_bytes()),
         &URL_SAFE_NO_PAD.decode(parts[2])?,
     )?;
@@ -872,7 +872,7 @@ impl wiremock::Respond for FailIdentity {
             return wiremock::ResponseTemplate::new(503);
         }
         let Ok(signature) = self.0.sign(
-            Pkcs1v15Sign::new::<opaque_sha2::Sha256>(),
+            Pkcs1v15Sign::new::<rsa_sha2::Sha256>(),
             &Sha256::digest(input.as_bytes()),
         ) else {
             return wiremock::ResponseTemplate::new(503);

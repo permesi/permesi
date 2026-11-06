@@ -27,9 +27,7 @@ js-sys = "0.3"
 serde-wasm-bindgen = "0.6"
 base64 = { workspace = true }
 opaque-ke = { workspace = true }
-opaque_argon2 = { workspace = true }
-opaque_rand_core = { workspace = true }
-opaque_sha2 = { workspace = true }
+rand = { workspace = true }
 rand_core = { workspace = true }
 argon2 = { workspace = true }
 getrandom = { version = "0.4", features = ["wasm_js"] }

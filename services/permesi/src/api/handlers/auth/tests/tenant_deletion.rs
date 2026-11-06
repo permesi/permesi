@@ -36,14 +36,14 @@ impl Fixture {
         };
         let password = Uuid::new_v4().to_string();
         let mut state = AppState::for_tests(db.pool.clone())?;
-        let mut rng = opaque_rand_core::OsRng;
+        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
         let start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password.as_bytes())?;
         let response = ServerRegistration::<OpaqueSuite>::start(
             state.auth.opaque().server_setup(),
             start.message,
             EMAIL.as_bytes(),
         )?;
-        let ksf = opaque_argon2::Argon2::default();
+        let ksf = argon2::Argon2::default();
         let finish = start.state.finish(
             &mut rng,
             password.as_bytes(),
@@ -156,7 +156,7 @@ impl Fixture {
 
     /// Runs the real start/finish transcript; wrong passwords cannot generate a valid finalization.
     async fn proof(&self, password: &str) -> Result<bool> {
-        let mut rng = opaque_rand_core::OsRng;
+        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
         let start = ClientLogin::<OpaqueSuite>::start(&mut rng, password.as_bytes())?;
         let response = call(
             &self.router,
@@ -178,7 +178,7 @@ impl Fixture {
                     .context("credential response")?,
             )?,
         )?;
-        let ksf = opaque_argon2::Argon2::default();
+        let ksf = argon2::Argon2::default();
         let finish = start.state.finish(
             &mut rng,
             password.as_bytes(),
@@ -283,7 +283,7 @@ async fn organization_reauthentication_requires_real_proof_and_separate_delete()
         before,
         "Foreign-session proof must not refresh owner"
     );
-    let mut rng = opaque_rand_core::OsRng;
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
     let start = ClientLogin::<OpaqueSuite>::start(&mut rng, f.password.as_bytes())?;
     let response = call(
         &f.router,
@@ -304,7 +304,7 @@ async fn organization_reauthentication_requires_real_proof_and_separate_delete()
                 .context("credential response")?,
         )?,
     )?;
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let finish = start.state.finish(
         &mut rng,
         f.password.as_bytes(),

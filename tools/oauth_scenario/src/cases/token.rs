@@ -119,7 +119,7 @@ pub(super) fn verify(token: &str, keys: &Value, typ: &str) -> Result<(Value, Val
     )
     .safe("Invalid RSA key.")?;
     rsa.verify(
-        Pkcs1v15Sign::new::<opaque_sha2::Sha256>(),
+        Pkcs1v15Sign::new::<rsa_sha2::Sha256>(),
         &Sha256::digest(format!("{header}.{payload}").as_bytes()),
         &URL_SAFE_NO_PAD
             .decode(signature)

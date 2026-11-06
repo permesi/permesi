@@ -10,8 +10,8 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use http::Method;
-use opaque_sha2::Sha256 as RsaSha256;
 use rsa::{Pkcs1v15Sign, RsaPublicKey, pkcs8::DecodePublicKey as _};
+use rsa_sha2::Sha256 as RsaSha256;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use serde_json::{Value, json};

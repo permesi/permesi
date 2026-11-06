@@ -45,7 +45,7 @@ pub fn sign_raw(header: &str, claims: &str) -> Result<String> {
     );
     let signature = key()?
         .sign(
-            Pkcs1v15Sign::new::<opaque_sha2::Sha256>(),
+            Pkcs1v15Sign::new::<rsa_sha2::Sha256>(),
             &Sha256::digest(message.as_bytes()),
         )
         .safe("Test signing failed.")?;

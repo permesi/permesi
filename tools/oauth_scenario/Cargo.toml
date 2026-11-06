@@ -19,11 +19,11 @@ base64.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["derive"] }
 getrandom.workspace = true
-openidconnect = { version = "4.0.1", default-features = false }
+openidconnect = { version = "4.1.0", default-features = false }
 opaque-ke.workspace = true
-opaque_argon2.workspace = true
-opaque_rand_core.workspace = true
-opaque_sha2 = { workspace = true, features = ["oid"] }
+argon2.workspace = true
+rand.workspace = true
+rsa_sha2 = { workspace = true, features = ["oid"] }
 rsa = "0.9.10"
 rcgen.workspace = true
 reqwest.workspace = true

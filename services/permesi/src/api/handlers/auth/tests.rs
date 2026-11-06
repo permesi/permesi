@@ -43,8 +43,8 @@ use opaque_ke::{
     ClientRegistrationFinishParameters, CredentialResponse, Identifiers, RegistrationResponse,
     ServerRegistration, ServerSetup, errors::ProtocolError,
 };
-use opaque_rand_chacha::ChaCha20Rng;
-use opaque_rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
 use std::sync::Arc;
@@ -204,7 +204,7 @@ fn opaque_test_record() -> Result<Vec<u8>> {
     let client_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password)?;
     let server_start =
         ServerRegistration::start(&server_setup, client_start.message, b"test@example.com")?;
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let params = ClientRegistrationFinishParameters::new(
         Identifiers {
             client: Some(b"test@example.com"),
@@ -601,7 +601,7 @@ async fn run_opaque_signup(
     seed: [u8; 32],
 ) -> Result<()> {
     let mut rng = ChaCha20Rng::from_seed(seed);
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let client_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password)?;
 
     let start_payload = json!({
@@ -938,7 +938,7 @@ async fn opaque_signup_login_flow_success() -> Result<()> {
         .await?;
 
     let mut rng = ChaCha20Rng::from_seed([12u8; 32]);
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
 
     let login_start_payload = json!({
@@ -1044,7 +1044,7 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
         .await?;
 
     let mut rng = ChaCha20Rng::from_seed([14u8; 32]);
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, wrong_password)?;
 
     let login_start_payload = json!({
@@ -1134,7 +1134,7 @@ async fn opaque_login_finish_rejects_unknown_user_after_dummy_flow() -> Result<(
     let password = password.as_slice();
 
     let mut rng = ChaCha20Rng::from_seed([15u8; 32]);
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let login_start = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
 
     let login_start_payload = json!({
@@ -1240,7 +1240,7 @@ async fn password_change_flow() -> Result<()> {
     let server_reg_start =
         ServerRegistration::start(&server_setup, client_reg_start.message, email.as_bytes())?;
 
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let reg_params = ClientRegistrationFinishParameters::new(
         Identifiers {
             client: Some(email.as_bytes()),
@@ -1440,7 +1440,7 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
     let client_reg_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, real_password)?;
     let server_reg_start =
         ServerRegistration::start(&server_setup, client_reg_start.message, email.as_bytes())?;
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let reg_params = ClientRegistrationFinishParameters::new(
         Identifiers {
             client: Some(email.as_bytes()),

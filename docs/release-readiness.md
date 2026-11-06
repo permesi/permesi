@@ -1,4 +1,4 @@
-# Release readiness as of 2026-10-31
+# Release readiness as of 2026-11-06
 
 Application changes remain on `sandbox`; Helm preparation remains on
 `sandbox/release-readiness`. The application `main`/`develop` and Helm `main`
@@ -46,25 +46,23 @@ establish Firefox/Safari compatibility, multi-host production HA or disaster rec
 ## Remaining work and release conditions
 
 The separate [Rust Security Audit](https://github.com/permesi/permesi/actions/runs/40477038659)
-failed on `crypto-bigint 0.5.5` / `RUSTSEC-2026-0387`. The locked graph still reaches
-it through `elliptic-curve 0.13.8`, including OPAQUE/voprf and the scenario runner's
-OpenID Connect client. WebAuthn 0.6.2 removes its affected path, but updating one
-path is insufficient.
-Compatible published parent-library upgrades must remove every affected path;
-the remaining parents have no such stable release yet. No new audit exception,
-fork or backport was added. The older RSA exception and maintenance-warning policy
-remain unchanged.
+previously failed on `crypto-bigint 0.5.5` / `RUSTSEC-2026-0387`. The 2026-11-06
+refresh removes that version entirely through OpenID Connect 4.1.0 and an exact
+upstream OPAQUE Git pin containing its unpublished RustCrypto migration. Only patched
+`crypto-bigint 0.7.10` remains. The local audit now passes under the existing policy;
+the older reviewed RSA exception and maintenance-warning policy remain unchanged.
 
-Recheck upstream around **2026-11-03**. This is a manual review target, not a
-scheduled reminder or a promise to release after a week. The weekly Cargo
+The manual upstream recheck on **2026-11-06** is recorded below. The dependency
+blocker is cleared locally; final release qualification remains required. The weekly Cargo
 Dependabot group is prepared on `sandbox`, but GitHub reads that configuration from
 the default branch. It is inactive until configuration promotion; do not promote
 application code merely to activate it. The existing weekly audit detects
 advisories and does not resolve dependency updates. See [workflow policy](../.github/workflows/README.md).
 
-When compatible releases exist, update dependencies on `sandbox`, inspect all
-`crypto-bigint` paths and require `cargo audit --deny unsound --deny yanked` to pass
-under the existing policy. Rerun full application CI and qualify the final images
+Keep the shared upstream OPAQUE revision fixed until a compatible published release
+contains the migration, inspect all `crypto-bigint` paths and require
+`cargo audit --deny unsound --deny yanked` to pass under the existing policy.
+Rerun full application CI and qualify the final images
 with matching SQL through the Helm packaged-stack, auth-mode and browser upgrade
 procedures. Earlier green runs qualify only the commits identified above.
 
@@ -154,3 +152,54 @@ native all-target/all-feature Clippy, strict WASM Clippy and `just openapi-check
 pass; generated API artifacts are unchanged. The browser workflows and full isolated
 OAuth scenarios were not rerun, so these checks do not replace final release
 qualification.
+
+## Dependency refresh on 2026-11-06
+
+`cargo upgrade` raises the scenario runner's `openidconnect` requirement from
+`4.0.1` to `4.1.0`, removing its old P-256/P-384 dependency path. The backend,
+browser and scenario runner now share upstream OPAQUE revision
+[`027abbc91115baa38b70ad3af7f5a22f072f978b`](https://github.com/meta/opaque-ke/commit/027abbc91115baa38b70ad3af7f5a22f072f978b),
+pinned once in the workspace manifest. Although it still declares version
+`4.1.0-pre.2`, this Git revision includes the November 5 RustCrypto migration that
+the published crate lacks. A future published release containing the migration can
+replace that single dependency entry after compatibility and audit checks pass.
+
+OPAQUE now uses Argon2 0.6, rand_chacha/rand_core 0.10 and SHA-2 0.11 without the
+four older OPAQUE aliases. RSA 0.9 verification separately retains SHA-2 0.10 under
+`rsa_sha2`; older transitive crypto versions still required by WebAuthn/RSA are not
+forced outside their upstream constraints. Ephemeral ceremony CSPRNGs are seeded
+from OS/browser entropy and reject entropy failure. The existing deterministic
+Vault-seed setup derivation, cipher suite, identifiers and KSF parameters remain
+unchanged; the optional KEM feature stays disabled.
+
+`cargo update` removes `crypto-bigint 0.5.5`, `elliptic-curve 0.13.8` and the old
+OPAQUE/voprf stack. `cargo tree --locked -i crypto-bigint` shows only patched
+`0.7.10`. Other compatible updates include Leptos `0.8.23`, `aes 0.9.4`,
+`ctutils 0.4.8`, `cc 1.11.1` and stable `pkcs1 0.8.0`.
+
+`cargo audit --deny unsound --deny yanked` passes against RustSec revision
+`26fd2d43f7280a1fb925a3743ec463017afe7119`, without a new exception. The existing
+reviewed RSA exception remains. Two maintenance warnings are still allowed by the
+existing policy: Leptos' `paste` and `astral-tokio-tar 0.6.4` through
+`testcontainers 0.28.0`
+([`RUSTSEC-2026-0440`](https://rustsec.org/advisories/RUSTSEC-2026-0440.html)).
+
+Four public fixture regressions preserve the production Vault-seed setup bytes,
+legacy registration records, pending client/server states, replayed handshake bytes
+and session keys, reject a tampered legacy finalization, and complete a fresh
+current-client login against the legacy record. voprf changed its random scalar
+sampling, so a fixed RNG seed generates a different fresh client request. Replaying
+the actual legacy encoded request retains the protocol compatibility assertion.
+
+The browser release build uses wasm-bindgen CLI `0.2.130`, matching the locked Rust
+crate; the older Trunk CLI pin failed the schema-version check and was corrected.
+Formatting, native all-target/all-feature Clippy, strict WASM Clippy and OpenAPI
+drift checks pass. Locked default and all-feature workspace suites pass 820 and 850
+tests respectively, with three browser tests ignored in each standard run. Those
+three tests run explicitly and pass alongside the Chromium console smoke suite.
+Generated API artifacts are unchanged. These full-suite counts precede the final
+compatible `flate2 1.1.11` lockfile refresh; that final graph passes `cargo check`,
+formatting, both Clippy gates and the existing security audit policy. Hosted CI
+must qualify the exact committed lockfile. The full isolated OAuth scenarios, hosted
+application CI and final exact-image/SQL Helm qualification were not rerun for this
+refresh; publication remains subject to those release conditions.

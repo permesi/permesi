@@ -31,7 +31,10 @@ use opaque_ke::{
     CredentialFinalization, CredentialRequest, Identifiers, ServerLogin, ServerLoginParameters,
     ServerRegistration,
 };
-use opaque_rand_core::OsRng;
+use rand::{
+    SeedableRng as _,
+    rngs::{StdRng, SysRng},
+};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -179,7 +182,12 @@ async fn build_reauth_start_response(
         },
     };
 
-    let mut rng = OsRng;
+    let mut rng = StdRng::try_from_rng(&mut SysRng).map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Re-auth failed".to_string(),
+        )
+    })?;
     let Ok(start_result) = ServerLogin::start(
         &mut rng,
         auth_state.opaque().server_setup(),

@@ -7,11 +7,19 @@ writer, Vault `opaque_server_seed` and OPAQUE server identifier. Pending exchang
 never depend on a process-local map, sticky sessions or a local file. WebAuthn/passkey
 ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges.md).
 
-The backend, browser client and scenario runner share `opaque-ke 4.1.0-pre.2` while
-retaining the existing Ristretto255/TripleDH/SHA-512/Argon2 suite. Its optional KEM
-feature is disabled. The `opaque_*` aliases stay on Argon2 0.5, rand_chacha 0.3,
-rand_core 0.6 and SHA-2 0.10 because the library still requires their older traits;
-the current versions used elsewhere in the workspace cannot replace those types.
+The backend, browser client and scenario runner share upstream `opaque-ke` revision
+`027abbc91115baa38b70ad3af7f5a22f072f978b`, pinned once in the workspace manifest.
+It includes the unpublished RustCrypto migration, using Argon2 0.6, rand_core 0.10,
+SHA-2 0.11 and the patched elliptic-curve stack. The existing
+Ristretto255/TripleDH/SHA-512/Argon2 suite and disabled optional KEM feature remain
+unchanged. A published release containing this migration can replace the workspace
+Git dependency after the same compatibility and audit checks pass.
+
+Each fresh ceremony uses a CSPRNG seeded from operating-system/browser entropy;
+entropy failure rejects the operation before an exchange is issued. Deterministic
+ChaCha20 setup derivation still uses the existing Vault seed. No credential rewrite
+or seed rotation is needed for this dependency migration. RSA verification separately
+retains SHA-2 0.10 under `rsa_sha2` because RSA 0.9 requires its older digest traits.
 
 ## Flow and trust boundary
 
@@ -102,7 +110,10 @@ Independent Vault exchange-key rotation remains separate from permanent OPAQUE s
 deterministic fixtures generated with `opaque-ke 4.0.1`. It verifies production
 seed-to-setup derivation, stored registration bytes, pending client/server states,
 handshake messages and matching session keys, and rejects an altered finalization
-MAC. These fixtures guard library upgrades without changing the cipher suite.
+MAC. A fresh current client also completes login against the unchanged legacy record.
+The legacy request is replayed directly because voprf now samples blinding scalars
+differently; a fixed RNG seed need not generate the same fresh request. Encoded legacy
+requests, responses, pending states and session keys still match byte-for-byte.
 
 Run the real PostgreSQL regressions with
 `cargo test --locked -p permesi --lib api::handlers::auth::tests::opaque_exchange`.

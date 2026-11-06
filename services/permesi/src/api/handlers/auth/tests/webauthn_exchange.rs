@@ -366,7 +366,7 @@ impl Authenticator {
         let mut signed = data.clone();
         signed.extend(Sha256::digest(&client));
         let signature = self.key.sign(
-            Pkcs1v15Sign::new::<opaque_sha2::Sha256>(),
+            Pkcs1v15Sign::new::<rsa_sha2::Sha256>(),
             &Sha256::digest(&signed),
         )?;
         Ok(serde_json::from_value(

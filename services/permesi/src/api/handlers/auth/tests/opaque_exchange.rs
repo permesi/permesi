@@ -55,7 +55,7 @@ async fn proof(
     admission: &str,
     cookie: Option<&str>,
 ) -> Result<Proof> {
-    let mut rng = opaque_rand_core::OsRng;
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
     let client = ClientLogin::<OpaqueSuite>::start(&mut rng, password)?;
     let path = if cookie.is_some() {
         "/v1/auth/opaque/reauth/start"
@@ -82,7 +82,7 @@ async fn proof(
             .and_then(Value::as_str)
             .context("credential response")?,
     )?;
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let finish = client.state.finish(
         &mut rng,
         password,
@@ -190,7 +190,10 @@ async fn opaque_exchange_capacity_lock_wait_is_bounded() -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('permesi:opaque-exchanges:v1',0))")
         .execute(&mut *blocker)
         .await?;
-    let client = ClientLogin::<OpaqueSuite>::start(&mut opaque_rand_core::OsRng, &f.password)?;
+    let client = ClientLogin::<OpaqueSuite>::start(
+        &mut rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?,
+        &f.password,
+    )?;
     let result = tokio::time::timeout(
         Duration::from_secs(2),
         post(
@@ -1168,7 +1171,7 @@ async fn opaque_state_enforces_pending_login_capacity_across_replicas() -> Resul
     let Some(f) = Fixture::new(Duration::from_secs(1), 1).await? else {
         return Ok(());
     };
-    let mut rng = opaque_rand_core::OsRng;
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
     let first = ClientLogin::<OpaqueSuite>::start(&mut rng, b"unknown password")?;
     let second = ClientLogin::<OpaqueSuite>::start(&mut rng, b"unknown password")?;
     let (a, b) = tokio::join!(
@@ -1250,11 +1253,17 @@ async fn opaque_pending_subject_quotas_preserve_other_accounts_and_reauthenticat
         (&b, "another@example.com", StatusCode::OK),
         (&a, "third@example.com", StatusCode::TOO_MANY_REQUESTS),
     ] {
-        let client = ClientLogin::<OpaqueSuite>::start(&mut opaque_rand_core::OsRng, b"unknown")?;
+        let client = ClientLogin::<OpaqueSuite>::start(
+            &mut rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?,
+            b"unknown",
+        )?;
         assert_eq!(post(router,"/v1/auth/opaque/login/start",json!({"email":email,"credential_request":STANDARD.encode(client.message.serialize())}),&f.zero,None).await?.status(),expected);
     }
     proof(&b, EMAIL, &f.password, &f.zero, Some(&f.first)).await?;
-    let client = ClientLogin::<OpaqueSuite>::start(&mut opaque_rand_core::OsRng, &f.password)?;
+    let client = ClientLogin::<OpaqueSuite>::start(
+        &mut rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?,
+        &f.password,
+    )?;
     assert_eq!(
         post(
             &a,
@@ -1321,7 +1330,7 @@ async fn opaque_capacity_reservation_serializes_check_and_insert_across_replicas
             f.admission.clone(),
             f.db.pool.clone(),
         );
-        let mut rng = opaque_rand_core::OsRng;
+        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
         let client = ClientLogin::<OpaqueSuite>::start(&mut rng, b"unknown password")?;
         let payload = json!({"email":"absent@example.com","credential_request":STANDARD.encode(client.message.serialize())});
         let zero = f.zero.clone();
@@ -1394,7 +1403,7 @@ async fn opaque_exchange_persists_no_plaintext_reference_or_transcript() -> Resu
         Duration::from_secs(300),
         10,
     );
-    let mut rng = opaque_rand_core::OsRng;
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
     let client = ClientLogin::<OpaqueSuite>::start(&mut rng, b"unregistered")?;
     let server = opaque_ke::ServerLogin::start(
         &mut rng,

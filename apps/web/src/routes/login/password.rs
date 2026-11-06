@@ -10,7 +10,7 @@ use crate::{
     components::{Alert, AlertKind, Button, Spinner},
     features::auth::{
         client,
-        opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
+        opaque::{OpaqueSuite, crypto_rng, identifiers, ksf, normalize_email},
         state::use_auth,
         token,
         types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest},
@@ -20,7 +20,6 @@ use base64::Engine;
 use leptos::{ev::SubmitEvent, prelude::*};
 use leptos_router::hooks::use_navigate;
 use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
-use opaque_rand_core::OsRng;
 
 #[derive(Clone)]
 /// Captures login form input for the async action without borrowing signals.
@@ -135,7 +134,7 @@ async fn perform_password_login(input: LoginInput) -> Result<LoginResult, AppErr
     let client_id = normalize_email(&input.email);
     let server_id = config.opaque_server_id;
 
-    let mut rng = OsRng;
+    let mut rng = crypto_rng()?;
     // Start OPAQUE locally so the password never leaves the browser.
     let start = ClientLogin::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
         .map_err(|_| AppError::Config("Unable to start secure login.".to_string()))?;

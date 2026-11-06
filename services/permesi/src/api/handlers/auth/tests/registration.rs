@@ -207,7 +207,7 @@ async fn pending_signup_password_cannot_obtain_session() -> Result<()> {
                 .context("credential response")?,
         )?,
     )?;
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     assert!(
         start
             .state

@@ -3,15 +3,17 @@
 //! Flow Overview: fixtures generated with opaque-ke 4.0.1 freeze deterministic setup,
 //! registration and login bytes. Current clients and servers exchange proofs with those
 //! legacy states, ensuring upgrades preserve stored records and pending transcripts.
+//! Replay the encoded request directly: voprf's scalar sampling can change the mapping
+//! from a deterministic RNG seed to a fresh request without changing protocol encoding.
 
 use super::{OpaqueState, OpaqueSuite, identifiers};
 use anyhow::{Context, Result};
 use opaque_ke::{
-    ClientLogin, ClientLoginFinishParameters, CredentialFinalization, ServerLogin,
-    ServerLoginParameters, ServerRegistration, errors::ProtocolError,
+    ClientLogin, ClientLoginFinishParameters, CredentialFinalization, CredentialRequest,
+    ServerLogin, ServerLoginParameters, ServerRegistration, errors::ProtocolError,
 };
-use opaque_rand_chacha::ChaCha20Rng;
-use opaque_rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -63,19 +65,18 @@ fn opaque_login_accepts_4_0_1_records_and_pending_transcripts() -> Result<()> {
     let client_id = b"compatibility@example.com";
     let mut client_rng = ChaCha20Rng::from_seed([44; 32]);
     let mut server_rng = ChaCha20Rng::from_seed([45; 32]);
-    let client = ClientLogin::<OpaqueSuite>::start(&mut client_rng, password)?;
-    assert_eq!(
-        hex::encode(client.message.serialize()),
-        fixture.credential_request
-    );
-    assert_eq!(hex::encode(client.state.serialize()), fixture.client_login);
+    let request = CredentialRequest::deserialize(&hex::decode(&fixture.credential_request)?)?;
+    assert_eq!(hex::encode(request.serialize()), fixture.credential_request);
+    let legacy_client =
+        ClientLogin::<OpaqueSuite>::deserialize(&hex::decode(&fixture.client_login)?)?;
+    assert_eq!(hex::encode(legacy_client.serialize()), fixture.client_login);
     let record = ServerRegistration::<OpaqueSuite>::deserialize(&hex::decode(&fixture.record)?)?;
     assert_eq!(hex::encode(record.serialize()), fixture.record);
     let server = ServerLogin::start(
         &mut server_rng,
         state.server_setup(),
         Some(record),
-        client.message,
+        request,
         client_id,
         ServerLoginParameters {
             context: None,
@@ -87,9 +88,7 @@ fn opaque_login_accepts_4_0_1_records_and_pending_transcripts() -> Result<()> {
         fixture.credential_response
     );
     assert_eq!(hex::encode(server.state.serialize()), fixture.server_login);
-    let ksf = opaque_argon2::Argon2::default();
-    let legacy_client =
-        ClientLogin::<OpaqueSuite>::deserialize(&hex::decode(&fixture.client_login)?)?;
+    let ksf = argon2::Argon2::default();
     let client = legacy_client.finish(
         &mut client_rng,
         password,
@@ -114,6 +113,47 @@ fn opaque_login_accepts_4_0_1_records_and_pending_transcripts() -> Result<()> {
     assert_eq!(hex::encode(client.session_key), fixture.session_key);
     assert_eq!(hex::encode(server.session_key), fixture.session_key);
     assert_eq!(hex::encode(legacy_server.session_key), fixture.session_key);
+    Ok(())
+}
+
+/// A fresh upgraded client must authenticate against the unchanged legacy password record.
+#[test]
+fn opaque_login_fresh_client_accepts_4_0_1_record() -> Result<()> {
+    let fixture = legacy_fixture()?;
+    let state = opaque_state();
+    let password = b"public compatibility fixture password";
+    let client_id = b"compatibility@example.com";
+    let mut client_rng = ChaCha20Rng::from_seed([44; 32]);
+    let mut server_rng = ChaCha20Rng::from_seed([45; 32]);
+    let client = ClientLogin::<OpaqueSuite>::start(&mut client_rng, password)?;
+    let record = ServerRegistration::<OpaqueSuite>::deserialize(&hex::decode(&fixture.record)?)?;
+    assert_eq!(hex::encode(record.serialize()), fixture.record);
+    let server = ServerLogin::start(
+        &mut server_rng,
+        state.server_setup(),
+        Some(record),
+        client.message,
+        client_id,
+        ServerLoginParameters {
+            context: None,
+            identifiers: identifiers(client_id, state.server_id()),
+        },
+    )?;
+    let ksf = argon2::Argon2::default();
+    let client = client.state.finish(
+        &mut client_rng,
+        password,
+        server.message,
+        ClientLoginFinishParameters::new(
+            None,
+            identifiers(client_id, state.server_id()),
+            Some(&ksf),
+        ),
+    )?;
+    let server = server
+        .state
+        .finish(client.message, ServerLoginParameters::default())?;
+    assert_eq!(client.session_key, server.session_key);
     Ok(())
 }
 

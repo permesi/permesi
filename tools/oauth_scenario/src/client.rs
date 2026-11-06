@@ -18,7 +18,10 @@ use opaque_ke::{
     ClientRegistrationFinishParameters, CredentialResponse, Identifiers, RegistrationResponse,
     key_exchange::tripledh::TripleDh,
 };
-use opaque_rand_core::OsRng;
+use rand::{
+    SeedableRng as _,
+    rngs::{StdRng, SysRng},
+};
 use reqwest::{Method, StatusCode};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -289,7 +292,8 @@ pub struct Actor {
 impl Actor {
     /// Start a native proof on the selected real replica; no protocol state is seeded in SQL.
     pub async fn password_proof(&self, api: &Api, flow: PasswordFlow) -> Result<PasswordProof> {
-        let mut rng = OsRng;
+        let mut rng =
+            StdRng::try_from_rng(&mut SysRng).safe("Cannot initialize OPAQUE randomness.")?;
         let client =
             ClientLogin::<Suite>::start(&mut rng, self.password.expose_secret().as_bytes())
                 .safe("Cannot start OPAQUE login.")?;
@@ -311,7 +315,7 @@ impl Actor {
             .safe("Invalid OPAQUE credential response encoding.")?;
         let response = CredentialResponse::<Suite>::deserialize(&bytes)
             .safe("Invalid OPAQUE credential response.")?;
-        let ksf = opaque_argon2::Argon2::default();
+        let ksf = argon2::Argon2::default();
         let finish = client
             .state
             .finish(
@@ -339,7 +343,8 @@ impl Actor {
     pub(crate) async fn pending_signup(api: &Api, pool: &PgPool) -> Result<(Self, SecretString)> {
         let email = format!("scenario-{}@example.test", Uuid::new_v4().simple());
         let password = random()?;
-        let mut rng = OsRng;
+        let mut rng =
+            StdRng::try_from_rng(&mut SysRng).safe("Cannot initialize OPAQUE randomness.")?;
         let start = ClientRegistration::<Suite>::start(&mut rng, password.as_bytes())
             .safe("Cannot start OPAQUE registration.")?;
         let response = api.auth_post("/v1/auth/opaque/signup/start", json!({"email":email,"registration_request":STANDARD.encode(start.message.serialize())}), StatusCode::OK).await?;
@@ -348,7 +353,7 @@ impl Actor {
             .safe("Invalid OPAQUE registration encoding.")?;
         let response = RegistrationResponse::<Suite>::deserialize(&bytes)
             .safe("Invalid OPAQUE registration transcript.")?;
-        let ksf = opaque_argon2::Argon2::default();
+        let ksf = argon2::Argon2::default();
         let params = ClientRegistrationFinishParameters::new(
             Identifiers {
                 client: Some(email.as_bytes()),
@@ -461,8 +466,8 @@ impl PasswordProof {
 struct Suite;
 impl CipherSuite for Suite {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeyExchange = TripleDh<opaque_ke::Ristretto255, opaque_sha2::Sha512>;
-    type Ksf = opaque_argon2::Argon2<'static>;
+    type KeyExchange = TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
+    type Ksf = argon2::Argon2<'static>;
 }
 
 #[derive(Deserialize, Clone)]

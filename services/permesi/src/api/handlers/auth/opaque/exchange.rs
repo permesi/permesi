@@ -19,8 +19,8 @@ use chacha20poly1305::{
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use opaque_ke::{ServerLogin, ServerSetup};
-use opaque_rand_chacha::ChaCha20Rng;
-use opaque_rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 use secrecy::{ExposeSecret, SecretBox, SecretSlice, zeroize::Zeroizing};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};

@@ -16,8 +16,8 @@ updates:
           - "*"
     open-pull-requests-limit: 5
 
-  # Watch the parent libraries that must move together before the crypto-bigint
-  # launch blocker can be removed. Compatibility aliases stay under manual control.
+  # Watch authentication parent libraries, including the temporary OPAQUE Git pin.
+  # Keep RSA's digest compatibility dependency under manual control.
   - package-ecosystem: "cargo"
     directory: "/"
     target-branch: "sandbox"

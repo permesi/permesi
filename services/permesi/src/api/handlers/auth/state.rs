@@ -343,16 +343,15 @@ fn origin_matches_rp_id(host: &str, rp_id: &str) -> bool {
 
 /// OPAQUE cipher suite used by the permesi server.
 ///
-/// The hash, key-stretching function, and deterministic setup RNG use explicit
-/// `opaque_*` compatibility aliases because `opaque-ke 4` exposes traits from
-/// the older digest and `rand_core` ecosystems. Keeping those versions local to
-/// this suite preserves the OPAQUE transcript while other code uses current crates.
+/// Backend and browser share a pinned upstream revision and current crypto traits.
+/// The deterministic setup RNG and suite parameters must preserve stored records
+/// and transcripts across upgrades; legacy byte fixtures enforce that boundary.
 pub(super) struct OpaqueSuite;
 
 impl CipherSuite for OpaqueSuite {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeyExchange = TripleDh<opaque_ke::Ristretto255, opaque_sha2::Sha512>;
-    type Ksf = opaque_argon2::Argon2<'static>;
+    type KeyExchange = TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
+    type Ksf = argon2::Argon2<'static>;
 }
 
 pub use super::opaque::exchange::OpaqueState;

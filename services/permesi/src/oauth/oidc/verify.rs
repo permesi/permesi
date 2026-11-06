@@ -7,8 +7,8 @@
 //! an unverified payload nor a database-only fabricated receipt is sufficient.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use opaque_sha2::Sha256 as RsaSha256;
 use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
+use rsa_sha2::Sha256 as RsaSha256;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;

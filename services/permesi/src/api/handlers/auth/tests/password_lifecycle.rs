@@ -9,13 +9,13 @@ use crate::api::handlers::{
 
 /// A valid upload reaches password mutation without exposing its bytes in diagnostics.
 fn registration_upload() -> Result<String> {
-    let mut rng = opaque_rand_core::OsRng;
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
     let password = test_password();
     let setup = ServerSetup::<OpaqueSuite>::new(&mut rng);
     let start = ClientRegistration::<OpaqueSuite>::start(&mut rng, &password)?;
     let response =
         ServerRegistration::start(&setup, start.message, b"password-lifecycle@example.com")?;
-    let ksf = opaque_argon2::Argon2::default();
+    let ksf = argon2::Argon2::default();
     let finish = start.state.finish(
         &mut rng,
         &password,

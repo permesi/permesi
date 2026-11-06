@@ -11,7 +11,7 @@ use crate::{
     components::{Alert, AlertKind, AlreadySignedInPanel, Button, Spinner},
     features::auth::{
         client,
-        opaque::{OpaqueSuite, identifiers, ksf, normalize_email},
+        opaque::{OpaqueSuite, crypto_rng, identifiers, ksf, normalize_email},
         state::use_auth,
         token,
         types::{OpaqueSignupFinishRequest, OpaqueSignupStartRequest},
@@ -20,7 +20,6 @@ use crate::{
 use base64::Engine;
 use leptos::{ev::SubmitEvent, prelude::*};
 use opaque_ke::{ClientRegistration, ClientRegistrationFinishParameters, RegistrationResponse};
-use opaque_rand_core::OsRng;
 
 /// Minimum password length enforced by the client for early UX feedback.
 const MIN_PASSWORD_LENGTH: usize = 12;
@@ -264,7 +263,7 @@ async fn perform_signup(input: SignupInput) -> Result<(), AppError> {
     let client_id = normalize_email(&input.email);
     let server_id = config.opaque_server_id;
 
-    let mut rng = OsRng;
+    let mut rng = crypto_rng()?;
     let start = ClientRegistration::<OpaqueSuite>::start(&mut rng, input.password.as_bytes())
         .map_err(|_| AppError::Config("Unable to start secure signup.".to_string()))?;
     let start_request = OpaqueSignupStartRequest {

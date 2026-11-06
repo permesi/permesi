@@ -164,7 +164,7 @@ impl Verifier {
         )?;
         let key = self.key(&decoded.kid).await?;
         key.verify(
-            Pkcs1v15Sign::new::<opaque_sha2::Sha256>(),
+            Pkcs1v15Sign::new::<rsa_sha2::Sha256>(),
             &Sha256::digest(format!("{header}.{payload}").as_bytes()),
             &decode(signature)?,
         )

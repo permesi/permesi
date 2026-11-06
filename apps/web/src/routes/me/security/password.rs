@@ -8,7 +8,7 @@ use crate::{
     components::{Alert, AlertKind, Button, Spinner},
     features::auth::{
         client as auth_client,
-        opaque::{OpaqueSuite, identifiers, ksf, normalize_email, reauthenticate},
+        opaque::{OpaqueSuite, crypto_rng, identifiers, ksf, normalize_email, reauthenticate},
         state::use_auth,
         token,
         types::{OpaquePasswordFinishRequest, OpaquePasswordStartRequest},
@@ -19,7 +19,6 @@ use base64::Engine;
 use leptos::{ev::SubmitEvent, prelude::*};
 use leptos_router::hooks::use_navigate;
 use opaque_ke::{ClientRegistration, ClientRegistrationFinishParameters, RegistrationResponse};
-use opaque_rand_core::OsRng;
 
 /// Minimum password length enforced by the client for early UX feedback.
 const MIN_PASSWORD_LENGTH: usize = 12;
@@ -109,7 +108,7 @@ async fn change_password(input: ChangePasswordInput) -> Result<(), AppError> {
     let client_id = normalize_email(&input.email);
     let server_id = config.opaque_server_id;
 
-    let mut rng = OsRng;
+    let mut rng = crypto_rng()?;
     reauthenticate(&input.email, input.current_password).await?;
     let ksf_params = ksf();
 

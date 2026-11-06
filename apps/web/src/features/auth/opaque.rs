@@ -7,19 +7,27 @@
 //! Password reauthentication reuses the existing admission-protected endpoints and
 //! only refreshes the current session's authentication time; it performs no mutation.
 
-use opaque_argon2::Argon2;
-use opaque_ke::key_exchange::tripledh::TripleDh;
-use opaque_ke::{CipherSuite, Identifiers};
+use argon2::Argon2;
+use opaque_ke::{CipherSuite, Identifiers, key_exchange::tripledh::TripleDh};
 
 /// OPAQUE cipher suite used by the client; must match the server configuration.
-/// Its `opaque_*` crypto aliases isolate `opaque-ke 4`'s older trait versions;
-/// changing the suite or aliases requires a coordinated backend migration.
+/// Backend and browser use the same pinned upstream revision and crypto versions;
+/// changing the suite requires a coordinated migration that preserves stored records.
 pub struct OpaqueSuite;
 
 impl CipherSuite for OpaqueSuite {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeyExchange = TripleDh<opaque_ke::Ristretto255, opaque_sha2::Sha512>;
+    type KeyExchange = TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
     type Ksf = Argon2<'static>;
+}
+
+/// Seeds a fresh CSPRNG from OS/browser entropy for one OPAQUE ceremony.
+/// Entropy failure rejects the operation before any protocol request is sent.
+pub fn crypto_rng() -> Result<rand::rngs::StdRng, crate::app_lib::AppError> {
+    use rand::SeedableRng as _;
+    rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng).map_err(|_| {
+        crate::app_lib::AppError::Config("Secure randomness is unavailable.".to_owned())
+    })
 }
 
 /// Normalizes emails for stable OPAQUE identifiers and API requests.
@@ -48,7 +56,6 @@ pub fn ksf() -> Argon2<'static> {
 pub async fn reauthenticate(email: &str, password: String) -> Result<(), crate::app_lib::AppError> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use opaque_ke::{ClientLogin, ClientLoginFinishParameters, CredentialResponse};
-    use opaque_rand_core::OsRng;
 
     use crate::{
         app_lib::{AppError, config::AppConfig},
@@ -60,7 +67,7 @@ pub async fn reauthenticate(email: &str, password: String) -> Result<(), crate::
 
     let client_id = normalize_email(email);
     let server_id = AppConfig::load().opaque_server_id;
-    let mut rng = OsRng;
+    let mut rng = crypto_rng()?;
     let start = ClientLogin::<OpaqueSuite>::start(&mut rng, password.as_bytes())
         .map_err(|_| AppError::Config("Unable to start secure re-authentication.".to_owned()))?;
     let request = OpaqueReauthStartRequest {
