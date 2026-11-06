@@ -147,12 +147,12 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-  # The scratch `release` branch only exists for `just deploy` to test a release
-  # candidate; it gets no Cloudflare Pages preview of its own.
+  # Production frontend publication belongs to deploy.yml. Ordinary main CI must
+  # not overwrite its signed candidate; the scratch release branch gets no preview.
   deploy-frontend:
     name: Deploy Frontend
     needs: frontend-build
-    if: github.ref_name != 'release'
+    if: github.ref_name != 'main' && github.ref_name != 'release'
     uses: ./.github/workflows/frontend.yml
     permissions:
       contents: read

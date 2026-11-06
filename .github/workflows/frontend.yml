@@ -91,12 +91,18 @@ jobs:
 
       - name: 'Deploy: Resolve Cloudflare Branch'
         shell: bash
+        env:
+          INPUT_DEPLOY_BRANCH: ${{ inputs.deploy_branch }}
         run: |
-          branch="${{ inputs.deploy_branch }}"
+          branch="${INPUT_DEPLOY_BRANCH}"
           if [[ -z "$branch" ]]; then
             branch="${GITHUB_REF_NAME}"
           fi
-          if [[ "$branch" != "main" && "$branch" != "develop" ]]; then
+          if [[ "$branch" == "main" || "$branch" == "release" ]]; then
+            echo "::error::The release workflow owns production and candidate frontend publication."
+            exit 1
+          fi
+          if [[ "$branch" != "develop" ]]; then
             branch="${branch//\//-}"
           fi
           echo "DEPLOY_BRANCH=${branch}" >> "$GITHUB_ENV"

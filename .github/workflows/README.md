@@ -94,6 +94,12 @@ before interpreting queue or wall-time differences as a speedup.
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
   pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
+  Frontend deployments from ordinary CI are previews only: `main` still builds and tests the frontend,
+  but only `deploy.yml` publishes the signed release candidate to the production `main` Pages branch.
+  The preview publisher rejects both `main` and the scratch `release` branch, including explicit branch
+  overrides, so a later CI run cannot overwrite the tested production frontend. The regression suite
+  `python3 scripts/test-frontend-preview.py` executes that branch resolver and checks that rejected
+  publication targets do not reach the deployment environment.
   The service image builds inject `github.sha` as `BUILD_GIT_COMMIT_HASH` because the Docker build context
   excludes `.git`, and the binaries would otherwise report an unknown commit.
   Its required `Browser tests` job downloads the same run's `frontend-dist` artifact and invokes

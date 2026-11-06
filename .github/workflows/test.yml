@@ -42,6 +42,7 @@ jobs:
           python3 scripts/check-action-pins.py
           python3 scripts/test-ci-timings.py
           python3 scripts/test-release-version.py
+          python3 scripts/test-frontend-preview.py
           python3 .github/actions/ensure-musl-toolchain/test_runtime.py
 
   lint:
