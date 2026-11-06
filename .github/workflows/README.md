@@ -8,6 +8,23 @@ Dependabot maintains the pins. `python3 scripts/check-action-pins.py` rejects
 mutable remote references in the required format job. Resolve updates against the
 upstream repository and retain the full hash when accepting an action update.
 
+## Release publication recovery
+
+A signed tag and promoted commit can exist before publishing completes. When a
+tag's Deploy run fails, inspect its failed job and repair workflow failures before
+retrying. A recovery run uses the workflow on `main` and the original candidate's
+tested artifacts; the existing version tag must stay fixed. Once the workflow fix
+is validated and reaches `main`, run `just release-republish X.Y.Z`.
+
+The release guard and local recorded-version reader consume the entire manifest
+stream while selecting only the first matching version. Exiting the parser early
+can give `base64` or `git show` a broken pipe, causing `pipefail` to reject valid
+release evidence. Draining the stream also preserves upstream failures, including
+invalid base64 or an unreadable commit. Version mismatches still reject publishing.
+`python3 scripts/test-release-version.py` exercises the checked-in shell against
+oversized manifests, later version fields, missing/mismatched versions, corrupt
+base64 and failed Git reads. The required format job runs these regressions.
+
 ## Runner Configuration (`CI_RUNNER`)
 
 Most workflows are configured to use a flexible runner selection logic:

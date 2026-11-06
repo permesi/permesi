@@ -144,7 +144,8 @@ jobs:
             echo "::error::Tag ${TAG} points at ${commit}, which is not on main (${status}); refusing to release."
             exit 1
           fi
-          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = /{print $2; exit}')"
+          # Drain the stream so pipefail still reports producer errors, without SIGPIPE.
+          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = / && !found {print $2; found=1}')"
           if [[ "${version}" != "${TAG}" ]]; then
             echo "::error::Tag ${TAG} does not match the workspace version ${version} at ${commit}; refusing to release."
             exit 1

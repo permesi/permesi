@@ -78,9 +78,10 @@ current_version() {
     printf '%s\n' "${versions}"
 }
 
-# The workspace version recorded in a commit (used to validate staged candidates).
+# Read the first recorded workspace version while draining git's output, so
+# pipefail preserves producer errors without an early-exit SIGPIPE.
 version_at() {
-    git show "$1:Cargo.toml" | awk -F'"' '/^version = /{print $2; exit}'
+    git show "$1:Cargo.toml" | awk -F'"' '/^version = / && !found {print $2; found=1}'
 }
 
 # Change the version in RELEASE_FILES only; dependency updates are separate commits.
