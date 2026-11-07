@@ -5,6 +5,7 @@
 //! run independent assertions, then clean up before writing JSON/JUnit results.
 //! Production authentication and token policy are not modified by this harness.
 
+mod better_auth;
 mod browser;
 mod cases;
 mod cli;

@@ -102,6 +102,7 @@ pub struct Services {
     journal: Option<Journal>,
     recovery_failed: bool,
     browser: Option<ProcessIdentity>,
+    better_auth: Option<ProcessIdentity>,
 }
 
 impl Services {
@@ -115,6 +116,13 @@ impl Services {
     /// The runtime clears it only after `Browser::stop` has reaped that child; failed cleanup retains its identity.
     pub fn browser_identity(&mut self, identity: Option<ProcessIdentity>) -> Result<()> {
         self.browser = identity;
+        self.record()
+    }
+
+    /// Preserves the separately owned Better Auth fixture through every journal update.
+    /// The runtime clears it only after the fixture child has been reaped.
+    pub fn better_auth_identity(&mut self, identity: Option<ProcessIdentity>) -> Result<()> {
+        self.better_auth = identity;
         self.record()
     }
 
@@ -138,6 +146,7 @@ impl Services {
             .into_iter()
             .flatten()
             .chain(self.browser.clone())
+            .chain(self.better_auth.clone())
             .collect();
         self.journal
             .as_mut()
@@ -562,6 +571,7 @@ socketserver.UnixStreamServer(sys.argv[1], Handler).serve_forever()
             journal: None,
             recovery_failed: false,
             browser: None,
+            better_auth: None,
             launch: Some(Launch {
                 binary: "python3".into(),
                 role: "SECRET_SENTINEL_ROLE".to_owned().into(),

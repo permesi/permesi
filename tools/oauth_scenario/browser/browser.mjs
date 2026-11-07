@@ -44,8 +44,11 @@ async function initialize() {
       const bytes = incoming.subarray(0, boundary); incoming = incoming.subarray(boundary + 1);
       let response;
       try { response = JSON.parse(bytes.toString('utf8')); } catch { chromium.kill('SIGKILL'); closed(); return; }
-      if (response.method === 'Network.requestWillBeSent' && response.params.type === 'Document' && response.params.redirectResponse) {
-        for (const page of contexts.values()) if (page.session === response.sessionId) page.hadRedirect = true;
+      if (response.method === 'Network.requestWillBeSent' && response.params.type === 'Document') {
+        for (const page of contexts.values()) if (page.session === response.sessionId) {
+          if (response.params.redirectResponse) page.hadRedirect = true;
+          if (page.capture && response.params.request.url.startsWith(page.capture)) page.captured = response.params.request.url;
+        }
       }
       if (response.method === 'Network.responseReceived' && response.params.type === 'Document') {
         for (const page of contexts.values()) if (page.session === response.sessionId) {
@@ -79,7 +82,7 @@ async function newPage(input) {
   const {browserContextId: context} = await call('Target.createBrowserContext');
   const {targetId} = await call('Target.createTarget', {url: 'about:blank', browserContextId: context});
   const {sessionId: session} = await call('Target.attachToTarget', {targetId, flatten: true});
-  const page = {context, session, origin: input.origin, callback: input.callback}; contexts.set(input.actor, page);
+  const page = {context, session, origin: input.origin, callback: input.callback, app: input.app}; contexts.set(input.actor, page);
   await call('Page.enable', {}, session); await call('Runtime.enable', {}, session); await call('Network.enable', {}, session);
   await call('Network.setBlockedURLs', {urls: ['https://fonts.googleapis.com/*', 'https://fonts.gstatic.com/*']}, session);
   return {stage: 'created'};
@@ -87,8 +90,14 @@ async function newPage(input) {
 
 async function stage(page) {
   const result = await evaluate(page, `(() => {
+    const app = ${JSON.stringify(page.app ?? null)};
     if (location.origin === ${JSON.stringify(new URL(page.callback).origin)} && location.pathname === '/callback') return {stage:'callback',url:location.href};
     if (location.origin === ${JSON.stringify(page.origin)} && location.pathname === '/client-callback') return {stage:'callback',url:location.href};
+    if (app && location.origin === app) {
+      if (location.pathname === '/done') return {stage:'app_done'};
+      if (location.pathname === '/api/auth/error' || location.pathname === '/sign-in-error') return {stage:'app_error',error:new URLSearchParams(location.search).get('error') || ''};
+      return null;
+    }
     if (location.origin !== ${JSON.stringify(page.origin)}) return {stage:'unexpected_origin'};
     if (document.querySelector('form[action="/authorize/consent"]')) return {stage:'consent', items:[...document.querySelectorAll('li')].map(li=>li.textContent)};
     if (location.pathname === '/login' && document.querySelector('#email')) return {stage:'login'};
@@ -96,6 +105,10 @@ async function stage(page) {
     return null;
   })()`);
   return result ? {...result, status:page.status} : null;
+}
+
+async function safeStage(page) {
+  try { return await stage(page); } catch { return null; }
 }
 
 async function login(page, input) {
@@ -120,21 +133,34 @@ async function action(input) {
   if (input.action === 'new') return newPage(input);
   const page = contexts.get(input.actor); if (!page) throw new Error('unknown_actor');
   if (input.action === 'login') return login(page, input);
+  if (input.action === 'app_start') {
+    if (!page.app) throw new Error('app_origin');
+    await navigate(page, `${page.app}/`, input.seconds);
+    await evaluate(page, `document.querySelector('#sign-in')?.click()`);
+    return wait(() => safeStage(page), input.seconds);
+  }
+  if (input.action === 'stage') return safeStage(page);
+  if (input.action === 'fetch') {
+    if (!input.path.startsWith('/') || input.path.includes('..')) throw new Error('fixture_path');
+    return evaluate(page, `fetch(${JSON.stringify(input.path)}).then(async r => ({status:r.status,body:await r.text()}))`);
+  }
   if (input.action === 'authorize') {
     const url = new URL(input.url); if (url.origin !== page.origin || url.pathname !== '/authorize') throw new Error('issuer_mismatch');
-    await navigate(page, input.url, input.seconds); return wait(() => stage(page), input.seconds);
+    await navigate(page, input.url, input.seconds); return wait(() => safeStage(page), input.seconds);
   }
   if (input.action === 'decision') {
     if (!['allow','cancel'].includes(input.decision)) throw new Error('decision');
     page.status = null; page.hasLocation = null; page.hadRedirect = false;
+    if (input.capture) { page.capture = input.capture; page.captured = null; }
     await evaluate(page, `document.querySelector('button[name="decision"][value="${input.decision}"]').click()`);
     try { return await wait(async () => {
-      const value = await stage(page);
+      const value = await safeStage(page);
       if (value?.stage === 'callback') return value;
+      if (value?.stage === 'app_done' || value?.stage === 'app_error') return {...value,status:page.status,url:page.captured};
       if (value?.stage === 'protocol_error' && page.status !== null && page.hasLocation !== null) return {...value,status:page.status,has_location_header:page.hasLocation,had_redirect:page.hadRedirect};
       return false;
     }, input.seconds); }
-    catch { return {stage:'consent_incomplete',status:page.status,protocol_error:(await stage(page))?.stage==='protocol_error'}; }
+    catch { return {stage:'consent_incomplete',status:page.status,protocol_error:(await safeStage(page))?.stage==='protocol_error'}; }
   }
   if (input.action === 'tamper') {
     await evaluate(page, `(() => {

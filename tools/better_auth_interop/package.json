@@ -1,0 +1,16 @@
+{
+  "name": "@permesi/better-auth-interop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test-only Better Auth interoperability fixture for the isolated OAuth scenario stack",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "node --check server.mjs"
+  },
+  "devDependencies": {
+    "better-auth": "1.7.18"
+  }
+}

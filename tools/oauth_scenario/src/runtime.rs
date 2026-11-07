@@ -16,7 +16,7 @@ use crate::{
     registry::Case,
     report::Report,
     resource::ResourceServer,
-    services::Services,
+    services::{Policy, Services},
     tls::Tls,
     topology::Topology,
 };
@@ -31,6 +31,15 @@ pub struct Inputs<'a> {
     pub web: &'a Path,
 }
 
+/// Shared run state produced by owned stack startup for the per-case loop.
+struct Owned {
+    tls: Tls,
+    policy: Policy,
+    owner: Actor,
+    api: Api,
+    outsider: Api,
+}
+
 /// Every resource handle remains here when the scenario future is cancelled.
 pub struct Runtime {
     private: PrivateDir,
@@ -40,6 +49,7 @@ pub struct Runtime {
     browser: Option<Browser>,
     infra: Option<Infrastructure>,
     resource: Option<ResourceServer>,
+    better_auth: Option<crate::better_auth::BetterAuth>,
 }
 
 impl Runtime {
@@ -56,6 +66,7 @@ impl Runtime {
             browser: None,
             infra: None,
             resource: None,
+            better_auth: None,
         })
     }
 
@@ -77,6 +88,79 @@ impl Runtime {
         repetition: u32,
         report: &mut Report,
     ) -> Result<()> {
+        let options = inputs.options;
+        let owned = self.start_owned_stack(inputs, report).await?;
+        let gateway = self
+            .gateway
+            .as_ref()
+            .ok_or_else(|| Failure::harness("Issuer state missing."))?;
+        let infra = self
+            .infra
+            .as_ref()
+            .ok_or_else(|| Failure::harness("Infrastructure state missing."))?;
+        let browser = self
+            .browser
+            .as_mut()
+            .ok_or_else(|| Failure::harness("Browser state missing."))?;
+        for case in inputs.selected {
+            gateway.replica_a();
+            let started = Instant::now();
+            let result = async {
+                let fixture =
+                    Fixture::create(&owned.api, inputs.manifest, options.seed, &gateway.callback)
+                        .await?;
+                if crate::better_auth::required(case.id) {
+                    start_better_auth(
+                        &self.private,
+                        &owned.tls,
+                        options,
+                        &mut self.services,
+                        &mut self.better_auth,
+                        &owned.api,
+                        &fixture,
+                    )
+                    .await?;
+                }
+                let mut context = cases::Context {
+                    browser,
+                    services: &mut self.services,
+                    gateway,
+                    owner: &owned.owner,
+                    api: &owned.api,
+                    outsider: &owned.outsider,
+                    pool: &infra.pool,
+                    admin_dsn: &infra.admin_dsn,
+                    policy: &owned.policy.oauth,
+                    credential_grace_seconds: owned.policy.credential_grace_seconds,
+                    access_token_ttl_seconds: owned.policy.access_token_ttl_seconds,
+                    resource: self
+                        .resource
+                        .as_ref()
+                        .ok_or_else(|| Failure::harness("Resource server state missing."))?,
+                    infrastructure: infra,
+                    manifest: inputs.manifest,
+                    better_auth: self.better_auth.as_ref(),
+                    fixture_seed: options.seed,
+                };
+                cases::execute(case.id, &mut context, &fixture).await
+            }
+            .await;
+            if let Err(error) = settle_case(&mut self.services, &mut self.better_auth).await {
+                report.record(*case, repetition, started, result.and(Err(error.clone())));
+                return Err(error);
+            }
+            report.record(*case, repetition, started, result);
+        }
+        Ok(())
+    }
+
+    /// Starts owned infrastructure, gateway, services, resource and browser, then
+    /// registers and authenticates the shared real fixture accounts.
+    async fn start_owned_stack(
+        &mut self,
+        inputs: &Inputs<'_>,
+        report: &mut Report,
+    ) -> Result<Owned> {
         let options = inputs.options;
         self.engine.create_network().await?;
         println!("Starting disposable PostgreSQL and Vault.");
@@ -137,47 +221,29 @@ impl Runtime {
         println!("Registering and authenticating real fixture accounts.");
         let (owner, api, outsider) =
             fixture_actors(browser, &anonymous, &infra.pool, &gateway.callback).await?;
-        for case in inputs.selected {
-            gateway.replica_a();
-            let started = Instant::now();
-            let result = async {
-                let fixture =
-                    Fixture::create(&api, inputs.manifest, options.seed, &gateway.callback).await?;
-                let mut context = cases::Context {
-                    browser,
-                    services: &mut self.services,
-                    gateway,
-                    owner: &owner,
-                    api: &api,
-                    outsider: &outsider,
-                    pool: &infra.pool,
-                    admin_dsn: &infra.admin_dsn,
-                    policy: &policy.oauth,
-                    credential_grace_seconds: policy.credential_grace_seconds,
-                    access_token_ttl_seconds: policy.access_token_ttl_seconds,
-                    resource: self
-                        .resource
-                        .as_ref()
-                        .ok_or_else(|| Failure::harness("Resource server state missing."))?,
-                    infrastructure: infra,
-                    manifest: inputs.manifest,
-                    fixture_seed: options.seed,
-                };
-                cases::execute(case.id, &mut context, &fixture).await
-            }
-            .await;
-            if let Err(error) = self.services.restore_stopped().await {
-                report.record(*case, repetition, started, result.and(Err(error.clone())));
-                return Err(error);
-            }
-            report.record(*case, repetition, started, result);
-        }
-        Ok(())
+        Ok(Owned {
+            tls,
+            policy,
+            owner,
+            api,
+            outsider,
+        })
     }
 
     /// Attempts every resource cleanup independently; failed process stops do not prevent container removal.
     pub async fn cleanup(&mut self, seconds: u64) -> Vec<Failure> {
         let mut errors = Vec::new();
+        if let Some(mut app) = self.better_auth.take() {
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), app.stop())
+                .await
+                .safe("Better Auth fixture shutdown exceeded its deadline.")
+                .and_then(std::convert::identity);
+            if let Err(error) = result {
+                errors.push(error);
+            } else if let Err(error) = self.services.better_auth_identity(None) {
+                errors.push(error);
+            }
+        }
         if let Some(browser) = &mut self.browser {
             let result = tokio::time::timeout(std::time::Duration::from_secs(5), browser.stop())
                 .await
@@ -302,6 +368,68 @@ async fn start_browser(
     services.browser_identity(browser.identity()?)?;
     browser.ready().await?;
     engine.verify_private_logs().await
+}
+
+/// Registers a fresh confidential client and starts the owned Better Auth fixture for one case.
+async fn start_better_auth(
+    private: &PrivateDir,
+    tls: &Tls,
+    options: &Options,
+    services: &mut Services,
+    slot: &mut Option<crate::better_auth::BetterAuth>,
+    api: &Api,
+    fixture: &Fixture,
+) -> Result<()> {
+    let config = crate::better_auth::configure(api, fixture).await?;
+    let app = crate::better_auth::BetterAuth::spawn(
+        private,
+        tls,
+        options.better_auth_fixture.as_deref(),
+        options.request_seconds,
+        options.readiness_seconds,
+        &config,
+    )?;
+    services.better_auth_identity(app.identity()?)?;
+    *slot = Some(app);
+    let app = slot
+        .as_mut()
+        .ok_or_else(|| Failure::harness("Missing Better Auth fixture."))?;
+    app.ready().await?;
+    crate::better_auth::register_callback(api, fixture, app).await?;
+    // Revalidate the issuer's cached key set once before the library fetches it: the
+    // JWKS endpoint serves a bounded cache and a preceding key-rotation case can leave
+    // it holding retired key versions. The issuer's documented refresh contract is
+    // `Cache-Control: no-cache` — the same directive the openidconnect fixture uses for
+    // its unknown-kid refresh — so the library's plain key fetch starts from current
+    // versions instead of a stale replica cache.
+    let primed = api
+        .client
+        .get(format!("{}/jwks.json", api.origin))
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .send()
+        .await
+        .safe("Better Auth JWKS revalidation request failed.")?;
+    crate::error::check(
+        primed.status() == reqwest::StatusCode::OK,
+        "Better Auth JWKS revalidation was rejected.",
+    )?;
+    Ok(())
+}
+
+/// Stops the per-case fixture and restores stopped replica slots; the first failure wins.
+async fn settle_case(
+    services: &mut Services,
+    slot: &mut Option<crate::better_auth::BetterAuth>,
+) -> Result<()> {
+    let stopped = if let Some(mut app) = slot.take() {
+        app.stop()
+            .await
+            .and_then(|()| services.better_auth_identity(None))
+    } else {
+        Ok(())
+    };
+    let restored = services.restore_stopped().await;
+    stopped.and(restored)
 }
 
 /// Runs one independent stack under the whole-run deadline, then cleans up outside that cancelled future.

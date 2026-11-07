@@ -216,6 +216,16 @@ pub const CASES: &[Case] = &[
         description: "Issued OIDC access token discloses only its subject at UserInfo on a third replica",
         group: "interop",
     },
+    Case {
+        id: "interop.better_auth_login",
+        description: "Real Better Auth sign-in through Permesi login/consent, verified linked subject and usable local session",
+        group: "interop",
+    },
+    Case {
+        id: "interop.better_auth_state_reject",
+        description: "Tampered state on an actual Better Auth callback is rejected with unchanged state; a fresh valid control succeeds",
+        group: "interop",
+    },
 ];
 
 /// Validates explicit IDs before startup; unsupported IDs cannot silently reduce coverage.
@@ -268,7 +278,7 @@ mod tests {
         assert_eq!(select(Suite::Full, &[])?.len(), CASES.len());
         assert_eq!(select(Suite::Smoke, &[])?.len(), 3);
         assert_eq!(select(Suite::Lifecycle, &[])?.len(), 8);
-        assert_eq!(select(Suite::Interop, &[])?.len(), 7);
+        assert_eq!(select(Suite::Interop, &[])?.len(), 9);
         assert_eq!(select(Suite::Refresh, &[])?.len(), 4);
         assert_eq!(select(Suite::Ha, &[])?.len(), 8);
         assert!(

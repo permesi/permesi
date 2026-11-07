@@ -62,6 +62,7 @@ pub async fn account_containment(context: &mut Context<'_>) -> Result<()> {
             resource: context.resource,
             infrastructure: context.infrastructure,
             manifest: context.manifest,
+            better_auth: context.better_auth,
             fixture_seed: context.fixture_seed,
         };
         exercise(&mut isolated, &fixture, &operator_api, &anonymous).await

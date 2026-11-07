@@ -35,6 +35,9 @@ pub struct Options {
     pub genesis_bin: Option<PathBuf>,
     #[arg(long)]
     pub web_dist: Option<PathBuf>,
+    /// Node fixture package for the Better Auth interoperability cases.
+    #[arg(long)]
+    pub better_auth_fixture: Option<PathBuf>,
     #[arg(long, default_value = ".tmp/oauth-scenarios")]
     pub report_dir: PathBuf,
     #[arg(long, default_value_t = 900, value_parser = clap::value_parser!(u64).range(30..=3600))]

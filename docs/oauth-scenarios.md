@@ -23,6 +23,7 @@ target/debug/permesi-oauth-scenario --suite interop --access-token-ttl-seconds 1
 target/debug/permesi-oauth-scenario --case redemption.bindings
 target/debug/permesi-oauth-scenario --case authentication.shared_exchanges
 target/debug/permesi-oauth-scenario --case authorization.consent --repeat 2 --seed 7
+just oauth-scenario-better-auth
 ```
 
 The binary also runs from another directory with explicit `--permesi-bin`,
@@ -182,16 +183,18 @@ repetitions and parallel isolation with
 | `interop.invalid_access_tokens` | Malformed/tampered/ID/algorithm/header/unknown-kid negatives, 16 concurrent unknown keys produce one refresh; client disable preserves issued JWT authority only until actual expiry |
 | `interop.signing_key_rotation` | Rotate actual Vault authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
 | `interop.userinfo_cross_replica` | Browser consent on A and standard-client exchange on B; header-only GET/POST on C disclose only the issued subject and reject ID, malformed and missing Bearer tokens |
+| `interop.better_auth_login` | Real Better Auth sign-in through the app, Permesi login/consent and the exact registered callback; verified linked subject, exact scopes and a usable local session |
+| `interop.better_auth_state_reject` | A one-character state tamper on an actual callback is rejected with unchanged storage/issuance state; the same unmodified callback succeeds as a fresh valid control |
 | `refresh.client_revocation` | Offline consent on A, exchange on B, rotation on C and hash-only revocation on A despite an incorrect type hint; unknown/repeated requests remain generic, successor fails on B |
 
 `smoke` selects provisioning, consent and login resume. `security` selects shared
 authentication exchanges, authorization/redemption negatives and failover. `lifecycle`
 selects credentials/deletion and the six lifecycle revalidation cases. `token` selects
 the five HTTP issuance cases and four refresh cases; `refresh` selects only those four
-refresh cases. `interop` selects seven standard-client/resource cases, including
-cross-replica `UserInfo` disclosure and rejection. `ha` selects
+refresh cases. `interop` selects seven standard-client/resource cases and the two
+Better Auth cases, including cross-replica `UserInfo` disclosure and rejection. `ha` selects
 eight provisioning, OPAQUE, account-containment, code/refresh race, restart, outage and failover cases.
-`full` selects all 38 cases. Every case restores explicitly stopped slots afterward,
+`full` selects all 40 cases. Every case restores explicitly stopped slots afterward,
 including after assertion failure. Unexpected exits remain failures; recovery failure
 blocks the remaining selection instead of silently testing a smaller topology.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
@@ -268,6 +271,53 @@ audience, time, nonce, hash, scope and JOSE controls. Separate tests cover trans
 limits, failed/coalesced fetches and explicit/drop listener cleanup. The listener is
 recorded as a non-secret resource origin and participates in bounded runtime cleanup.
 
+## Better Auth interoperability fixture
+
+`tools/better_auth_interop` pins the real Better Auth TypeScript library to 1.7.18
+in an isolated npm package with its own generated lockfile, and runs a minimal
+Node 24 HTTPS app whose genericOAuth plugin talks to the real per-run issuer. The
+plugin performs discovery, S256 PKCE, nonce/state validation and
+`requireIdTokenVerification`, selects `tokenEndpointAuth` `client_secret_basic`,
+and requests `openid profile email` from a confidential client registered through
+the ordinary management API. The trusted fixture `organization_id` rides only the
+plugin's extra authorization parameters; library-managed state, nonce and PKCE
+parameters stay reserved. Token and UserInfo work stays in the standard
+`signIn.social`/`callback/:id` handlers and session implementation — no custom
+`getToken`/`getUserInfo` adapters, mocked provider, minted tokens or pre-created
+sessions. Permesi's ID tokens carry no profile claims, so the linked account's
+verified email can only arrive through the real back-channel UserInfo request.
+
+The runner spawns one fixture process per Better Auth case with a disposable
+SQLite file (Node's built-in `node:sqlite`, migrated by the library) inside the
+run's private directory, a cleared environment plus explicit run-generated
+configuration, `NODE_EXTRA_CA_CERTS` trust for the back-channel, and
+unconditional kill/reap cleanup including failed startup and cancellation.
+Ownership precedes readiness: the child's PID and birth ticks are journaled
+immediately after spawn, before the private ready handshake with the bound
+port and callback path. The storage path is the child's single non-secret
+process argument, keeping the private directory in `/proc/<pid>/cmdline` so
+the recovery guard recognizes the child. The exact callback URI is
+registered through management after the fixture binds its port and read back.
+Missing or drifted package dependencies fail the selected cases with a static
+setup error instead of counting as coverage. Fixture startup revalidates the
+issuer's cached key set once with the documented `Cache-Control: no-cache`
+refresh contract, because `/jwks.json` serves a bounded per-replica cache and
+the preceding `interop.signing_key_rotation` case can otherwise leave fresh
+clients verifying against retired key versions for up to the cache TTL; this
+covers that specific suite precondition, not universal key rotation for
+Better Auth clients. `interop.better_auth_login` drives a
+real browser through the app, Permesi login/consent and the real callback, then
+verifies the linked provider subject and a usable local session against the
+expected fixture owner. `interop.better_auth_state_reject` uses a fresh
+unauthenticated cookie jar to deliver an actual callback whose state is tampered
+by one character, requires the library's exact `state_mismatch` rejection with
+unchanged storage counts and no token issuance, and finishes with the same
+unmodified callback as a fresh valid control, so a fixture that rejects
+everything cannot pass. Removing the tampering makes the negative assertion
+fail, as mutation-checked. The fixture README documents its environment inputs,
+local invocation (`just oauth-scenario-better-auth`) and limits; the CI OAuth
+scenario matrix installs the pinned fixture dependencies before the full suite.
+
 ## Extension contract and remaining work
 
 Add future protocol stages as stable cases with documented preconditions, fresh
@@ -280,7 +330,8 @@ bounded waits and secret-free reporting intact as scenarios grow.
 independent RS256/claim verification, current/retiring credentials, rollback, replay,
 concurrency and shared rotation. Refresh-family rotation/reuse/concurrency are now covered; next add broader MFA/account-switching
 coverage alongside its implementation. The seven standard-library/resource scenarios
-provide a narrow interoperability foundation; broader clients, formal OIDC conformance
+and the Better Auth client fixture provide a narrow interoperability foundation;
+broader clients, formal OIDC conformance
 and production resource-server revocation policy remain separately tracked.
 
 Broader scenario coverage for the implemented durable WebAuthn/passkey exchanges,

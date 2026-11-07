@@ -26,7 +26,7 @@ rand.workspace = true
 rsa_sha2 = { workspace = true, features = ["oid"] }
 rsa = "0.9.10"
 rcgen.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["cookies"] }
 rustls.workspace = true
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }

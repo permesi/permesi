@@ -4,7 +4,10 @@ use crate::{
     error::{Result, Safe},
     files::PrivateDir,
 };
-use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+use rcgen::{
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+    KeyUsagePurpose,
+};
 use std::{net::TcpListener, path::PathBuf, time::Duration};
 
 /// Paths stay private; only the public CA is mounted into the isolated browser.
@@ -22,6 +25,11 @@ impl Tls {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let mut root =
             CertificateParams::new(Vec::<String>::new()).safe("Cannot configure private CA.")?;
+        // Distinct subjects keep chain building unambiguous for OpenSSL-based verifiers;
+        // rcgen's default DN would make the leaf appear self-issued beside its own issuer.
+        let mut root_name = DistinguishedName::new();
+        root_name.push(DnType::CommonName, "permesi scenario CA");
+        root.distinguished_name = root_name;
         root.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         root.key_usages = vec![
             KeyUsagePurpose::KeyCertSign,
@@ -33,8 +41,11 @@ impl Tls {
             .self_signed(&root_key)
             .safe("Cannot generate private CA.")?;
         let issuer = Issuer::from_params(&root, &root_key);
-        let leaf = CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])
+        let mut leaf = CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])
             .safe("Cannot configure test certificate.")?;
+        let mut leaf_name = DistinguishedName::new();
+        leaf_name.push(DnType::CommonName, "localhost");
+        leaf.distinguished_name = leaf_name;
         let leaf_key = KeyPair::generate().safe("Cannot generate TLS key.")?;
         let leaf_cert = leaf
             .signed_by(&leaf_key, &issuer)

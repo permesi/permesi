@@ -11,6 +11,14 @@ oauth-scenario *args: oauth-scenario-build
 oauth-scenario-list:
   cargo run --locked -p permesi-oauth-scenario -- --list
 
+[doc("Install the pinned Better Auth interoperability fixture dependencies")]
+oauth-scenario-better-auth-setup:
+  npm --prefix "{{root}}/tools/better_auth_interop" ci
+
+[doc("Run only the two Better Auth interoperability cases on a disposable local Podman stack")]
+oauth-scenario-better-auth *args: oauth-scenario-build oauth-scenario-better-auth-setup
+  "{{root}}/target/debug/permesi-oauth-scenario" --case interop.better_auth_login --case interop.better_auth_state_reject {{args}}
+
 [doc("Verify recovery guards, interruptions, restart SIGKILL, startup/deadline failures and isolation")]
 oauth-scenario-harness-test *args:
   python3 -m unittest discover -s "{{root}}/tools/oauth_scenario/tests" -p '*_test.py'

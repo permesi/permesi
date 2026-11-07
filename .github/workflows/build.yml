@@ -224,6 +224,15 @@ jobs:
         run: |
           mkdir -p target/debug
           tar -xzf .tmp/scenario-binaries/scenario-binaries.tar.gz -C target/debug
+      - name: Set up Node for the Better Auth fixture
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tools/better_auth_interop/package-lock.json
+      - name: Install Better Auth fixture dependencies
+        working-directory: tools/better_auth_interop
+        run: npm ci
       - uses: ./.github/actions/ensure-container-runtime
         env:
           PERMESI_TEST_REQUIRE_PODMAN: '1'

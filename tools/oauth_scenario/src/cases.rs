@@ -40,6 +40,7 @@ mod hierarchy;
 use hierarchy::{deletion, failover};
 
 mod authentication;
+mod better_auth;
 mod containment;
 mod ha;
 mod interop;
@@ -64,6 +65,7 @@ pub struct Context<'a> {
     pub resource: &'a crate::resource::ResourceServer,
     pub infrastructure: &'a crate::infrastructure::Infrastructure,
     pub manifest: &'a crate::manifest::Manifest,
+    pub better_auth: Option<&'a crate::better_auth::BetterAuth>,
     pub fixture_seed: u64,
 }
 
@@ -155,6 +157,8 @@ pub async fn execute(id: &str, context: &mut Context<'_>, fixture: &Fixture) -> 
         "interop.invalid_access_tokens" => interop::invalid_access(context, fixture).await,
         "interop.signing_key_rotation" => interop::rotation(context, fixture).await,
         "interop.userinfo_cross_replica" => interop::userinfo_cross_replica(context, fixture).await,
+        "interop.better_auth_login" => better_auth::login(context, fixture).await,
+        "interop.better_auth_state_reject" => better_auth::state_reject(context, fixture).await,
         "refresh.rotation_reuse" => refresh::rotation(context, fixture).await,
         "refresh.replica_race" => refresh::race(context, fixture).await,
         "refresh.lifecycle" => refresh::lifecycle(context, fixture).await,
