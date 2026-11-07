@@ -230,6 +230,19 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: tools/better_auth_interop/package-lock.json
+      - name: Install Just for OAuth recipe tests
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        with:
+          tool: just@1.58.0
+          fallback: none
+      - name: Ensure zsh for OAuth recipe tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v zsh >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y zsh
+          fi
       - name: Install Better Auth fixture dependencies
         working-directory: tools/better_auth_interop
         run: npm ci

@@ -132,7 +132,12 @@ before interpreting queue or wall-time differences as a speedup.
   alongside tests, service/frontend builds and OAuth scenarios, so failure, cancellation or skipping
   the browser gate cannot produce a successful aggregate check.
   OAuth scenarios run as a required three/five-replica matrix with fail-fast disabled.
-  Each matrix member installs the Better Auth fixture's locked npm dependencies,
+  Each matrix member installs prebuilt Just 1.58.0 with the existing pinned installer
+  and source-build fallback disabled, and installs zsh through apt with sudo only when
+  missing. These tools run the documented Better Auth setup recipe in the recovery
+  regressions. Runners need Debian/Ubuntu package access and noninteractive sudo when
+  zsh is absent; the consumer job does not need Rust/Cargo to install Just.
+  Each member installs the Better Auth fixture's locked npm dependencies,
   checks its syntax with `npm run check`, and gates execution on
   `npm audit --audit-level=high` before starting scenarios.
   A required `Build scenario binaries` job checks out the exact workflow SHA and builds
