@@ -86,7 +86,11 @@ before interpreting queue or wall-time differences as a speedup.
   container to accept connections. The lint job installs `wasm32-unknown-unknown` and
   checks `permesi_web` with the same denied warnings as the native workspace. Locally,
   `just clippy` runs both targets after `just web-setup` installs the browser target.
-  Coverage still runs the full default workspace.
+  Coverage still runs the full default workspace. Unit tests and coverage explicitly
+  install Node 24 for the Better Auth fixture command's private-storage ownership
+  regression; it validates the real command builder without installing npm dependencies.
+  The format job also runs the container-runtime setup, isolation and cleanup
+  regressions with hermetic fake engines, without changing the host's container engine.
 - **`security-audit.yml`**: Audits the locked Rust dependency graph for vulnerabilities, unsound
   advisories, and yanked crates when Cargo dependency files change, on manual runs, and weekly so
   newly published RustSec advisories are detected without duplicating the normal test workflow.
@@ -122,6 +126,9 @@ before interpreting queue or wall-time differences as a speedup.
   alongside tests, service/frontend builds and OAuth scenarios, so failure, cancellation or skipping
   the browser gate cannot produce a successful aggregate check.
   OAuth scenarios run as a required three/five-replica matrix with fail-fast disabled.
+  Each matrix member installs the Better Auth fixture's locked npm dependencies,
+  checks its syntax with `npm run check`, and gates execution on
+  `npm audit --audit-level=high` before starting scenarios.
   A required `Build scenario binaries` job checks out the exact workflow SHA and builds
   the services and runner once. Both matrix members download its SHA-named artifact from
   their own workflow run; a tar archive preserves executable modes. Packaging strips

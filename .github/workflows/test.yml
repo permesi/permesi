@@ -44,6 +44,7 @@ jobs:
           python3 scripts/test-release-version.py
           python3 scripts/test-frontend-preview.py
           python3 .github/actions/ensure-musl-toolchain/test_runtime.py
+          python3 .github/actions/ensure-container-runtime/test_runtime.py
 
   lint:
     name: Clippy
@@ -165,6 +166,11 @@ jobs:
         with:
           shared-key: native-tests
           save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Set up Node for Better Auth fixture unit tests
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
 
       - uses: ./.github/actions/ensure-container-runtime
 

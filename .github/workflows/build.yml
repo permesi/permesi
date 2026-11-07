@@ -233,6 +233,12 @@ jobs:
       - name: Install Better Auth fixture dependencies
         working-directory: tools/better_auth_interop
         run: npm ci
+      - name: Check Better Auth fixture syntax
+        working-directory: tools/better_auth_interop
+        run: npm run check
+      - name: Audit Better Auth fixture dependencies
+        working-directory: tools/better_auth_interop
+        run: npm audit --audit-level=high
       - uses: ./.github/actions/ensure-container-runtime
         env:
           PERMESI_TEST_REQUIRE_PODMAN: '1'
