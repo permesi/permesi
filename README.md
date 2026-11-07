@@ -585,80 +585,52 @@ Passkey credentials are persisted in the dedicated `passkeys` table when preview
 
 #### Releasing
 
-Work lands on `sandbox`; once its CI run is green it is merged into `develop`, and
-`just deploy` (or `deploy-minor` / `deploy-major`) releases from a clean `develop`. The
-release rule is that the commit tagged and put on `main` is exactly the commit CI
-tested, and everything published is exactly what CI built from it, so a release never
-needs a tag deleted or moved:
+Work lands on `sandbox`; when its CI run is green it is fast-forwarded into `develop`, and
+`just deploy` releases from `develop`. The release rule is that the commit released is
+exactly the commit CI tested on `develop`, and the release workflow changes nothing in the
+repository except moving `main` to that commit:
+
+1. As the last commit of the work, the operator bumps the version with a tool of their
+   choice (`cargo set-version --workspace --bump patch`, or `gbump`) in `Cargo.toml` and
+   `Cargo.lock`, and sets `info.version` in `docs/openapi/permesi.json` and
+   `docs/openapi/genesis.json` to the same value (`just openapi` regenerates them). The
+   reviewer checks that the bump is present and complete.
+2. Merge `sandbox` into `develop` as a fast-forward, push, and wait for **Test & Build**
+   on `develop` to pass.
+3. Run `just deploy`. It starts `.github/workflows/deploy.yml` on `develop` and follows the
+   run.
 
 ```
-just deploy
- 1. preflight       checks that change nothing that lasts: clean develop equal to
-                    origin, main can fast-forward, gh logged in, git 2.31+, and a
-                    signing test (a temporary local tag, deleted at once)
- 2. candidate       temporary worktree: version bump (Cargo.toml, Cargo.lock, the OpenAPI
-                    specs' info.version), `cargo clean`, `just openapi` must reproduce the
-                    specs, `just test` (fmt, clippy, the web build and every test), then
-                    a signed commit pushed to the `release` branch
- 3. two CI runs     Test & Build, and a candidate run of the Deploy workflow: tests, the
-                    musl archives and Debian packages, the signed production web build,
-                    and the permesi, genesis and web images pushed to GHCR only as
-                    `:sha-<commit>`, keylessly signed and OCI-attested, all recorded in a
-                    manifest (SHA-256 sums, image digests) with build-provenance
-                    attestations for the release files; nothing is published, and nothing
-                    is built from a cache
- 4. pre-tag check   the manifest and every artifact are downloaded and checked
- 5. promotion       one atomic push of develop, main and the signed tag, which names the
-                    candidate run
- 6. tag run         publish only: the GitHub release gets the manifest's files and
-                    notes made from the commit subjects since the previous release, the
-                    image digests get the version (and `latest`) tags, the signed web
-                    build goes to Cloudflare Pages, Helm is dispatched with the digests,
-                    and the committed API docs go to GitHub Pages; nothing is rebuilt
+Deploy workflow (workflow_dispatch on develop)
+ guard         develop only; the version is X.Y.Z, above the latest tag and untagged; both
+               OpenAPI specs carry it; main is an ancestor; `CI OK` passed on this commit
+ build         musl archives and Debian packages (hosted runner, nothing from a cache)
+ frontend      the production web build, signed (checksums, cosign, build provenance)
+ images        permesi, genesis and web, pushed only as `:sha-<commit>`, keylessly signed
+               and OCI-attested
+ release       exact file set checked, SHA256SUMS, build-provenance attestation, the GitHub
+               release (this creates the tag at the tested commit) and a final check that
+               the tag and the assets are right
+ then          image digests get the version (and `latest`) tags, the web build goes to
+               Cloudflare Pages, Helm is dispatched with the digests, the API docs go to
+               GitHub Pages, and `main` is fast-forwarded to the released commit
 ```
 
-`just deploy` ends at the promotion and prints "Promoted"; `just release-status` then
-shows the tag run's state. Everything before the promotion is idempotent: if a test,
-build or check fails, or the run is interrupted, `develop` and `main` are untouched and
-no tag exists. Re-run the failed jobs in GitHub (a waiting deploy continues by itself
-within 15 minutes, `RELEASE_RERUN_WAIT`), or fix on `sandbox` and merge; either way,
-running `just deploy` again resumes the same candidate or builds a fresh one. After the
-promotion only the publishing steps remain. If one of them hits an outage, "Re-run
-failed jobs" on the tag run finishes it; every step is safe to repeat (the release is
-updated in place, images are retagged to the same digests). If the tagged workflow
-itself was wrong, fix it, release as usual, and run `just release-republish X.Y.Z`: a
-recovery run on `main` checks that tag like its own run would and publishes its
-candidate artifacts, without touching the tag. GitHub's Latest release, the `latest`
-image tag, Cloudflare Pages, Helm and the docs only follow the highest promoted release
-(a verified signed tag on `main`, with a matching version), checked right before each of
-them acts, with every pending job kept in order across runs, so a late, re-run or recovered older tag never rolls production
-back, and extra assets a broken run left on a release are removed. Recovery needs the candidate run's artifacts (kept 90 days by
-default), and re-runs work for 30 days.
+Nothing is published before every build job has succeeded. If a job fails, fix the cause
+and use "Re-run failed jobs" on the run: a draft release left by a failed run is replaced,
+an already published release is kept, and images are retagged to the same digests. A
+failure after the tag exists (the release is public) cannot be repaired by changing code
+under the same version: bump to the next version and release that. The production steps
+(the `latest` image tag, Cloudflare Pages, Helm and the docs) run only while the version is
+the highest release tag, checked right before each acts, so a re-run of an older release
+never rolls production back. The tag is created by GitHub and is not signed. Releases
+need `just` and `gh` (logged in). Dependency updates (`cargo update`) are ordinary changes
+made on `sandbox`, so CI tests them before a release.
 
-While it waits, `just deploy` polls GitHub every 10 seconds until a run appears (up to
-5 minutes), then every 30 seconds (`RELEASE_POLL_SECONDS`), for at most an hour per
-attempt (`RELEASE_CI_TIMEOUT`); with `RELEASE_NO_WAIT=1` it stops once the candidate is
-staged or while CI runs, and a later `just deploy` finishes. Run it inside the dev
-session (Herdr or tmux) on the VM so a dropped connection does not stop the wait.
-`just release-preflight` runs only the checks, and `just protect-branches` keeps the
-protection as code: `main` accepts only commits whose aggregate **CI OK** check passed,
-admins included, with signed commits, linear history and resolved review conversations,
-and the "Release tags" ruleset lets `X.Y.Z` tags be created but never moved or deleted.
-`just release-dry-run` builds and packages the current branch exactly like a candidate
-(images included, pushed only as `:sha-<commit>`) without a bump or a tag; other tags
-only test and build. Dependency updates (`cargo update`) are ordinary changes made on
-`sandbox`, so CI tests them before a release. Tag and commit signing follow Git's
-configured `gpg.format` (SSH or OpenPGP).
-
-The workflows are hardened like the template's, with one deliberate difference: actions
-are referenced by their major version tag (`actions/checkout@v7`) instead of a full
-commit SHA, so fixes within a major version arrive without a pull request and Dependabot
-proposes only new major versions (one weekly pull request into `sandbox`). The cost is
-trust in each action's maintainers: whoever can move a tag changes the code the
-workflows run. `sigstore/cosign-installer` publishes no major tag and is referenced by
-its exact version. The Rust toolchain comes from `rustup` through
-`.github/actions/rust-toolchain` instead of a third-party action, no checkout keeps the
-token, and every Cargo command uses `--locked`. To check a downloaded release file:
+The workflows reference actions by full commit SHA (checked by
+`scripts/check-action-pins.py`), Dependabot proposes updates, the Rust toolchain comes from
+`rustup` through `.github/actions/rust-toolchain`, no checkout keeps the token, and every
+Cargo command uses `--locked`. To check a downloaded release file:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
@@ -666,24 +638,19 @@ gh attestation verify <file> --repo permesi/permesi --signer-workflow permesi/pe
 ```
 
 Every image digest is also keylessly signed by the Deploy workflow and carries an OCI
-build-provenance attestation. Verify a published image against the digest recorded in the
-candidate manifest (constraining the OIDC issuer and the exact workflow identity, never a
-permissive certificate-identity regex):
+build-provenance attestation. Verify a published image against its digest (constraining
+the OIDC issuer and the exact workflow identity, never a permissive certificate-identity
+regex):
 
 ```sh
 cosign verify \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/release" \
+  --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/develop" \
   "ghcr.io/permesi/permesi@sha256:<digest>"
 ```
 
-The release promotion runs this same check against the manifest's immutable digests before
-retagging or dispatching Helm, and a failed verification blocks the release. Real OIDC
-signing and publication require an authorized workflow run; they cannot be produced locally.
-
-The same flow, and how to set it up in another repository, is documented in
-[cron-when's RELEASING.md](https://github.com/nbari/cron-when/blob/main/RELEASING.md),
-which serves as the template.
+Real OIDC signing and publication require an authorized workflow run; they cannot be
+produced locally.
 
 ### Local HTTPS for Passkeys (mkcert + HAProxy)
 

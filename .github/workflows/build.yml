@@ -10,8 +10,8 @@ on:
 permissions:
   contents: read
 
-# Superseded development pushes must not occupy scarce fixture runners. Keep
-# candidate/main runs independent so a newer run cannot cancel release evidence.
+# Superseded development pushes must not occupy scarce fixture runners. Keep other
+# branch runs independent so a newer run cannot cancel their evidence.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.ref_name == 'sandbox' || github.ref_name == 'develop') && 'latest' || github.run_id }}
   cancel-in-progress: ${{ github.ref_name == 'sandbox' || github.ref_name == 'develop' }}
@@ -148,11 +148,11 @@ jobs:
           overwrite: true
 
   # Production frontend publication belongs to deploy.yml. Ordinary main CI must
-  # not overwrite its signed candidate; the scratch release branch gets no preview.
+  # not overwrite the signed production build.
   deploy-frontend:
     name: Deploy Frontend
     needs: frontend-build
-    if: github.ref_name != 'main' && github.ref_name != 'release'
+    if: github.ref_name != 'main'
     uses: ./.github/workflows/frontend.yml
     permissions:
       contents: read

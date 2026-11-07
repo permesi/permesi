@@ -1,208 +1,102 @@
 ---
 name: Deploy
 
+# Run manually on `develop` (`just deploy`). The commit is the one Test & Build already
+# passed on develop; this workflow bumps and commits nothing. It builds that commit once
+# (binaries and packages, the signed production web build, the three images pushed under
+# `:sha-<commit>`), publishes the GitHub release (which creates the tag), then tags the
+# tested image digests, deploys the web build to Cloudflare Pages, dispatches Helm and
+# publishes the API docs, and finally fast-forwards `main` to the released commit. A
+# failed job is fixed with "Re-run failed jobs"; nothing is published before every build
+# job has succeeded.
 on:
-  push:
-    tags:
-      - '*'
   workflow_dispatch:
-    inputs:
-      publish:
-        description: >-
-          Recovery: an existing X.Y.Z tag whose publishing failed. Run on main; it checks
-          the tag like its own run would and publishes the tag's candidate artifacts.
-        required: false
-        default: ''
 
-# Runs of the same ref (recovery runs on main, candidate runs on release) wait in order;
-# `queue: max` keeps every pending run instead of replacing the pending one.
+# One release at a time; a second dispatch waits instead of replacing or cancelling it.
 concurrency:
-  group: deploy-${{ github.workflow }}-${{ github.ref_name }}
+  group: deploy
   cancel-in-progress: false
-  queue: max
 
 # Read-only by default; jobs that publish ask for more.
 permissions:
   contents: read
 
 jobs:
-  # Classifies the run for the jobs below.
-  # - `candidate`: a manual (workflow_dispatch) run on a branch, which `just deploy`
-  #   starts on the release candidate before any tag exists. It tests and builds
-  #   everything once: the musl archives and Debian packages, the signed production
-  #   web build, and the three images, pushed to GHCR only as `:sha-<commit>`. It keeps
-  #   the files with a manifest of their SHA-256 sums and the image digests, and
-  #   publishes nothing.
-  # - `release`: a pushed X.Y.Z tag. It builds nothing. The signed tag names its
-  #   candidate run; the guard checks that run and the tag's commit, and the jobs below
-  #   publish exactly the manifest's files and image digests (GitHub release, image
-  #   tags, Cloudflare Pages, Helm, API docs), so what ships is what was tested.
-  # - `recover`: a manual run on main with `publish: X.Y.Z`, for a tag whose publishing
-  #   failed in a way re-running its jobs cannot fix. It applies the same checks to that
-  #   tag and publishes its candidate artifacts with main's workflow; the tag itself
-  #   never changes.
-  # - `test-tag`: any other tag, or a manual run on a tag (t-* from `just t-deploy`):
-  #   tests and builds only.
-  # The production-facing steps (GitHub's Latest release, the `latest` image tag,
-  # Cloudflare Pages, Helm and the API docs) each check right before they act that the
-  # tag is the highest promoted release (.github/actions/release-is-latest), and each runs
-  # in its own concurrency group across runs with `queue: max` (every pending job waits
-  # its turn instead of being replaced), so a late or re-run job of an older tag never
-  # rolls production back and a newer release is never cancelled by an older one.
+  # Everything that can be known before building: the branch, the version, that no
+  # release of it exists, that the commit passed Test & Build, and that the committed
+  # OpenAPI specs already carry the version (the bump touches Cargo.toml, Cargo.lock and
+  # both specs' info.version).
   guard:
     name: Release guard
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
     outputs:
-      kind: ${{ steps.classify.outputs.kind }}
-      version: ${{ steps.classify.outputs.version }}
-      tag: ${{ steps.classify.outputs.tag }}
-      commit: ${{ steps.release.outputs.commit }}
-      candidate_run: ${{ steps.release.outputs.candidate_run }}
-      candidate_branch: ${{ steps.release.outputs.candidate_branch }}
+      version: ${{ steps.check.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Classify the run
-        id: classify
+      - name: Check the commit can be released
+        id: check
         shell: bash
         env:
-          EVENT: ${{ github.event_name }}
-          PUBLISH: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)"
-          tag=""
-          if [[ "${EVENT}" == workflow_dispatch && -n "${PUBLISH:-}" ]]; then
-            if [[ "${GITHUB_REF}" != refs/heads/main || ! "${PUBLISH}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::A recovery run needs an X.Y.Z tag in 'publish' and must run on main."
-              exit 1
-            fi
-            kind=recover
-            tag="${PUBLISH}"
-            version="${PUBLISH}"
-          elif [[ "${EVENT}" == workflow_dispatch && "${GITHUB_REF}" == refs/heads/* ]]; then
-            kind=candidate
-          elif [[ "${EVENT}" == push && "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            kind=release
-            tag="${GITHUB_REF_NAME}"
-          else
-            kind=test-tag
-            # Test builds are named after the ref; only safe characters reach file names.
-            version="test"
-            if [[ "${GITHUB_REF_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              version="${GITHUB_REF_NAME}"
-            fi
+          if [[ "${GITHUB_REF}" != refs/heads/develop ]]; then
+            echo "::error::Run the release on develop (got ${GITHUB_REF})."
+            exit 1
           fi
-          if [[ "${kind}" != test-tag && ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          version="$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Cargo.toml has no X.Y.Z workspace version (found '${version}')."
             exit 1
           fi
-          {
-            echo "kind=${kind}"
-            echo "version=${version}"
-            echo "tag=${tag}"
-          } >> "$GITHUB_OUTPUT"
-          echo "${EVENT} on ${GITHUB_REF} classified as ${kind} (version ${version}${tag:+, tag ${tag}})."
-
-      # Everything is read through the API, so it holds for any tag, however far main
-      # has moved on since.
-      - name: Require the tag's commit, version, Test & Build run and candidate run
-        id: release
-        if: steps.classify.outputs.kind == 'release' || steps.classify.outputs.kind == 'recover'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.classify.outputs.tag }}
-          KIND: ${{ steps.classify.outputs.kind }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          repo="${GITHUB_REPOSITORY}"
-          # The signed tag names the candidate run whose artifacts it releases.
-          read -r type object <<<"$(gh api "repos/${repo}/git/ref/tags/${TAG}" --jq '"\(.object.type) \(.object.sha)"')"
-          if [[ "${type}" != tag ]]; then
-            echo "::error::${TAG} is not an annotated tag; refusing to release."
+          if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+            echo "::error::${version} is already tagged; bump the version on develop first."
             exit 1
           fi
-          read -r verified commit <<<"$(gh api "repos/${repo}/git/tags/${object}" --jq '"\(.verification.verified) \(.object.sha)"')"
-          message="$(gh api "repos/${repo}/git/tags/${object}" --jq '.message')"
-          if [[ "${verified}" != true ]]; then
-            echo "::error::The signature of tag ${TAG} is not verified by GitHub; refusing to release."
+          latest="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+          if [[ -n "${latest}" && "$(printf '%s\n%s\n' "${latest}" "${version}" | sort -V | tail -n 1)" != "${version}" ]]; then
+            echo "::error::${version} is below the latest release ${latest}; bump to a higher version."
             exit 1
           fi
-          if [[ "${KIND}" == release && "${commit}" != "${GITHUB_SHA}" ]]; then
-            echo "::error::Tag ${TAG} points at ${commit}, but this run is for ${GITHUB_SHA}."
+          for spec in docs/openapi/permesi.json docs/openapi/genesis.json; do
+            found="$(jq -r .info.version "${spec}")"
+            if [[ "${found}" != "${version}" ]]; then
+              echo "::error::${spec} is for ${found}, not ${version}; run just openapi and commit it with the bump."
+              exit 1
+            fi
+          done
+          if ! git merge-base --is-ancestor origin/main "${GITHUB_SHA}"; then
+            echo "::error::main has commits that develop does not; merge main into develop first."
             exit 1
           fi
-          status="$(gh api "repos/${repo}/compare/${commit}...main" --jq '.status')"
-          if [[ "${status}" != identical && "${status}" != ahead ]]; then
-            echo "::error::Tag ${TAG} points at ${commit}, which is not on main (${status}); refusing to release."
+          # `CI OK` is Test & Build's aggregate of every gating job; it must have
+          # succeeded on exactly this commit.
+          passed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=CI%20OK&status=completed" \
+            --jq '[.check_runs[] | select(.conclusion == "success")] | length')"
+          if [[ "${passed}" -lt 1 ]]; then
+            echo "::error::${GITHUB_SHA} has no successful CI OK check; wait for Test & Build to pass on develop."
             exit 1
           fi
-          # Drain the stream so pipefail still reports producer errors, without SIGPIPE.
-          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = / && !found {print $2; found=1}')"
-          if [[ "${version}" != "${TAG}" ]]; then
-            echo "::error::Tag ${TAG} does not match the workspace version ${version} at ${commit}; refusing to release."
-            exit 1
-          fi
-          passed="$(gh run list --repo "${repo}" --workflow build.yml \
-            --commit "${commit}" --event push --status success --limit 1 \
-            --json databaseId --jq '.[0].databaseId // empty')"
-          if [[ -z "${passed}" ]]; then
-            echo "::error::${commit} has no successful Test & Build run; refusing to release ${TAG}."
-            exit 1
-          fi
-          candidate_run="$(sed -n 's/^Candidate run: \([0-9][0-9]*\)$/\1/p' <<<"${message}" | head -n 1)"
-          if [[ -z "${candidate_run}" ]]; then
-            echo "::error::Tag ${TAG} names no candidate run; refusing to publish untested artifacts."
-            exit 1
-          fi
-          read -r head_sha event conclusion path head_branch <<<"$(gh api "repos/${repo}/actions/runs/${candidate_run}" \
-            --jq '"\(.head_sha) \(.event) \(.conclusion) \(.path) \(.head_branch)"')"
-          if [[ "${head_sha}" != "${commit}" || "${event}" != workflow_dispatch || "${conclusion}" != success || "${path}" != .github/workflows/deploy.yml* ]]; then
-            echo "::error::Run ${candidate_run} is not a successful candidate run of ${commit} (${head_sha} ${event} ${conclusion} ${path})."
-            exit 1
-          fi
-          if [[ "${head_branch}" != release && "${head_branch}" != develop ]]; then
-            echo "::error::Run ${candidate_run} ran on branch '${head_branch}', which is not an allowed release branch (release or develop)."
-            exit 1
-          fi
-          {
-            echo "commit=${commit}"
-            echo "candidate_run=${candidate_run}"
-            echo "candidate_branch=${head_branch}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Tag ${TAG}: ${commit} is on main, passed Test & Build (run ${passed}) and candidate run ${candidate_run}."
-
-  # ----- Candidate and test tags: test and build everything once -----
-
-  test:
-    needs: guard
-    if: needs.guard.outputs.kind == 'candidate' || needs.guard.outputs.kind == 'test-tag'
-    uses: ./.github/workflows/test.yml
-    with:
-      runner: ubuntu-latest
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${version} from ${GITHUB_SHA} (CI OK passed)."
 
   build:
     name: Build
-    runs-on: ${{ matrix.os }}
-    needs: [guard, test]
-    if: needs.guard.outputs.kind == 'candidate' || needs.guard.outputs.kind == 'test-tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: guard
     env:
       VERSION: ${{ needs.guard.outputs.version }}
-
-    strategy:
-      matrix:
-        include:
-          - build: linux
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-
+      TARGET: x86_64-unknown-linux-musl
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -212,19 +106,16 @@ jobs:
       - name: Install Rust
         uses: ./.github/actions/rust-toolchain
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ env.TARGET }}
 
       - uses: ./.github/actions/ensure-musl-toolchain
-        if: matrix.build == 'linux'
         timeout-minutes: 5
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
+        run: cargo build --release --locked --target "${TARGET}" -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
 
       - name: Build archives
         shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -252,7 +143,7 @@ jobs:
           mv "$(ls target/debian/genesis_*.deb)" "dist/genesis_${VERSION}_amd64.deb"
           ls -al dist
 
-      # The release tag publishes exactly these files, downloaded from this run.
+      # The release publishes exactly these files, downloaded from this run.
       - name: Upload the binaries and packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -263,8 +154,8 @@ jobs:
   frontend-build:
     name: Build Frontend
     runs-on: ubuntu-latest
-    needs: [guard, test]
-    if: needs.guard.outputs.kind == 'candidate' || needs.guard.outputs.kind == 'test-tag'
+    timeout-minutes: 60
+    needs: guard
     permissions:
       contents: read
     steps:
@@ -285,8 +176,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      # No build cache in the release workflow: what the candidate builds ships, so it is
-      # built from source only, never from a cache another run could have written.
+      # No build cache in the release workflow: what is built here ships, so it is built
+      # from source only, never from a cache another run could have written.
       - name: Install Trunk
         run: ./scripts/install-trunk
 
@@ -294,7 +185,7 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
-      # A release candidate is built for production (permesi.com).
+      # A release is built for production (permesi.com).
       - name: Set Frontend Env
         shell: bash
         env:
@@ -333,12 +224,11 @@ jobs:
           path: apps/web/dist
           if-no-files-found: error
 
-  # Sign the production web build once (checksums, cosign, build provenance); the tag
-  # deploys this signed build to Cloudflare Pages and attaches it to the release.
+  # Sign the production web build once (checksums, cosign, build provenance); the release
+  # deploys this signed build to Cloudflare Pages and attaches it to the GitHub release.
   frontend-sign:
     name: Sign Frontend
     needs: [guard, frontend-build]
-    if: needs.guard.outputs.kind == 'candidate'
     uses: ./.github/workflows/frontend.yml
     permissions:
       contents: read
@@ -352,8 +242,8 @@ jobs:
   web-dist:
     name: Package Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [guard, frontend-sign]
-    if: needs.guard.outputs.kind == 'candidate'
     env:
       VERSION: ${{ needs.guard.outputs.version }}
     steps:
@@ -384,8 +274,8 @@ jobs:
   images:
     name: Build Images
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [guard, build, frontend-build]
-    if: needs.guard.outputs.kind == 'candidate'
     permissions:
       contents: read
       packages: write
@@ -468,8 +358,7 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Sign each immutable image digest keylessly. The release verifies these signatures
-      # against the same workflow identity before it retags the digests.
+      # Sign each immutable image digest keylessly with this workflow's identity.
       - name: Sign the images
         shell: bash
         env:
@@ -489,7 +378,7 @@ jobs:
           done
 
       # Attest each image's OCI provenance in the registry; the attestations carry the
-      # same subject digests the manifest records and the release publishes.
+      # same subject digests the release tags.
       - name: Attest permesi image provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
@@ -511,173 +400,81 @@ jobs:
           subject-digest: ${{ steps.push.outputs.web_digest }}
           push-to-registry: true
 
-  # The candidate's manifest: the SHA-256 of every release file, the image digests, the
-  # version, the commit and the artifacts the release needs. `just deploy` checks it and
-  # those artifacts before tagging, and the release publishes exactly what it lists.
-  manifest:
-    name: Release manifest
-    runs-on: ubuntu-latest
-    needs: [guard, build, web-dist, images]
-    if: needs.guard.outputs.kind == 'candidate'
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - name: Download this run's release files
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: dist-*
-          path: artifacts
-
-      # Every expected artifact must be here with all its files, so a lost artifact can
-      # never produce a partial release. Keep this in step with the build jobs.
-      - name: Check the inventory
-        shell: bash
-        env:
-          EXPECTED: dist-binaries=4 dist-web=1
-        run: |
-          set -euo pipefail
-          for entry in ${EXPECTED}; do
-            name="${entry%=*}"
-            count="$(find "artifacts/${name}" -maxdepth 1 -type f 2>/dev/null | wc -l)"
-            if [[ "${count}" -ne "${entry#*=}" ]]; then
-              echo "::error::Artifact ${name} has ${count} files, expected ${entry#*=}."
-              exit 1
-            fi
-          done
-          actual="$(find artifacts -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tr '\n' ' ')"
-          wanted="$(for entry in ${EXPECTED}; do echo "${entry%=*}"; done | sort | tr '\n' ' ')"
-          if [[ "${actual}" != "${wanted}" ]]; then
-            echo "::error::Found artifacts ${actual}, expected ${wanted}."
-            exit 1
-          fi
-
-      - name: Write the manifest
-        shell: bash
-        env:
-          VERSION: ${{ needs.guard.outputs.version }}
-          EXPECTED: dist-binaries=4 dist-web=1
-          PERMESI_DIGEST: ${{ needs.images.outputs.permesi_digest }}
-          GENESIS_DIGEST: ${{ needs.images.outputs.genesis_digest }}
-          WEB_DIGEST: ${{ needs.images.outputs.web_digest }}
-        run: |
-          set -euo pipefail
-          mkdir dist manifest
-          find artifacts -type f -exec cp -n {} dist/ \;
-          (cd dist && sha256sum -- *) > manifest/SHA256SUMS
-          if [[ "$(wc -l < manifest/SHA256SUMS)" -ne 5 ]]; then
-            echo "::error::Expected 5 release files (a name collision?), got $(wc -l < manifest/SHA256SUMS)."
-            exit 1
-          fi
-          for entry in "permesi ${PERMESI_DIGEST}" "genesis ${GENESIS_DIGEST}" "web ${WEB_DIGEST}"; do
-            if [[ ! "${entry#* }" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "::error::Image ${entry% *} has no valid digest (got '${entry#* }')."
-              exit 1
-            fi
-            echo "${entry}"
-          done > manifest/IMAGES
-          {
-            echo "VERSION=${VERSION}"
-            echo "COMMIT=${GITHUB_SHA}"
-          } > manifest/release.env
-          # The artifacts the release publishes from; just deploy checks they all remain.
-          for entry in ${EXPECTED}; do echo "${entry%=*}"; done > manifest/ARTIFACTS
-          cat manifest/*
-
-      - name: Upload the manifest
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: release-manifest
-          path: manifest/*
-          if-no-files-found: error
-
-      # A signed statement that this run built exactly these bytes; the release publishes
-      # the same files, so `gh attestation verify <file> --repo permesi/permesi
-      # --signer-workflow permesi/permesi/.github/workflows/deploy.yml` works on downloads.
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
-        with:
-          subject-path: dist/*
-
-  # ----- Release tags and recovery runs: publish only, nothing is built -----
-
-  # The GitHub release gets exactly the files of the candidate run's manifest, and no
-  # others. Safe to re-run: the release is updated in place, existing assets are
-  # overwritten and stray ones removed; it is GitHub's Latest release only when the tag
-  # is the highest promoted release at that moment.
+  # The GitHub release gets exactly the built files and no others. Publishing creates the
+  # tag at the tested commit.
   release:
     name: GitHub release
     runs-on: ubuntu-latest
-    needs: guard
-    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
-    concurrency:
-      group: permesi-production-release
-      cancel-in-progress: false
-      queue: max
+    timeout-minutes: 20
+    needs: [guard, build, web-dist, images]
     permissions:
       contents: write
-      actions: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      # Full history and tags: the release notes list the commits since the previous
-      # release.
+      # Full history and tags: the release notes list the commits since the previous release.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download the candidate run's manifest
+      - name: Download the release files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          run-id: ${{ needs.guard.outputs.candidate_run }}
-          github-token: ${{ github.token }}
-          name: release-manifest
-          path: manifest
-
-      - name: Download the candidate run's release files
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          run-id: ${{ needs.guard.outputs.candidate_run }}
-          github-token: ${{ github.token }}
           pattern: dist-*
           merge-multiple: true
           path: dist
 
-      - name: Check the files against the manifest
+      # A release cannot be completed later, so the file set is checked first. Keep this
+      # list in step with the build jobs: a missing or extra file stops the release.
+      - name: Check the release files
         shell: bash
-        env:
-          TAG_VERSION: ${{ needs.guard.outputs.version }}
-          TAG_COMMIT: ${{ needs.guard.outputs.commit }}
         run: |
           set -euo pipefail
-          . manifest/release.env
-          if [[ "${VERSION}" != "${TAG_VERSION}" || "${COMMIT}" != "${TAG_COMMIT}" ]]; then
-            echo "::error::The candidate manifest is for ${VERSION} at ${COMMIT}, not ${TAG_VERSION} at ${TAG_COMMIT}."
+          expected="$(
+            {
+              echo "permesi-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
+              echo "genesis-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
+              echo "permesi_${VERSION}_amd64.deb"
+              echo "genesis_${VERSION}_amd64.deb"
+              echo "permesi-web-dist-${VERSION}.tar.gz"
+            } | sort
+          )"
+          actual="$(ls dist | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::The built files differ from the expected set."
+            diff <(echo "${expected}") <(echo "${actual}") || true
             exit 1
           fi
-          listed="$(awk '{print $2}' manifest/SHA256SUMS | sort)"
-          present="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
-          if [[ "${listed}" != "${present}" ]]; then
-            echo "::error::The downloaded files do not match the manifest."
-            diff <(echo "${listed}") <(echo "${present}") || true
-            exit 1
-          fi
-          (cd dist && sha256sum -c ../manifest/SHA256SUMS)
-          cp manifest/SHA256SUMS dist/
 
-      # The notes are the commit subjects since the previous release (the version bump
-      # itself left out), so they need no hand-kept changelog and every re-run writes the
-      # same text.
+      - name: Write the checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      # A signed statement that this run built exactly these bytes:
+      # `gh attestation verify <file> --repo permesi/permesi
+      # --signer-workflow permesi/permesi/.github/workflows/deploy.yml` works on downloads.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/*
+
+      # The notes are the commit subjects since the previous release (version bumps left
+      # out), so no changelog is kept by hand and every re-run writes the same text.
       - name: Write the release notes
         shell: bash
-        env:
-          TAG: ${{ needs.guard.outputs.tag }}
         run: |
           set -euo pipefail
-          previous="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "refs/tags/${TAG}^" 2>/dev/null || true)"
-          range="refs/tags/${TAG}"
-          [[ -z "${previous}" ]] || range="${previous}..refs/tags/${TAG}"
+          previous="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "${GITHUB_SHA}" 2>/dev/null || true)"
+          range="${GITHUB_SHA}"
+          [[ -z "${previous}" ]] || range="${previous}..${GITHUB_SHA}"
           changes="$(git log --no-merges --format='- %s (%h)' "${range}" | grep -vE '^- bump version to [0-9]+\.[0-9]+\.[0-9]+ ' || true)"
           {
             echo "## Changes"
@@ -685,7 +482,7 @@ jobs:
             echo "${changes:-- Only the version bump.}"
             if [[ -n "${previous}" ]]; then
               echo
-              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${TAG}"
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${VERSION}"
             fi
             echo
             echo "## Verify a download"
@@ -697,64 +494,58 @@ jobs:
           } > "${RUNNER_TEMP}/notes.md"
           cat "${RUNNER_TEMP}/notes.md"
 
-      - name: Is this the latest release
-        id: latest
-        uses: ./.github/actions/release-is-latest
-        with:
-          tag: ${{ needs.guard.outputs.tag }}
-          token: ${{ github.token }}
-
-      - name: GitHub Release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
-        with:
-          tag_name: ${{ needs.guard.outputs.tag }}
-          draft: false
-          make_latest: ${{ steps.latest.outputs.latest }}
-          body_path: ${{ runner.temp }}/notes.md
-          files: dist/*
-
-      - name: Keep exactly the manifest's files on the release
+      # Assets go on a draft first, so a failed upload never leaves a public half release.
+      # A draft left by a failed run is replaced; a published release is left alone. The
+      # guard made this the highest version, so it is GitHub's Latest release.
+      - name: Create the release
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.guard.outputs.tag }}
         run: |
           set -euo pipefail
-          expected="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
-          while read -r asset; do
-            [[ -n "${asset}" ]] || continue
-            if ! grep -qxF "${asset}" <<<"${expected}"; then
-              echo "Removing ${asset}, which is not in the candidate manifest."
-              gh release delete-asset "${TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}" --yes
+          if state="$(gh release view "${VERSION}" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "${state}" == false ]]; then
+              echo "Release ${VERSION} is already published."
+              exit 0
             fi
-          done < <(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')
-          actual="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort)"
-          if [[ "${actual}" != "${expected}" ]]; then
-            echo "::error::Release ${TAG} holds $(tr '\n' ' ' <<<"${actual}"), expected $(tr '\n' ' ' <<<"${expected}")."
+            gh release delete "${VERSION}" --yes
+          fi
+          gh release create "${VERSION}" dist/* \
+            --draft \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/notes.md"
+          gh release edit "${VERSION}" --draft=false --latest
+
+      # What a user can download must be exactly what was built, and the tag must sit on
+      # the tested commit. This also runs when a re-run finds the release already published.
+      - name: Check the published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" --jq '.object.sha')"
+          if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::Tag ${VERSION} points at ${tag_sha}, not at the tested commit ${GITHUB_SHA}."
             exit 1
           fi
+          expected="$(ls dist | sort)"
+          actual="$(gh release view "${VERSION}" --json assets --jq '.assets[].name' | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::Release ${VERSION} holds: $(tr '\n' ' ' <<<"${actual}"); expected: $(tr '\n' ' ' <<<"${expected}")."
+            exit 1
+          fi
+          echo "Release ${VERSION} is on ${GITHUB_SHA} with $(wc -l <<<"${actual}") files."
 
-  # Add the version tag (and `latest`, for the highest release) to the candidate's image
+  # Add the version tag (and `latest`, for the highest release) to the tested image
   # digests. skopeo copies within the same repository with the digest preserved, so
   # nothing is rebuilt or pushed anew; re-running is a no-op.
   images-publish:
     name: Tag Images
     runs-on: ubuntu-latest
-    needs: [guard, release]
-    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
-    concurrency:
-      group: permesi-production-images
-      cancel-in-progress: false
-      queue: max
+    timeout-minutes: 20
+    needs: [guard, images, release]
     permissions:
       contents: read
       actions: read
       packages: write
-    outputs:
-      permesi_digest: ${{ steps.tag.outputs.permesi_digest }}
-      genesis_digest: ${{ steps.tag.outputs.genesis_digest }}
-      web_digest: ${{ steps.tag.outputs.web_digest }}
-      latest: ${{ steps.latest.outputs.latest }}
     env:
       TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ACTOR: ${{ github.actor }}
@@ -768,59 +559,29 @@ jobs:
         id: latest
         uses: ./.github/actions/release-is-latest
         with:
-          tag: ${{ needs.guard.outputs.tag }}
+          tag: ${{ needs.guard.outputs.version }}
           token: ${{ github.token }}
 
-      - name: Download the candidate run's manifest
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          run-id: ${{ needs.guard.outputs.candidate_run }}
-          github-token: ${{ github.token }}
-          name: release-manifest
-          path: ${{ runner.temp }}/manifest
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Authenticate to GHCR
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "${TOKEN}" | cosign login ghcr.io -u "${ACTOR}" --password-stdin
-
-      # Verify every immutable digest was keylessly signed by this repository's Deploy
-      # workflow on the candidate branch before retagging it. A missing or wrong
-      # signer blocks the release instead of falling back to a tag.
-      - name: Verify the images were signed by this workflow
-        shell: bash
-        env:
-          CANDIDATE_BRANCH: ${{ needs.guard.outputs.candidate_branch }}
-          CANDIDATE_COMMIT: ${{ needs.guard.outputs.commit }}
-        run: |
-          set -euo pipefail
-          while read -r service digest; do
-            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Bad digest for ${service}: ${digest}"; exit 1; }
-            cosign verify \
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/${CANDIDATE_BRANCH}" \
-              --certificate-github-workflow-sha "${CANDIDATE_COMMIT}" \
-              "ghcr.io/permesi/${service}@${digest}"
-            echo "Verified signature of ghcr.io/permesi/${service}@${digest}"
-          done < "${RUNNER_TEMP}/manifest/IMAGES"
-
       - name: Tag the tested digests
-        id: tag
         shell: bash
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           LATEST: ${{ steps.latest.outputs.latest }}
+          PERMESI_DIGEST: ${{ needs.images.outputs.permesi_digest }}
+          GENESIS_DIGEST: ${{ needs.images.outputs.genesis_digest }}
+          WEB_DIGEST: ${{ needs.images.outputs.web_digest }}
         run: |
           set -euo pipefail
           command -v skopeo >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y skopeo; }
           echo "${TOKEN}" | skopeo login ghcr.io -u "${ACTOR}" --password-stdin
           tags=("${VERSION}")
           [[ "${LATEST}" != true ]] || tags+=(latest)
-          while read -r service digest; do
+          for service in permesi genesis web; do
+            case "${service}" in
+              permesi) digest="${PERMESI_DIGEST}" ;;
+              genesis) digest="${GENESIS_DIGEST}" ;;
+              web) digest="${WEB_DIGEST}" ;;
+            esac
             [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Bad digest for ${service}: ${digest}"; exit 1; }
             source="docker://ghcr.io/permesi/${service}@${digest}"
             skopeo inspect --raw "${source}" >/dev/null
@@ -833,20 +594,17 @@ jobs:
               fi
               echo "ghcr.io/permesi/${service}:${tag} -> ${digest}"
             done
-            echo "${service}_digest=${digest}" >> "$GITHUB_OUTPUT"
-          done < "${RUNNER_TEMP}/manifest/IMAGES"
+          done
 
-  # Deploy the candidate's signed production web build to Cloudflare Pages, only while
-  # the tag is the highest promoted release.
+  # Deploy the signed production web build to Cloudflare Pages, only while this is the
+  # highest release.
   deploy-frontend:
     name: Deploy Frontend
     runs-on: ubuntu-latest
-    needs: [guard, release]
-    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
-    concurrency:
-      group: permesi-production-frontend
-      cancel-in-progress: false
-      queue: max
+    timeout-minutes: 20
+    needs: [guard, web-dist, release]
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
     permissions:
       contents: read
       actions: read
@@ -860,35 +618,21 @@ jobs:
         id: latest
         uses: ./.github/actions/release-is-latest
         with:
-          tag: ${{ needs.guard.outputs.tag }}
+          tag: ${{ needs.guard.outputs.version }}
           token: ${{ github.token }}
 
-      - name: Download the candidate run's manifest
+      - name: Download the web build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          run-id: ${{ needs.guard.outputs.candidate_run }}
-          github-token: ${{ github.token }}
-          name: release-manifest
-          path: ${{ runner.temp }}/manifest
-
-      - name: Download the candidate run's web build
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          run-id: ${{ needs.guard.outputs.candidate_run }}
-          github-token: ${{ github.token }}
           name: dist-web
           path: ${{ runner.temp }}/web
 
-      - name: Check and unpack it
+      - name: Unpack it
         shell: bash
-        env:
-          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          package="permesi-web-dist-${VERSION}.tar.gz"
-          (cd "${RUNNER_TEMP}/web" && grep " ${package}\$" "${RUNNER_TEMP}/manifest/SHA256SUMS" | sha256sum -c -)
           mkdir -p "${RUNNER_TEMP}/site"
-          tar -xzf "${RUNNER_TEMP}/web/${package}" -C "${RUNNER_TEMP}/site"
+          tar -xzf "${RUNNER_TEMP}/web/permesi-web-dist-${VERSION}.tar.gz" -C "${RUNNER_TEMP}/site"
           test -f "${RUNNER_TEMP}/site/dist/index.html"
 
       - name: Set up Node
@@ -910,18 +654,12 @@ jobs:
           HIGHEST: ${{ steps.latest.outputs.highest }}
         run: echo "A newer release (${HIGHEST}) is in production; Cloudflare Pages left alone."
 
-  # Dispatch Helm with the tested digests, only while the tag is the highest promoted
-  # release: checked right here, inside the Helm group, so a delayed older run cannot
-  # dispatch after a newer release.
+  # Dispatch Helm with the tested digests, only while this is the highest release.
   helm:
     name: Dispatch Helm Release
     runs-on: ubuntu-latest
-    needs: [guard, images-publish]
-    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
-    concurrency:
-      group: permesi-production-helm
-      cancel-in-progress: false
-      queue: max
+    timeout-minutes: 10
+    needs: [guard, images, images-publish]
     permissions:
       contents: read
     steps:
@@ -934,18 +672,18 @@ jobs:
         id: latest
         uses: ./.github/actions/release-is-latest
         with:
-          tag: ${{ needs.guard.outputs.tag }}
+          tag: ${{ needs.guard.outputs.version }}
           token: ${{ github.token }}
 
       - name: Dispatch release to permesi-helm
         if: steps.latest.outputs.latest == 'true'
         uses: ./.github/actions/dispatch-helm
         with:
-          version: ${{ needs.guard.outputs.tag }}
-          source_sha: ${{ needs.guard.outputs.commit }}
-          permesi_digest: ${{ needs.images-publish.outputs.permesi_digest }}
-          genesis_digest: ${{ needs.images-publish.outputs.genesis_digest }}
-          web_digest: ${{ needs.images-publish.outputs.web_digest }}
+          version: ${{ needs.guard.outputs.version }}
+          source_sha: ${{ github.sha }}
+          permesi_digest: ${{ needs.images.outputs.permesi_digest }}
+          genesis_digest: ${{ needs.images.outputs.genesis_digest }}
+          web_digest: ${{ needs.images.outputs.web_digest }}
           tag_only: 'false'
           app_id: ${{ vars.PERMESI_HELM_APP_ID }}
           private_key: ${{ secrets.PERMESI_HELM_APP_PRIVATE_KEY }}
@@ -956,17 +694,12 @@ jobs:
           HIGHEST: ${{ steps.latest.outputs.highest }}
         run: echo "A newer release (${HIGHEST}) is in production; Helm left alone."
 
-  # Publish the tag's committed OpenAPI specs: `just deploy` regenerated and compared
-  # them before promoting, so nothing is generated here.
+  # Publish the committed OpenAPI specs; the guard checked they carry the version.
   docs:
     name: Deploy Documentation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [guard, release]
-    if: needs.guard.outputs.kind == 'release' || needs.guard.outputs.kind == 'recover'
-    concurrency:
-      group: permesi-production-docs
-      cancel-in-progress: false
-      queue: max
     permissions:
       contents: write
     steps:
@@ -979,36 +712,11 @@ jobs:
         id: latest
         uses: ./.github/actions/release-is-latest
         with:
-          tag: ${{ needs.guard.outputs.tag }}
+          tag: ${{ needs.guard.outputs.version }}
           token: ${{ github.token }}
-
-      - name: Checkout the tag's sources
-        if: steps.latest.outputs.latest == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: refs/tags/${{ needs.guard.outputs.tag }}
-          path: tagged
-          persist-credentials: false
-
-      - name: Check the specs carry the release version
-        if: steps.latest.outputs.latest == 'true'
-        working-directory: tagged
-        shell: bash
-        env:
-          VERSION: ${{ needs.guard.outputs.version }}
-        run: |
-          set -euo pipefail
-          for spec in docs/openapi/permesi.json docs/openapi/genesis.json; do
-            found="$(jq -r .info.version "${spec}")"
-            if [[ "${found}" != "${VERSION}" ]]; then
-              echo "::error::${spec} is for ${found}, not ${VERSION}."
-              exit 1
-            fi
-          done
 
       - name: Build Redoc Page
         if: steps.latest.outputs.latest == 'true'
-        working-directory: tagged
         run: |
           mkdir -p docs/redoc
           cp apps/web/public/logo.svg docs/redoc/logo.svg
@@ -1019,4 +727,21 @@ jobs:
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./tagged/docs/redoc
+          publish_dir: ./docs/redoc
+
+  # main only ever holds released commits. force=false: the API refuses anything but a
+  # fast-forward.
+  main:
+    name: Fast-forward main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: release
+    permissions:
+      contents: write
+    steps:
+      - name: Move main to the released commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
+            -f sha="${GITHUB_SHA}" -F force=false

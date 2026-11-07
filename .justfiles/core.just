@@ -122,51 +122,16 @@ check-tag-not-exists version:
 
     echo "✅ No tag exists for version ${version}"
 
-# Releases run scripts/release (see its header for the whole flow): the version bump
-# is staged on the scratch `release` branch, Test & Build and a candidate run of the
-# Deploy workflow (every build, package and image, published nowhere) test that exact
-# commit, and only then do develop, main and the signed tag move together in one atomic
-# push; the tag's run then publishes exactly what the candidate run built. The bump
-# changes only the version (Cargo.toml, the workspace entries of Cargo.lock and the
-# OpenAPI specs' info.version) and is verified locally in a temporary worktree first.
-# Every deploy recipe is idempotent: rerunning it resumes the staged candidate, or
-# says there is nothing left to release.
+# Releases run .github/workflows/deploy.yml on develop: it checks that the commit passed
+# Test & Build and that the version (Cargo.toml, Cargo.lock and both OpenAPI specs'
+# info.version) is new, builds and publishes everything, and fast-forwards main. The
+# operator bumps the version beforehand, as the last commit of the work.
 
-# Deploy: stage a patch bump, wait for CI on it, then release it
+# Release develop: start the Deploy workflow and follow it
 deploy:
-    @scripts/release deploy patch
-
-# Deploy with minor version bump
-deploy-minor:
-    @scripts/release deploy minor
-
-# Deploy with major version bump
-deploy-major:
-    @scripts/release deploy major
-
-# Release develop's version as is when it has no tag yet (no new bump)
-deploy-current:
-    @scripts/release deploy current
-
-# Show where a release stands: develop, main, sandbox, the staged candidate and its runs
-release-status:
-    @scripts/release status
-
-# Check everything a release needs; changes nothing that lasts
-release-preflight:
-    @scripts/release preflight
-
-# Publish an existing release tag again if its own run cannot (recovery run on main)
-release-republish version:
-    @scripts/release republish {{version}}
-
-# Apply branch protection (main requires "CI OK") and the rule that release tags never move
-protect-branches:
-    @scripts/release protect
-
-# Build and package the current branch like a release candidate; releases nothing, no tag
-release-dry-run:
-    @scripts/release dry-run
+    gh workflow run deploy.yml --ref develop
+    sleep 5
+    gh run watch "$(gh run list --workflow deploy.yml --branch develop --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
 
 # ----------------------
 # Sandbox branch helpers

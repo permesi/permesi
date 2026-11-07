@@ -1,11 +1,9 @@
 name: Release is latest
 description: >-
-  Whether a tag is the highest promoted release right now: the highest X.Y.Z tag that
-  is a GitHub-verified annotated tag whose commit is on main and carries that version in
-  Cargo.toml. It fails when GitHub cannot be asked. Production steps (the
-  `latest` image tag, Cloudflare Pages, Helm, the docs, GitHub's Latest release) call it
-  immediately before they act, so a late or re-run job of an older tag never rolls
-  production back, and a stray higher tag that was never promoted is ignored.
+  Whether a tag is the highest X.Y.Z release tag right now. Production steps (the
+  `latest` image tag, Cloudflare Pages, Helm, the docs) call it immediately before they
+  act, so a re-run job of an older release never rolls production back. It fails when
+  GitHub cannot be asked, instead of treating that as "no releases".
 inputs:
   tag:
     description: The X.Y.Z tag being published.
@@ -15,10 +13,10 @@ inputs:
     required: true
 outputs:
   latest:
-    description: "'true' when the tag is the highest promoted release, otherwise 'false'."
+    description: "'true' when the tag is the highest release, otherwise 'false'."
     value: ${{ steps.check.outputs.latest }}
   highest:
-    description: The highest promoted release (empty when there is none).
+    description: The highest release tag (empty when there is none).
     value: ${{ steps.check.outputs.highest }}
 runs:
   using: composite
@@ -30,41 +28,10 @@ runs:
         TAG: ${{ inputs.tag }}
       run: |
         set -euo pipefail
-        repo="${GITHUB_REPOSITORY}"
         # A plain assignment, so a failing listing fails the step instead of looking
         # like "no releases".
-        tags="$(gh api --paginate "repos/${repo}/tags" --jq '.[].name')"
-        highest=""
-        while read -r candidate; do
-          [[ -n "${candidate}" ]] || continue
-          # Every API result is a plain assignment: a GitHub error fails the step, and never
-          # makes a valid higher release look invalid.
-          ref="$(gh api "repos/${repo}/git/ref/tags/${candidate}" --jq '"\(.object.type) \(.object.sha)"')"
-          read -r type object <<<"${ref}"
-          if [[ "${type}" != tag ]]; then
-            echo "Ignoring ${candidate}: a lightweight tag."
-            continue
-          fi
-          verified="$(gh api "repos/${repo}/git/tags/${object}" --jq '.verification.verified')"
-          if [[ "${verified}" != true ]]; then
-            echo "Ignoring ${candidate}: its signature is not verified by GitHub."
-            continue
-          fi
-          commit="$(gh api "repos/${repo}/commits/refs/tags/${candidate}" --jq '.sha')"
-          status="$(gh api "repos/${repo}/compare/${commit}...main" --jq '.status')"
-          if [[ "${status}" != identical && "${status}" != ahead ]]; then
-            echo "Ignoring ${candidate}: ${commit} is not on main (${status})."
-            continue
-          fi
-          # Drain the response so early version selection cannot break the decoder.
-          version="$(gh api "repos/${repo}/contents/Cargo.toml?ref=${commit}" --jq '.content' | base64 -d | awk -F'"' '/^version = / && !found {print $2; found=1}')"
-          if [[ "${version}" != "${candidate}" ]]; then
-            echo "Ignoring ${candidate}: its commit carries version ${version}."
-            continue
-          fi
-          highest="${candidate}"
-          break
-        done < <(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"${tags}" | sort -rV || true)
+        tags="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/tags" --jq '.[].name')"
+        highest="$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"${tags}" | sort -V | tail -n 1 || true)"
         latest=false
         if [[ -n "${highest}" && "${highest}" == "${TAG}" ]]; then
           latest=true
@@ -73,4 +40,4 @@ runs:
           echo "latest=${latest}"
           echo "highest=${highest}"
         } >> "$GITHUB_OUTPUT"
-        echo "Highest promoted release: ${highest:-none}; ${TAG} is the latest: ${latest}."
+        echo "Highest release: ${highest:-none}; ${TAG} is the latest: ${latest}."

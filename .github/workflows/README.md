@@ -10,24 +10,16 @@ upstream repository and retain the full hash when accepting an action update.
 
 ## Release publication recovery
 
-A signed tag and promoted commit can exist before publishing completes. When a
-tag's Deploy run fails, inspect its failed job and repair workflow failures before
-retrying. A recovery run uses the workflow on `main` and the original candidate's
-tested artifacts; the existing version tag must stay fixed. Once the workflow fix
-is validated and reaches `main`, run `just release-republish X.Y.Z`.
+The release is one run of `deploy.yml`, and nothing is published before every build job has
+succeeded. If a job fails before the GitHub release job, fix the cause and use "Re-run failed
+jobs" (a draft left by a failed run is replaced). Once the release is published the tag exists
+and the release is public: transient failures of the later steps (image tags, Cloudflare Pages,
+Helm, the docs, moving `main`) are repaired with "Re-run failed jobs", which is safe to repeat
+because every step is idempotent. A failure that needs a code change is released as the next
+version.
 
-The release guard, shared latest-release action and local recorded-version reader
-consume the entire manifest stream while selecting only the first matching version.
-Exiting the parser early
-can give `base64` or `git show` a broken pipe, causing `pipefail` to reject valid
-release evidence. Draining the stream also preserves upstream failures, including
-invalid base64 or an unreadable commit. Version mismatches still reject publishing.
-`python3 scripts/test-release-version.py` exercises the checked-in shell against
-oversized manifests, later version fields, missing/mismatched versions, corrupt
-base64 and failed Git reads. It discovers all API-based version readers in workflows
-and composite actions so a copied reader cannot escape coverage. The required format
-job runs these regressions. Whole-action tests preserve the higher-version check
-and require corrupt or unavailable evidence to fail without a latest-release output.
+The shared latest-release action lists the repository's `X.Y.Z` tags and takes the highest by
+version order; a GitHub API error fails the step instead of looking like "no releases".
 
 ## Runner Configuration (`CI_RUNNER`)
 
@@ -105,8 +97,8 @@ before interpreting queue or wall-time differences as a speedup.
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
   pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
   Frontend deployments from ordinary CI are previews only: `main` still builds and tests the frontend,
-  but only `deploy.yml` publishes the signed release candidate to the production `main` Pages branch.
-  The preview publisher rejects both `main` and the scratch `release` branch, including explicit branch
+  but only `deploy.yml` publishes the signed release build to the production `main` Pages branch.
+  The preview publisher rejects `main`, including explicit branch
   overrides, so a later CI run cannot overwrite the tested production frontend. The regression suite
   `python3 scripts/test-frontend-preview.py` executes that branch resolver and checks that rejected
   publication targets do not reach the deployment environment.
@@ -156,7 +148,7 @@ before interpreting queue or wall-time differences as a speedup.
   source line and exception class without printing captured subprocess output. This covers one-host process/state
   availability and does not establish multi-host load or network-failure behavior.
   New `sandbox`/`develop` runs cancel superseded runs on the same branch. Other refs,
-  including release candidates and `main`, use independent run-specific groups; these
+  including `main`, use independent run-specific groups; these
   runs cannot be cancelled by development pushes. Different branches still run their
   own checks, even for an identical SHA. `CI_RUNNER` selection and the aggregate failure
   policy are unchanged. See [measurement and remaining work](../../docs/maintainability-ci.md).
@@ -169,7 +161,7 @@ before interpreting queue or wall-time differences as a speedup.
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: The release pipeline, in modes set by its guard job. A manual run on a branch is a release candidate (started by `just deploy`, or by `just release-dry-run` on any branch): it tests and builds everything once, from source with no build cache, the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), keylessly signs each immutable image digest and pushes its OCI build-provenance attestation, records them in a `release-manifest` artifact, and attests the build provenance of the release files. A pushed `X.Y.Z` tag builds nothing: after checking the signed tag and its named candidate run, it verifies each manifest digest's Cosign signature against this workflow's exact identity and OIDC issuer, then publishes exactly the manifest's files as the GitHub release, with notes made from the commit subjects since the previous release, adds the version tag (and `latest`) to the tested image digests, deploys the signed web build to Cloudflare Pages, dispatches Helm through `.github/actions/dispatch-helm`, and publishes the committed API docs. A manual run on `main` with `publish: X.Y.Z` recovers a tag whose publishing failed. The production steps check `.github/actions/release-is-latest` right before they act and queue across runs (`queue: max`), so an older tag never rolls production back.
+- **`deploy.yml`**: The release pipeline, one manual run on `develop` (started by `just deploy`). Its guard checks the branch, that the workspace version is new and above the latest tag, that both OpenAPI specs carry it, that `main` is an ancestor and that the `CI OK` check passed on the exact commit. It then builds from source with no build cache the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), keylessly signs each immutable image digest and pushes its OCI build-provenance attestation, checks the exact release file set, attests the build provenance of the release files and publishes the GitHub release, which creates the tag. Afterwards it tags the tested image digests with the version (and `latest` for the highest release), deploys the signed web build to Cloudflare Pages, dispatches Helm with the digests, publishes the API docs and fast-forwards `main`. Each production step runs only while the version is the highest release tag.
 - **`dispatch-helm-release.yml`**: Manual (or `workflow_call`) entry point that sends the `repository_dispatch` event to `permesi/permesi-helm` through the same `.github/actions/dispatch-helm` composite action the release uses; the payload carries the image digests so Helm can pin exact artifacts.
 
 ## Hardening
@@ -270,11 +262,10 @@ before use.
 
 ### `release-is-latest`
 
-Answers whether a tag is the highest promoted release right now: the highest `X.Y.Z` tag that is
-a GitHub-verified annotated tag whose commit is on `main` and carries that version in
-`Cargo.toml`. Every production step in `deploy.yml` (GitHub's Latest release, the `latest` image
-tag, Cloudflare Pages, Helm, the docs) calls it right before acting, so an older tag never rolls
-production back. Any GitHub API error fails the step instead of changing the answer.
+Answers whether a tag is the highest `X.Y.Z` release tag right now. Every production step in
+`deploy.yml` (the `latest` image tag, Cloudflare Pages, Helm, the docs) calls it right before
+acting, so a re-run of an older release never rolls production back. Any GitHub API error fails
+the step instead of changing the answer.
 
 ### `dispatch-helm`
 
