@@ -134,18 +134,23 @@ jobs:
         run: node apps/web/tests/browser_files.test.mjs
 
   test:
-    name: Unit Tests
+    name: Unit Tests (${{ matrix.name }})
     # Each test can start its own PostgreSQL/Vault fixture. Bound fixture pressure
     # even when multiple branch workflows share the self-hosted machine.
     env:
       RUST_TEST_THREADS: '4'
     strategy:
+      fail-fast: false
+      max-parallel: 1
       matrix:
-        os:
-          - ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
-        rust:
-          - stable
-    runs-on: ${{ matrix.os }}
+        include:
+          - name: Permesi
+            group: permesi
+            packages: -p permesi
+          - name: Other workspace components
+            group: other
+            packages: --workspace --exclude permesi
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     # Both suites start many PostgreSQL/Vault fixtures on the same self-hosted host.
     # Run integration first so their private Podman engines do not overload startup.
     needs:
@@ -177,25 +182,27 @@ jobs:
       - name: Build default test executables
         run: |
           rm -rf target/cargo-timings
-          cargo test --locked --workspace --lib --bins --no-run --timings
+          cargo test --locked ${{ matrix.packages }} --lib --bins --no-run --timings
 
       - name: test
-        run: cargo test --locked --workspace --lib --bins
+        run: cargo test --locked ${{ matrix.packages }} --lib --bins
 
       - name: Build all-feature test executables
-        run: cargo test --locked --workspace --all-features --no-run --timings
+        run: cargo test --locked ${{ matrix.packages }} --all-features --no-run --timings
 
       - name: test (all features)
-        run: cargo test --locked --workspace --all-features --no-fail-fast
+        run: cargo test --locked ${{ matrix.packages }} --all-features --no-fail-fast
 
       - name: Verify cached build identity
+        # This regression covers both services independently of the selected packages.
+        if: matrix.group == 'permesi'
         run: python3 scripts/test-build-identity.py
 
       - name: Upload compilation timings
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: test-compilation-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          name: test-compilation-timings-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/cargo-timings/*.html
           if-no-files-found: ignore
 

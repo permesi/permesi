@@ -66,13 +66,19 @@ before interpreting queue or wall-time differences as a speedup.
   unit/integration tests. A separate hosted OpenAPI drift job generates both service
   contracts and compares them byte-for-byte with the committed artifacts; failure
   blocks the reusable test workflow and `CI OK`. Web auditing includes development/build dependencies so
-  source-map and stylesheet-tooling advisories are covered. The unit job runs default
-  library/binary tests, then the complete all-feature workspace suite. Each configuration
-  has a separate `--no-run --timings` compilation step, so job step durations distinguish
-  compilation from execution; HTML compilation reports are uploaded even on test failure.
-  Cached build-identity regressions compile the actual service build scripts in
-  disposable Git-less/Git/worktree crates after the native suites; no live services
-  are required for this check.
+  source-map and stylesheet-tooling advisories are covered. The unit matrix has two
+  retry groups: Permesi (`-p permesi`) and Other workspace components
+  (`--workspace --exclude permesi`), which automatically includes new workspace members.
+  Each runs default library/binary tests followed by its complete all-feature suite,
+  including integration targets and doctests. `max-parallel: 1` bounds container pressure;
+  `fail-fast: false` preserves the other group's result after a failure. A failed group
+  can be rerun without repeating the successful group. Each configuration has a separate
+  `--no-run --timings` compilation step and group-specific HTML timing artifacts, uploaded
+  even on test failure. A fully green run repeats job setup and may compile shared
+  dependencies again; this split makes no measured speedup claim.
+  Cached build-identity regressions run once in the Permesi group and compile both
+  actual service build scripts in disposable Git-less/Git/worktree crates after the
+  native suites; no live services are required for this check.
   Development lint/check/native-test jobs use toolchain/environment/lockfile-aware
   dependency caches; PR jobs restore but do not save those caches. The reusable
   `cache` input defaults to false, preserving release callers' fresh native test

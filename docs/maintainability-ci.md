@@ -46,12 +46,29 @@ dependency/runner waits and required a second attempt for the scenario harness.
 These observations identify test execution and scheduling as major costs; they
 do not establish a cache-related speedup or production performance.
 
-Default and all-feature suites retain their existing commands and separate
-coverage. Each now has an explicit `--no-run --timings` build step before execution.
-GitHub step timings distinguish compilation from execution, and the unit job
-uploads Cargo's HTML compilation reports even when execution fails. Native
-check/lint/test and musl jobs use toolchain/environment/lockfile-aware dependency
-caches. The reusable workflow's `cache` input defaults to false, so release callers
+The unit-test matrix separates Permesi (`-p permesi`) from Other workspace
+components (`--workspace --exclude permesi`); new workspace members automatically
+join the latter. Each group runs default library/binary tests and then its full
+all-feature suite, including standalone integration targets and doctests. The
+separate default integration job remains required. Matrix `max-parallel: 1` and
+four Rust test threads retain bounded fixture pressure, while `fail-fast: false`
+lets both groups report results. Retrying a failed group avoids repeating the
+successful group. A fully green run repeats checkout, toolchain, Node 24 and
+container-runtime setup and can recompile shared dependencies; shorter retries
+are the intended benefit, with no measured wall-time improvement claimed.
+
+Each configuration retains an explicit `--no-run --timings` build step before
+execution. GitHub step timings distinguish compilation from execution, and each
+group uploads distinct Cargo HTML reports even when execution fails. The cached
+build-identity regression runs once in the Permesi group and still exercises both
+services. Native check/lint/test and musl jobs use toolchain/environment/lockfile-aware
+dependency caches. Both unit groups retain the existing `native-tests` cache shared
+with default integration; this avoids introducing a new cache namespace, but
+cache contents and package-local feature resolution may cause additional compilation.
+Selecting fewer packages can reduce dependency feature unification compared with
+the old workspace-wide invocation; each selected package still receives its default
+or all features, respectively, and retains the same test targets. The reusable
+workflow's `cache` input defaults to false, so release callers
 retain fresh native test builds; `build.yml` explicitly enables it. PR jobs restore
 but do not save these caches.
 Source changes still go through Cargo; production release artifact builds remain
