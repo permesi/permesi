@@ -50,7 +50,7 @@ rcgen = "0.14"
 rustls = "0.23"
 rustls-pki-types = "1.15.1"
 socket2 = "0.6"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum-server = { version = "0.9", features = ["tls-rustls"] }
 secrecy = "0.10.3"
 serde = "1.0"
 serde_json = "1.0"

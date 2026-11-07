@@ -203,3 +203,27 @@ formatting, both Clippy gates and the existing security audit policy. Hosted CI
 must qualify the exact committed lockfile. The full isolated OAuth scenarios, hosted
 application CI and final exact-image/SQL Helm qualification were not rerun for this
 refresh; publication remains subject to those release conditions.
+
+## Dependency refresh on 2026-11-07
+
+Before splitting the unit-test CI job, `cargo upgrade` and `cargo update` refresh
+`serde_spanned` to `1.1.3`, `smallvec` to `1.16.5`, `toml` to
+`1.2.1+spec-1.1.0`, `toml_datetime` to `1.1.3+spec-1.1.0` and `uuid` to `1.29.1`.
+The workspace also moves `axum-server` from `0.8.0` to
+[`0.9.0`](https://github.com/programatik29/axum-server/releases/tag/v0.9.0). Its breaking
+custom TLS acceptor change does not require application changes: both services
+continue to supply their existing Rustls configuration to `from_tcp_rustls`.
+Rustls already enables TLS 1.2 in this dependency graph; the upgrade does not
+change the configured certificate verification or protocol policy.
+
+The reviewed OPAQUE Git revision and RSA-specific SHA-2 compatibility alias remain
+pinned. `cargo audit` passes with the existing RSA exception and the existing
+`paste` and `astral-tokio-tar` maintenance warnings; no exception is added.
+
+Formatting, native all-target/all-feature Clippy, strict WASM Clippy and Actionlint
+pass. All four component/default-or-all-feature command selections compile and
+list the expected targets, including all-feature integration targets and doctests.
+The scenario runner's 45 unit tests pass, including its local HTTPS server and
+client checks against the updated server library. These checks do not execute the
+full database/Vault test suites; exact-commit CI qualification remains required
+before the updated lockfile is release-ready.
