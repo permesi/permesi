@@ -597,16 +597,17 @@ exactly the commit CI tested, and the workflow changes nothing in the repository
 2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check on the
    commit, so the CI run that passed on `sandbox` already counts once `develop` points at
    the same commit; there is no need to wait for `develop`'s own run.
-3. Run `just deploy`. It starts `.github/workflows/deploy.yml` on `develop`, follows the
+3. Run `just deploy`. It starts `.github/workflows/release.yml` on `develop`, follows the
    run and, once it has succeeded, fast-forwards `main` to the released commit. `main`
    only allows the operator to push (the workflow's token cannot), so this push runs
    from the operator's machine.
 
 ```
-Deploy workflow (workflow_dispatch on develop)
+Release workflow (workflow_dispatch on develop)
  guard         develop only; the version is X.Y.Z, above the latest tag and untagged; both
                OpenAPI specs carry it; main is an ancestor; `CI OK` passed on this commit
- build         musl archives and Debian packages (hosted runner, nothing from a cache)
+ build         musl archives and Debian packages for x86_64 (amd64) and aarch64 (arm64),
+               each on a native hosted runner, nothing from a cache
  frontend      the production web build, signed (checksums, cosign, build provenance)
  images        permesi, genesis and web, pushed only as `:sha-<commit>`, keylessly signed
                and OCI-attested
@@ -636,10 +637,10 @@ Cargo command uses `--locked`. To check a downloaded release file:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify <file> --repo permesi/permesi --signer-workflow permesi/permesi/.github/workflows/deploy.yml
+gh attestation verify <file> --repo permesi/permesi --signer-workflow permesi/permesi/.github/workflows/release.yml
 ```
 
-Every image digest is also keylessly signed by the Deploy workflow and carries an OCI
+Every image digest is also keylessly signed by the Release workflow and carries an OCI
 build-provenance attestation. Verify a published image against its digest (constraining
 the OIDC issuer and the exact workflow identity, never a permissive certificate-identity
 regex):
@@ -647,7 +648,7 @@ regex):
 ```sh
 cosign verify \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  --certificate-identity "https://github.com/permesi/permesi/.github/workflows/deploy.yml@refs/heads/develop" \
+  --certificate-identity "https://github.com/permesi/permesi/.github/workflows/release.yml@refs/heads/develop" \
   "ghcr.io/permesi/permesi@sha256:<digest>"
 ```
 

@@ -147,7 +147,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-  # Production frontend publication belongs to deploy.yml. Ordinary main CI must
+  # Production frontend publication belongs to release.yml. Ordinary main CI must
   # not overwrite the signed production build.
   deploy-frontend:
     name: Deploy Frontend

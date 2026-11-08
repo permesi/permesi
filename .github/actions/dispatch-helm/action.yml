@@ -2,7 +2,7 @@ name: Dispatch Helm release
 description: >-
   Notify permesi-helm of a release: validate the version, the source commit and the
   image digests, then send a `permesi-release` repository dispatch with them. Used by the
-  Deploy workflow (after checking the release is the latest) and by the manual
+  Release workflow (after checking the release is the latest) and by the manual
   Dispatch Helm Release workflow.
 inputs:
   version:

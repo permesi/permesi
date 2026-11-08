@@ -10,7 +10,7 @@ upstream repository and retain the full hash when accepting an action update.
 
 ## Release publication recovery
 
-The release is one run of `deploy.yml`, and nothing is published before every build job has
+The release is one run of `release.yml`, and nothing is published before every build job has
 succeeded. If a job fails before the GitHub release job, fix the cause and use "Re-run failed
 jobs" (a draft left by a failed run is replaced). Once the release is published the tag exists
 and the release is public: transient failures of the later steps (image tags, Cloudflare Pages,
@@ -44,7 +44,7 @@ aggregate check.
     *   `test.yml` pull-request jobs are hardcoded to use `ubuntu-latest` for safer execution of untrusted PR code.
     *   `coverage.yml`: This workflow is hardcoded to use `ubuntu-latest` for stable tool/runtime behavior.
     *   `build.yml` browser tests use `ubuntu-latest` for a fresh browser host. A job-local `chromium` alias prefers native Google Chrome and falls back to Chromium; the step probes headless startup and prints the selected version.
-    *   `deploy.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
+    *   `release.yml`: This workflow is hardcoded to use `ubuntu-latest` for production releases to ensure a clean, standardized environment for final artifacts and deployments.
     *   `schemathesis.yml`: This workflow is hardcoded to use `ubuntu-latest` so API contract checks always run on GitHub-hosted runners.
 
 Verify runner usage with `just ci-timings <run-id>`. This read-only metadata report
@@ -98,7 +98,7 @@ before interpreting queue or wall-time differences as a speedup.
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
   pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
   Frontend deployments from ordinary CI are previews only: `main` still builds and tests the frontend,
-  but only `deploy.yml` publishes the signed release build to the production `main` Pages branch.
+  but only `release.yml` publishes the signed release build to the production `main` Pages branch.
   The preview publisher rejects `main`, including explicit branch
   overrides, so a later CI run cannot overwrite the tested production frontend. The regression suite
   `python3 scripts/test-frontend-preview.py` executes that branch resolver and checks that rejected
@@ -162,7 +162,7 @@ before interpreting queue or wall-time differences as a speedup.
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: The release pipeline, one manual run on `develop` (started by `just deploy`). Its guard checks the branch, that the workspace version is new and above the latest tag, that both OpenAPI specs carry it, that `main` is an ancestor and that the `CI OK` check passed on the exact commit. It then builds from source with no build cache the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), keylessly signs each immutable image digest and pushes its OCI build-provenance attestation, checks the exact release file set, attests the build provenance of the release files and publishes the GitHub release, which creates the tag. Afterwards it tags the tested image digests with the version (and `latest` for the highest release), deploys the signed web build to Cloudflare Pages, dispatches Helm with the digests, publishes the API docs. `just deploy` then fast-forwards `main`, which only the operator may push to. Each production step runs only while the version is the highest release tag.
+- **`release.yml`**: The release pipeline, one manual run on `develop` (started by `just deploy`). Its guard checks the branch, that the workspace version is new and above the latest tag, that both OpenAPI specs carry it, that `main` is an ancestor and that the `CI OK` check passed on the exact commit. It then builds from source with no build cache the musl archives and Debian packages for x86_64 and aarch64 (native runners), the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), keylessly signs each immutable image digest and pushes its OCI build-provenance attestation, checks the exact release file set, attests the build provenance of the release files and publishes the GitHub release, which creates the tag. Afterwards it tags the tested image digests with the version (and `latest` for the highest release), deploys the signed web build to Cloudflare Pages, dispatches Helm with the digests, publishes the API docs. `just deploy` then fast-forwards `main`, which only the operator may push to. Each production step runs only while the version is the highest release tag.
 - **`dispatch-helm-release.yml`**: Manual (or `workflow_call`) entry point that sends the `repository_dispatch` event to `permesi/permesi-helm` through the same `.github/actions/dispatch-helm` composite action the release uses; the payload carries the image digests so Helm can pin exact artifacts.
 
 ## Hardening
@@ -185,7 +185,7 @@ false`), the reusable workflows are read-only by default, and every Cargo comman
 
 ## Required Secrets
 
-- **`PERMESI_HELM_APP_PRIVATE_KEY`**: GitHub App private key PEM used to mint a short-lived installation token in `.github/actions/dispatch-helm` (from `deploy.yml` and `dispatch-helm-release.yml`).
+- **`PERMESI_HELM_APP_PRIVATE_KEY`**: GitHub App private key PEM used to mint a short-lived installation token in `.github/actions/dispatch-helm` (from `release.yml` and `dispatch-helm-release.yml`).
 
 ## Required Variables
 
@@ -264,14 +264,14 @@ before use.
 ### `release-is-latest`
 
 Answers whether a tag is the highest `X.Y.Z` release tag right now. Every production step in
-`deploy.yml` (the `latest` image tag, Cloudflare Pages, Helm, the docs) calls it right before
+`release.yml` (the `latest` image tag, Cloudflare Pages, Helm, the docs) calls it right before
 acting, so a re-run of an older release never rolls production back. Any GitHub API error fails
 the step instead of changing the answer.
 
 ### `dispatch-helm`
 
 Validates a release's version, source commit and image digests, mints a GitHub App token and sends
-the `permesi-release` repository dispatch to `permesi/permesi-helm`. Used by `deploy.yml`'s Helm
+the `permesi-release` repository dispatch to `permesi/permesi-helm`. Used by `release.yml`'s Helm
 job and by `dispatch-helm-release.yml`.
 
 The automatic release always supplies all three lowercase `sha256:<64 hex>`

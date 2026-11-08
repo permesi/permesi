@@ -1,5 +1,5 @@
 ---
-name: Deploy
+name: Release
 
 # Run manually on `develop` (`just deploy`). The commit is the one Test & Build already
 # passed on develop; this workflow bumps and commits nothing. It builds that commit once
@@ -90,14 +90,30 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${version} from ${GITHUB_SHA} (CI OK passed)."
 
+  # One leg per CPU, each on a native runner: the musl archives and the Debian package of
+  # that architecture. Keep the release's expected file set in step with this matrix.
   build:
-    name: Build
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            deb_arch: amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            deb_arch: arm64
     env:
       VERSION: ${{ needs.guard.outputs.version }}
-      TARGET: x86_64-unknown-linux-musl
+      TARGET: ${{ matrix.target }}
+      DEB_ARCH: ${{ matrix.deb_arch }}
+      # Native musl compiler for crates that build C code, on either architecture.
+      CC_aarch64_unknown_linux_musl: musl-gcc
+      CC_x86_64_unknown_linux_musl: musl-gcc
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -133,6 +149,7 @@ jobs:
       - name: Install cargo-deb
         run: cargo install --locked cargo-deb
 
+      # cargo-deb names the package after the runner's architecture, which is the target's.
       - name: Build Debian packages
         shell: bash
         run: |
@@ -140,15 +157,22 @@ jobs:
           cargo build --release --locked -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
           cargo deb -p permesi --no-build
           cargo deb -p genesis --no-build
-          mv "$(ls target/debian/permesi_*.deb)" "dist/permesi_${VERSION}_amd64.deb"
-          mv "$(ls target/debian/genesis_*.deb)" "dist/genesis_${VERSION}_amd64.deb"
+          for binary_name in permesi genesis; do
+            deb="$(ls target/debian/${binary_name}_*.deb)"
+            actual="$(dpkg-deb --field "${deb}" Architecture)"
+            if [[ "${actual}" != "${DEB_ARCH}" ]]; then
+              echo "::error::${deb} is for ${actual}, expected ${DEB_ARCH}."
+              exit 1
+            fi
+            mv "${deb}" "dist/${binary_name}_${VERSION}_${DEB_ARCH}.deb"
+          done
           ls -al dist
 
       # The release publishes exactly these files, downloaded from this run.
       - name: Upload the binaries and packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: dist-binaries
+          name: dist-binaries-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -438,10 +462,14 @@ jobs:
           set -euo pipefail
           expected="$(
             {
-              echo "permesi-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
-              echo "genesis-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
-              echo "permesi_${VERSION}_amd64.deb"
-              echo "genesis_${VERSION}_amd64.deb"
+              for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+                echo "permesi-${VERSION}-${target}.tar.gz"
+                echo "genesis-${VERSION}-${target}.tar.gz"
+              done
+              for arch in amd64 arm64; do
+                echo "permesi_${VERSION}_${arch}.deb"
+                echo "genesis_${VERSION}_${arch}.deb"
+              done
               echo "permesi-web-dist-${VERSION}.tar.gz"
             } | sort
           )"
@@ -461,7 +489,7 @@ jobs:
 
       # A signed statement that this run built exactly these bytes:
       # `gh attestation verify <file> --repo permesi/permesi
-      # --signer-workflow permesi/permesi/.github/workflows/deploy.yml` works on downloads.
+      # --signer-workflow permesi/permesi/.github/workflows/release.yml` works on downloads.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
@@ -490,7 +518,7 @@ jobs:
             echo
             echo '```sh'
             echo 'sha256sum --check --ignore-missing SHA256SUMS'
-            echo "gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/deploy.yml"
+            echo "gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml"
             echo '```'
           } > "${RUNNER_TEMP}/notes.md"
           cat "${RUNNER_TEMP}/notes.md"
