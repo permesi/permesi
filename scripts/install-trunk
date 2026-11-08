@@ -3,8 +3,10 @@ set -euo pipefail
 
 # Install a pinned official Trunk release without compiling Trunk's native C
 # dependencies. This avoids compiler-version incompatibilities in tool-only
-# dependencies while keeping local and CI frontend builds reproducible.
-trunk_version="${TRUNK_VERSION:-0.21.14}"
+# dependencies while keeping local and CI frontend builds reproducible. Trunk 0.22
+# retries its own tool downloads (wasm-bindgen, wasm-opt) on HTTP 5xx with backoff;
+# 0.21 failed on the first 504 from GitHub's release CDN.
+trunk_version="${TRUNK_VERSION:-0.22.1}"
 cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
 install_dir="${TRUNK_INSTALL_DIR:-${cargo_home}/bin}"
 
@@ -38,11 +40,12 @@ release_url="https://github.com/trunk-rs/trunk/releases/download/v${trunk_versio
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
+# GitHub's release CDN answers an occasional 5xx; retry it instead of failing the build.
 echo "Installing Trunk ${trunk_version} (${target}) from its official release..."
-curl --fail --location --silent --show-error \
+curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
     "${release_url}/${archive}" --output "${tmp_dir}/${archive}"
 expected_sha256="$(
-    curl --fail --location --silent --show-error \
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
         "${release_url}/${archive}.sha256"
 )"
 
