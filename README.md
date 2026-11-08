@@ -718,7 +718,7 @@ Regenerate them from code:
 
 Run `just openapi-check` to regenerate both contracts in a temporary directory and
 compare them byte-for-byte with the committed files. CI requires this check on
-pushes, pull requests and release candidates without rewriting the artifacts.
+pushes, pull requests and releases without rewriting the artifacts.
 
 ## Containers
 

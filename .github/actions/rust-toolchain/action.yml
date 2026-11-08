@@ -3,7 +3,7 @@ description: >-
   Install a Rust toolchain with rustup and make it the default, with optional extra
   targets and components. rustup is preinstalled on GitHub-hosted runners and installed
   here when a runner lacks it, so no third-party action code runs in the workflows. An
-  exact version (the release manifest's RUST) reproduces the candidate's toolchain.
+  exact version (the one the release guard resolved) pins every job of a run to one compiler.
 inputs:
   toolchain:
     description: stable, beta, nightly, or an exact version such as 1.98.1.

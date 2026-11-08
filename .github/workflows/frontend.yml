@@ -15,7 +15,7 @@ on:
         required: false
         default: ''
       deploy:
-        description: Deploy after signing; a release candidate only signs.
+        description: Deploy after signing; the release workflow only signs.
         type: boolean
         required: false
         default: true
@@ -98,8 +98,8 @@ jobs:
           if [[ -z "$branch" ]]; then
             branch="${GITHUB_REF_NAME}"
           fi
-          if [[ "$branch" == "main" || "$branch" == "release" ]]; then
-            echo "::error::The release workflow owns production and candidate frontend publication."
+          if [[ "$branch" == "main" ]]; then
+            echo "::error::The release workflow owns production frontend publication."
             exit 1
           fi
           if [[ "$branch" != "develop" ]]; then
