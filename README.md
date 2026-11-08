@@ -595,12 +595,14 @@ exactly the commit CI tested, and the workflow changes nothing in the repository
    `docs/openapi/genesis.json` to the same value (`just openapi` regenerates them). The
    reviewer checks that the bump is present and complete.
 2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check on the
-   commit, so the CI run that passed on `sandbox` already counts once `develop` points at
-   the same commit; there is no need to wait for `develop`'s own run.
+   commit, so the CI run that passed on `sandbox` already counts for the release guard
+   once `develop` points at the same commit, and you can run `just release` at once.
 3. Run `just release`. It starts `.github/workflows/release.yml` on `develop`, follows the
-   run and, once it has succeeded, fast-forwards `main` to the released commit. `main`
-   only allows the operator to push (the workflow's token cannot), so this push runs
-   from the operator's machine.
+   run and, once it has succeeded and `develop`'s own Test & Build has finished, fast-forwards
+   `main` to the released commit. `main` only allows the operator to push (the workflow's
+   token cannot), and a protected branch refuses an update while a `CI OK` check of that
+   commit is still pending, so this push waits for `develop`'s run and runs from the
+   operator's machine.
 
 ```
 Release workflow (workflow_dispatch on develop)

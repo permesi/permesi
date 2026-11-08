@@ -125,8 +125,10 @@ check-tag-not-exists version:
 # Releases run .github/workflows/release.yml on develop: it checks that the commit passed
 # Test & Build and that the version (Cargo.toml, Cargo.lock and both OpenAPI specs'
 # info.version) is new, then builds and publishes everything. `main` only allows the
-# operator to push, so once the run has succeeded this recipe fast-forwards `main` to the
-# released commit. The operator bumps the version beforehand, as the last commit of the work.
+# operator to push, and a protected branch refuses an update while a `CI OK` check of the
+# same commit is still pending (develop's own Test & Build), so once the run has succeeded
+# this recipe waits for that run and then fast-forwards `main` to the released commit. The
+# operator bumps the version beforehand, as the last commit of the work.
 
 # Release develop: start the Release workflow, follow it, then fast-forward main
 release:
@@ -137,6 +139,11 @@ release:
     run="$(gh run list --workflow release.yml --branch develop --limit 1 --json databaseId --jq '.[0].databaseId')"
     gh run watch "${run}" --exit-status
     sha="$(gh run view "${run}" --json headSha --jq .headSha)"
+    ci="$(gh run list --workflow build.yml --branch develop --commit "${sha}" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+    if [[ -n "${ci}" ]]; then
+        echo "Waiting for develop's Test & Build (run ${ci}) before moving main..."
+        gh run watch "${ci}" > /dev/null
+    fi
     git push origin "${sha}:refs/heads/main"
 
 # ----------------------
