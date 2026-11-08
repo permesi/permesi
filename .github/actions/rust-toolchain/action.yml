@@ -42,5 +42,9 @@ runs:
         for component in ${COMPONENTS//,/ }; do args+=(--component "${component}"); done
         rustup toolchain install "${TOOLCHAIN}" "${args[@]}"
         rustup default "${TOOLCHAIN}"
+        # An environment choice beats a repository's rust-toolchain.toml, so the version a
+        # release resolved is the one every later step uses, even if the file says `stable`.
+        export RUSTUP_TOOLCHAIN="${TOOLCHAIN}"
+        echo "RUSTUP_TOOLCHAIN=${TOOLCHAIN}" >> "${GITHUB_ENV}"
         rustc --version
         cargo --version
