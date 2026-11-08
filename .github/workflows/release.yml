@@ -432,6 +432,7 @@ jobs:
           subject-name: ghcr.io/permesi/permesi
           subject-digest: ${{ steps.push.outputs.permesi_digest }}
           push-to-registry: true
+          create-storage-record: false
 
       - name: Attest genesis image provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
@@ -439,6 +440,7 @@ jobs:
           subject-name: ghcr.io/permesi/genesis
           subject-digest: ${{ steps.push.outputs.genesis_digest }}
           push-to-registry: true
+          create-storage-record: false
 
       - name: Attest web image provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
@@ -446,6 +448,7 @@ jobs:
           subject-name: ghcr.io/permesi/web
           subject-digest: ${{ steps.push.outputs.web_digest }}
           push-to-registry: true
+          create-storage-record: false
 
   # The GitHub release gets exactly the built files and no others. Publishing creates the
   # tag at the tested commit.
