@@ -35,6 +35,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      checks: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       rust: ${{ steps.rust.outputs.version }}
