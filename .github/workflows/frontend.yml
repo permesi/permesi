@@ -98,7 +98,7 @@ jobs:
           if [[ -z "$branch" ]]; then
             branch="${GITHUB_REF_NAME}"
           fi
-          if [[ "$branch" == "main" ]]; then
+          if [[ "$branch" == "main" || "$branch" == "release" ]]; then
             echo "::error::The release workflow owns production frontend publication."
             exit 1
           fi
