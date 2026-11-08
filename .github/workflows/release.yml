@@ -585,6 +585,14 @@ jobs:
             echo "::error::Release ${VERSION} holds: $(tr '\n' ' ' <<<"${actual}"); expected: $(tr '\n' ' ' <<<"${expected}")."
             exit 1
           fi
+          # The bytes too: download what a user would get and compare it with what was built.
+          published="${RUNNER_TEMP}/published"
+          rm -rf "${published}"
+          gh release download "${VERSION}" --dir "${published}"
+          if ! diff <(cd dist && sha256sum -- * | sort -k2) <(cd "${published}" && sha256sum -- * | sort -k2); then
+            echo "::error::The published files differ from the files that were built."
+            exit 1
+          fi
           echo "Release ${VERSION} is on ${GITHUB_SHA} with $(wc -l <<<"${actual}") files."
 
   # Add the version tag (and `latest`, for the highest release) to the tested image
