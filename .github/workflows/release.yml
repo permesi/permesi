@@ -37,12 +37,30 @@ jobs:
       actions: read
     outputs:
       version: ${{ steps.check.outputs.version }}
+      rust: ${{ steps.rust.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # `stable` moves every few weeks and "Re-run failed jobs" can run a leg hours later, so
+      # it is resolved once here: every Rust job of this run installs exactly this version,
+      # and a re-run keeps this job's output. Nothing in the repository has to be bumped.
+      - name: Resolve the Rust toolchain for this run
+        id: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          version="$(rustc +stable --version | awk '{print $2}')"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not resolve stable to an exact version (got '${version}')."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "This release is built with Rust ${version}."
 
       - name: Check the commit can be released
         id: check
@@ -124,6 +142,7 @@ jobs:
       - name: Install Rust
         uses: ./.github/actions/rust-toolchain
         with:
+          toolchain: ${{ needs.guard.outputs.rust }}
           targets: ${{ env.TARGET }}
 
       - uses: ./.github/actions/ensure-musl-toolchain
@@ -200,6 +219,7 @@ jobs:
       - name: Set up Rust
         uses: ./.github/actions/rust-toolchain
         with:
+          toolchain: ${{ needs.guard.outputs.rust }}
           targets: wasm32-unknown-unknown
 
       # No build cache in the release workflow: what is built here ships, so it is built
@@ -439,6 +459,7 @@ jobs:
       attestations: write
     env:
       VERSION: ${{ needs.guard.outputs.version }}
+      RUST: ${{ needs.guard.outputs.rust }}
       GH_TOKEN: ${{ github.token }}
     steps:
       # Full history and tags: the release notes list the commits since the previous release.
@@ -521,6 +542,8 @@ jobs:
             echo 'sha256sum --check --ignore-missing SHA256SUMS'
             echo "gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml"
             echo '```'
+            echo
+            echo "Built with Rust ${RUST}."
           } > "${RUNNER_TEMP}/notes.md"
           cat "${RUNNER_TEMP}/notes.md"
 
