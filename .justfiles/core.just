@@ -134,16 +134,29 @@ check-tag-not-exists version:
 release:
     #!/usr/bin/env bash
     set -euo pipefail
+    git fetch --quiet origin develop
+    sha="$(git rev-parse origin/develop)"
+    last="$(gh run list --workflow release.yml --branch develop --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')"
     gh workflow run release.yml --ref develop
-    sleep 5
-    run="$(gh run list --workflow release.yml --branch develop --limit 1 --json databaseId --jq '.[0].databaseId')"
+    # The dispatched run is the first new one for this commit; never just "the latest".
+    run=""
+    for _ in $(seq 30); do
+        run="$(gh run list --workflow release.yml --branch develop --event workflow_dispatch --limit 10 --json databaseId,headSha --jq "[.[] | select(.databaseId > ${last} and .headSha == \"${sha}\")][0].databaseId // empty")"
+        [[ -z "${run}" ]] || break
+        sleep 2
+    done
+    [[ -n "${run}" ]] || { echo "The dispatched release run did not appear." >&2; exit 1; }
     gh run watch "${run}" --exit-status
-    sha="$(gh run view "${run}" --json headSha --jq .headSha)"
-    ci="$(gh run list --workflow build.yml --branch develop --commit "${sha}" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
-    if [[ -n "${ci}" ]]; then
-        echo "Waiting for develop's Test & Build (run ${ci}) before moving main..."
-        gh run watch "${ci}" > /dev/null
-    fi
+    # develop's own Test & Build must have finished, and passed, before main can move.
+    ci=""
+    for _ in $(seq 30); do
+        ci="$(gh run list --workflow build.yml --branch develop --commit "${sha}" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+        [[ -z "${ci}" ]] || break
+        sleep 2
+    done
+    [[ -n "${ci}" ]] || { echo "No Test & Build run of develop for ${sha}; push it to main yourself when CI OK passed." >&2; exit 1; }
+    echo "Waiting for develop's Test & Build (run ${ci}) before moving main..."
+    gh run watch "${ci}" --exit-status > /dev/null || { echo "Test & Build failed on ${sha}; re-run its failed jobs, then: git push origin ${sha}:refs/heads/main" >&2; exit 1; }
     git push origin "${sha}:refs/heads/main"
 
 # ----------------------
