@@ -129,7 +129,7 @@ check-tag-not-exists version:
 # released commit. The operator bumps the version beforehand, as the last commit of the work.
 
 # Release develop: start the Release workflow, follow it, then fast-forward main
-deploy:
+release:
     #!/usr/bin/env bash
     set -euo pipefail
     gh workflow run release.yml --ref develop

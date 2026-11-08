@@ -1,13 +1,13 @@
 ---
 name: Release
 
-# Run manually on `develop` (`just deploy`). The commit is the one Test & Build already
+# Run manually on `develop` (`just release`). The commit is the one Test & Build already
 # passed on develop; this workflow bumps and commits nothing. It builds that commit once
 # (binaries and packages, the signed production web build, the three images pushed under
 # `:sha-<commit>`), publishes the GitHub release (which creates the tag), then tags the
 # tested image digests, deploys the web build to Cloudflare Pages, dispatches Helm and
 # publishes the API docs. `main` is protected with a push allow-list that only holds the
-# operator, so `just deploy` fast-forwards `main` itself once this run has succeeded. A
+# operator, so `just release` fast-forwards `main` itself once this run has succeeded. A
 # failed job is fixed with "Re-run failed jobs"; nothing is published before every build
 # job has succeeded.
 on:

@@ -586,7 +586,7 @@ Passkey credentials are persisted in the dedicated `passkeys` table when preview
 #### Releasing
 
 Work lands on `sandbox`; when its CI run is green it is fast-forwarded into `develop`, and
-`just deploy` releases from `develop`. The release rule is that the commit released is
+`just release` releases from `develop`. The release rule is that the commit released is
 exactly the commit CI tested, and the workflow changes nothing in the repository:
 
 1. As the last commit of the work, the operator bumps the version with a tool of their
@@ -597,7 +597,7 @@ exactly the commit CI tested, and the workflow changes nothing in the repository
 2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check on the
    commit, so the CI run that passed on `sandbox` already counts once `develop` points at
    the same commit; there is no need to wait for `develop`'s own run.
-3. Run `just deploy`. It starts `.github/workflows/release.yml` on `develop`, follows the
+3. Run `just release`. It starts `.github/workflows/release.yml` on `develop`, follows the
    run and, once it has succeeded, fast-forwards `main` to the released commit. `main`
    only allows the operator to push (the workflow's token cannot), so this push runs
    from the operator's machine.
