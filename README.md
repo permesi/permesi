@@ -587,18 +587,20 @@ Passkey credentials are persisted in the dedicated `passkeys` table when preview
 
 Work lands on `sandbox`; when its CI run is green it is fast-forwarded into `develop`, and
 `just deploy` releases from `develop`. The release rule is that the commit released is
-exactly the commit CI tested on `develop`, and the release workflow changes nothing in the
-repository except moving `main` to that commit:
+exactly the commit CI tested, and the workflow changes nothing in the repository:
 
 1. As the last commit of the work, the operator bumps the version with a tool of their
    choice (`cargo set-version --workspace --bump patch`, or `gbump`) in `Cargo.toml` and
    `Cargo.lock`, and sets `info.version` in `docs/openapi/permesi.json` and
    `docs/openapi/genesis.json` to the same value (`just openapi` regenerates them). The
    reviewer checks that the bump is present and complete.
-2. Merge `sandbox` into `develop` as a fast-forward, push, and wait for **Test & Build**
-   on `develop` to pass.
-3. Run `just deploy`. It starts `.github/workflows/deploy.yml` on `develop` and follows the
-   run.
+2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check on the
+   commit, so the CI run that passed on `sandbox` already counts once `develop` points at
+   the same commit; there is no need to wait for `develop`'s own run.
+3. Run `just deploy`. It starts `.github/workflows/deploy.yml` on `develop`, follows the
+   run and, once it has succeeded, fast-forwards `main` to the released commit. `main`
+   only allows the operator to push (the workflow's token cannot), so this push runs
+   from the operator's machine.
 
 ```
 Deploy workflow (workflow_dispatch on develop)
@@ -612,8 +614,8 @@ Deploy workflow (workflow_dispatch on develop)
                release (this creates the tag at the tested commit) and a final check that
                the tag and the assets are right
  then          image digests get the version (and `latest`) tags, the web build goes to
-               Cloudflare Pages, Helm is dispatched with the digests, the API docs go to
-               GitHub Pages, and `main` is fast-forwarded to the released commit
+               Cloudflare Pages, Helm is dispatched with the digests, and the API docs go
+               to GitHub Pages
 ```
 
 Nothing is published before every build job has succeeded. If a job fails, fix the cause

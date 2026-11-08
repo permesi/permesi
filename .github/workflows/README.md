@@ -14,9 +14,10 @@ The release is one run of `deploy.yml`, and nothing is published before every bu
 succeeded. If a job fails before the GitHub release job, fix the cause and use "Re-run failed
 jobs" (a draft left by a failed run is replaced). Once the release is published the tag exists
 and the release is public: transient failures of the later steps (image tags, Cloudflare Pages,
-Helm, the docs, moving `main`) are repaired with "Re-run failed jobs", which is safe to repeat
+Helm, the docs) are repaired with "Re-run failed jobs", which is safe to repeat
 because every step is idempotent. A failure that needs a code change is released as the next
-version.
+version. `main` allows only the operator to push, so `just deploy` fast-forwards it after the
+run succeeds; if that push is interrupted, run `git push origin <released-sha>:main`.
 
 The shared latest-release action lists the repository's `X.Y.Z` tags and takes the highest by
 version order; a GitHub API error fails the step instead of looking like "no releases".
@@ -161,7 +162,7 @@ before interpreting queue or wall-time differences as a speedup.
   Commit metadata parsing in the `/health` verification step requires `python3` on the runner.
 - **`coverage.yml`**: Generates and uploads code coverage reports.
 - **`frontend.yml`**: Handles integrity checks (signing) and deployment of the web frontend to Cloudflare Pages.
-- **`deploy.yml`**: The release pipeline, one manual run on `develop` (started by `just deploy`). Its guard checks the branch, that the workspace version is new and above the latest tag, that both OpenAPI specs carry it, that `main` is an ancestor and that the `CI OK` check passed on the exact commit. It then builds from source with no build cache the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), keylessly signs each immutable image digest and pushes its OCI build-provenance attestation, checks the exact release file set, attests the build provenance of the release files and publishes the GitHub release, which creates the tag. Afterwards it tags the tested image digests with the version (and `latest` for the highest release), deploys the signed web build to Cloudflare Pages, dispatches Helm with the digests, publishes the API docs and fast-forwards `main`. Each production step runs only while the version is the highest release tag.
+- **`deploy.yml`**: The release pipeline, one manual run on `develop` (started by `just deploy`). Its guard checks the branch, that the workspace version is new and above the latest tag, that both OpenAPI specs carry it, that `main` is an ancestor and that the `CI OK` check passed on the exact commit. It then builds from source with no build cache the musl archives, the Debian packages, the signed production web build and the three images (pushed to GHCR only as `:sha-<commit>`, with `github.sha` injected so `/health` and CLI build metadata carry the commit), keylessly signs each immutable image digest and pushes its OCI build-provenance attestation, checks the exact release file set, attests the build provenance of the release files and publishes the GitHub release, which creates the tag. Afterwards it tags the tested image digests with the version (and `latest` for the highest release), deploys the signed web build to Cloudflare Pages, dispatches Helm with the digests, publishes the API docs. `just deploy` then fast-forwards `main`, which only the operator may push to. Each production step runs only while the version is the highest release tag.
 - **`dispatch-helm-release.yml`**: Manual (or `workflow_call`) entry point that sends the `repository_dispatch` event to `permesi/permesi-helm` through the same `.github/actions/dispatch-helm` composite action the release uses; the payload carries the image digests so Helm can pin exact artifacts.
 
 ## Hardening

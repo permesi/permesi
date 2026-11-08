@@ -6,7 +6,8 @@ name: Deploy
 # (binaries and packages, the signed production web build, the three images pushed under
 # `:sha-<commit>`), publishes the GitHub release (which creates the tag), then tags the
 # tested image digests, deploys the web build to Cloudflare Pages, dispatches Helm and
-# publishes the API docs, and finally fast-forwards `main` to the released commit. A
+# publishes the API docs. `main` is protected with a push allow-list that only holds the
+# operator, so `just deploy` fast-forwards `main` itself once this run has succeeded. A
 # failed job is fixed with "Re-run failed jobs"; nothing is published before every build
 # job has succeeded.
 on:
@@ -728,20 +729,3 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs/redoc
-
-  # main only ever holds released commits. force=false: the API refuses anything but a
-  # fast-forward.
-  main:
-    name: Fast-forward main
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: release
-    permissions:
-      contents: write
-    steps:
-      - name: Move main to the released commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
-            -f sha="${GITHUB_SHA}" -F force=false

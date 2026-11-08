@@ -124,14 +124,20 @@ check-tag-not-exists version:
 
 # Releases run .github/workflows/deploy.yml on develop: it checks that the commit passed
 # Test & Build and that the version (Cargo.toml, Cargo.lock and both OpenAPI specs'
-# info.version) is new, builds and publishes everything, and fast-forwards main. The
-# operator bumps the version beforehand, as the last commit of the work.
+# info.version) is new, then builds and publishes everything. `main` only allows the
+# operator to push, so once the run has succeeded this recipe fast-forwards `main` to the
+# released commit. The operator bumps the version beforehand, as the last commit of the work.
 
-# Release develop: start the Deploy workflow and follow it
+# Release develop: start the Deploy workflow, follow it, then fast-forward main
 deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
     gh workflow run deploy.yml --ref develop
     sleep 5
-    gh run watch "$(gh run list --workflow deploy.yml --branch develop --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
+    run="$(gh run list --workflow deploy.yml --branch develop --limit 1 --json databaseId --jq '.[0].databaseId')"
+    gh run watch "${run}" --exit-status
+    sha="$(gh run view "${run}" --json headSha --jq .headSha)"
+    git push origin "${sha}:refs/heads/main"
 
 # ----------------------
 # Sandbox branch helpers
