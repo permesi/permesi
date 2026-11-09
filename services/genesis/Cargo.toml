@@ -33,6 +33,8 @@ assets = [
 
 [package.metadata.generate-rpm]
 summary = "Genesis service"
+vendor = "Team Permesi <team@permesi.dev>"
+url = "https://permesi.dev"
 # gzip keeps the package installable on the oldest supported RPM distributions.
 payload_compress = "gzip"
 post_install_script = "../../contrib/rpm/genesis/post.sh"
