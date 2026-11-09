@@ -6,7 +6,7 @@
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{Alert, AlertKind, Button, DateTime, Icon, IconName, Spinner, icon_size},
     features::auth::{
         client::{self, is_token_expired},
         state::use_auth,
@@ -166,7 +166,7 @@ fn AdminClaimSuccess(success: ReadSignal<Option<String>>) -> impl IntoView {
                     on:click=move |_| navigate(paths::ADMIN, leptos_router::NavigateOptions::default())
                     class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all cursor-pointer"
                 >
-                    <span class="material-symbols-outlined mr-2 text-base">"settings"</span>
+                    <Icon name=IconName::AdminPanel size=icon_size::INLINE class="mr-2" />
                     "Go Admin"
                 </button>
             </div>
@@ -289,19 +289,16 @@ fn active_token_notice(
                         } else {
                             Some(
                                 view! {
-                                <Alert
-                                    kind=AlertKind::Success
-                                    message=format!("Admin token active until {}.", token.expires_at)
-                                />
+                                <div role="status" class="text-sm text-green-700 dark:text-green-300">
+                                    "Admin token active until "<DateTime value=token.expires_at />"."
+                                </div>
                                 <div class="mt-4">
                                     <A
                                         href={paths::ADMIN}
                                         {..}
                                         class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800 transition-all"
                                     >
-                                        <span class="material-symbols-outlined mr-2 text-base">
-                                            "settings"
-                                        </span>
+                                        <Icon name=IconName::AdminPanel size=icon_size::INLINE class="mr-2" />
                                         "Go Admin"
                                     </A>
                                 </div>

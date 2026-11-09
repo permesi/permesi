@@ -3,13 +3,13 @@
 //! Flow Overview: The section collects browser-local input, completes the existing
 //! authentication ceremony and calls its session-authenticated mutation API.
 
-use super::{
-    display::{format_relative, format_rfc3339},
-    factor_mutation_error,
-};
+use super::factor_mutation_error;
 use crate::{
     app_lib::{AppError, theme::Theme},
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{
+        Alert, AlertKind, Button, DateTime, EmptyValue, Icon, IconName, MetaItem, Spinner,
+        icon_size,
+    },
     features::{
         auth::{client as auth_client, opaque::reauthenticate, state::use_auth},
         me::client,
@@ -90,9 +90,7 @@ pub(super) fn SecurityKeysSection() -> impl IntoView {
                                         <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class=Theme::ICON>
-                                                        "usb"
-                                                    </span>
+                                                    <Icon name=IconName::SecurityKey size=icon_size::CARD class=Theme::ICON />
                                                     <div>
                                                         <p class="text-sm font-medium text-gray-900 dark:text-white">
                                                             "Security keys"
@@ -317,31 +315,26 @@ fn key_list(state: KeyRows) -> impl IntoView {
                         view! {
                             <div class="flex flex-col space-y-4 group">
                                 <div class=Theme::LIST_ITEM_FLAT>
-                                    <div class="flex items-center space-x-3">
-                                        <span class=Theme::ICON_SMALL>
-                                            "key"
-                                        </span>
-                                        <div>
+                                    <div class="flex min-w-0 flex-1 items-start space-x-3">
+                                        <Icon name=IconName::KeyRound size=icon_size::INLINE class=Theme::ICON />
+                                        <div class="min-w-0 flex-1">
                                             <p class="text-sm text-gray-700 dark:text-gray-300 font-medium">
                                                 {label}
                                             </p>
-                                            <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                {format!(
-                                                    "Added {} | Last used {}",
-                                                    format_rfc3339(&key.created_at),
-                                                    key.last_used_at
-                                                        .as_deref().map_or_else(|| {
-                                                            "Never".to_string()
-                                                        }, format_relative)
-                                                )}
-                                            </p>
+                                            <dl class="mt-2">
+                                                <MetaItem icon=IconName::Calendar label="Added"><DateTime value=key.created_at /></MetaItem>
+                                                <MetaItem icon=IconName::Clock label="Last used">
+                                                    {key.last_used_at.map_or_else(|| view! { <EmptyValue text="Never" /> }.into_any(), |at| view! { <DateTime value=at /> }.into_any())}
+                                                </MetaItem>
+                                            </dl>
                                         </div>
                                     </div>
                                     <span
-                                        class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                                        class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-red-50 hover:text-red-700 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none cursor-pointer dark:hover:bg-red-950 dark:hover:text-red-300"
                                         role="button"
                                         tabindex="0"
                                         aria-label="Remove security key"
+                                        title="Remove security key"
                                         on:click={
                                             let credential_id = credential_id.clone();
                                             move |_| {
@@ -358,7 +351,7 @@ fn key_list(state: KeyRows) -> impl IntoView {
                                             }
                                         }
                                     >
-                                        <span class="material-symbols-outlined text-sm">"delete"</span>
+                                        <Icon name=IconName::Delete size=icon_size::INLINE />
                                     </span>
                                 </div>
 

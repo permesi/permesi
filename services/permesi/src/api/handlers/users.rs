@@ -36,6 +36,12 @@ pub struct UserDetail {
     pub role: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Successful interactive authentication only; visible to platform administrators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_login_at: Option<String>,
+    /// True only when tracking covered the user's entire lifetime; absent for non-admins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_tracking_complete: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -296,9 +302,11 @@ async fn fetch_user_summaries(pool: &PgPool) -> Result<Vec<UserSummary>, sqlx::E
         .collect())
 }
 
+/// Reads profile metadata and conditionally exposes login history to platform administrators.
 async fn fetch_user_detail(
     pool: &PgPool,
     user_id: Uuid,
+    include_login: bool,
 ) -> Result<Option<UserDetail>, sqlx::Error> {
     let query = r#"
         SELECT
@@ -308,7 +316,9 @@ async fn fetch_user_detail(
             u.locale,
             r.role,
             to_char(u.created_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-            to_char(u.updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            to_char(u.updated_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
+            CASE WHEN $2 THEN to_char(u.last_login_at AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') END AS last_login_at,
+            CASE WHEN $2 THEN u.created_at >= u.last_login_tracking_since END AS login_tracking_complete
         FROM users u
         LEFT JOIN user_roles r ON r.user_id = u.id
         WHERE u.id = $1
@@ -316,6 +326,7 @@ async fn fetch_user_detail(
     "#;
     let row = sqlx::query(query)
         .bind(user_id)
+        .bind(include_login)
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|row| UserDetail {
@@ -326,6 +337,8 @@ async fn fetch_user_detail(
         role: row.get("role"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        last_login_at: row.get("last_login_at"),
+        login_tracking_complete: row.get("login_tracking_complete"),
     }))
 }
 
@@ -336,7 +349,7 @@ async fn fetch_user_detail_for_principal(
     user_id: Uuid,
 ) -> Result<Option<UserDetail>, ServiceError> {
     ensure_permission(principal, Permission::Read)?;
-    fetch_user_detail(pool, user_id)
+    fetch_user_detail(pool, user_id, principal.allows(Permission::InspectTenants))
         .await
         .map_err(ServiceError::Database)
 }
@@ -378,6 +391,8 @@ async fn update_user_profile(
         role: None,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        last_login_at: None,
+        login_tracking_complete: None,
     }))
 }
 

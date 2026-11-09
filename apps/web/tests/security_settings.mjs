@@ -8,6 +8,8 @@ export async function checkSecuritySettings({goto,wait,click,fill,evaluate,call,
  for (const label of ['Password','Passkeys','Authenticator app','Recovery codes','Security keys']) {
   assert(await evaluate(`document.body.innerText.includes(${JSON.stringify(label)})`),`Missing security section: ${label}`);
  }
+ assert(await evaluate("[...document.querySelectorAll('time')].filter(e=>e.textContent==='Oct 5, 2026 · 07:04 UTC' && e.getAttribute('datetime') && e.title).length>=2"),'Persisted credential timestamps must use exact, readable UTC dates');
+ assert(await evaluate("[...document.querySelectorAll('dt')].filter(e=>['Added','Last used'].includes(e.textContent)).length>=4"),'Credential metadata must retain visible field labels');
  const before=requests.length;
  await click('Change password');
  await fill('current_password','fixture-current-password');

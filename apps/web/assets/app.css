@@ -2,3 +2,36 @@
 @source "../index.html";
 @source "../src/**/*.rs";
 @import "tailwindcss";
+
+/* Lucide defaults to a 2px stroke; 1.5 matches the lighter Material Symbols weight used before. */
+.lucide {
+  stroke-width: 1.5;
+}
+
+/* Shared section columns and the explicit 0.5rem row gap own metadata alignment/spacing. */
+dl:has(> .metadata-row) {
+  display: grid;
+  grid-template-columns: 1rem max-content minmax(0, 1fr);
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.metadata-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 1rem max-content minmax(0, 1fr);
+  align-items: start;
+  column-gap: 0.5rem;
+  min-width: 0;
+  margin-block: 0;
+}
+
+dl:has(> .metadata-row) .metadata-row {
+  grid-template-columns: subgrid;
+}
+
+.metadata-row > dd {
+  grid-column: 3;
+  min-width: 0;
+}
+

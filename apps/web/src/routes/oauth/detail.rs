@@ -5,14 +5,14 @@
 //! Disabling/deleting are confirmed because they revoke stored authority permanently.
 
 use super::common::{
-    CARD, FormError, INPUT, LABEL, LINK, Loading, OAuthNav, ResourceParams, SECONDARY,
+    CARD, DESTRUCTIVE, FormError, INPUT, LABEL, LINK, Loading, OAuthNav, ResourceParams, SECONDARY,
     application_context, error_message,
 };
 use crate::{
     app_lib::AppError,
     components::{
-        Alert, AlertKind, Button,
-        ui::{CopyValue, Dialog},
+        Alert, AlertKind, Button, CopyValue, DateTime, EntityHeader, Icon, IconName, MetaItem,
+        icon_size, ui::Dialog,
     },
     features::oauth::{
         client,
@@ -78,12 +78,14 @@ fn ClientConfiguration(
     let id = registration.client_id.clone();
     let client = RwSignal::new(registration);
     let credential_paths = paths.clone();
+    let copy_id = id.clone();
     view! { <div class="space-y-6">
-        <div class=CARD><h2 class="mb-4 break-words text-xl font-semibold">{move || client.get().name}</h2>
-            <dl class="grid gap-4 sm:grid-cols-2"><div class="min-w-0 sm:col-span-2"><dt class=LABEL>"Client ID"</dt><dd><CopyValue value=id.clone() /></dd></div>
-                <div><dt class=LABEL>"Type"</dt><dd>{move || client.get().client_type.label()}</dd></div>
-                <div><dt class=LABEL>"Status"</dt><dd>{move || client.get().status()}</dd></div>
-                <div><dt class=LABEL>"Created"</dt><dd class="break-words text-sm">{move || client.get().created_at}</dd></div>
+        <div class=CARD><EntityHeader icon=IconName::Clients>{move || client.get().name}</EntityHeader>
+            <dl class="mt-3">
+                <MetaItem icon=IconName::Identifier label="Client ID"><CopyValue value=copy_id label="client ID" /></MetaItem>
+                <MetaItem icon=IconName::Clients label="Type">{move || client.get().client_type.label()}</MetaItem>
+                <MetaItem icon=IconName::Info label="Status">{move || client.get().status()}</MetaItem>
+                <MetaItem icon=IconName::Calendar label="Created">{move || view! { <DateTime value=client.get().created_at /> }}</MetaItem>
             </dl>
         </div>
         <ClientSettings paths=paths.clone() client=client />
@@ -349,7 +351,7 @@ fn ClientLifecycle(paths: ApplicationPaths, client: RwSignal<ClientResponse>) ->
     });
     view! { <section class="rounded-lg border border-red-200 p-6 dark:border-red-900" aria-labelledby="danger-heading"><h3 id="danger-heading" class="text-lg font-medium">"Danger Zone"</h3>
         <p class="my-3 text-sm text-gray-500 dark:text-gray-400">"Disabling or deleting a client revokes its saved grants and credentials. Re-enabling does not restore revoked authority."</p>
-        <div class="flex flex-wrap gap-3"><button type="button" class=SECONDARY disabled=Signal::derive(move || change.pending().get() || delete.pending().get()) on:click=move |_| { error.set(String::new()); open.set(true); }>{move || if client.get().disabled_at.is_some() { "Enable Client" } else { "Disable Client" }}</button><button type="button" class="cursor-pointer rounded-lg border border-red-300 px-4 py-2 text-sm text-red-700 hover:bg-red-50 focus:ring-2 focus:ring-red-500 dark:text-red-400 dark:hover:bg-red-950" disabled=move || change.pending().get() || delete.pending().get() on:click=move |_| { confirmation.set(String::new()); delete_error.set(String::new()); delete_open.set(true); }>"Delete Client"</button></div>
+        <div class="flex flex-wrap gap-3"><button type="button" class=SECONDARY disabled=Signal::derive(move || change.pending().get() || delete.pending().get()) on:click=move |_| { error.set(String::new()); open.set(true); }>{move || if client.get().disabled_at.is_some() { "Enable Client" } else { "Disable Client" }}</button><button type="button" class=DESTRUCTIVE disabled=move || change.pending().get() || delete.pending().get() on:click=move |_| { confirmation.set(String::new()); delete_error.set(String::new()); delete_open.set(true); }><Icon name=IconName::Delete size=icon_size::INLINE />"Delete Client"</button></div>
         <Dialog id="client-lifecycle" title="Change client status" open=open busy=change.pending()>
             <p class="mb-4 text-sm">{move || if client.get().disabled_at.is_some() { "Enable this client? Previously revoked grants and credentials will remain revoked." } else { "Disable this client? It becomes inactive and its saved grants and credentials are revoked." }}</p><FormError id="lifecycle-error" error=error />
             <div class="mt-4 flex justify-end gap-3"><button type="button" class=SECONDARY disabled=move || change.pending().get() on:click=move |_| open.set(false)>"Cancel"</button><Button disabled=change.pending() on_click=move |_| { change.dispatch(client.get_untracked().disabled_at.is_none()); }>{move || if change.pending().get() { "Saving…" } else { "Confirm" }}</Button></div>
@@ -357,7 +359,7 @@ fn ClientLifecycle(paths: ApplicationPaths, client: RwSignal<ClientResponse>) ->
         <Dialog id="client-delete" title="Delete OAuth Client" open=delete_open busy=delete.pending()>
             <form class="space-y-4" on:submit=move |ev| { ev.prevent_default(); if confirmation.get_untracked() == id.get_value() && !delete.pending().get_untracked() { delete.dispatch(()); } }>
                 <p class="text-sm">"This permanently removes the client from management and revokes its saved authority. This cannot be undone."</p>
-                <label for="delete-client-confirmation" class=LABEL>"Type the full client ID to confirm"</label><code class="block break-all text-sm">{id.get_value()}</code>
+                <label for="delete-client-confirmation" class=LABEL>"Type the full client ID to confirm"</label><CopyValue value=id.get_value() label="client ID" compact=true />
                 <input id="delete-client-confirmation" class=INPUT autocomplete="off" spellcheck="false" aria-describedby="delete-client-error" prop:value=move || confirmation.get() disabled=move || delete.pending().get() on:input=move |ev| confirmation.set(event_target_value(&ev)) />
                 <FormError id="delete-client-error" error=delete_error />
                 <div class="flex justify-end gap-3"><button type="button" class=SECONDARY disabled=move || delete.pending().get() on:click=move |_| delete_open.set(false)>"Cancel"</button><Button button_type="submit" disabled=Signal::derive(move || delete.pending().get() || confirmation.get() != id.get_value())>{move || if delete.pending().get() { "Deleting…" } else { "Delete Client" }}</Button></div>

@@ -15,10 +15,10 @@ pub(crate) use detail::ClientDetailPage;
 pub(crate) use scopes::ScopesPage;
 
 use crate::{
-    components::{Alert, AlertKind},
+    components::{Alert, AlertKind, Icon, IconName, icon_size},
     features::oauth::client,
 };
-use common::{CARD, LINK, Loading, OAuthNav, application_context, error_message};
+use common::{CARD, LINK, Loading, OAuthNav, SECONDARY, application_context, error_message};
 use leptos::prelude::*;
 use leptos_router::components::A;
 
@@ -40,7 +40,7 @@ pub fn OAuthOverviewPage() -> impl IntoView {
     });
     view! { <div class="space-y-6">
         <OAuthNav paths=paths.clone() />
-        <h2 class="text-xl font-semibold">"OAuth Configuration"</h2>
+        <div class="flex flex-wrap items-center justify-between gap-4"><h2 class="text-xl font-semibold">"OAuth Configuration"</h2><button type="button" class=SECONDARY on:click=move |_| summary.refetch()><Icon name=IconName::Refresh size=icon_size::INLINE class="text-gray-400 dark:text-gray-500" />"Refresh"</button></div>
         <p class="text-sm text-gray-500 dark:text-gray-400">"Manage client registrations, credentials, redirect URIs and delegated scopes. Authorization Code + PKCE is available; token issuance is planned."</p>
         <Suspense fallback=|| view! { <Loading message="Loading OAuth configuration…" /> }>
             {move || match summary.get() {

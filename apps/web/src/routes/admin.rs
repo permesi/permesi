@@ -1,6 +1,7 @@
-//! Admin overview page showing system infrastructure health and platform stats.
+//! Admin overview showing neutral navigation cards and semantic system-health status.
 
 use crate::{
+    components::{Icon, IconName, icon_size},
     features::auth::{client, state::use_auth, types::AdminInfraResponse},
     routes::paths,
 };
@@ -30,9 +31,12 @@ pub fn AdminPage() -> impl IntoView {
                 </div>
                 <button
                     on:click=move |_| infra.refetch()
-                    class="p-2 text-gray-500 hover:text-blue-600 transition-colors"
+                    class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                    aria-label="Refresh system status"
+                    title="Refresh system status"
                 >
-                    <span class="material-symbols-outlined">"refresh"</span>
+                    <Icon name=IconName::Refresh size=icon_size::INLINE />
+                    "Refresh"
                 </button>
             </div>
 
@@ -48,25 +52,21 @@ pub fn AdminPage() -> impl IntoView {
             </Suspense>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-                <A href={paths::USERS} {..} class="group p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:border-blue-500 transition-all">
-                    <div class="flex items-center gap-4">
-                        <div class="p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform">
-                            <span class="material-symbols-outlined">"group"</span>
-                        </div>
-                        <div>
-                            <h2 class="font-semibold text-gray-900 dark:text-white">"Users"</h2>
-                            <p class="text-sm text-gray-500">"Manage platform users and permissions."</p>
+                <A href={paths::USERS} {..} class="cursor-pointer min-w-0 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors">
+                    <div class="flex items-start gap-3">
+                        <Icon name=IconName::Users size=icon_size::CONTROL class="mt-1 shrink-0 text-gray-400 dark:text-gray-500" />
+                        <div class="min-w-0">
+                            <h2 class="break-words text-lg font-medium text-gray-900 dark:text-white">"Users"</h2>
+                            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Manage platform users and permissions."</p>
                         </div>
                     </div>
                 </A>
-                <A href={paths::ADMIN_ORGS} {..} class="group cursor-pointer p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:border-blue-500 transition-all">
-                    <div class="flex items-center gap-4">
-                        <div class="p-3 bg-green-50 dark:bg-green-900/30 rounded-lg text-green-600 dark:text-green-400 group-hover:scale-110 transition-transform">
-                            <span class="material-symbols-outlined">"corporate_fare"</span>
-                        </div>
-                        <div>
-                            <h2 class="font-semibold text-gray-900 dark:text-white">"Organizations"</h2>
-                            <p class="text-sm text-gray-500">"Inspect all active tenants and their resources."</p>
+                <A href={paths::ADMIN_ORGS} {..} class="cursor-pointer min-w-0 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors">
+                    <div class="flex items-start gap-3">
+                        <Icon name=IconName::Organizations size=icon_size::CONTROL class="mt-1 shrink-0 text-gray-400 dark:text-gray-500" />
+                        <div class="min-w-0">
+                            <h2 class="break-words text-lg font-medium text-gray-900 dark:text-white">"Organizations"</h2>
+                            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Inspect all active tenants and their resources."</p>
                         </div>
                     </div>
                 </A>
@@ -75,6 +75,7 @@ pub fn AdminPage() -> impl IntoView {
     }
 }
 
+/// Displays infrastructure metrics without changing the server-reported health state.
 fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
     let db_color = if data.database.status == "ok" {
         "text-green-500"
@@ -90,69 +91,69 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
     view! {
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             // Database Card
-            <div class="p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">"Database"</h3>
-                    <span class=format!("material-symbols-outlined {}", db_color)>"database"</span>
+            <div class="min-w-0 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">"Database"</h3>
+                    <Icon name=IconName::Database size=icon_size::CONTROL class="text-gray-400 dark:text-gray-500" />
                 </div>
                 <div class="space-y-2">
-                    <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Status"</span>
-                        <span class="font-medium dark:text-white">{data.database.status}</span>
+                    <div class="flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm">
+                        <span class="text-gray-500 dark:text-gray-400">"Status"</span>
+                        <span class=db_color>{data.database.status}</span>
                     </div>
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Pool Size"</span>
+                        <span class="text-gray-500 dark:text-gray-400">"Pool Size"</span>
                         <span class="font-medium dark:text-white">{data.database.pool_size}</span>
                     </div>
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Active / Idle"</span>
+                        <span class="text-gray-500 dark:text-gray-400">"Active / Idle"</span>
                         <span class="font-medium dark:text-white">{data.database.active_connections} " / " {data.database.idle_connections}</span>
                     </div>
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Permesi Size"</span>
+                        <span class="text-gray-500 dark:text-gray-400">"Permesi Size"</span>
                         <span class="font-medium dark:text-white">{format_bytes(data.database.permesi_size_bytes)}</span>
                     </div>
                 </div>
             </div>
 
             // Vault Card
-            <div class="p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">"Vault"</h3>
-                    <span class=format!("material-symbols-outlined {}", vault_color)>"lock"</span>
+            <div class="min-w-0 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">"Vault"</h3>
+                    <Icon name=IconName::LockedKey size=icon_size::CONTROL class="text-gray-400 dark:text-gray-500" />
                 </div>
                 <div class="space-y-2">
-                    <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Version"</span>
-                        <span class="font-medium dark:text-white">{data.vault.version}</span>
+                    <div class="flex min-w-0 justify-between gap-3 text-sm">
+                        <span class="shrink-0 text-gray-500 dark:text-gray-400">"Version"</span>
+                        <span class="min-w-0 break-words text-right font-medium dark:text-white">{data.vault.version}</span>
                     </div>
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Sealed"</span>
+                        <span class="text-gray-500 dark:text-gray-400">"Sealed"</span>
                         <span class="font-medium dark:text-white">{data.vault.sealed.to_string()}</span>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Status"</span>
-                        <span class="font-medium dark:text-white">{data.vault.status}</span>
+                    <div class="flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm">
+                        <span class="text-gray-500 dark:text-gray-400">"Status"</span>
+                        <span class=vault_color>{data.vault.status}</span>
                     </div>
                 </div>
             </div>
 
             // Platform Card
-            <div class="p-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">"Platform"</h3>
-                    <span class="material-symbols-outlined text-blue-500">"monitoring"</span>
+            <div class="min-w-0 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">"Platform"</h3>
+                    <Icon name=IconName::Health size=icon_size::CONTROL class="text-gray-400 dark:text-gray-500" />
                 </div>
                 <div class="space-y-2">
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Operators"</span>
+                        <span class="text-gray-500 dark:text-gray-400">"Operators"</span>
                         <span class="font-medium dark:text-white">{data.platform.operator_count}</span>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">"Recent Elevation Attempts"</span>
+                    <div class="flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm">
+                        <span class="text-gray-500 dark:text-gray-400">"Recent Elevation Attempts"</span>
                         <span class="font-medium dark:text-white">{data.platform.recent_attempts_count}</span>
                     </div>
-                    <p class="text-[10px] text-gray-400 mt-2 italic">"Attempts tracked in the last hour"</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">"Attempts tracked in the last hour"</p>
                 </div>
             </div>
         </div>

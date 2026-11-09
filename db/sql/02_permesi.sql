@@ -41,6 +41,10 @@ CREATE INDEX IF NOT EXISTS idx_users_status ON users (status);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS authorization_revision UUID NOT NULL DEFAULT uuidv4();
 -- Database-clock cutoff also invalidates consumed-but-not-yet-issued login proofs.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS authentication_not_before TIMESTAMPTZ NOT NULL DEFAULT '-infinity';
+-- Interactive-login history: last_login_at stays NULL until a completed login; the tracking marker
+-- lets the admin API tell a user created under tracking ("Never") from one that predates it.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_tracking_since TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE OR REPLACE FUNCTION advance_user_authorization_revision() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 BEGIN

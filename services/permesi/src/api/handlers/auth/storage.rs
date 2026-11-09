@@ -7,6 +7,9 @@
 //! Registration applies server-owned admission before a bounded transaction. User-first
 //! activation/resend locks coordinate all replicas without holding a network operation;
 //! only pending identities activate, and sibling mailbox capabilities retire together.
+//! Completed interactive logins additionally update monotonic database-clock history
+//! within that transaction. Limited MFA authority, full-session reauthentication,
+//! OAuth authorization and refresh issuance never record an interactive login.
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::json;
@@ -204,6 +207,23 @@ pub(super) async fn insert_session(
 ) -> Result<String> {
     let mut connection = pool.acquire().await?;
     insert_session_on(&mut connection, user_id, ttl_seconds).await
+}
+
+/// Issues a completed interactive login and records its database-clock time atomically.
+/// Call only after all required factors succeed, within the issuance transaction.
+pub(super) async fn insert_login_session_on(
+    connection: &mut PgConnection,
+    user_id: Uuid,
+    ttl_seconds: i64,
+) -> Result<String> {
+    let token = insert_session_on(connection, user_id, ttl_seconds).await?;
+    sqlx::query(
+        "UPDATE users SET last_login_at=GREATEST(COALESCE(last_login_at, '-infinity'::timestamptz), NOW()) WHERE id=$1",
+    )
+    .bind(user_id)
+    .execute(connection)
+    .await?;
+    Ok(token)
 }
 
 /// Insert through the caller's connection so verified identity locks cover issuance.

@@ -1,13 +1,18 @@
 //! Organization detail route. Shows projects and allows management of the tenant.
+//! Header metadata is resolved from the existing membership-scoped organization list;
+//! linked project cards omit interactive identifiers and use readable creation dates.
 
 use super::deletion::{DeleteResource, DeleteTarget};
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{
+        Alert, AlertKind, Button, CopyValue, DateTime, EmptyValue, EntityHeader, Icon, IconName,
+        MetaItem, Spinner, icon_size,
+    },
     features::orgs::{
         client,
-        types::{CreateProjectRequest, ProjectResponse},
+        types::{CreateProjectRequest, OrgResponse, ProjectResponse},
     },
     routes::paths,
 };
@@ -20,10 +25,18 @@ struct OrgParams {
     slug: Option<String>,
 }
 
-/// Renders the organization detail view.
+/// Renders organization metadata and projects without changing management authorization.
 #[component]
 pub fn OrgDetailPage() -> impl IntoView {
     let params = use_params::<OrgParams>();
+    let organization = LocalResource::new(move || {
+        let slug = params.get().ok().and_then(|p| p.slug).unwrap_or_default();
+        async move {
+            client::list_orgs()
+                .await
+                .map(|items| items.into_iter().find(|org| org.slug == slug))
+        }
+    });
 
     let projects = LocalResource::new(move || {
         let slug = params.get().ok().and_then(|p| p.slug).unwrap_or_default();
@@ -39,28 +52,14 @@ pub fn OrgDetailPage() -> impl IntoView {
 
     view! {
         <div class="space-y-6">
-            <div class="flex items-center justify-between">
-                <div class="space-y-1">
-                    <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                        {move || params.get().ok().and_then(|p| p.slug).unwrap_or_else(|| "Organization".to_string())}
-                    </h1>
-                    <p class="text-sm text-gray-500 dark:text-gray-400">
-                        "Manage projects and environments for this organization."
-                    </p>
-                </div>
-
-                <CreateProjectModal
-                    org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
-                    on_success=Callback::new(move |_| projects.refetch())
-                />
-            </div>
+            <OrganizationHeader organization=organization projects=projects />
 
             <Suspense fallback=move || view! { <Spinner /> }>
                 {move || match projects.get() {
                     Some(Ok(list)) if list.is_empty() => {
                         view! {
                             <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                                <span class="material-symbols-outlined text-4xl text-gray-400">"account_tree"</span>
+                                <Icon name=IconName::Projects size=icon_size::EMPTY class="text-gray-400 dark:text-gray-500" />
                                 <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No projects"</h3>
                                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Add your first project to this organization."</p>
                             </div>
@@ -78,22 +77,13 @@ pub fn OrgDetailPage() -> impl IntoView {
                                             <A
                                                 href={paths::project_detail(&org_slug, &proj.slug)}
                                                 {..}
-                                                class="block p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-500 transition-colors shadow-sm"
+                                                class="block min-w-0 cursor-pointer p-5 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors"
                                             >
-                                                <div class="flex items-start justify-between">
-                                                    <span class="material-symbols-outlined text-green-600 dark:text-green-400">
-                                                        "account_tree"
-                                                    </span>
-                                                    <span class="text-xs text-gray-400 dark:text-gray-500 uppercase font-mono tracking-wider">
-                                                        {proj.slug}
-                                                    </span>
-                                                </div>
-                                                <h2 class="mt-4 text-lg font-medium text-gray-900 dark:text-white truncate">
-                                                    {proj.name}
-                                                </h2>
-                                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                    "Created " {proj.created_at}
-                                                </p>
+                                                <EntityHeader icon=IconName::Projects navigable=true>{proj.name}</EntityHeader>
+                                                <dl class="mt-3">
+                                                    <MetaItem icon=IconName::Tag label="Slug" mono=true>{proj.slug}</MetaItem>
+                                                    <MetaItem icon=IconName::Calendar label="Created"><DateTime value=proj.created_at /></MetaItem>
+                                                </dl>
                                             </A>
                                         }
                                     }
@@ -120,6 +110,58 @@ pub fn OrgDetailPage() -> impl IntoView {
     }
 }
 
+/// Shows membership-scoped organization metadata and existing project actions.
+#[component]
+fn OrganizationHeader(
+    organization: LocalResource<Result<Option<OrgResponse>, AppError>>,
+    projects: LocalResource<Result<Vec<ProjectResponse>, AppError>>,
+) -> impl IntoView {
+    let params = use_params::<OrgParams>();
+    view! {
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="min-w-0 w-full space-y-1 sm:w-auto sm:flex-1">
+                <h1 class="break-words text-2xl font-semibold text-gray-900 dark:text-white">
+                    {move || organization.get().and_then(Result::ok).flatten().map_or_else(
+                        || params.get().ok().and_then(|p| p.slug).unwrap_or_else(|| "Organization".to_owned()),
+                        |org| org.name,
+                    )}
+                </h1>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    "Manage projects and environments for this organization."
+                </p>
+                <div class="min-h-24 pt-2" role="group" aria-label="Organization metadata">
+                    <Suspense fallback=move || view! { <Spinner /> }>
+                        {move || match organization.get() {
+                            Some(Ok(Some(org))) => view! {
+                                <dl>
+                                    <MetaItem icon=IconName::Tag label="Slug" mono=true>{org.slug}</MetaItem>
+                                    <MetaItem icon=IconName::Identifier label="Organization ID">
+                                        <CopyValue value=org.id label="organization ID" compact=true />
+                                    </MetaItem>
+                                    <MetaItem icon=IconName::Calendar label="Created"><DateTime value=org.created_at /></MetaItem>
+                                </dl>
+                            }.into_any(),
+                            Some(Err(_) | Ok(None)) => view! { <EmptyValue text="Unavailable" /> }.into_any(),
+                            None => ().into_any(),
+                        }}
+                    </Suspense>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+                <button type="button" on:click=move |_| { projects.refetch(); organization.refetch(); }
+                    class="inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">
+                    <Icon name=IconName::Refresh size=icon_size::INLINE />"Refresh"
+                </button>
+                <CreateProjectModal
+                    org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
+                    on_success=Callback::new(move |_| projects.refetch())
+                />
+            </div>
+        </div>
+    }
+}
+
+/// Creates a project with the existing organization-scoped request and validation.
 #[component]
 fn CreateProjectModal<F>(org_slug: F, on_success: Callback<ProjectResponse>) -> impl IntoView
 where
@@ -178,22 +220,22 @@ where
     view! {
         <div>
             <Button on_click=move |_| set_is_open.set(true)>
-                <div class="flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base">"add"</span>
-                    "New Project"
-                </div>
+                "New Project"
             </Button>
 
             <Show when=move || is_open.get()>
                 <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
                     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
-                            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">"Create Project"</h2>
+                        <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-start justify-between gap-3">
+                            <h2 class="min-w-0 break-words text-lg font-medium text-gray-900 dark:text-white">"Create Project"</h2>
                             <button
                                 on:click=move |_| set_is_open.set(false)
-                                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                                type="button"
+                                class="shrink-0 cursor-pointer p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:ring-2 focus-visible:ring-blue-500 rounded dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                                aria-label="Close dialog"
+                                title="Close dialog"
                             >
-                                <span class="material-symbols-outlined">"close"</span>
+                                <Icon name=IconName::Cancel size=icon_size::CONTROL />
                             </button>
                         </div>
 
@@ -230,7 +272,7 @@ where
                                 <button
                                     type="button"
                                     on:click=move |_| set_is_open.set(false)
-                                    class="px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
+                                    class="cursor-pointer px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
                                 >
                                     "Cancel"
                                 </button>

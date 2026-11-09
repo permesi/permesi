@@ -1,4 +1,5 @@
 use crate::{
+    components::{Icon, IconName, icon_size},
     features::auth::{client, state::use_auth},
     routes::paths,
 };
@@ -15,10 +16,8 @@ pub fn AlreadySignedInPanel() -> impl IntoView {
     view! {
         <div class="max-w-sm mx-auto text-center space-y-6 py-8">
             <div class="flex justify-center">
-                <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-full">
-                    <span class="material-symbols-outlined text-4xl text-blue-600 dark:text-blue-400">
-                        "account_circle"
-                    </span>
+                <div>
+                    <Icon name=IconName::Account size=icon_size::EMPTY class="text-gray-400 dark:text-gray-500" />
                 </div>
             </div>
             <div class="space-y-2">

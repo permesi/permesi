@@ -1,14 +1,17 @@
 //! Client registration list and minimal creation form.
 //!
 //! Creation sends only name/type; independent redirect and scope APIs configure
-//! the new registration. Public client identifiers are displayed and used in links.
+//! the new registration. Cards link by public identifier; details expose copyable IDs.
 
 use super::common::{
     EmptyState, FormError, INPUT, LABEL, Loading, OAuthNav, SECONDARY, application_context,
     error_message,
 };
 use crate::{
-    components::{Alert, AlertKind, Button, ui::Dialog},
+    components::{
+        Alert, AlertKind, Button, DateTime, EntityHeader, Icon, IconName, MetaItem, icon_size,
+        ui::Dialog,
+    },
     features::oauth::{
         client,
         model::NO_CLIENTS,
@@ -33,21 +36,24 @@ pub fn ClientsPage() -> impl IntoView {
     });
     view! { <div class="space-y-6">
         <OAuthNav paths=paths.clone() />
-        <div class="flex flex-wrap items-center justify-between gap-4"><h2 class="text-xl font-semibold">"OAuth Clients"</h2><CreateClientDialog paths=paths.clone() /></div>
+        <div class="flex flex-wrap items-center justify-between gap-4"><h2 class="text-xl font-semibold">"OAuth Clients"</h2><div class="flex flex-wrap items-center gap-3"><button type="button" class=SECONDARY on:click=move |_| clients.refetch()><Icon name=IconName::Refresh size=icon_size::INLINE class="text-gray-400 dark:text-gray-500" />"Refresh"</button><CreateClientDialog paths=paths.clone() /></div></div>
         <p class="text-sm text-gray-500 dark:text-gray-400">"Organization owners and admins can manage clients. Client IDs are public identifiers; client types are fixed at creation."</p>
         <Suspense fallback=|| view! { <Loading message="Loading OAuth clients…" /> }>
             {move || match clients.get() {
                 Some(Ok(items)) if items.is_empty() => view! { <EmptyState title=NO_CLIENTS message="Create a client to configure an integration for this application." /> }.into_any(),
-                Some(Ok(items)) => view! { <div class="space-y-3">{items.into_iter().map(|item| view! {
-                    <A href=paths.client(&item.client_id) attr:class="block min-w-0 cursor-pointer rounded-lg border border-gray-200 bg-white p-5 shadow-sm hover:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-blue-500">
-                        <div class="flex flex-wrap items-center justify-between gap-3"><h3 class="break-words font-semibold">{item.name.clone()}</h3><span class="rounded-full bg-gray-100 px-3 py-1 text-xs dark:bg-gray-700">{item.status()}</span></div>
-                        <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-                            <div><dt class="text-xs text-gray-500 dark:text-gray-400">"Type"</dt><dd>{item.client_type.label()}</dd></div>
-                            <div class="min-w-0"><dt class="text-xs text-gray-500 dark:text-gray-400">"Client ID"</dt><dd class="break-all font-mono text-xs">{item.client_id}</dd></div>
-                            <div><dt class="text-xs text-gray-500 dark:text-gray-400">"Created"</dt><dd class="break-words text-xs">{item.created_at}</dd></div>
+                Some(Ok(items)) => view! { <div class="space-y-3">{items.into_iter().map(|item| {
+                    let status = item.status();
+                    let client_type = item.client_type.label();
+                    view! {
+                    <A href=paths.client(&item.client_id) attr:class="block min-w-0 cursor-pointer rounded-lg border border-gray-200 bg-white p-5 hover:border-gray-400 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-500 dark:hover:bg-gray-700/50">
+                        <EntityHeader icon=IconName::Clients navigable=true>{item.name.clone()}</EntityHeader>
+                        <dl class="mt-3">
+                            <MetaItem icon=IconName::Clients label="Type">{client_type}</MetaItem>
+                            <MetaItem icon=IconName::Info label="Status">{status}</MetaItem>
+                            <MetaItem icon=IconName::Calendar label="Created"><DateTime value=item.created_at /></MetaItem>
                         </dl>
                     </A>
-                }).collect_view()}</div> }.into_any(),
+                }}).collect_view()}</div> }.into_any(),
                 Some(Err(err)) => view! { <Alert kind=AlertKind::Error message=error_message(&err) /> }.into_any(),
                 None => view! { <Loading message="Loading OAuth clients…" /> }.into_any(),
             }}

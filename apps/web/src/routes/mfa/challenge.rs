@@ -10,7 +10,7 @@
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{Alert, AlertKind, Button, Icon, IconName, Spinner, icon_size},
     features::auth::{
         client,
         state::use_auth,
@@ -359,7 +359,7 @@ fn SecurityKeyButton(
                             on:click=move |_| { action.dispatch(()); }
                             class="w-full inline-flex justify-center items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 cursor-pointer"
                         >
-                            <span class="material-symbols-outlined text-base">"key"</span>
+                            <Icon name=IconName::KeyRound size=icon_size::CONTROL />
                             {move || if action.pending().get() {
                                 "Waiting for key..."
                             } else {

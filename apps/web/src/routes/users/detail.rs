@@ -1,9 +1,12 @@
-//! User detail route guarded by the auth gate. It fetches a single user record
-//! by id and relies on the backend for authorization.
+//! User detail route guarded by the auth gate. Copyable identifiers and readable
+//! UTC metadata keep the profile inspectable; authorization remains with the API.
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{
+        Alert, AlertKind, Button, CopyValue, DateTime, EmptyValue, Icon, IconName, MetaItem,
+        Spinner, icon_size,
+    },
     features::{
         auth::RequireAdmin,
         users::{client, types::UserDetail},
@@ -48,15 +51,17 @@ pub fn UserDetailPage() -> impl IntoView {
     view! {
         <RequireAdmin children=move || view! {
             <div class="space-y-6">
-                <div class="flex items-center gap-4">
+                <div class="flex flex-wrap items-center gap-4">
                     <A
                         href={paths::USERS}
                         {..}
-                        class="p-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        class="cursor-pointer p-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors"
+                        aria-label="Back to users"
+                        title="Back to users"
                     >
-                        <span class="material-symbols-outlined text-2xl">"arrow_back"</span>
+                        <Icon name=IconName::Back size=icon_size::CONTROL />
                     </A>
-                    <div class="space-y-1">
+                    <div class="min-w-0 flex-1 space-y-1">
                         <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
                             "User Detail"
                         </h1>
@@ -64,6 +69,11 @@ pub fn UserDetailPage() -> impl IntoView {
                             "Viewing detailed profile and metadata for this user."
                         </p>
                     </div>
+                    <button type="button" on:click=move |_| user.refetch()
+                        class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
+                        <Icon name=IconName::Refresh size=icon_size::INLINE />
+                        "Refresh"
+                    </button>
                 </div>
 
                 <Suspense fallback=move || view! { <Spinner /> }.into_any()>
@@ -84,46 +94,35 @@ pub fn UserDetailPage() -> impl IntoView {
 
 /// Displays a fetched user record and its platform-role action.
 fn render_user_detail(detail: UserDetail, on_success: Callback<()>) -> impl IntoView {
-    let display_name = detail
-        .display_name
-        .clone()
-        .unwrap_or_else(|| "Not set".to_string());
-    let locale = detail
-        .locale
-        .clone()
-        .unwrap_or_else(|| "Default".to_string());
-    let role = detail.role.clone().unwrap_or_else(|| "none".to_string());
+    let display_name = detail.display_name.clone();
+    let locale = detail.locale.clone();
+    let role = detail.role.clone().unwrap_or_else(|| "user".to_string());
     let operator_id = detail.id.clone();
     let operator_email = detail.email.clone();
+    let copy_id = detail.id.clone();
 
     view! {
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div class="lg:col-span-2 space-y-6">
+            <div class="min-w-0 lg:col-span-2 space-y-6">
                 <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                     <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
+                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
                             "Profile Information"
                         </h2>
                     </div>
-                    <div class="p-6 space-y-6">
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                            <div>
-                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Email Address"</label>
-                                <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{detail.email}</div>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Display Name"</label>
-                                <div class="mt-1 text-sm text-gray-900 dark:text-white">{display_name}</div>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Locale"</label>
-                                <div class="mt-1 text-sm text-gray-900 dark:text-white">{locale}</div>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Internal ID"</label>
-                                <div class="mt-1 text-xs font-mono text-gray-500 dark:text-gray-400">{detail.id.clone()}</div>
-                            </div>
-                        </div>
+                    <div class="grid min-w-0 gap-4 p-6 xl:grid-cols-2">
+                        <dl class="min-w-0">
+                            <MetaItem icon=IconName::Mail label="Email Address">{detail.email}</MetaItem>
+                            <MetaItem icon=IconName::Globe label="Locale">{locale.map_or_else(|| view! { <EmptyValue /> }.into_any(), IntoAny::into_any)}</MetaItem>
+                        </dl>
+                        <dl class="min-w-0">
+                            <MetaItem icon=IconName::Person label="Display Name">{display_name.map_or_else(|| view! { <EmptyValue /> }.into_any(), IntoAny::into_any)}</MetaItem>
+                        </dl>
+                        <dl class="min-w-0 xl:col-span-2">
+                            <MetaItem icon=IconName::Identifier label="Internal ID">
+                                <CopyValue value=copy_id label="user ID" compact=true />
+                            </MetaItem>
+                        </dl>
                     </div>
                 </div>
 
@@ -131,7 +130,7 @@ fn render_user_detail(detail: UserDetail, on_success: Callback<()>) -> impl Into
 
                 <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                     <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
+                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
                             "Platform Role"
                         </h2>
                     </div>
@@ -144,29 +143,34 @@ fn render_user_detail(detail: UserDetail, on_success: Callback<()>) -> impl Into
                     </div>
                 </div>
             </div>
-            <div class="space-y-6">
+            <div class="min-w-0 space-y-6">
                 <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                     <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">
+                        <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
                             "Metadata"
                         </h2>
                     </div>
-                    <div class="p-6 space-y-4">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Joined"</label>
-                            <div class="mt-1 text-xs text-gray-900 dark:text-white">{detail.created_at}</div>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">"Last Updated"</label>
-                            <div class="mt-1 text-xs text-gray-900 dark:text-white">{detail.updated_at}</div>
-                        </div>
-                    </div>
+                    <dl class="p-6">
+                        <MetaItem icon=IconName::Calendar label="Joined">
+                            <DateTime value=detail.created_at with_time=true />
+                        </MetaItem>
+                        <MetaItem icon=IconName::Clock label="Last Updated">
+                            <DateTime value=detail.updated_at with_time=true />
+                        </MetaItem>
+                        <MetaItem icon=IconName::SignIn label="Last Login">
+                            {detail.last_login_at.map_or_else(
+                                || view! { <EmptyValue text=if detail.login_tracking_complete == Some(true) { "Never" } else { "Not recorded" } /> }.into_any(),
+                                |value| view! { <DateTime value with_time=true /> }.into_any(),
+                            )}
+                        </MetaItem>
+                    </dl>
                 </div>
             </div>
         </div>
     }
 }
 
+/// Edits the platform role with the existing server-authorized action.
 #[component]
 fn RoleManager(user_id: String, current_role: String, on_success: Callback<()>) -> impl IntoView {
     let (selected_role, set_selected_role) = signal(current_role.clone());
@@ -191,9 +195,11 @@ fn RoleManager(user_id: String, current_role: String, on_success: Callback<()>) 
     });
 
     let roles = vec!["owner", "admin", "editor", "member"];
+    let role_label = current_role.clone();
 
     view! {
         <div class="space-y-4">
+            <dl><MetaItem icon=IconName::Shield label="Current role">{role_label}</MetaItem></dl>
             <div class="flex flex-col sm:flex-row sm:items-center gap-4">
                 <select
                     class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full sm:w-64 p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
@@ -202,6 +208,7 @@ fn RoleManager(user_id: String, current_role: String, on_success: Callback<()>) 
                     <option value="none" selected=move || selected_role.get() == "none" disabled=true>
                         "Select a role..."
                     </option>
+                    <option value="user" selected=move || selected_role.get() == "user" disabled=true>"USER (default)"</option>
                     {roles.into_iter().map(|r| {
                         let r_val = r.to_string();
                         view! {
@@ -226,7 +233,7 @@ fn RoleManager(user_id: String, current_role: String, on_success: Callback<()>) 
                 <Alert kind=AlertKind::Error message=error.get().map_or_else(String::new, |err| err.to_string()) />
             </Show>
 
-            <p class="text-xs text-gray-500">
+            <p class="text-xs text-gray-500 dark:text-gray-400">
                 "Warning: Changing platform roles affects global permissions for this user."
             </p>
         </div>

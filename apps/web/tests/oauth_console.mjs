@@ -19,12 +19,16 @@ const app='11111111-1111-4111-8111-111111111111';
 const clientId='22222222-2222-4222-8222-222222222222';
 const base=`/v1/orgs/crono/projects/jobs/envs/production/apps/${app}/oauth`;
 const route=`/console/orgs/crono/projects/jobs/envs/production/apps/${app}`;
-const time='2026-10-04T06:00:00Z';
+const time='2026-10-05T07:04:00Z';
 let clients=[];
 let organizationActive=true, projectActive=true, applicationActive=true;
 let memberRole='owner', delayCapabilities=false, failCapabilities=false;
 const orgId='33333333-3333-4333-8333-333333333333';
 const grantId='44444444-4444-4444-8444-444444444444';
+const profileId='a4ce5e44-b738-48dd-8c2e-0eb930aa0c8b';
+let sessionIsOperator=false;
+let unavailableMetadataPath=null, unavailableMetadataStatus=503;
+let lastLogin=time, loginTrackingComplete=true;
 let savedGrants=[{id:grantId,client_id:clientId,client_name:'Jobs reader',application_name:'Jobs application',organization_slug:'crono',organization_name:'Crono',scopes:['jobs:read','runs:read'],created_at:time}];
 let denyNextResourceDelete=false;
 let requireRecentOrgAuthentication=false;
@@ -53,15 +57,26 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/mfa/totp/enroll/start'){return send(200,{secret:'JBSWY3DPEHPK3PXP',qr_code_url:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E',credential_id:'test-enrollment'});}
   if(p==='/v1/auth/mfa/totp/enroll/finish'){assert.equal(input.code,'123456');sessionKind='full';return send(200,{codes:['TEST-RECOVERY-CODE']});}
   if(p==='/v1/auth/logout'&&req.method==='POST'){sessionKind='none';return send(204);}
-  if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:'test-user',email:'ui@example.test',is_operator:false,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
-  if(p==='/v1/me')return send(200,{id:'test-user',email:'ui@example.test',display_name:null,locale:null,created_at:time,updated_at:time,roles:[],scopes:[],mfa_enabled:true,totp_enabled:true});
+  if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:profileId,email:'ui@example.test',is_operator:sessionIsOperator,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
+  if(p==='/v1/me')return send(200,{id:profileId,email:'ui@example.test',display_name:null,locale:null,created_at:time,updated_at:time,roles:[],scopes:[],mfa_enabled:true,totp_enabled:true});
+  if(p==='/v1/auth/admin/status')return send(200,{bootstrap_open:false,operator:sessionIsOperator,cooldown_seconds:0});
+  if(p==='/v1/auth/admin/elevate'&&req.method==='POST'){assert(sessionIsOperator);return send(200,{admin_token:'fixture-ui-elevation',expires_at:new Date(Date.now()+600000).toISOString()});}
+  if(p==='/v1/users')return send(200,[{id:profileId,email:'profile@example.test',display_name:'Fixture profile'}]);
+  if(p===`/v1/users/${profileId}`)return send(200,{id:profileId,email:'profile@example.test',display_name:null,locale:'en-US',role:null,created_at:time,updated_at:time,last_login_at:lastLogin,login_tracking_complete:loginTrackingComplete});
+  if(p===`/v1/users/${profileId}/operator`)return send(200,{designation:'disabled',pending_enable:false,requested_by_me:false,requested_by_email:null,requested_reason:null,requested_at:null,can_approve:false});
+  if(p==='/v1/admin/orgs')return send(200,{items:[
+   {id:orgId,slug:'crono',name:'Crono',created_at:time,owners:[{user_id:profileId,email:'long-owner-'.repeat(6)+'@example.test',display_name:null},{user_id:clientId,email:'second-owner@example.test',display_name:'Second owner'}]},
+   {id:app,slug:'no-owners',name:'No owners',created_at:time,owners:[]},
+   {id:clientId,slug:'unknown-owners',name:'Unknown ownership',created_at:time}
+  ],next_cursor:null});
+  if(p===unavailableMetadataPath)return send(unavailableMetadataStatus,unavailableMetadataStatus===200?[]:'Fixture metadata unavailable.');
   if(p==='/v1/me/mfa/security-keys')return send(200,[{credential_id:'fixture-security-key',label:'Fixture hardware key',created_at:time,last_used_at:null}]);
   if(p==='/v1/me/webauthn/credentials')return send(200,{preview_mode:false,credentials:[{id:'fixture-passkey',label:'Fixture passkey',created_at:time,last_used_at:null}]});
   if(p==='/v1/me/webauthn/register/options'||p==='/v1/auth/opaque/reauth/start')return send(401,'Fixture password proof rejected.');
   if(p==='/v1/me/oauth/grants'&&req.method==='GET')return send(200,{grants:savedGrants,next_cursor:null});
   if(p===`/v1/me/oauth/grants/${grantId}`&&req.method==='DELETE'){savedGrants=[];return send(204);}
   if(p==='/v1/orgs/crono/capabilities'){if(delayCapabilities)await new Promise(resolve=>setTimeout(resolve,650));if(failCapabilities)return send(503,{error:{code:'unavailable',message:'Capability lookup unavailable.'}});return send(organizationActive?200:404,organizationActive?{organization_id:orgId,can_manage_resources:['owner','admin'].includes(memberRole),can_delete_organization:memberRole==='owner'}:undefined);}
-  if(p==='/v1/orgs')return send(200,organizationActive?[{id:'org',slug:'crono',name:'Crono',created_at:time}]:[]);
+  if(p==='/v1/orgs')return send(200,organizationActive?[{id:orgId,slug:'crono',name:'Crono',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects')return send(200,projectActive?[{id:'project',slug:'jobs',name:'Jobs',created_at:time}]:[]);
   if(p==='/v1/orgs/crono/projects/jobs/envs') {
    if(req.method==='GET')return send(200,environments);
@@ -172,9 +187,47 @@ try {
  await call('Runtime.enable');await call('Page.enable');await call('Page.bringToFront');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('permesi_logged_in','true');"});
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ const captureMetadata=async(name)=>{
+  for(const width of [1280,390]){
+   await call('Emulation.setDeviceMetricsOverride',{width,height:950,deviceScaleFactor:1,mobile:false});await delay(150);
+   assert(await evaluate(`document.documentElement.scrollWidth<=${width}`),`${name} metadata must fit ${width}px`);
+   assert(await evaluate("[...document.querySelectorAll('.metadata-row')].every(row=>{const label=row.querySelector('dt').getBoundingClientRect(),value=row.querySelector('dd').getBoundingClientRect();return value.left-label.right>=0 && value.left-label.right<=12;})"),`${name} must not contain stretched label/value gaps`);
+   assert(await evaluate("[...new Set([...document.querySelectorAll('.metadata-row')].map(row=>row.parentElement))].every(list=>getComputedStyle(list).rowGap==='8px'&&!/(^|\\s)space-y-/.test(list.className))"),`${name} metadata must use the shared 0.5rem row gap without dead spacing utilities`);
+   assert(await evaluate("[...document.querySelectorAll('.copy-value code button')].every(button=>{const code=button.closest('code'),walker=document.createTreeWalker(code,NodeFilter.SHOW_TEXT);let node,last;while(node=walker.nextNode())if(node.textContent.trim()&&!button.contains(node))last=node;if(!last)return false;const range=document.createRange();range.setStart(last,last.length-1);range.setEnd(last,last.length);const text=range.getBoundingClientRect(),icon=button.getBoundingClientRect();return Math.abs(icon.left-text.right-6)<=2&&icon.top<=text.bottom&&icon.bottom>=text.top;})"),`${name} copy icon must immediately follow the final characters even when wrapped`);
+   const image=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot(`permesi-${name}-${width===390?'mobile':'desktop'}.png`,Buffer.from(image.data,'base64'));
+  }
+  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ };
+ await goto('/console/me');await wait("document.querySelector('button[aria-label=\"Copy user ID\"]') && document.querySelectorAll('time').length===2");await captureMetadata('me-metadata');
+ assert(await evaluate("[...document.querySelectorAll('dd span.rounded')].filter(e=>e.textContent==='Not set').length===2"),'Missing profile values use neutral pills');
+ assert(await evaluate("['Joined','Last Updated'].every(label=>[...document.querySelectorAll('dt')].some(e=>e.textContent===label))"),'Profile timestamp labels match administrator user metadata');
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:950,deviceScaleFactor:1,mobile:false});
+ const profileCopyHeight=await evaluate("document.querySelector('.copy-value').getBoundingClientRect().height");
+ await evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw Error('Fixture clipboard denied')}}})");
+ await click('Copy user ID');await wait("document.querySelector('.copy-value [role=status]').innerText.trim()==='Copy failed. Select the value to copy it.'");
+ assert.equal(await evaluate("document.querySelector('.copy-value').getBoundingClientRect().height"),profileCopyHeight,'Failed compact copy must not move metadata');
+ await evaluate("navigator.clipboard.writeText=async value=>{window.profileCopiedValue=value}");
+ await click('Copy user ID');await wait("document.querySelector('.copy-value [role=status]').innerText.trim()==='Copied.'");
+ assert.equal(await evaluate('window.profileCopiedValue'),profileId,'Compact copy retains the full UUID after wrapping');
+ assert.equal(await evaluate("document.querySelector('.copy-value').getBoundingClientRect().height"),profileCopyHeight,'Successful compact copy must not move metadata');
+ await evaluate("delete navigator.clipboard");
+ await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ for(const [pathname,endpoint,label] of [
+  ['/console/orgs/crono','/v1/orgs','Organization metadata'],
+  ['/console/orgs/crono/projects/jobs','/v1/orgs/crono/projects','Project metadata'],
+  ['/console/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs/envs','Environment metadata'],
+ ]) {
+  for(const status of [503,200]) {
+   unavailableMetadataPath=endpoint;unavailableMetadataStatus=status;
+   await goto(`${pathname}?metadata_fixture=${status}`);
+   await wait(`location.pathname===${JSON.stringify(pathname)}&&location.search==='?metadata_fixture=${status}'&&document.querySelector('[aria-label="${label}"]')?.innerText==='Unavailable'`);
+   assert(!await evaluate(`document.querySelector('[aria-label="${label}"] [role=alert]')`),'Missing header metadata must not duplicate body error alerts');
+  }
+ }
+ unavailableMetadataPath=null;
  await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
  await goto('/console/me/connected-apps');await wait("document.body.innerText.includes('Jobs reader') && document.body.innerText.includes('runs:read')");
- assert(await evaluate("document.body.innerText.includes('Organization: Crono (crono)')"));
+ assert(await evaluate("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Organization' && !e.classList.contains('sr-only')) && document.body.innerText.includes('Crono (crono)')"));
  assert(!await evaluate("document.body.innerText.includes('platform:admin')"));
  await click('Revoke access');await wait("document.querySelector('dialog[open]') && document.body.innerText.includes('Already-issued access tokens remain valid until they expire.')");
  await click('Revoke access');await wait("document.body.innerText.includes('No saved application access on this page.')");
@@ -183,6 +236,7 @@ try {
  await goto('/console/orgs');await wait("document.body.innerText.includes('Crono')");
  assert.equal(await evaluate('window.PERMESI_CONFIG.token_base_url'),origin,'Admission requests must stay on the owned fixture origin');
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/console/orgs/crono')).click()");await wait("document.body.innerText.includes('Jobs')");
+ await wait("document.querySelector('button[aria-label=\"Copy organization ID\"]')");await captureMetadata('org-metadata');
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/projects/jobs')).click()");await wait("document.body.innerText.includes('Either tier can be created first.')");
  await click('New Environment');await wait("document.querySelector('#create-environment').open");
  assert.equal(await evaluate("document.querySelector('#environment-tier').value"),'non_production');
@@ -215,7 +269,7 @@ try {
  const assertNavigation=async(subsection)=>{
   assert.equal(await evaluate("document.querySelector('nav[aria-label=Application] a[aria-current=page]').getAttribute('aria-label')"),'OAuth Configuration');
   assert.equal(await evaluate("document.querySelector('nav[aria-label=\"OAuth configuration\"] a[aria-current=page]').getAttribute('aria-label')"),subsection);
-  assert(await evaluate("[...document.querySelectorAll('nav[aria-label=Application] a,nav[aria-label=\"OAuth configuration\"] a')].every(e=>e.querySelector('.material-symbols-outlined[aria-hidden=true]') && e.querySelector('span:last-child').textContent.trim())"),'Navigation must retain labels and decorative Material Symbols');
+  assert(await evaluate("[...document.querySelectorAll('nav[aria-label=Application] a,nav[aria-label=\"OAuth configuration\"] a')].every(e=>e.querySelector('span[aria-hidden=true] svg.lucide') && e.querySelector('span:last-child').textContent.trim())"),'Navigation must retain labels and decorative Lucide icons');
   assert(await evaluate("document.querySelector('nav[aria-label=Application]').classList.contains('border-b') && document.querySelector('nav[aria-label=\"OAuth configuration\"]').classList.contains('rounded-lg')"),'Primary tabs and secondary segmented navigation must differ');
  };
  await assertNavigation('Summary');
@@ -232,7 +286,20 @@ try {
  await assertNavigation('Clients');
  assert(!await evaluate("document.querySelector('#credential-heading')"),'Public clients must have no secret controls');
  assert(!await evaluate("document.body.innerText.includes('internal-row-id')"));
+ await evaluate("Object.defineProperty(navigator, 'clipboard', {configurable:true,value:{writeText:async(value)=>{window.copiedValue=value;}}})");
  await click('Copy');await wait("document.body.innerText.includes('Copied.')");
+ assert.equal(await evaluate('window.copiedValue'),clientId,'Clipboard must receive the entire original identifier');
+ assert(await evaluate(`document.querySelector('button[aria-label="Copy client ID"]').textContent.trim()==='Copy' && document.querySelector('button[aria-label="Copy client ID"] path')?.getAttribute('d')==='M20 6 9 17l-5-5' && [...document.querySelectorAll('time')].some(e=>e.getAttribute('datetime')===${JSON.stringify(time)} && e.textContent==='Oct 5, 2026 · 07:04 UTC' && e.title==='2026-10-05T07:04:00.000Z')`),'Client detail must retain labelled copy feedback and readable UTC metadata');
+ assert(await evaluate("[...document.querySelectorAll('dt')].filter(e=>['Client ID','Type','Status','Created'].includes(e.textContent)).every(e=>e.getClientRects().length && getComputedStyle(e).position!=='absolute')"),'Metadata labels must be visible');
+ await evaluate("navigator.clipboard.writeText=async()=>{throw new Error('Fixture clipboard denied')}");
+ await click('Copy');await wait("[...document.querySelectorAll('[role=status]')].some(e=>e.innerText.includes('Copy failed.') && e.getClientRects().length)");
+ assert(await evaluate("document.querySelector('button[aria-label=\"Copy client ID\"] path')?.getAttribute('d')!=='M20 6 9 17l-5-5'"),'A failed retry must remove previous success feedback');
+ await evaluate("delete navigator.clipboard");
+ await click('Clients');await wait("[...document.querySelectorAll('h3')].some(e=>e.textContent==='crono-web')");
+ assert(await evaluate(`(()=>{const card=[...document.querySelectorAll('a')].find(e=>e.getAttribute('href')===${JSON.stringify(`${route}/oauth/clients/${clientId}`)});return card && !card.querySelector('button') && !card.textContent.includes(${JSON.stringify(clientId)}) && card.querySelector('time')?.textContent==='Oct 5, 2026 · 07:04 UTC' && card.textContent.includes('Public') && card.textContent.includes('Active');})()`),'Client link cards must show names, type, status and readable dates without nested copy actions');
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});assert(await evaluate('document.documentElement.scrollWidth <= 390'),'OAuth client cards must fit narrow screens');
+ await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ await evaluate(`[...document.querySelectorAll('a')].find(e=>e.getAttribute('href')===${JSON.stringify(`${route}/oauth/clients/${clientId}`)}).click()`);await wait("document.body.innerText.includes('Allowed Scopes')");
  await fill('redirect-uri-input','https://EXAMPLE:443/a/../callback?x=%2f#fragment');await click('Add URI');await click('Save Redirect URIs');
  await wait("document.querySelector('#redirect-error').innerText.includes('invalid characters')");
  assert.equal(redirects.length,0);
@@ -267,7 +334,6 @@ try {
  const dark=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-oauth-ui-client-dark.png',Buffer.from(dark.data,'base64'));
  await call('Emulation.setEmulatedMedia',{features:[]});
  await click('Scopes');await wait("document.body.innerText.includes('No application scopes')");await assertNavigation('Scopes');
- assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(e=>e.getClientRects().length&&e.querySelector('.material-symbols-outlined')?.textContent==='edit').length"),0);
  assert(await evaluate("[...document.querySelectorAll('h3')].filter(e=>['openid','profile','email','address','phone','offline_access'].includes(e.textContent)).every(e=>!e.closest('div.rounded-lg').querySelector('button'))"),'System OIDC scopes must remain immutable');
  await click('+ Create Scope');await wait("document.querySelector('#create-oauth-scope').open");
  await fill('scope-resource','users');await fill('scope-action','invite');await click('Create Scope');await wait("document.querySelector('#create-scope-error').innerText.includes('reserved')");assert.equal(await evaluate("document.getElementById('scope-resource').value"),'users');
@@ -279,9 +345,11 @@ try {
  await click('Create Scope');await wait("document.body.innerText.includes('Read scheduled jobs')");
  assert.deepEqual(requests.find(value=>value.method==='POST'&&value.path===`${base}/scopes`).input,{name:'jobs:read',description:'Read scheduled jobs'});
  assert(await evaluate("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Resource' && e.nextElementSibling.textContent==='jobs') && [...document.querySelectorAll('dt')].some(e=>e.textContent==='Action' && e.nextElementSibling.textContent==='read')"),'Scope registry must show derived resource and action');
+ assert(await evaluate("[...document.querySelectorAll('h3')].find(e=>e.textContent==='jobs:read').closest('div.rounded-lg').querySelector('time').textContent==='Oct 5, 2026 · 07:04 UTC'"),'Scope registry dates must be readable');
  const scopeList=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-resource-action-scopes.png',Buffer.from(scopeList.data,'base64'));
  const scopeActions=()=>`(()=>{const row=[...document.querySelectorAll('h3')].find(e=>e.textContent==='jobs:read').closest('div.rounded-lg');return [...row.querySelectorAll('button')].filter(e=>!e.closest('dialog'));})()`;
- assert.deepEqual(await evaluate(`${scopeActions()}.map(e=>{const label=e.cloneNode(true);label.querySelectorAll('[aria-hidden=true]').forEach(n=>n.remove());return {label:label.textContent.trim(),icon:e.querySelector('.material-symbols-outlined[aria-hidden=true]')?.textContent};})`),[{label:'Edit',icon:'edit'},{label:'Delete',icon:'delete'}]);
+ assert.deepEqual(await evaluate(`${scopeActions()}.map(e=>{const label=e.cloneNode(true);label.querySelectorAll('[aria-hidden=true]').forEach(n=>n.remove());return {label:label.textContent.trim(),icon:!!e.querySelector('span[aria-hidden=true] svg.lucide')};})`),[{label:'Edit',icon:true},{label:'Delete',icon:true}]);
+ assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(e=>e.getClientRects().length&&/^(edit|delete)$/.test(e.textContent.trim())).length"),0,'Populated scopes must not expose lowercase icon ligature words');
  const scopeColors=await evaluate(`${scopeActions()}.map(e=>getComputedStyle(e).color)`);assert.notEqual(scopeColors[0],scopeColors[1],'Delete must visibly communicate destructive intent');
  await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:'dark'}]});await delay(100);
  assert.notEqual(await evaluate(`${scopeActions()}[1] && getComputedStyle(${scopeActions()}[1]).color`),scopeColors[1],'Destructive action must adapt to dark mode');
@@ -292,9 +360,9 @@ try {
  const scopeDarkMobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-scope-actions-dark-mobile.png',Buffer.from(scopeDarkMobile.data,'base64'));
 
  await evaluate(`${scopeActions()}[0].focus()`);assert(await evaluate(`document.activeElement===${scopeActions()}[0]`),'Edit action must accept keyboard focus');await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
- await wait("document.querySelector('#edit-scope-scope-api').open");assert.equal(await evaluate("document.querySelector('#edit-scope-scope-api h2 .material-symbols-outlined[aria-hidden=true]').textContent"),'edit');
+ await wait("document.querySelector('#edit-scope-scope-api').open");assert(await evaluate("!!document.querySelector('#edit-scope-scope-api h2 span[aria-hidden=true] svg.lucide')"));
  await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await wait("!document.querySelector('#edit-scope-scope-api').open");
- assert.equal(await evaluate('document.activeElement.textContent.replace("edit","").trim()'),'Edit','Escape must restore focus to scope action');
+ assert.equal(await evaluate('document.activeElement.textContent.trim()'),'Edit','Escape must restore focus to scope action');
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});await call('Emulation.setEmulatedMedia',{features:[]});
  await click('Edit');await wait("document.querySelector('#edit-scope-scope-api').open");await fill('scope-description-scope-api','Read jobs and execution history');await click('Save Description');await wait("document.body.innerText.includes('Read jobs and execution history')");
  await goto(`${route}/oauth/clients/${clientId}`);await wait("document.body.innerText.includes('Allowed Scopes')");
@@ -308,7 +376,7 @@ try {
  await click('Save Allowed Scopes');await wait("document.body.innerText.includes('Allowed scopes saved.')");assert(!allowed.includes('old.opaque'));registry=registry.filter(scope=>scope.name!=='old.opaque');
  const assignment=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});workspace.writeScreenshot('permesi-resource-action-assignment.png',Buffer.from(assignment.data,'base64'));
  mutationForbidden=true;await fill('client-edit-name','must-stay-draft');await click('Save Name');await wait("document.querySelector('#client-settings-error').innerText.includes('organization role')");assert.equal(await evaluate("document.getElementById('client-edit-name').value"),'must-stay-draft');mutationForbidden=false;
- await click('Scopes');await wait("document.body.innerText.includes('Read jobs and execution history')");await assertNavigation('Scopes');await evaluate(`${scopeActions()}[1].focus()`);await call('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',text:' ',windowsVirtualKeyCode:32});await call('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});await wait("document.querySelector('#delete-scope-scope-api').open");assert.equal(await evaluate("document.querySelector('#delete-scope-scope-api h2 .material-symbols-outlined[aria-hidden=true]').textContent"),'delete');
+ await click('Scopes');await wait("document.body.innerText.includes('Read jobs and execution history')");await assertNavigation('Scopes');await evaluate(`${scopeActions()}[1].focus()`);await call('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',text:' ',windowsVirtualKeyCode:32});await call('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});await wait("document.querySelector('#delete-scope-scope-api').open");assert(await evaluate("!!document.querySelector('#delete-scope-scope-api h2 span[aria-hidden=true] svg.lucide')"));
  assert(await evaluate("[...document.querySelectorAll('#delete-scope-scope-api button')].find(e=>e.textContent==='Delete Scope').disabled"));await fill('scope-confirmation-scope-api','jobs:read');await click('Delete Scope');await wait("document.body.innerText.includes('No application scopes')");assert(!allowed.includes('jobs:read'));
  await goto(`${route}/oauth/clients/${clientId}`);await wait("document.body.innerText.includes('Allowed Scopes')");await click('Delete Client');await wait("document.querySelector('#client-delete').open");
  assert(await evaluate("[...document.querySelectorAll('#client-delete button')].find(e=>e.textContent==='Delete Client').disabled"));await fill('delete-client-confirmation',clientId);await click('Delete Client');await wait("document.body.innerText.includes('No OAuth clients')");
@@ -330,6 +398,9 @@ try {
  assert(!await evaluate(`location.href.includes(${JSON.stringify(firstSecret)}) || Object.values(localStorage).concat(Object.values(sessionStorage)).some(value=>value.includes(${JSON.stringify(firstSecret)}))`),'Secret must never reach browser storage or URL');
  assert.equal(requests.filter(value=>value.method==='POST'&&value.path===`${base}/clients/${clientId}/secrets`).length,1);
  await click('I saved the secret');await wait("!document.querySelector('#client-secret-issue').open && !document.querySelector('#one-time-client-secret')");
+ await wait("document.querySelector('#credential-heading ~ div li time')");
+ assert(await evaluate("[...document.querySelectorAll('#credential-heading ~ div li time')].every(e=>e.textContent==='Oct 5, 2026 · 07:04 UTC' && e.title==='2026-10-05T07:04:00.000Z')"),'Credential creation metadata must display exact UTC times');
+ assert(await evaluate("!!document.querySelector('#credential-heading ~ div li button[aria-label=\"Copy credential ID\"][title=\"Copy credential ID\"]')"),'Credential identifiers must expose labelled compact copy controls');
  await click('Rotate Secret');await click('Confirm Issuance');await wait("document.querySelector('#one-time-client-secret')");
  assert.notEqual(await evaluate("document.querySelector('#one-time-client-secret').textContent"),firstSecret);
  await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
@@ -344,7 +415,7 @@ try {
  await delay(300);assert.equal(requests.filter(value=>value.method==='POST'&&value.path.endsWith('/secrets/rotate')).length,afterLost,'Ambiguous failures must not automatically retry');
  await click('Close dialog');await wait("!document.querySelector('#client-secret-issue').open");
  const retiringDeadline=secrets.find(value=>value.expires_at).expires_at;
- await evaluate("[...document.querySelectorAll('#credential-heading ~ div li')].find(e=>e.querySelector('p').textContent==='Current').querySelector('button').click()");
+ await evaluate("(()=>{const row=[...document.querySelectorAll('#credential-heading ~ div li')].find(e=>e.querySelector('p').textContent==='Current');[...row.querySelectorAll('button')].find(e=>e.textContent.trim()==='Revoke Secret').click();})()");
  await click('Confirm Revocation');await wait("!document.querySelector('#client-secret-revoke').open && [...document.querySelectorAll('button')].some(e=>e.textContent==='Create Secret')");
  await click('Create Secret');await click('Confirm Issuance');await wait("document.querySelector('#one-time-client-secret')");
  assert.equal(secrets.find(value=>value.expires_at).expires_at,retiringDeadline,'Recovery must preserve the original overlap deadline');
@@ -482,8 +553,24 @@ try {
  requireRecentOrgAuthentication=false;await confirmDeletion('Delete Organization','crono','/console/orgs');await wait("document.body.innerText.includes('No organizations')");
  assert(!organizationActive&&!projectActive&&!applicationActive&&environments.length===0);
  for(const endpoint of [route.replace('/console','/v1'),'/v1/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs','/v1/orgs/crono'])assert(requests.some(value=>value.method==='DELETE'&&value.path===endpoint&&value.input===null));
+ await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ sessionIsOperator=true;await goto('/console/admin/claim');await wait("document.querySelector('input[placeholder=\"s.xxxxx\"]')");
+ await evaluate("(()=>{const input=document.querySelector('input[placeholder=\"s.xxxxx\"]');input.value='fixture-step-up';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
+ await click('Elevate');await wait("document.body.innerText.includes('Admin token active until')");
+ await click('Global Users');await wait("document.body.innerText.includes('profile@example.test')");await click('profile@example.test');
+ await wait("document.body.innerText.includes('Profile Information') && document.body.innerText.includes('Designation') && document.querySelector('button[aria-label=\"Copy user ID\"]')");
+ await wait("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Last Login') && document.querySelectorAll('time').length===3");
+ await captureMetadata('user-metadata');
+ lastLogin=null;loginTrackingComplete=false;await click('Refresh');await wait("document.body.innerText.includes('Not recorded')");
+ assert(await evaluate("[...document.querySelectorAll('dd span.rounded')].some(e=>e.textContent==='Not recorded')"));
+ loginTrackingComplete=true;await click('Refresh');await wait("document.body.innerText.includes('Never')");
+ await click('Global Organizations');await wait("document.body.innerText.includes('Second owner')");
+ assert(await evaluate("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Owners') && ['None','Unavailable'].every(text=>[...document.querySelectorAll('dd span.rounded')].some(e=>e.textContent===text))"));
+ assert(await evaluate(`document.querySelector('a[href="/console/users/${profileId}"]')!==null`),'Owners link to user inspection');
+ assert.equal(await evaluate("document.querySelectorAll('article a button').length"),0);
+ await captureMetadata('admin-orgs-metadata');
  assert.deepEqual(exceptions,[]);
  assert.deepEqual(fixtureFailures,[]);
- console.log('Browser smoke passed: composed security settings, five rejected OPAQUE mutation proofs with unchanged factors, keyboard authenticator controls, connected-app consent display/revocation, Material Symbols with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
+ console.log('Browser smoke passed: composed security settings, five rejected OPAQUE mutation proofs with unchanged factors, keyboard authenticator controls, connected-app consent display/revocation, Lucide SVG icons with visible scope labels, keyboard/focus, dark/mobile checks, bottom-up typed resource deletion, immediate-child blockers with conflict refetch, recent-auth feedback, conflict retry and parent navigation, independent environment creation, production selection limits, environment error drafts, hierarchy, empty states, creation, public ID/copy, exact redirect bytes, rejected drafts, scope assignment/system immutability, name edits, lifecycle, typed deletion, role rejection, fixed 390px layout, dark mode, busy Escape/forced-close protection, queued-close reopening, independent navigation/icon states, disabled cursor, unchanged redirect save, resource/action composition and grouped assignment, opaque authorization login/MFA resume, enrollment recovery-code acknowledgement, malicious return-handle rejection, confidential one-time disclosure/copy/clearing, overlap rotation, revocation, response-loss recovery, and credential role rejection, no JS exceptions.');
  console.log('Browser screenshots: '+workspace.directory);
 } finally {socket?.close();browser.kill('SIGTERM');await delay(500);server.close();fs.rmSync(profile,{recursive:true,force:true});}

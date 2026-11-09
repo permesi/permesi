@@ -13,6 +13,14 @@
 - `check.sql` — post-bootstrap verification (run against `postgres`).
 - `reset_all.sql` — destructive reset for dev/test (run against `postgres`).
 
+`02_permesi.sql` adds nullable `users.last_login_at` and a per-user
+`last_login_tracking_since` marker, without ever inventing login times. Full
+OPAQUE/passkey login and completion of required MFA record UTC database time in the
+same transaction as session issuance; reauthentication of an existing full session,
+OAuth consent and refresh do not. Updates are monotonic even when an older transaction
+commits later.
+
+
 The OAuth foundation is additive in `02_permesi.sql`. Reapply that script to the
 existing Permesi database with the role that owns the existing Permesi tables and
 `ON_ERROR_STOP=1` before starting

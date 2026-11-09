@@ -244,9 +244,9 @@ fn assert_collection_metadata(tree: &Tree, path: &str, body: &Value) {
     };
     let metadata_only = |row: &Value| {
         row.as_object().is_some_and(|fields| {
-            fields
-                .keys()
-                .all(|key| ["id", "name", "slug", "tier", "created_at"].contains(&key.as_str()))
+            fields.keys().all(|key| {
+                ["id", "name", "slug", "tier", "created_at", "owners"].contains(&key.as_str())
+            })
         })
     };
     if let Some(items) = body.get("items").and_then(Value::as_array) {
@@ -261,4 +261,112 @@ fn assert_collection_metadata(tree: &Tree, path: &str, body: &Value) {
         assert_eq!(body.get("id"), Some(&json!(expected.to_string())));
         assert!(metadata_only(body));
     }
+}
+
+/// Owner metadata comes from current active memberships, not the organization creator.
+#[tokio::test]
+async fn admin_organizations_return_multiple_active_owners_and_empty_collections() -> Result<()> {
+    let f = Fixture::new().await?;
+    insert_member_role(&f.db.pool, f.foreign.org, f.operator, "owner").await?;
+    let removed = insert_active_user(&f.db.pool, "removed@inspection.test").await?;
+    insert_member_role(&f.db.pool, f.foreign.org, removed, "owner").await?;
+    sqlx::query("DELETE FROM org_memberships WHERE org_id=$1 AND user_id=$2")
+        .bind(f.foreign.org)
+        .bind(removed)
+        .execute(&f.db.pool)
+        .await?;
+    let suspended = insert_active_user(&f.db.pool, "suspended@inspection.test").await?;
+    insert_member_role(&f.db.pool, f.foreign.org, suspended, "owner").await?;
+    sqlx::query("UPDATE org_memberships SET status='suspended' WHERE user_id=$1")
+        .bind(suspended)
+        .execute(&f.db.pool)
+        .await?;
+    let member = insert_active_user(&f.db.pool, "member@inspection.test").await?;
+    sqlx::query("INSERT INTO org_memberships(org_id,user_id,status) VALUES($1,$2,'active')")
+        .bind(f.foreign.org)
+        .bind(member)
+        .execute(&f.db.pool)
+        .await?;
+    sqlx::query("DELETE FROM org_member_roles WHERE org_id=$1")
+        .bind(f.own.org)
+        .execute(&f.db.pool)
+        .await?;
+    let (status, body) = request(&f.router, &f.token, "GET", "/v1/admin/orgs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let items = body
+        .get("items")
+        .and_then(Value::as_array)
+        .context("organization page")?;
+    let foreign = items
+        .iter()
+        .find(|row| row.get("id") == Some(&json!(f.foreign.org.to_string())))
+        .context("foreign organization")?;
+    let owners = foreign
+        .get("owners")
+        .and_then(Value::as_array)
+        .context("owners")?;
+    assert_eq!(owners.len(), 2);
+    for user in [f.operator, f.ordinary] {
+        assert!(
+            owners
+                .iter()
+                .any(|owner| owner.get("user_id") == Some(&json!(user.to_string())))
+        );
+    }
+    assert!(
+        owners
+            .iter()
+            .all(|owner| owner.as_object().is_some_and(|fields| fields.len() == 3))
+    );
+    let own = items
+        .iter()
+        .find(|row| row.get("id") == Some(&json!(f.own.org.to_string())))
+        .context("own organization")?;
+    assert_eq!(own.get("owners"), Some(&json!([])));
+    assert_eq!(
+        request(&f.router, &f.ordinary_token, "GET", "/v1/admin/orgs", None)
+            .await?
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    Ok(())
+}
+
+/// Login history is additive, distinguishes legacy users, and never reaches ordinary callers.
+#[tokio::test]
+async fn admin_user_detail_exposes_recorded_login_and_tracking_coverage() -> Result<()> {
+    let f = Fixture::new().await?;
+    let path = format!("/v1/users/{}", f.ordinary);
+    let (status, body) = request(&f.router, &f.token, "GET", &path, None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("last_login_at").is_none());
+    assert_eq!(body.get("login_tracking_complete"), Some(&json!(true)));
+    sqlx::query(
+        "UPDATE users SET created_at=last_login_tracking_since-INTERVAL '1 day' WHERE id=$1",
+    )
+    .bind(f.ordinary)
+    .execute(&f.db.pool)
+    .await?;
+    let (_, body) = request(&f.router, &f.token, "GET", &path, None).await?;
+    assert_eq!(body.get("login_tracking_complete"), Some(&json!(false)));
+    sqlx::query("UPDATE users SET last_login_at='2026-01-02T03:04:05Z' WHERE id=$1")
+        .bind(f.ordinary)
+        .execute(&f.db.pool)
+        .await?;
+    let (_, body) = request(&f.router, &f.token, "GET", &path, None).await?;
+    assert_eq!(
+        body.get("last_login_at"),
+        Some(&json!("2026-01-02T03:04:05Z"))
+    );
+    let (status, _) = request(&f.router, &f.ordinary_token, "GET", &path, None).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    sqlx::query("INSERT INTO user_roles(user_id,role) VALUES($1,'editor')")
+        .bind(f.ordinary)
+        .execute(&f.db.pool)
+        .await?;
+    let (status, body) = request(&f.router, &f.ordinary_token, "GET", &path, None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("last_login_at").is_none());
+    assert!(body.get("login_tracking_complete").is_none());
+    Ok(())
 }

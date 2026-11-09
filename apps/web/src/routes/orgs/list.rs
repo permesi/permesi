@@ -1,9 +1,13 @@
 //! Organizations list route. Shows all tenants the user belongs to and allows
-//! administrators to create new ones.
+//! administrators to create new ones. Linked cards show wrapping slugs and readable
+//! creation dates; identifiers remain on detail pages to avoid nested controls.
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{
+        Alert, AlertKind, Button, DateTime, EntityHeader, Icon, IconName, MetaItem, Spinner,
+        icon_size,
+    },
     features::orgs::{
         client,
         types::{CreateOrgRequest, OrgResponse},
@@ -20,8 +24,8 @@ pub fn OrgsListPage() -> impl IntoView {
 
     view! {
         <div class="space-y-6">
-            <div class="flex items-center justify-between">
-                <div class="space-y-1">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="min-w-0 space-y-1">
                     <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
                         "Organizations"
                     </h1>
@@ -29,7 +33,17 @@ pub fn OrgsListPage() -> impl IntoView {
                         "Manage your tenants, projects, and environments."
                     </p>
                 </div>
-                <CreateOrgModal on_success=Callback::new(move |_| orgs.refetch()) />
+                <div class="flex flex-wrap items-center gap-3">
+                    <button
+                        type="button"
+                        on:click=move |_| orgs.refetch()
+                        class="inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+                    >
+                        <Icon name=IconName::Refresh size=icon_size::INLINE />
+                        "Refresh"
+                    </button>
+                    <CreateOrgModal on_success=Callback::new(move |_| orgs.refetch()) />
+                </div>
             </div>
 
             <Suspense fallback=move || view! { <Spinner /> }>
@@ -37,7 +51,7 @@ pub fn OrgsListPage() -> impl IntoView {
                     Some(Ok(list)) if list.is_empty() => {
                         view! {
                             <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                                <span class="material-symbols-outlined text-4xl text-gray-400">"corporate_fare"</span>
+                                <Icon name=IconName::Organizations size=icon_size::EMPTY class="text-gray-400 dark:text-gray-500" />
                                 <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No organizations"</h3>
                                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Get started by creating a new organization."</p>
                             </div>
@@ -54,22 +68,15 @@ pub fn OrgsListPage() -> impl IntoView {
                                             <A
                                                 href={paths::org_detail(&org.slug)}
                                                 {..}
-                                                class="block p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-500 transition-colors shadow-sm"
+                                                class="block min-w-0 cursor-pointer p-5 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors"
                                             >
-                                                <div class="flex items-start justify-between">
-                                                    <span class="material-symbols-outlined text-blue-600 dark:text-blue-400">
-                                                        "corporate_fare"
-                                                    </span>
-                                                    <span class="text-xs text-gray-400 dark:text-gray-500 uppercase font-mono tracking-wider">
-                                                        {org.slug}
-                                                    </span>
-                                                </div>
-                                                <h2 class="mt-4 text-lg font-medium text-gray-900 dark:text-white truncate">
-                                                    {org.name}
-                                                </h2>
-                                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                    "Created " {org.created_at}
-                                                </p>
+                                                <EntityHeader icon=IconName::Organizations navigable=true>{org.name}</EntityHeader>
+                                                <dl class="mt-3">
+                                                    <MetaItem icon=IconName::Tag label="Slug" mono=true>{org.slug}</MetaItem>
+                                                    <MetaItem icon=IconName::Calendar label="Created">
+                                                        <DateTime value=org.created_at />
+                                                    </MetaItem>
+                                                </dl>
                                             </A>
                                         }
                                     }
@@ -87,6 +94,7 @@ pub fn OrgsListPage() -> impl IntoView {
     }
 }
 
+/// Creates an organization using the existing form and server validation.
 #[component]
 fn CreateOrgModal(on_success: Callback<OrgResponse>) -> impl IntoView {
     let (is_open, set_is_open) = signal(false);
@@ -137,22 +145,22 @@ fn CreateOrgModal(on_success: Callback<OrgResponse>) -> impl IntoView {
     view! {
         <div>
             <Button on_click=move |_| set_is_open.set(true)>
-                <div class="flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base">"add"</span>
-                    "New Organization"
-                </div>
+                "New Organization"
             </Button>
 
             <Show when=move || is_open.get()>
                 <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
                     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
-                            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">"Create Organization"</h2>
+                        <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex items-start justify-between gap-3">
+                            <h2 class="min-w-0 break-words text-lg font-medium text-gray-900 dark:text-white">"Create Organization"</h2>
                             <button
                                 on:click=move |_| set_is_open.set(false)
-                                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                                type="button"
+                                class="shrink-0 cursor-pointer p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:ring-2 focus-visible:ring-blue-500 rounded dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                                aria-label="Close dialog"
+                                title="Close dialog"
                             >
-                                <span class="material-symbols-outlined">"close"</span>
+                                <Icon name=IconName::Cancel size=icon_size::CONTROL />
                             </button>
                         </div>
 
@@ -189,7 +197,7 @@ fn CreateOrgModal(on_success: Callback<OrgResponse>) -> impl IntoView {
                                 <button
                                     type="button"
                                     on:click=move |_| set_is_open.set(false)
-                                    class="px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
+                                    class="cursor-pointer px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
                                 >
                                     "Cancel"
                                 </button>

@@ -28,6 +28,14 @@ use storage::{Scope, Selector};
 /// A fixed protocol bound, matching the existing saved-consent pagination model.
 const PAGE_SIZE: usize = 50;
 
+/// Minimal owner identification; membership and role details remain private.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AdminOwner {
+    user_id: String,
+    email: String,
+    display_name: Option<String>,
+}
+
 /// Public resource metadata only; roles, credentials and OAuth configuration are absent.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdminMetadata {
@@ -38,6 +46,8 @@ pub struct AdminMetadata {
     slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owners: Option<Vec<AdminOwner>>,
 }
 
 /// A bounded collection with an opaque ordering reference, never an authority token.

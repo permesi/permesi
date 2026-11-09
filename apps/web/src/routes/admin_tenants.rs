@@ -2,12 +2,15 @@
 //!
 //! Flow Overview: the existing operator/elevation UI guard mounts an identity-keyed
 //! inspection page; metadata and a bounded child page come only from admin GET APIs.
-//! Navigation never mounts tenant edit/delete/OAuth controls. Account/path changes
-//! discard the previous page and cursor rather than retaining foreign cached state.
+//! Navigation never mounts tenant edit/delete/OAuth controls. Copyable identifiers and
+//! UTC dates aid inspection; account/path changes discard previous metadata and cursors.
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Spinner},
+    components::{
+        Alert, AlertKind, CopyValue, DateTime, EmptyValue, EntityHeader, Icon, IconName, MetaItem,
+        Spinner, icon_size,
+    },
     features::{
         admin_tenants::{self, Inspection, InspectionPath, Metadata},
         auth::{RequireAdmin, state::use_auth},
@@ -16,9 +19,8 @@ use crate::{
 use leptos::prelude::*;
 use leptos_router::{components::A, hooks::use_params, params::Params};
 
-const LINK: &str =
-    "cursor-pointer text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300";
-const BUTTON: &str = "cursor-pointer rounded border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-700";
+const LINK: &str = "cursor-pointer rounded text-gray-700 hover:text-blue-600 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-300 dark:hover:text-blue-400";
+const BUTTON: &str = "inline-flex cursor-pointer items-center gap-2 rounded border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-600 dark:hover:bg-gray-700";
 
 #[derive(Clone, PartialEq, Params)]
 struct InspectionParams {
@@ -93,9 +95,11 @@ fn InspectionPage(path: InspectionPath) -> impl IntoView {
             {breadcrumbs.into_iter().map(|(href, label)| view! { <A href attr:class=LINK>{label}</A> }).collect_view()}
         </nav>
         <div class="flex flex-wrap items-center justify-between gap-3">
-            <div><h1 class="break-words text-2xl font-semibold">{move || data.get().and_then(Result::ok).and_then(|value| value.metadata.map(|row| row.name)).unwrap_or_else(|| "Global Organizations".to_owned())}</h1>
+            <div class="min-w-0"><h1 class="break-words text-2xl font-semibold">{move || data.get().and_then(Result::ok).and_then(|value| value.metadata.map(|row| row.name)).unwrap_or_else(|| "Global Organizations".to_owned())}</h1>
                 <p class="text-sm text-gray-500 dark:text-gray-400">"Read-only platform inspection"</p></div>
-            <button class=BUTTON on:click=move |_| { history.set(Vec::new()); after.set(None); data.refetch(); }>"Refresh"</button>
+            <button type="button" class=BUTTON on:click=move |_| { history.set(Vec::new()); after.set(None); data.refetch(); }>
+                <Icon name=IconName::Refresh size=icon_size::INLINE />"Refresh"
+            </button>
         </div>
         <Suspense fallback=move || view! { <Spinner /> }>
             {move || match data.get() {
@@ -120,18 +124,26 @@ fn InspectionBody(
         .as_ref()
         .and_then(|page| page.next_cursor.clone());
     let collection = path.children();
+    let owner_detail = matches!(&path, InspectionPath::Organization(_));
+    let owner_cards = matches!(&path, InspectionPath::Organizations);
+    let child_icon = match &path {
+        InspectionPath::Organizations => IconName::Organizations,
+        InspectionPath::Organization(_) => IconName::Projects,
+        InspectionPath::Project(..) => IconName::Environments,
+        InspectionPath::Environment(..) | InspectionPath::Application(..) => IconName::Clients,
+    };
     view! {
-        {value.metadata.map(|metadata| view! { <MetadataFields metadata /> })}
+        {value.metadata.map(|metadata| view! { <MetadataFields metadata show_owners=owner_detail /> })}
         {value.page.map(|page| view! { <div class="space-y-4">
-            <h2 class="text-lg font-semibold">{collection.unwrap_or_default()}</h2>
-            {if page.items.is_empty() { view! { <p class="text-gray-500">"No active resources found."</p> }.into_any() }
+            <h2 class="text-lg font-medium">{collection.unwrap_or_default()}</h2>
+            {if page.items.is_empty() { view! { <p class="text-gray-500 dark:text-gray-400">"No active resources found."</p> }.into_any() }
             else { view! { <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {page.items.into_iter().map(|metadata| {
                     let href = path.child(&metadata).map(|child| child.console());
                     let name = metadata.name.clone();
                     view! { <article class="min-w-0 rounded-lg border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
-                        {href.map(|href| view! { <A href attr:class=LINK>{name}</A> })}
-                        <MetadataFields metadata />
+                        {href.map(|href| view! { <EntityHeader icon=child_icon><A href attr:class=LINK>{name}</A></EntityHeader> })}
+                        <MetadataFields metadata show_owners=owner_cards />
                     </article> }
                 }).collect_view()}
             </div> }.into_any() }}
@@ -147,11 +159,33 @@ fn InspectionBody(
 
 /// Shows only server-returned identity, classification and creation metadata as escaped text.
 #[component]
-fn MetadataFields(metadata: Metadata) -> impl IntoView {
-    view! { <dl class="mt-3 space-y-1 break-words text-sm text-gray-500 dark:text-gray-400">
-        <div><dt class="inline font-medium">"ID: "</dt><dd class="inline">{metadata.id}</dd></div>
-        {metadata.slug.map(|slug| view! { <div><dt class="inline font-medium">"Slug: "</dt><dd class="inline">{slug}</dd></div> })}
-        {metadata.tier.map(|tier| view! { <div><dt class="inline font-medium">"Tier: "</dt><dd class="inline">{tier}</dd></div> })}
-        <div><dt class="inline font-medium">"Created: "</dt><dd class="inline">{metadata.created_at}</dd></div>
+fn MetadataFields(metadata: Metadata, show_owners: bool) -> impl IntoView {
+    view! { <dl class="mt-3 min-w-0">
+        <MetaItem icon=IconName::Identifier label="ID">
+            <CopyValue value=metadata.id label="resource ID" compact=true />
+        </MetaItem>
+        {metadata.slug.map(|slug| view! { <MetaItem icon=IconName::Tag label="Slug" mono=true>{slug}</MetaItem> })}
+        {metadata.tier.map(|tier| view! { <MetaItem icon=IconName::Environments label="Tier">{tier}</MetaItem> })}
+        <MetaItem icon=IconName::Calendar label="Created">
+            <DateTime value=metadata.created_at />
+        </MetaItem>
+        {show_owners.then(|| {
+            let unavailable = metadata.owners.is_none();
+            let owners = metadata.owners.unwrap_or_default();
+            let label = if owners.len() > 1 { "Owners" } else { "Owner" };
+            view! { <MetaItem icon=IconName::Person label=label>
+                {if owners.is_empty() {
+                    view! { <EmptyValue text=if unavailable { "Unavailable" } else { "None" } /> }.into_any()
+                } else {
+                    view! { <span class="flex flex-wrap gap-x-3 gap-y-1">
+                        {owners.into_iter().map(|owner| {
+                            let href = crate::routes::paths::user_detail(&owner.user_id);
+                            let name = owner.display_name.filter(|name| !name.trim().is_empty()).unwrap_or(owner.email);
+                            view! { <span class="min-w-0 max-w-full break-all"><A href attr:class=LINK>{name}</A></span> }
+                        }).collect_view()}
+                    </span> }.into_any()
+                }}
+            </MetaItem> }
+        })}
     </dl> }
 }

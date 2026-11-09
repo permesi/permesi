@@ -1116,6 +1116,12 @@ async fn opaque_login_finish_rejects_wrong_password() -> Result<()> {
 
     assert_eq!(finish_response.status(), StatusCode::UNAUTHORIZED);
     assert!(finish_response.headers().get(SET_COOKIE).is_none());
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT last_login_at IS NULL FROM users WHERE email=$1")
+            .bind(email)
+            .fetch_one(&db.pool)
+            .await?
+    );
     Ok(())
 }
 
@@ -1597,5 +1603,46 @@ async fn password_change_fails_with_invalid_reauth() -> Result<()> {
     // A proof that does not match the server's login state is rejected as unauthorized.
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
+    Ok(())
+}
+
+/// An older transaction finishing later cannot replace a newer login; aborted issuance is invisible.
+#[tokio::test]
+async fn login_tracking_preserves_newer_timestamp_and_rolls_back_failed_issuance() -> Result<()> {
+    let db = TestDb::new()
+        .await?
+        .context("Login tracking regression requires PostgreSQL")?;
+    let user = insert_active_user(&db.pool, "login-history@example.test").await?;
+    let mut older = db.pool.begin().await?;
+    let old_time: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT NOW()")
+        .fetch_one(&mut *older)
+        .await?;
+    let mut newer = db.pool.begin().await?;
+    super::storage::insert_login_session_on(&mut newer, user, 300).await?;
+    newer.commit().await?;
+    let recorded: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT last_login_at FROM users WHERE id=$1")
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?;
+    assert!(recorded > old_time);
+    super::storage::insert_login_session_on(&mut older, user, 300).await?;
+    older.commit().await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            "SELECT last_login_at FROM users WHERE id=$1"
+        )
+        .bind(user)
+        .fetch_one(&db.pool)
+        .await?,
+        recorded
+    );
+    let other = insert_active_user(&db.pool, "aborted-login@example.test").await?;
+    let mut aborted = db.pool.begin().await?;
+    super::storage::insert_login_session_on(&mut aborted, other, 300).await?;
+    aborted.rollback().await?;
+    let state: (bool, i64) = sqlx::query_as("SELECT last_login_at IS NULL,(SELECT COUNT(*) FROM user_sessions WHERE user_id=$1) FROM users WHERE id=$1")
+        .bind(other).fetch_one(&db.pool).await?;
+    assert_eq!(state, (true, 0));
     Ok(())
 }

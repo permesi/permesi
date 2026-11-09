@@ -6,7 +6,7 @@
 use super::MfaAuthInput;
 use crate::{
     app_lib::{AppError, theme::Theme},
-    components::{Alert, AlertKind, Spinner},
+    components::{Alert, AlertKind, Icon, IconName, Spinner, icon_size},
     features::auth::{client as auth_client, opaque::reauthenticate, state::use_auth},
     routes::paths,
 };
@@ -52,9 +52,7 @@ pub(super) fn AuthenticatorSection(
                                                 <div class="group">
                                                     <div class=Theme::LIST_ITEM_FLAT>
                                                         <div class="flex items-center space-x-3">
-                                                            <span class=Theme::ICON_SMALL>
-                                                                "smartphone"
-                                                            </span>
+                                                            <Icon name=IconName::Device size=icon_size::CARD class=Theme::ICON />
                                                             <span class="text-sm text-gray-700 dark:text-gray-300 font-medium">
                                                                 "Authenticator app"
                                                             </span>
@@ -126,7 +124,7 @@ fn removal_form(state: RemovalForm) -> impl IntoView {
                                                                 }
                                                             >
                                                                 <div class="flex items-start space-x-3 mb-2">
-                                                                    <span class="material-symbols-outlined text-red-600 dark:text-red-400">"warning"</span>
+                                                                    <Icon name=IconName::Warning size=icon_size::CARD class="text-red-600 dark:text-red-400" />
                                                                     <p class="text-sm text-red-800 dark:text-red-200 font-medium">
                                                                         "Confirm removal of Authenticator app"
                                                                     </p>
@@ -188,10 +186,11 @@ fn authenticator_menu(set_show_delete_totp_form: WriteSignal<bool>) -> impl Into
             let (show_menu, set_show_menu) = signal(false);
             view! {
                     <span
-                        class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                        class="inline-flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none cursor-pointer dark:hover:bg-gray-700 dark:hover:text-gray-200"
                         role="button"
                         tabindex="0"
                         aria-label="Authenticator settings"
+                        title="Authenticator settings"
                         on:click=move |ev| {
                             ev.stop_propagation();
                             set_show_menu.update(|v| *v = !*v);
@@ -202,7 +201,7 @@ fn authenticator_menu(set_show_delete_totp_form: WriteSignal<bool>) -> impl Into
                             }
                         }
                     >
-                        <span class="material-symbols-outlined text-sm" aria-hidden="true">"settings"</span>
+                        <Icon name=IconName::Settings size=icon_size::INLINE />
                     </span>
 
                 <Show when=move || show_menu.get()>
@@ -218,7 +217,7 @@ fn authenticator_menu(set_show_delete_totp_form: WriteSignal<bool>) -> impl Into
                                 on:click=move |_| set_show_menu.set(false)
                                 class="flex w-full items-center px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
                             >
-                                <span class="material-symbols-outlined mr-3 text-sm" aria-hidden="true">"edit"</span>
+                                <Icon name=IconName::Edit size=icon_size::INLINE class="mr-3" />
                                 "Edit"
                             </leptos_router::components::A>
                             <button
@@ -231,7 +230,7 @@ fn authenticator_menu(set_show_delete_totp_form: WriteSignal<bool>) -> impl Into
                                 }
                                 class="flex w-full items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer text-left"
                             >
-                                <span class="material-symbols-outlined mr-3 text-sm" aria-hidden="true">"delete"</span>
+                                <Icon name=IconName::Delete size=icon_size::INLINE class="mr-3" />
                                 "Delete"
                             </button>
                         </div>

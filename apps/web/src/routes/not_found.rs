@@ -1,6 +1,6 @@
 //! Minimalistic and clean 404 page for unknown or unauthorized routes.
 
-use crate::components::layout::AppShell;
+use crate::components::{Icon, IconName, icon_size, layout::AppShell};
 use crate::features::auth::state::use_auth;
 use crate::routes::paths;
 use leptos::prelude::*;
@@ -53,7 +53,7 @@ pub fn NotFoundContent() -> impl IntoView {
                         {..}
                         class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800 transition-all"
                     >
-                        <span class="material-symbols-outlined mr-2 text-base">"home"</span>
+                        <Icon name=IconName::Home size=icon_size::INLINE class="mr-2" />
                         "Go Home"
                     </A>
                     <button
@@ -66,7 +66,7 @@ pub fn NotFoundContent() -> impl IntoView {
                         }
                         class="inline-flex items-center px-5 py-2.5 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700 transition-all cursor-pointer"
                     >
-                        <span class="material-symbols-outlined mr-2 text-base">"arrow_back"</span>
+                        <Icon name=IconName::Back size=icon_size::INLINE class="mr-2" />
                         "Go Back"
                     </button>
                 </div>

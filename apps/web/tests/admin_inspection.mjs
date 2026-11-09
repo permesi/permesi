@@ -73,13 +73,38 @@ try {
  await evaluate(`(${card}).click()`);
  await wait(text('foreign-owned'));await readonly();
  assert(await evaluate(text('operator-owned')));
+ assert(await evaluate(`document.querySelector('section[aria-label="Read-only platform inspection"] article h3 a')!==null`),'Resource names should remain the primary card links');
+ assert(await evaluate(`document.querySelector('section[aria-label="Read-only platform inspection"] time[datetime][title]')!==null`),'Creation dates should expose their exact timestamp');
+ assert(await evaluate(`document.querySelector('section[aria-label="Read-only platform inspection"] button[aria-label="Copy resource ID"]')!==null`),'Inspection identifiers should remain complete and copyable');
+ assert.equal(await evaluate(`document.querySelectorAll('section[aria-label="Read-only platform inspection"] a button').length`),0,'Copy actions must not be nested inside navigation links');
+ assert(await evaluate("[...document.querySelectorAll('article dt')].filter(e=>e.textContent==='Owner').length>=2"),'Organizations expose current owner memberships');
+ assert(await evaluate("[...document.querySelectorAll('article dd a')].some(e=>new URL(e.href).pathname.startsWith('/console/users/'))"),'Owner identities link to administrator user inspection');
+ const childIcons=new Set([await evaluate("document.querySelector('article h3')?.previousElementSibling?.querySelector('svg')?.innerHTML")]);
+ for(const width of [1280,390]) {
+  await call('Emulation.setDeviceMetricsOverride',{width,height:950,deviceScaleFactor:1,mobile:false});await delay(150);
+  assert(await evaluate(`document.documentElement.scrollWidth<=${width}`),'Owner metadata must wrap without horizontal scrolling');
+  const image=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  workspace.writeScreenshot(`permesi-admin-orgs-real-${width}.png`,Buffer.from(image.data,'base64'));
+ }
+ await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
  await clickButton('Next');await wait(`!${text('foreign-owned')}&&${text('Page organization')}`);
  await clickButton('Previous');await wait(text('foreign-owned'));
  const org='/console/admin/orgs/foreign-owned';
  const project=org+'/projects/main';const environment=project+'/envs/test';
  for(const [href,label] of [[org,'Main project'],[project,'Test environment'],[environment,'Application'],[environment+'/apps/'+application,application]]) {
-  await clickLink(href);await wait(text(label));await readonly();
+  await clickLink(href);
+  await wait(label===application
+   ? `[...document.querySelectorAll('.copy-value code')].some(e=>e.textContent===${JSON.stringify(application)})`
+   : text(label));
+  await readonly();
+  if(label!==application) {
+   await wait(`location.pathname===${JSON.stringify(href)}&&document.querySelector('article h3')`);
+   const icon=await evaluate("document.querySelector('article h3').previousElementSibling.querySelector('svg').innerHTML");
+   assert(!childIcons.has(icon),'Each child resource kind must use its own hierarchy icon');
+   childIcons.add(icon);
+  }
  }
+ assert.equal(childIcons.size,4,'Organization, project, environment and application cards have distinct icons');
  await wait(text('Application <img'));
  assert.equal(await evaluate(`document.querySelectorAll('section[aria-label="Read-only platform inspection"] img').length`),0,'Metadata must remain text rather than interpreted HTML');
  assert(!await evaluate("window.__inspectionXss===true"),'Untrusted metadata must not execute before navigation');
@@ -96,6 +121,7 @@ try {
  assert(!await evaluate("window.__inspectionXss===true"),'Other users metadata must be rendered as escaped text');
  assert.equal(inspectionWrites,0);assert.equal(exceptions.length,0,'No browser runtime exceptions');
  console.log('admin inspection browser passed');
+ console.log('Admin inspection screenshots: '+workspace.directory);
 } finally {
  socket?.close();browser.kill('SIGTERM');await delay(150);if(browser.exitCode===null)browser.kill('SIGKILL');
  await new Promise(resolve=>browser.exitCode!==null?resolve():browser.once('exit',resolve));

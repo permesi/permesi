@@ -6,7 +6,7 @@
 use super::MfaAuthInput;
 use crate::{
     app_lib::{AppError, theme::Theme},
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{Alert, AlertKind, Button, Icon, IconName, Spinner, icon_size},
     features::auth::{client as auth_client, opaque::reauthenticate},
 };
 use leptos::{ev::SubmitEvent, prelude::*};
@@ -44,9 +44,7 @@ pub(super) fn RecoveryCodesSection(email: StoredValue<String>, enabled: bool) ->
                                             <div class=Theme::ROW>
                                                 <div class="flex items-center justify-between">
                                                     <div class="flex items-center space-x-3">
-                                                        <span class=Theme::ICON>
-                                                            "settings_backup_restore"
-                                                        </span>
+                                                        <Icon name=IconName::Recovery size=icon_size::CARD class=Theme::ICON />
                                                         <div>
                                                             <p class="text-sm font-medium text-gray-900 dark:text-white">
                                                                 "Recovery codes"

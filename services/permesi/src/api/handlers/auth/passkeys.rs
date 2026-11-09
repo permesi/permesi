@@ -19,7 +19,8 @@ use crate::api::handlers::{
         mfa::{self, MfaState},
         session::session_cookie_with_ttl,
         storage::{
-            insert_mfa_bootstrap_session_on, insert_mfa_challenge_session_on, insert_session_on,
+            insert_login_session_on, insert_mfa_bootstrap_session_on,
+            insert_mfa_challenge_session_on,
         },
         utils::extract_client_ip,
         zero_token::{require_zero_token, zero_token_error_response},
@@ -295,9 +296,9 @@ async fn verify_passkey_assertion<'a>(
     let mut guard = super::operations::begin(pool, timeout_ms)
         .await
         .map_err(|_| Box::new(login_storage_error()))?;
-    // Lock identity before credential, consistently with password/status mutation paths.
+    // Serialize identity writers before credential locks; login history must not upgrade shared locks.
     let status = sqlx::query_scalar::<_, String>(
-        "SELECT status::text FROM users WHERE id=$1 AND authentication_not_before<$2 FOR SHARE",
+        "SELECT status::text FROM users WHERE id=$1 AND authentication_not_before<$2 FOR NO KEY UPDATE",
     )
     .bind(user_id)
     .bind(created_at)
@@ -471,7 +472,7 @@ async fn create_session_token(
         }
         MfaState::Disabled => {
             let ttl = auth_state.config().session_ttl_seconds();
-            (insert_session_on(connection, user_id, ttl).await, ttl)
+            (insert_login_session_on(connection, user_id, ttl).await, ttl)
         }
     };
     Ok((token.map_err(|_| Box::new(login_storage_error()))?, ttl))

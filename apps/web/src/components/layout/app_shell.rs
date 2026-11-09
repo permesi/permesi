@@ -2,7 +2,7 @@
 //! header markup and the mobile menu toggle so routes can focus on content.
 //! Navigation remains client-side; backend routes must enforce access control.
 
-use crate::components::layout::Sidebar;
+use crate::components::{Icon, IconName, icon_size, layout::Sidebar};
 use crate::features::auth::{client, state::use_auth};
 use crate::routes::paths;
 use leptos::{prelude::*, task::spawn_local};
@@ -273,9 +273,7 @@ fn HeaderNavigation(
                                             }
                                         >
                                             "Sign Out"
-                                            <span class="material-symbols-outlined text-base">
-                                                "logout"
-                                            </span>
+                                            <Icon name=IconName::SignOut size=icon_size::INLINE />
                                         </button>
                                     </div>
                                 </Show>

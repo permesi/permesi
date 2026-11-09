@@ -7,7 +7,7 @@
 use super::webauthn_supported;
 use crate::{
     app_lib::{AppError, theme::Theme},
-    components::{Alert, AlertKind, Spinner},
+    components::{Alert, AlertKind, Icon, IconName, Spinner, icon_size},
     features::{
         auth::{token, webauthn},
         passkeys::{
@@ -78,9 +78,7 @@ pub(super) fn CreatePasskeyControl(
             <div class=Theme::ROW>
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-3">
-                        <span class=Theme::ICON>
-                            "fingerprint"
-                        </span>
+                        <Icon name=IconName::Authentication size=icon_size::CARD class=Theme::ICON />
                         <div>
                             <p class="text-sm font-medium text-gray-900 dark:text-white">
                                 "Passkeys"

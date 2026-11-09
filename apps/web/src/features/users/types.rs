@@ -20,6 +20,8 @@ pub struct UserDetail {
     pub role: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub last_login_at: Option<String>,
+    pub login_tracking_complete: Option<bool>,
 }
 
 /// Server-issued operator designation state; browser controls are only UX hints.

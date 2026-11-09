@@ -12,7 +12,7 @@ use leptos_router::hooks::use_navigate;
 
 use crate::{
     app_lib::AppError,
-    components::ui::Dialog,
+    components::{Icon, IconName, icon_size, ui::Dialog},
     features::{
         oauth::paths::{ApplicationPaths, EnvironmentPaths},
         orgs::client,
@@ -164,14 +164,14 @@ pub(super) fn DeleteResource(
                 <p id="resource-delete-blocker" class="text-sm text-gray-600 dark:text-gray-300" aria-live="polite">{move || child_blocker.get().unwrap_or_default()}</p>
                 <button type="button" class=DESTRUCTIVE aria-describedby="resource-delete-blocker" disabled=move || child_blocker.get().is_some() || busy.get()
                     on:click=move |_| { state.error.set(String::new()); state.begin(); }>
-                    <span class="material-symbols-outlined" aria-hidden="true">"delete"</span>{title}
+                    <Icon name=IconName::Delete size=icon_size::INLINE />{title}
                 </button>
             </section>
         </Show>
         <Show when=move || !state.open.get() && !state.error.get().is_empty()>
             <p role="alert" class="text-sm text-red-700 dark:text-red-300">{move || state.error.get()}</p>
         </Show>
-        <Dialog id="delete-resource" title=title icon="delete" open=state.open busy=busy>
+        <Dialog id="delete-resource" title=title icon=IconName::Delete open=state.open busy=busy>
             <form class="space-y-4" on:keydown=move |ev: leptos::ev::KeyboardEvent| {
                 if ev.key() == "Enter" && ev.repeat() { ev.prevent_default(); }
             } on:submit=move |ev| {

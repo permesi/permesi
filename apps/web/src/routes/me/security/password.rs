@@ -5,7 +5,7 @@
 
 use crate::{
     app_lib::{AppError, config::AppConfig, theme::Theme},
-    components::{Alert, AlertKind, Button, Spinner},
+    components::{Alert, AlertKind, Button, Icon, IconName, Spinner, icon_size},
     features::auth::{
         client as auth_client,
         opaque::{OpaqueSuite, crypto_rng, identifiers, ksf, normalize_email, reauthenticate},
@@ -70,9 +70,7 @@ pub(super) fn PasswordSection(email: StoredValue<String>, configured: bool) -> i
                                         <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class=Theme::ICON>
-                                                        "password"
-                                                    </span>
+                                                    <Icon name=IconName::Credentials size=icon_size::CARD class=Theme::ICON />
                                                     <div>
                                                         <p class="text-sm font-medium text-gray-900 dark:text-white">
                                                             "Password"

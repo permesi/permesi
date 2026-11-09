@@ -9,7 +9,10 @@ use super::common::{
     application_context, error_message,
 };
 use crate::{
-    components::{Alert, AlertKind, Button, ui::Dialog},
+    components::{
+        Alert, AlertKind, Button, DateTime, EntityHeader, Icon, IconName, MetaItem, icon_size,
+        ui::Dialog,
+    },
     features::oauth::{
         client,
         model::{NO_APPLICATION_SCOPES, application_scopes_empty},
@@ -34,14 +37,14 @@ pub fn ScopesPage() -> impl IntoView {
     });
     let changed = Callback::new(move |()| scopes.refetch());
     view! { <div class="space-y-6"><OAuthNav paths=paths.clone() />
-        <div class="flex flex-wrap items-center justify-between gap-4"><h2 class="text-xl font-semibold">"OAuth Scopes"</h2><CreateScopeDialog paths=paths.clone() changed=changed /></div>
+        <div class="flex flex-wrap items-center justify-between gap-4"><h2 class="text-xl font-semibold">"OAuth Scopes"</h2><div class="flex flex-wrap items-center gap-3"><button type="button" class=SECONDARY on:click=move |_| scopes.refetch()><Icon name=IconName::Refresh size=icon_size::INLINE class="text-gray-400 dark:text-gray-500" />"Refresh"</button><CreateScopeDialog paths=paths.clone() changed=changed /></div></div>
         <p class="text-sm text-gray-500 dark:text-gray-400">"Delegated scopes describe what clients may request for this application. They are separate from Permesi administrator permissions. System OIDC scopes are read-only. Organization owners and admins can manage application scopes."</p>
         <Suspense fallback=|| view! { <Loading message="Loading OAuth scopes…" /> }>
             {move || match scopes.get() {
                 Some(Ok(items)) => {
                     let no_application_scopes = application_scopes_empty(&items);
                     view! { <div class="space-y-4">
-                        <Show when=move || no_application_scopes><EmptyState title=NO_APPLICATION_SCOPES message="Create delegated API scopes such as jobs:read. OIDC protocol scopes are provided by the server." /></Show>
+                        <Show when=move || no_application_scopes><EmptyState title=NO_APPLICATION_SCOPES message="Create delegated API scopes such as jobs:read. OIDC protocol scopes are provided by the server." icon=IconName::Scopes /></Show>
                         {items.into_iter().map(|scope| view! { <ScopeRow paths=paths.clone() scope=scope changed=changed /> }).collect_view()}
                     </div> }.into_any()
                 },
@@ -59,14 +62,27 @@ fn ScopeRow(paths: ApplicationPaths, scope: ScopeResponse, changed: Callback<()>
     let semantics = ApplicationScopeParts::from_scope(&scope).map(|parts| {
         let resource = parts.resource.to_owned();
         let action = parts.action.to_owned();
-        view! { <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-            <div><dt class="text-xs text-gray-500 dark:text-gray-400">"Resource"</dt><dd class="break-all">{resource}</dd></div>
-            <div><dt class="text-xs text-gray-500 dark:text-gray-400">"Action"</dt><dd class="break-all">{action}</dd></div>
-        </dl> }
+        view! {
+            <MetaItem icon=IconName::Scopes label="Resource" mono=true>{resource}</MetaItem>
+            <MetaItem icon=IconName::Tag label="Action" mono=true>{action}</MetaItem>
+        }
     });
-    view! { <div class=CARD><div class="flex flex-wrap items-start justify-between gap-4"><div class="min-w-0"><h3 class="break-all font-mono font-medium">{scope.name.clone()}</h3><p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{scope.kind_label()}</p><p class="mt-3 break-words text-sm text-gray-600 dark:text-gray-300">{scope.description.clone()}</p></div>
-        {if editable { view! { <ScopeControls paths=paths scope=scope changed=changed /> }.into_any() } else { view! { <span class="text-xs text-gray-500 dark:text-gray-400">"Read-only"</span> }.into_any() }}
-    </div>{semantics}</div> }
+    let created_at = scope.created_at.clone();
+    let name = scope.name.clone();
+    let kind = scope.kind_label();
+    let description = scope.description.clone();
+    view! { <div class=CARD>
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0 grow basis-40"><EntityHeader icon=IconName::Scopes>{name}</EntityHeader></div>
+            {if editable { view! { <ScopeControls paths=paths scope=scope changed=changed /> }.into_any() } else { view! { <span class="text-xs text-gray-500 dark:text-gray-400">"Read-only"</span> }.into_any() }}
+        </div>
+        <p class="mt-3 break-words text-sm text-gray-600 dark:text-gray-300">{description}</p>
+        <dl class="mt-3">
+            <MetaItem icon=IconName::Info label="Type">{kind}</MetaItem>
+            {semantics}
+            <MetaItem icon=IconName::Calendar label="Created"><DateTime value=created_at /></MetaItem>
+        </dl>
+    </div> }
 }
 
 /// Creates only backend-supported name/description fields and retains invalid drafts.
@@ -166,9 +182,9 @@ fn ScopeControls(
     let confirmation_id = format!("scope-confirmation-{}", scope.id);
     let edit_error_id = format!("scope-error-{}", scope.id);
     let delete_error_id = format!("scope-delete-error-{}", scope.id);
-    view! { <div class="flex gap-2">
-        <button type="button" class=format!("inline-flex items-center gap-2 {SECONDARY}") on:click=move |_| { error.set(String::new()); edit_open.set(true); }><span class="material-symbols-outlined text-base" aria-hidden="true">"edit"</span>"Edit"</button><button type="button" class=DESTRUCTIVE on:click=move |_| { confirmation.set(String::new()); delete_error.set(String::new()); delete_open.set(true); }><span class="material-symbols-outlined text-base" aria-hidden="true">"delete"</span>"Delete"</button>
-        <Dialog id=format!("edit-scope-{}", scope.id) title="Edit Scope Description" icon="edit" open=edit_open busy=edit.pending()>
+    view! { <div class="flex flex-wrap gap-2">
+        <button type="button" class=format!("inline-flex items-center gap-2 {SECONDARY}") on:click=move |_| { error.set(String::new()); edit_open.set(true); }><Icon name=IconName::Edit size=icon_size::INLINE />"Edit"</button><button type="button" class=DESTRUCTIVE on:click=move |_| { confirmation.set(String::new()); delete_error.set(String::new()); delete_open.set(true); }><Icon name=IconName::Delete size=icon_size::INLINE />"Delete"</button>
+        <Dialog id=format!("edit-scope-{}", scope.id) title="Edit Scope Description" icon=IconName::Edit open=edit_open busy=edit.pending()>
             <form class="space-y-4" on:submit=move |ev| { ev.prevent_default(); if !edit.pending().get_untracked() { error.set(String::new()); edit.dispatch(description.get_untracked()); } }>
                 <code class="block break-all text-sm">{name.get_value()}</code><label for=description_id.clone() class=LABEL>"Description"</label>
                 <textarea id=description_id class=INPUT rows="3" maxlength="2048" prop:value=move || description.get() disabled=move || edit.pending().get() aria-describedby=edit_error_id.clone() on:input=move |ev| description.set(event_target_value(&ev)) />
@@ -176,7 +192,7 @@ fn ScopeControls(
                 <div class="flex justify-end gap-3"><button type="button" class=SECONDARY disabled=move || edit.pending().get() on:click=move |_| edit_open.set(false)>"Cancel"</button><Button button_type="submit" disabled=edit.pending()>{move || if edit.pending().get() { "Saving…" } else { "Save Description" }}</Button></div>
             </form>
         </Dialog>
-        <Dialog id=format!("delete-scope-{}", scope.id) title="Delete OAuth Scope" icon="delete" open=delete_open busy=delete.pending()>
+        <Dialog id=format!("delete-scope-{}", scope.id) title="Delete OAuth Scope" icon=IconName::Delete open=delete_open busy=delete.pending()>
             <form class="space-y-4" on:submit=move |ev| { ev.prevent_default(); if confirmation.get_untracked() == name.get_value() && !delete.pending().get_untracked() { delete.dispatch(()); } }>
                 <p class="text-sm">"Deleting this scope removes it from client allow-lists and saved grants. Creating the same name later will not restore those assignments."</p>
                 <label for=confirmation_id.clone() class=LABEL>"Type the scope name to confirm"</label><code class="block break-all">{name.get_value()}</code>

@@ -100,9 +100,22 @@ responses after route/account changes are ignored. Password fields clear on ever
 attempt, cancellation and unmount; passwords are absent from URLs, storage and logs.
 Browser checks remain usability hints, and the backend enforces current state.
 
-OAuth scope actions use the existing Material Symbols `edit` and `delete` alongside
-visible labels. Delete has destructive light/dark styling and both actions remain
-keyboard accessible. System OIDC entries remain read-only.
+Console cards emphasize names with muted entity icons and a header divider.
+Shared `MetaItem` rows use three section-wide subgrid tracks
+(`1rem max-content minmax(0, 1fr)`): fixed icon, content-sized visible label and
+wrapping value, with a 0.5rem row gap. Copy buttons follow the final value chunk
+inline inside the `dd`, not in a trailing action column. Labels align without wide
+empty columns or stretched label/value gaps; missing values read “Not set” or “None”.
+`DateTime` defaults to
+`Oct 5, 2026 · 07:04 UTC`, retaining exact ISO in `datetime` and `title`; invalid
+input remains unchanged. `CopyValue` copies complete values through named,
+keyboard-accessible controls with reserved success feedback and visible failures.
+Whole-card links contain no interactive copy controls; identifiers remain available
+on detail pages. One-time secret disclosure and its dismissal rules are unchanged.
+Refresh actions reuse existing resources without retrying mutations or resetting
+configuration drafts. OAuth scope Edit/Delete actions retain visible labels and
+semantic icons; Delete has destructive light/dark styling, both remain keyboard
+accessible, and system OIDC entries remain read-only.
 
 The current phase adds no restore, purge, resource move or recursive cascade API.
 Token issuance and rotating refresh families are implemented in the separate OAuth

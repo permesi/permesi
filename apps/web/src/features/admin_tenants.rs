@@ -115,6 +115,14 @@ impl InspectionPath {
     }
 }
 
+/// Public owner identification returned only by the administrator inspection API.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Owner {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Metadata {
     pub id: String,
@@ -122,6 +130,7 @@ pub struct Metadata {
     pub created_at: String,
     pub slug: Option<String>,
     pub tier: Option<String>,
+    pub owners: Option<Vec<Owner>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

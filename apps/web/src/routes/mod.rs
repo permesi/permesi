@@ -31,7 +31,10 @@ pub(crate) use signup::SignUpPage;
 pub(crate) use users::{UserDetailPage, UsersListPage};
 pub(crate) use verify_email::VerifyEmailPage;
 
-use crate::components::layout::{AdminLayout, AuthLayout, PublicLayout};
+use crate::components::{
+    Icon, IconName, icon_size,
+    layout::{AdminLayout, AuthLayout, PublicLayout},
+};
 use leptos::prelude::*;
 use leptos_router::{
     components::{ParentRoute, Route, Routes},
@@ -199,7 +202,7 @@ fn WelcomePage() -> impl IntoView {
                     {..}
                     class="w-full px-4 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95 whitespace-nowrap"
                 >
-                    <span class="material-symbols-outlined text-[18px]">"login"</span>
+                    <Icon name=IconName::SignIn size=icon_size::CONTROL />
                     "Sign In"
                 </A>
                 <A
@@ -207,7 +210,7 @@ fn WelcomePage() -> impl IntoView {
                     {..}
                     class="w-full px-4 py-2.5 bg-gray-100 text-gray-900 text-sm font-semibold rounded-xl hover:bg-gray-200 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95 whitespace-nowrap"
                 >
-                    <span class="material-symbols-outlined text-[18px]">"person_add"</span>
+                    <Icon name=IconName::SignUp size=icon_size::CONTROL />
                     "Create account"
                 </A>
             </div>

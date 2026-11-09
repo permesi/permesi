@@ -6,6 +6,7 @@
 //! 3. Platform Admin (Users, Global Settings - Operator only)
 
 use crate::app_lib::theme::Theme;
+use crate::components::{Icon, IconName, icon_size};
 use crate::features::auth::{client, state::use_auth};
 use crate::routes::paths;
 use leptos::{prelude::*, task::spawn_local};
@@ -36,7 +37,7 @@ pub fn Sidebar() -> impl IntoView {
                     <div class="mt-2 space-y-1">
                         <SidebarLink
                             href={paths::DASHBOARD}
-                            icon="dashboard"
+                            icon=IconName::Dashboard
                             label="Dashboard"
                         />
 
@@ -52,7 +53,7 @@ pub fn Sidebar() -> impl IntoView {
                     <div class="mt-2 space-y-1">
                         <SidebarLink
                             href={paths::ORGS}
-                            icon="corporate_fare"
+                            icon=IconName::Organizations
                             label="Organizations"
                         />
                     </div>
@@ -67,17 +68,17 @@ pub fn Sidebar() -> impl IntoView {
                         <div class="mt-2 space-y-1">
                             <SidebarLink
                                 href={paths::ADMIN}
-                                icon="admin_panel_settings"
+                                icon=IconName::AdminPanel
                                 label="Admin Overview"
                             />
                             <SidebarLink
                                 href={paths::ADMIN_ORGS}
-                                icon="corporate_fare"
+                                icon=IconName::Organizations
                                 label="Global Organizations"
                             />
                             <SidebarLink
                                 href={paths::USERS}
-                                icon="group"
+                                icon=IconName::Users
                                 label="Global Users"
                             />
                         </div>
@@ -123,17 +124,17 @@ fn ProfileNavigation() -> impl IntoView {
         <div>
             <button
                 on:click=move |_| set_open.update(|open| *open = !*open)
-                class="w-full group flex items-center justify-between px-2 py-2 text-sm font-medium rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white cursor-pointer"
+                class="w-full group flex items-center justify-between px-2 py-2 text-sm font-medium rounded-md transition-colors text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
                 class:text-gray-900=move || is_open.get()
                 class:dark:text-white=move || is_open.get()
                 aria-expanded=move || if is_open.get() { "true" } else { "false" }
             >
                 <div class="flex items-center">
-                    <span class=Theme::ICON>"person"</span>
+                    <Icon name=IconName::Profile size=icon_size::NAV class=format!("mr-2 {}", Theme::ICON) />
                     "My Profile"
                 </div>
-                <span class="material-symbols-outlined text-base text-gray-400 transition-transform duration-200"
-                    class:rotate-180=move || is_open.get()>"expand_more"</span>
+                <span class="inline-flex text-gray-400 transition-transform duration-200 motion-reduce:transition-none"
+                    class:rotate-180=move || is_open.get()><Icon name=IconName::Expand size=icon_size::INLINE /></span>
             </button>
             <div class="mt-1 space-y-1 transition-all duration-300 ease-in-out"
                 class:max-h-0=move || !is_open.get()
@@ -142,9 +143,9 @@ fn ProfileNavigation() -> impl IntoView {
                 class:opacity-100=move || is_open.get()
                 class:overflow-hidden=move || !is_open.get()
                 class:overflow-visible=move || is_open.get()>
-                <ProfileSubLink href=paths::ME icon="badge" label="Overview" />
-                <ProfileSubLink href=paths::ME_SECURITY icon="encrypted" label="Security" />
-                <ProfileSubLink href=paths::ME_CONNECTED_APPS icon="hub" label="Connected apps" />
+                <ProfileSubLink href=paths::ME icon=IconName::Identity label="Overview" />
+                <ProfileSubLink href=paths::ME_SECURITY icon=IconName::Security label="Security" />
+                <ProfileSubLink href=paths::ME_CONNECTED_APPS icon=IconName::ConnectedApps label="Connected apps" />
             </div>
         </div>
     }
@@ -152,25 +153,30 @@ fn ProfileNavigation() -> impl IntoView {
 
 /// Marks only the exact active profile route while retaining keyboard navigation.
 #[component]
-fn ProfileSubLink(href: &'static str, icon: &'static str, label: &'static str) -> impl IntoView {
+fn ProfileSubLink(href: &'static str, icon: IconName, label: &'static str) -> impl IntoView {
     let location = use_location();
     let active = move || location.pathname.get() == href;
     view! {
         <A href=move || href.to_string() {..}
-            attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition cursor-pointer"
+            attr:class="group relative flex items-center gap-3 rounded-lg pl-10 pr-3 py-1 text-sm transition cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-500"
             class:bg-slate-200=active
             class:text-slate-900=active
             class:font-medium=active
             class:text-slate-600=move || !active()
             class:hover:bg-slate-100=move || !active()
             class:hover:text-slate-900=move || !active()
+            class:dark:bg-gray-700=active
+            class:dark:text-white=active
+            class:dark:text-gray-300=move || !active()
+            class:dark:hover:bg-gray-800=move || !active()
+            class:dark:hover:text-white=move || !active()
             aria-current=move || active().then_some("page")>
             <Show when=active>
                 <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
             </Show>
-            <span class=move || format!("{} text-lg", Theme::ICON)
+            <span class=Theme::ICON
                 class:text-slate-700=active
-                class:text-slate-400=move || !active()>{icon}</span>
+                class:text-slate-400=move || !active()><Icon name=icon size=icon_size::CONTROL /></span>
             {label}
         </A>
     }
@@ -178,7 +184,7 @@ fn ProfileSubLink(href: &'static str, icon: &'static str, label: &'static str) -
 
 /// Highlights one section; overview/claim retain their own state outside the inspection subtree.
 #[component]
-fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> impl IntoView {
+fn SidebarLink(href: &'static str, icon: IconName, label: &'static str) -> impl IntoView {
     let location = use_location();
     let is_active = move || {
         let pathname = location.pathname.get();
@@ -195,22 +201,27 @@ fn SidebarLink(href: &'static str, icon: &'static str, label: &'static str) -> i
         <A
             href=move || href.to_string()
             {..}
-            attr:class="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-1 text-sm transition"
+            attr:class="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-1 text-sm transition focus-visible:ring-2 focus-visible:ring-blue-500"
             class:bg-slate-200=move || active_1()
             class:text-slate-900=move || active_4()
             class:text-slate-700=move || !is_active()
             class:hover:bg-slate-50=move || !is_active()
+            class:dark:bg-gray-700=move || is_active()
+            class:dark:text-white=move || is_active()
+            class:dark:text-gray-300=move || !is_active()
+            class:dark:hover:bg-gray-800=move || !is_active()
+            class:dark:hover:text-white=move || !is_active()
             aria-current=move || if is_active() { Some("page") } else { None }
         >
             <Show when=move || is_active()>
                 <span class="absolute -left-3 top-0.5 bottom-0.5 w-1 rounded bg-blue-600"></span>
             </Show>
             <span
-                class=move || format!("{} text-xl", Theme::ICON)
+                class=Theme::ICON
                 class:text-slate-700=move || is_active()
                 class:text-slate-400=move || !is_active()
             >
-                {icon}
+                <Icon name=icon size=icon_size::NAV />
             </span>
             {label}
         </A>

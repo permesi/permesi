@@ -255,9 +255,12 @@ impl AuthorityGuard {
     ) -> Result<axum::http::HeaderValue, StatusCode> {
         let ttl = auth.config().session_ttl_seconds();
         let user = self.user;
-        let token = super::storage::insert_session_on(self.connection(), user, ttl)
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let token = if matches!(self.kind, SessionKind::Full) {
+            super::storage::insert_session_on(self.connection(), user, ttl).await
+        } else {
+            super::storage::insert_login_session_on(self.connection(), user, ttl).await
+        }
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         self.consume_original()
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;

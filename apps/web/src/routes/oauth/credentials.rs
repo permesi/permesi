@@ -8,15 +8,14 @@
 use super::common::{CARD, FormError, SECONDARY, error_message};
 use crate::{
     app_lib::AppError,
-    components::{Button, ui::Dialog},
+    components::{Button, CopyValue, DateTime, Icon, IconName, MetaItem, icon_size, ui::Dialog},
     features::oauth::{
         client,
         paths::ApplicationPaths,
         types::{ClientResponse, IssuedSecret},
     },
 };
-use leptos::{prelude::*, task::spawn_local};
-use wasm_bindgen_futures::JsFuture;
+use leptos::prelude::*;
 
 /// Renders secret metadata and explicit mutations; server tenant ACLs remain authoritative.
 #[component]
@@ -78,13 +77,15 @@ pub(super) fn CredentialSection(
                 let empty = rows.is_empty();
                 view! { <div class="space-y-3">
                     <Show when=move || empty><p>"No usable client secrets."</p></Show>
-                    <ul class="space-y-3">{rows.iter().map(|value| {
+                    <ul class="space-y-3">{rows.into_iter().map(|value| {
                         let id = StoredValue::new(value.id.clone());
-                        view! { <li class="rounded border border-gray-200 p-3 dark:border-gray-700">
-                            <p class="font-medium">{if value.expires_at.is_some() { "Retiring" } else { "Current" }}</p>
-                            <code class="block break-all text-sm">{value.id.clone()}</code>
-                            <p class="text-sm">"Created: "{value.created_at.clone()}</p>
-                            {value.expires_at.clone().map(|deadline| view! { <p class="text-sm">"Valid until: "{deadline}</p> })}
+                        view! { <li class="min-w-0 space-y-2 border-b border-gray-200 py-3 last:border-0 dark:border-gray-700">
+                            <p class="text-sm font-medium">{if value.expires_at.is_some() { "Retiring" } else { "Current" }}</p>
+                            <dl>
+                                <MetaItem icon=IconName::Identifier label="Credential ID"><CopyValue value=value.id.clone() label="credential ID" compact=true /></MetaItem>
+                                <MetaItem icon=IconName::Calendar label="Created"><DateTime value=value.created_at.clone() /></MetaItem>
+                                {value.expires_at.clone().map(|deadline| view! { <MetaItem icon=IconName::Clock label="Valid until"><DateTime value=deadline /></MetaItem> })}
+                            </dl>
                             <button class=SECONDARY type="button" disabled=busy on:click=move |_| { revoke_id.set(id.get_value()); revoke_error.set(String::new()); revoke_open.set(true); }>"Revoke Secret"</button>
                         </li> }
                     }).collect_view()}</ul>
@@ -97,7 +98,7 @@ pub(super) fn CredentialSection(
             Some(Err(err)) => view! { <p class="text-sm text-red-600">{error_message(&err)}</p> }.into_any(),
             None => view! { <p>"Loading credential metadata…"</p> }.into_any(),
         }}</Suspense>
-        <button type="button" class=SECONDARY disabled=busy on:click=move |_| refresh.update(|version| *version += 1)>"Refresh Secret Metadata"</button>
+        <button type="button" class=SECONDARY disabled=busy on:click=move |_| refresh.update(|version| *version += 1)><Icon name=IconName::Refresh size=icon_size::INLINE class="text-gray-400 dark:text-gray-500" />"Refresh Secret Metadata"</button>
         <Dialog id="client-secret-issue" title="Issue client secret" open=open busy=issue.pending()>
             <Show when=move || secret.get().is_some() fallback=move || view! {
                 <p class="mb-4 text-sm">"Create a new secret? Save it securely when shown. A replacement retires the current secret using the configured overlap."</p>
@@ -111,7 +112,7 @@ pub(super) fn CredentialSection(
         </Dialog>
         <Dialog id="client-secret-revoke" title="Revoke client secret" open=revoke_open busy=revoke.pending()>
             <p class="mb-4 text-sm">"Revoke this secret? Applications using it will need another valid secret."</p>
-            <code class="block break-all text-sm">{move || revoke_id.get()}</code>
+            {move || view! { <CopyValue value=revoke_id.get() label="credential ID" compact=true /> }}
             <FormError id="credential-revoke-error" error=revoke_error />
             <Button disabled=revoke.pending() on_click=move |_| { if !revoke.pending().get_untracked() { revoke.dispatch(revoke_id.get_untracked()); } }>"Confirm Revocation"</Button>
         </Dialog>
@@ -139,17 +140,7 @@ fn watch_revocation(
 /// Mounted only during disclosure; closing destroys the plaintext text and clipboard closure.
 #[component]
 fn SecretReveal(value: String) -> impl IntoView {
-    let value = StoredValue::new(value);
-    let status = RwSignal::new(String::new());
-    view! { <div><code id="one-time-client-secret" class="block break-all text-sm">{value.get_value()}</code>
-        <button type="button" class=SECONDARY on:click=move |_| spawn_local(async move {
-            let Some(window) = web_sys::window() else { return; };
-            if !window.is_secure_context() { status.try_set("Select the secret to copy it.".to_owned()); return; }
-            let copied = JsFuture::from(window.navigator().clipboard().write_text(&value.get_value())).await.is_ok();
-            status.try_set(if copied { "Copied." } else { "Select the secret to copy it." }.to_owned());
-        })>"Copy Secret"</button>
-        <p class="text-sm" aria-live="polite">{move || status.get()}</p>
-    </div> }
+    view! { <CopyValue value=value label="Secret" code_id="one-time-client-secret" button_text="Copy Secret" /> }
 }
 
 /// Handles one explicitly confirmed issuance; errors refresh metadata but never retry.

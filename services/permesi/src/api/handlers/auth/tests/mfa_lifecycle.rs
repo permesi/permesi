@@ -380,3 +380,69 @@ async fn mfa_challenge_failure_limit_is_terminal_across_connections() -> Result<
     );
     Ok(())
 }
+
+/// The shared factor-completion boundary records limited-session promotion but not full-session renewal.
+#[tokio::test]
+async fn mfa_completion_records_login_only_when_promoting_limited_authority() -> Result<()> {
+    let db = TestDb::new()
+        .await?
+        .context("MFA login tracking requires PostgreSQL")?;
+    let auth = auth_state();
+    for bootstrap in [false, true] {
+        let user = user(&db.pool).await?;
+        let (token, policy) = if bootstrap {
+            super::super::mfa::storage::upsert_mfa_state(
+                &db.pool,
+                user,
+                super::super::mfa::MfaState::RequiredUnenrolled,
+                None,
+            )
+            .await?;
+            (
+                storage::insert_mfa_bootstrap_session(&db.pool, user, 300).await?,
+                Policy::Enrollment,
+            )
+        } else {
+            (
+                storage::insert_mfa_challenge_session(&db.pool, user, 300).await?,
+                Policy::Challenge,
+            )
+        };
+        assert!(
+            sqlx::query_scalar::<_, bool>("SELECT last_login_at IS NULL FROM users WHERE id=$1")
+                .bind(user)
+                .fetch_one(&db.pool)
+                .await?
+        );
+        let guard = AuthorityGuard::acquire(&db.pool, &headers(&token)?, user, policy, 1000)
+            .await
+            .map_err(|_| anyhow!("limited authority"))?;
+        guard
+            .issue_full(&auth)
+            .await
+            .map_err(|_| anyhow!("factor completion"))?;
+        let recorded: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT last_login_at FROM users WHERE id=$1")
+                .bind(user)
+                .fetch_one(&db.pool)
+                .await?;
+        let full = storage::insert_session(&db.pool, user, 300).await?;
+        let guard = AuthorityGuard::acquire(&db.pool, &headers(&full)?, user, Policy::Full, 1000)
+            .await
+            .map_err(|_| anyhow!("full authority"))?;
+        guard
+            .issue_full(&auth)
+            .await
+            .map_err(|_| anyhow!("full renewal"))?;
+        assert_eq!(
+            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                "SELECT last_login_at FROM users WHERE id=$1"
+            )
+            .bind(user)
+            .fetch_one(&db.pool)
+            .await?,
+            recorded
+        );
+    }
+    Ok(())
+}

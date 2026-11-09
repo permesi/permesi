@@ -3,13 +3,15 @@
 //! Scope is server-selected by the route; all path/cursor values are bound parameters.
 //! Parent validation distinguishes an empty collection from missing ancestry, while
 //! the page query rechecks that ancestry rather than trusting the earlier lookup.
+//! Organization owner identification is aggregated from active owner memberships in
+//! the same metadata query; neither creator identity nor per-owner queries are used.
 
 use axum::http::StatusCode;
 use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgRow};
 use uuid::Uuid;
 
-use super::{AdminMetadata, PAGE_SIZE};
+use super::{AdminMetadata, AdminOwner, PAGE_SIZE};
 
 pub(super) enum Scope {
     Organizations,
@@ -29,6 +31,7 @@ pub(super) struct Record {
     name: String,
     slug: Option<String>,
     tier: Option<String>,
+    owners: Option<Vec<AdminOwner>>,
 }
 
 impl Record {
@@ -40,6 +43,7 @@ impl Record {
             created_at: self.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
             slug: self.slug,
             tier: self.tier,
+            owners: self.owners,
         }
     }
 
@@ -51,6 +55,13 @@ impl Record {
             name: row.try_get("name")?,
             slug: row.try_get("slug")?,
             tier: row.try_get("tier")?,
+            owners: row
+                .try_get::<Option<String>, _>("owners")?
+                .map(|owners| {
+                    serde_json::from_str(&owners)
+                        .map_err(|error| sqlx::Error::Decode(Box::new(error)))
+                })
+                .transpose()?,
         })
     }
 }
@@ -58,6 +69,11 @@ impl Record {
 /// Constructs fixed ancestry joins; user data is never concatenated into SQL identifiers.
 fn base(scope: &Scope) -> QueryBuilder<Postgres> {
     let mut query = QueryBuilder::new("SELECT r.id,r.name,r.created_at,");
+    if matches!(scope, Scope::Organizations) {
+        query.push("(SELECT COALESCE(jsonb_agg(jsonb_build_object('user_id',u.id,'email',u.email,'display_name',u.display_name) ORDER BY u.email,u.id),'[]'::jsonb)::text FROM org_memberships m JOIN org_member_roles mr ON mr.org_id=m.org_id AND mr.user_id=m.user_id JOIN users u ON u.id=m.user_id WHERE m.org_id=r.id AND m.status='active' AND mr.role_name='owner' AND u.status='active') AS owners,");
+    } else {
+        query.push("NULL::text AS owners,");
+    }
     query.push(match scope {
         Scope::Organizations => "r.slug,NULL::text AS tier FROM organizations r WHERE r.deleted_at IS NULL",
         Scope::Projects(_) => "r.slug,NULL::text AS tier FROM projects r JOIN organizations o ON o.id=r.org_id WHERE r.deleted_at IS NULL AND o.deleted_at IS NULL",

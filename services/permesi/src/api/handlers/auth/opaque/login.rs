@@ -15,8 +15,8 @@ use crate::api::handlers::{
         session::session_cookie_with_ttl,
         state::{AuthState, OpaqueSuite},
         storage::{
-            insert_mfa_bootstrap_session_on, insert_mfa_challenge_session_on, insert_session_on,
-            lookup_login_record,
+            insert_login_session_on, insert_mfa_bootstrap_session_on,
+            insert_mfa_challenge_session_on, lookup_login_record,
         },
         types::{OpaqueLoginFinishRequest, OpaqueLoginStartRequest, OpaqueLoginStartResponse},
         utils::{decode_base64_field, extract_client_ip, normalize_email, valid_email},
@@ -386,7 +386,7 @@ pub async fn opaque_login_finish(
                     }
                 }
                 MfaState::Disabled => {
-                    match insert_session_on(
+                    match insert_login_session_on(
                         &mut tx,
                         user_id,
                         auth_state.config().session_ttl_seconds(),

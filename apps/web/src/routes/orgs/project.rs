@@ -2,16 +2,23 @@
 //!
 //! The session-backed list supplies tier-selection hints only. Creation order is
 //! unrestricted; org management authorization and the production limit remain server-side.
+//! Project metadata comes from the existing organization-scoped collection. Environment
+//! cards use neutral tier labels: classification is not a health or warning state.
 
 use super::deletion::{DeleteResource, DeleteTarget};
 use crate::features::oauth::paths::EnvironmentPaths;
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Button, Spinner, ui::Dialog},
+    components::{
+        Alert, AlertKind, Button, CopyValue, DateTime, EmptyValue, EntityHeader, Icon, IconName,
+        MetaItem, Spinner, icon_size, ui::Dialog,
+    },
     features::orgs::{
         client,
-        types::{CreateEnvironmentRequest, EnvironmentResponse, production_tier_present},
+        types::{
+            CreateEnvironmentRequest, EnvironmentResponse, ProjectResponse, production_tier_present,
+        },
     },
 };
 use leptos::prelude::*;
@@ -23,10 +30,25 @@ struct ProjectParams {
     project_slug: Option<String>,
 }
 
-/// Renders the project detail view.
+/// Renders project metadata and independent environment cards without changing tier rules.
 #[component]
 pub fn ProjectDetailPage() -> impl IntoView {
     let params = use_params::<ProjectParams>();
+    let project = LocalResource::new(move || {
+        let p = params.get().ok();
+        let org_slug = p.as_ref().and_then(|p| p.slug.clone()).unwrap_or_default();
+        let project_slug = p.and_then(|p| p.project_slug).unwrap_or_default();
+        async move {
+            if org_slug.is_empty() || project_slug.is_empty() {
+                return Ok(None);
+            }
+            client::list_projects(&org_slug).await.map(|items| {
+                items
+                    .into_iter()
+                    .find(|project| project.slug == project_slug)
+            })
+        }
+    });
 
     let envs = LocalResource::new(move || {
         let p = params.get().ok();
@@ -46,30 +68,14 @@ pub fn ProjectDetailPage() -> impl IntoView {
 
     view! {
         <div class="space-y-6">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div class="space-y-1">
-                    <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-                        {move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_else(|| "Project".to_string())}
-                    </h1>
-                    <p class="text-sm text-gray-500 dark:text-gray-400">
-                        "Manage environments and applications for this project."
-                    </p>
-                </div>
-
-                <CreateEnvModal
-                    org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
-                    project_slug=move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_default()
-                    production_exists=Signal::derive(move || envs.get().is_some_and(|result| result.is_ok_and(|list| production_tier_present(&list))))
-                    on_success=Callback::new(move |_| envs.refetch())
-                />
-            </div>
+            <ProjectHeader project=project envs=envs />
 
             <Suspense fallback=move || view! { <Spinner /> }>
                 {move || match envs.get() {
                     Some(Ok(list)) if list.is_empty() => {
                         view! {
                             <div class="text-center py-12 bg-white dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
-                                <span class="material-symbols-outlined text-4xl text-gray-400">"lan"</span>
+                                <Icon name=IconName::Environments size=icon_size::EMPTY class="text-gray-400 dark:text-gray-500" />
                                 <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">"No environments"</h3>
                                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">"Create an environment to get started. Either tier can be created first."</p>
                             </div>
@@ -82,27 +88,23 @@ pub fn ProjectDetailPage() -> impl IntoView {
                                     each=move || list.clone()
                                     key=|env| env.id.clone()
                                     children=move |env| {
-                                        let tier_class = if env.tier == "production" {
-                                            "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
+                                        let tier = if env.tier == "production" {
+                                            "Production"
                                         } else {
-                                            "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                                            "Non-Production"
                                         };
                                         view! {
                                             <A href=EnvironmentPaths {
                                                 org: params.get().ok().and_then(|p| p.slug).unwrap_or_default(),
                                                 project: params.get().ok().and_then(|p| p.project_slug).unwrap_or_default(),
                                                 environment: env.slug.clone(),
-                                            }.console() attr:class="block cursor-pointer p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm hover:border-blue-500 dark:hover:border-blue-500 focus:ring-2 focus:ring-blue-500 transition-colors">
-                                                <div class="flex items-center justify-between mb-4">
-                                                    <span class=format!("text-xs font-semibold px-2.5 py-0.5 rounded-full {}", tier_class)>
-                                                        {env.tier.to_uppercase()}
-                                                    </span>
-                                                    <span class="text-xs font-mono text-gray-400">{env.slug}</span>
-                                                </div>
-                                                <h2 class="text-lg font-medium text-gray-900 dark:text-white">{env.name}</h2>
-                                                <div class="mt-4 pt-4 border-t border-gray-50 dark:border-gray-700">
-                                                    <p class="text-sm text-blue-600 dark:text-blue-400">"Manage applications →"</p>
-                                                </div>
+                                            }.console() attr:class="block min-w-0 cursor-pointer p-5 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors">
+                                                <EntityHeader icon=IconName::Environments navigable=true>{env.name}</EntityHeader>
+                                                <dl class="mt-3">
+                                                    <MetaItem icon=IconName::Tag label="Slug" mono=true>{env.slug}</MetaItem>
+                                                    <MetaItem icon=IconName::Environments label="Tier">{tier}</MetaItem>
+                                                    <MetaItem icon=IconName::Calendar label="Created"><DateTime value=env.created_at /></MetaItem>
+                                                </dl>
                                             </A>
                                         }
                                     }
@@ -125,6 +127,59 @@ pub fn ProjectDetailPage() -> impl IntoView {
                     None => Some("Checking active children…".to_owned()),
                 }) /> }
             })}
+        </div>
+    }
+}
+
+/// Shows project metadata and environment actions without inferring tier authority.
+#[component]
+fn ProjectHeader(
+    project: LocalResource<Result<Option<ProjectResponse>, AppError>>,
+    envs: LocalResource<Result<Vec<EnvironmentResponse>, AppError>>,
+) -> impl IntoView {
+    let params = use_params::<ProjectParams>();
+    view! {
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="min-w-0 w-full space-y-1 sm:w-auto sm:flex-1">
+                <h1 class="break-words text-2xl font-semibold text-gray-900 dark:text-white">
+                    {move || project.get().and_then(Result::ok).flatten().map_or_else(
+                        || params.get().ok().and_then(|p| p.project_slug).unwrap_or_else(|| "Project".to_owned()),
+                        |project| project.name,
+                    )}
+                </h1>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    "Manage environments and applications for this project."
+                </p>
+                <div class="min-h-24 pt-2" role="group" aria-label="Project metadata">
+                    <Suspense fallback=move || view! { <Spinner /> }>
+                        {move || match project.get() {
+                            Some(Ok(Some(project))) => view! {
+                                <dl>
+                                    <MetaItem icon=IconName::Tag label="Slug" mono=true>{project.slug}</MetaItem>
+                                    <MetaItem icon=IconName::Identifier label="Project ID">
+                                        <CopyValue value=project.id label="project ID" compact=true />
+                                    </MetaItem>
+                                    <MetaItem icon=IconName::Calendar label="Created"><DateTime value=project.created_at /></MetaItem>
+                                </dl>
+                            }.into_any(),
+                            Some(Err(_) | Ok(None)) => view! { <EmptyValue text="Unavailable" /> }.into_any(),
+                            None => ().into_any(),
+                        }}
+                    </Suspense>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+                <button type="button" on:click=move |_| { envs.refetch(); project.refetch(); }
+                    class="inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">
+                    <Icon name=IconName::Refresh size=icon_size::INLINE />"Refresh"
+                </button>
+                <CreateEnvModal
+                    org_slug=move || params.get().ok().and_then(|p| p.slug).unwrap_or_default()
+                    project_slug=move || params.get().ok().and_then(|p| p.project_slug).unwrap_or_default()
+                    production_exists=Signal::derive(move || envs.get().is_some_and(|result| result.is_ok_and(|list| production_tier_present(&list))))
+                    on_success=Callback::new(move |_| envs.refetch())
+                />
+            </div>
         </div>
     }
 }
@@ -213,10 +268,7 @@ where
     view! {
         <div>
             <Button on_click=move |_| { set_error.set(None); is_open.set(true); }>
-                <div class="flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base" aria-hidden="true">"add"</span>
-                    "New Environment"
-                </div>
+                "New Environment"
             </Button>
 
             <Dialog id="create-environment" title="Create Environment" open=is_open busy=create_action.pending()>

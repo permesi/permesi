@@ -8,7 +8,6 @@
 //! browser state never grants permission. Password rotation clears the old session.
 
 mod authenticator;
-mod display;
 mod passkeys;
 mod password;
 mod recovery;
@@ -20,7 +19,7 @@ use self::{
 };
 use crate::{
     app_lib::{AppError, theme::Theme},
-    components::{Alert, AlertKind, Spinner},
+    components::{Alert, AlertKind, Icon, IconName, Spinner, icon_size},
     features::me::client,
     routes::paths,
 };
@@ -108,9 +107,7 @@ pub fn MeSecurityPage() -> impl IntoView {
                                         <div class=Theme::ROW>
                                             <div class="flex items-center justify-between">
                                                 <div class="flex items-center space-x-3">
-                                                    <span class=Theme::ICON>
-                                                        "phonelink_lock"
-                                                    </span>
+                                                    <Icon name=IconName::PhoneLock size=icon_size::CARD class=Theme::ICON />
                                                     <div>
                                                         <p class="text-sm font-medium text-gray-900 dark:text-white">
                                                             "Two-factor methods"

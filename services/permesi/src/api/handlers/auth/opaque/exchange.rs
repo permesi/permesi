@@ -349,6 +349,7 @@ pub(in crate::api::handlers::auth) fn hash_id(id: Uuid) -> [u8; 32] {
 /// The authenticated proof timestamp must also follow the current account containment cutoff.
 /// Hold the returned transaction through the session write, then commit. Failed bindings
 /// return no guard; callers must never issue authority without one.
+/// Serialize identity writers up front so concurrent login-history updates cannot upgrade shared locks.
 pub(in crate::api::handlers::auth) async fn lock_identity<'a>(
     pool: &'a PgPool,
     identity: &ExchangeIdentity,
@@ -357,7 +358,7 @@ pub(in crate::api::handlers::auth) async fn lock_identity<'a>(
 ) -> Result<Option<Transaction<'a, Postgres>>> {
     let mut tx = begin(pool, timeout_ms).await?;
     let record: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT opaque_registration_record FROM users WHERE id=$1 AND status='active' AND authentication_not_before<$2 FOR SHARE",
+        "SELECT opaque_registration_record FROM users WHERE id=$1 AND status='active' AND authentication_not_before<$2 FOR NO KEY UPDATE",
     )
     .bind(identity.user_id)
     .bind(created_at)

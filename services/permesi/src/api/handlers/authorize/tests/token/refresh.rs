@@ -74,6 +74,11 @@ pub(super) async fn replica(t: &TokenFixture) -> Result<Router> {
 #[tokio::test]
 async fn refresh_public_rotation_preserves_family_scope_and_revokes_on_reuse() -> Result<()> {
     let t = TokenFixture::new().await?;
+    let login_before: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT last_login_at FROM users WHERE id=$1")
+            .bind(t.f.user)
+            .fetch_one(&t.f.pool)
+            .await?;
     let first = issue(&t).await?;
     let original = first["refresh_token"].as_str().context("refresh")?;
     let b = replica(&t).await?;
@@ -147,6 +152,15 @@ async fn refresh_public_rotation_preserves_family_scope_and_revokes_on_reuse() -
         .await?
         .0,
         StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT last_login_at FROM users WHERE id=$1"
+        )
+        .bind(t.f.user)
+        .fetch_one(&t.f.pool)
+        .await?,
+        login_before
     );
     Ok(())
 }

@@ -894,6 +894,12 @@ async fn mfa_rejected_totp_proofs_commit_failure_audits_without_authority() -> R
             .await?,
         0
     );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT last_login_at IS NULL FROM users WHERE id=$1")
+            .bind(user)
+            .fetch_one(&ctx.pool)
+            .await?
+    );
     Ok(())
 }
 

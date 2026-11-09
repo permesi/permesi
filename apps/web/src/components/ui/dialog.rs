@@ -1,6 +1,7 @@
 //! Native modal using the console's existing card styles. The browser traps focus,
 //! handles Escape, and restores focus; pending mutations block dismissal.
 
+use super::{Icon, IconName, icon_size};
 use leptos::prelude::*;
 
 /// Opens a named modal with native keyboard semantics; busy actions prevent dismissal.
@@ -8,7 +9,7 @@ use leptos::prelude::*;
 pub fn Dialog(
     #[prop(into)] id: String,
     title: &'static str,
-    #[prop(optional)] icon: Option<&'static str>,
+    #[prop(optional)] icon: Option<IconName>,
     open: RwSignal<bool>,
     #[prop(into)] busy: Signal<bool>,
     children: Children,
@@ -40,12 +41,12 @@ pub fn Dialog(
             class="inset-0 m-auto w-[calc(100%-2rem)] max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-200 bg-white p-6 text-gray-900 shadow-xl backdrop:bg-black/50 dark:border-gray-700 dark:bg-gray-800 dark:text-white">
             <div class="mb-4 flex items-center justify-between gap-4">
                 <h2 id=title_id.clone() class="flex items-center gap-2 text-lg font-semibold">
-                    {icon.map(|icon| view! { <span class="material-symbols-outlined shrink-0" aria-hidden="true">{icon}</span> })}
+                    {icon.map(|name| view! { <Icon name=name size=icon_size::CARD /> })}
                     {title}
                 </h2>
-                <button type="button" aria-label="Close dialog" disabled=move || busy.get()
-                    class="cursor-pointer rounded p-1 text-gray-500 hover:bg-gray-100 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:hover:bg-gray-700"
-                    on:click=move |_| open.set(false)>"✕"</button>
+                <button type="button" aria-label="Close dialog" title="Close dialog" disabled=move || busy.get()
+                    class="cursor-pointer rounded p-1 text-gray-500 hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-gray-700"
+                    on:click=move |_| open.set(false)><Icon name=IconName::Cancel size=icon_size::CONTROL /></button>
             </div>
             {children()}
         </dialog>

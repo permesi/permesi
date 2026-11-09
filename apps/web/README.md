@@ -42,6 +42,19 @@ Note: running `trunk serve` directly will skip CSS generation unless you also ru
 - `/users/:id`: User detail
 - any other path: Not Found
 
+Read-only metadata uses aligned icon/label columns and complete wrapping values.
+Copy controls follow the final identifier token, including on narrow screens.
+Neutral pills distinguish unset values ("Not set"), empty collections ("None")
+and unavailable history; effective platform-role defaults remain "user". Locale
+has no configured server default and remains unset when absent.
+
+Global Organizations shows current active owner memberships, including multiple
+owners, with links to user details; creators are not inferred to be owners.
+Administrator user metadata shows Joined, Last Updated and Last Login. Last Login
+records only successful completed interactive authentication: "Never" requires
+tracking from account creation, while legacy null history is "Not recorded".
+Refresh refetches these server-owned values without changing login history.
+
 ## Environment management
 
 Projects own independent sibling environments at
@@ -154,7 +167,13 @@ font links remain in `index.html` but cannot resolve in these test browsers. The
 rule does not act as an operating-system firewall or block literal external IP addresses;
 fixture API/callback URLs are explicitly loopback and these tests claim that narrower boundary.
 
-Application sections use primary tabs with Material Symbols and an underline for the current section. Inside OAuth Configuration, Summary, Clients and Scopes use a smaller segmented navigation; client details keep Clients selected. Both levels retain text labels, keyboard focus styles and independent active states in light and dark themes.
+Application sections use primary tabs with Lucide icons and an underline for the current section. Inside OAuth Configuration, Summary, Clients and Scopes use a smaller segmented navigation; client details keep Clients selected. Both levels retain text labels, keyboard focus styles and independent active states in light and dark themes.
+
+Shared presentation atoms are imported from `crate::components`. `Icon`, `IconName` and `icon_size` wrap local decorative Lucide SVGs with a 1.5 stroke and inherited colour. Sizes are 16px metadata, 18px controls, 20px headings/navigation and 36px empty states. `EntityHeader` gives resource cards a quiet icon, title and divider; only navigable cards show a chevron. `MetaItem` uses aligned grid columns for icon, visible muted label and wrapping primary value inside a `dl`. Missing values use “Not set” or “None”; identifiers are never truncated. `DateTime` defaults to `Oct 5, 2026 · 07:04 UTC`, retaining exact ISO in `datetime` and `title`; invalid input remains visible unchanged. `CopyValue` copies the complete original value, provides named keyboard-operable controls, reserves feedback space and reports clipboard failures visibly. Repeated attempts cannot retain stale success feedback. OAuth client details retain “Copy”/“Copied.” and one-time secrets retain “Copy Secret”; the secret component is destroyed on dismissal. Whole-card links never contain copy controls. Clickable text and icon controls retain pointer, hover and visible keyboard focus affordances in both themes.
+
+Metadata sections share three CSS subgrid tracks: `1rem max-content minmax(0, 1fr)`, with an explicit 0.5rem row gap. The value starts one small gap after the longest content-sized label, not after a fixed-width spacer. Copy buttons stay inline after the value inside its `dd`, keeping the final identifier chunk and action together when text wraps. There is no independent action column. Page-level grids group sections rather than stretching individual field rows. Profile timestamps consistently use Joined and Last Updated.
+
+Admin inspector child cards use the corresponding organization, project, environment or application icon. When tenant header metadata cannot be loaded or resolved, the header shows a neutral “Unavailable” pill; errors remain owned by the body rather than duplicated in the header. Clipboard failures visibly retain “Select the value to copy it.” A hidden, accessibility-excluded copy of the longest feedback message reserves responsive space so success and failure feedback cannot move surrounding metadata.
 
 The API permits credentialed PUT preflights from its existing configured frontend origins so the redirect and scope replacement editors work across origins. This preserves the origin allow-list and server authorization checks.
 

@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.4.10"
+    "version": "0.5.0"
   },
   "paths": {
     "/.well-known/openid-configuration": {
@@ -8282,6 +8282,15 @@
           "name": {
             "type": "string"
           },
+          "owners": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AdminOwner"
+            }
+          },
           "slug": {
             "type": [
               "string",
@@ -8293,6 +8302,28 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "AdminOwner": {
+        "type": "object",
+        "description": "Minimal owner identification; membership and role details remain private.",
+        "required": [
+          "user_id",
+          "email"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
           }
         }
       },
@@ -9856,11 +9887,25 @@
           "id": {
             "type": "string"
           },
+          "last_login_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Successful interactive authentication only; visible to platform administrators."
+          },
           "locale": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "login_tracking_complete": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True only when tracking covered the user's entire lifetime; absent for non-admins."
           },
           "role": {
             "type": [

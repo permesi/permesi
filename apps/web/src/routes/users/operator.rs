@@ -8,7 +8,9 @@ use leptos::prelude::*;
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Spinner, ui::Dialog},
+    components::{
+        Alert, AlertKind, DateTime, Icon, IconName, MetaItem, Spinner, icon_size, ui::Dialog,
+    },
     features::{
         auth::{opaque::reauthenticate, state::use_auth},
         users::{client, types::OperatorStatus},
@@ -125,16 +127,16 @@ pub(super) fn OperatorManager(user_id: String, email: String) -> impl IntoView {
     let busy = Signal::derive(move || action.pending().get());
     let email_for_confirm = email.clone();
     view! {
-        <section class="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <section class="min-w-0 rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-gray-700">
-                <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-900 dark:text-white">"Platform Operator"</h2>
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-white">"Platform Operator"</h2>
             </div>
             <div class="space-y-3 p-6">
                 <p class="text-sm text-gray-600 dark:text-gray-300">"This designation is separate from platform roles, organization membership and OAuth scopes."</p>
                 {status_controls(status, selected, typed, password, error, open)}
             </div>
         </section>
-        <Dialog id="operator-designation" title="Manage Operator Designation" icon="verified_user" open=open busy=busy>
+        <Dialog id="operator-designation" title="Manage Operator Designation" icon=IconName::Operator open=open busy=busy>
             <form class="space-y-4" on:submit=move |ev| {
                 ev.prevent_default();
                 let actor_email = auth.session.get_untracked().map(|session| session.email).unwrap_or_default();
@@ -147,7 +149,7 @@ pub(super) fn OperatorManager(user_id: String, email: String) -> impl IntoView {
                 <p class="text-sm text-gray-700 dark:text-gray-200">{move || selected.get().label()}</p>
                 <p class="text-sm text-gray-600 dark:text-gray-300">"Confirm the target account and verify your own password. Approval and current authority are checked again by the server."</p>
                 <ReasonSelect reason />
-                <label for="operator-target-confirm" class="block text-sm font-medium">"Type "<code>{email.clone()}</code>" to confirm"</label>
+                <label for="operator-target-confirm" class="block break-words text-sm font-medium">"Type "<code>{email.clone()}</code>" to confirm"</label>
                 <input id="operator-target-confirm" class="w-full rounded border border-gray-300 bg-white px-3 py-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
                     autocomplete="off" spellcheck="false" prop:value=move || typed.get()
                     on:input=move |ev| typed.set(event_target_value(&ev)) />
@@ -200,12 +202,12 @@ fn status_controls(
         Some(Ok(current)) => {
             let designation = current.designation.clone();
             view! {
-                <p class="text-sm text-gray-900 dark:text-gray-100">"Designation: "<strong>{designation}</strong></p>
+                <dl class="border-b border-gray-100 pb-4 dark:border-gray-700"><MetaItem icon=IconName::Shield label="Designation">{designation}</MetaItem></dl>
                 <div class="flex flex-wrap gap-3">
                     {if current.designation == "enabled" {
                         view! { <button type="button" class="cursor-pointer rounded border border-red-600 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus:ring-2 focus:ring-red-500 dark:text-red-300 dark:hover:bg-red-950"
                             on:click=move |_| begin(Operation::Disable, selected, typed, password, error, open)>
-                            <span class="material-symbols-outlined mr-1 align-middle" aria-hidden="true">"person_off"</span>"Disable operator"
+                            <Icon name=IconName::UserDisable size=icon_size::INLINE class="mr-1" />"Disable operator"
                         </button> }.into_any()
                     } else if current.pending_enable {
                         view! { <p class="text-sm text-gray-600 dark:text-gray-300">"A designation request is pending."</p> }.into_any()
@@ -223,13 +225,13 @@ fn status_controls(
                     } else { view! { <span></span> }.into_any() }}
                 </div>
                 {current.requested_by_email.map(|requester| view! {
-                    <div class="text-sm text-gray-600 dark:text-gray-300">
+                    <div class="min-w-0 break-words text-sm text-gray-600 dark:text-gray-300">
                         <p>"Requested by "<strong>{requester}</strong></p>
                         {current.requested_reason.clone().map(|reason| view! {
                             <p>"Reason: "{reason.replace('_', " ")}</p>
                         })}
                         {current.requested_at.clone().map(|at| view! {
-                            <p>"Requested at "{at}" UTC (expires after ten minutes)"</p>
+                            <p>"Requested at "<DateTime value=at with_time=true />" (expires after ten minutes)"</p>
                         })}
                     </div>
                 })}

@@ -115,6 +115,12 @@ async fn opaque_login_completes_after_replica_restart_and_rejects_replay() -> Re
         .bind(email)
         .execute(&db.pool)
         .await?;
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT last_login_at IS NULL FROM users WHERE email=$1")
+            .bind(email)
+            .fetch_one(&db.pool)
+            .await?
+    );
     let proof = proof(&router_a, email, &password, &token, None).await?;
     drop(router_a);
     let router_b = opaque_router(auth_state(), admission, db.pool.clone());
@@ -128,6 +134,11 @@ async fn opaque_login_completes_after_replica_restart_and_rejects_replay() -> Re
     .await?;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert!(response.headers().contains_key(SET_COOKIE));
+    let recorded: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT last_login_at FROM users WHERE email=$1")
+            .bind(email)
+            .fetch_one(&db.pool)
+            .await?;
     let response = post(
         &router_b,
         "/v1/auth/opaque/login/finish",
@@ -137,6 +148,15 @@ async fn opaque_login_completes_after_replica_restart_and_rejects_replay() -> Re
     )
     .await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            "SELECT last_login_at FROM users WHERE email=$1"
+        )
+        .bind(email)
+        .fetch_one(&db.pool)
+        .await?,
+        recorded
+    );
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions")
         .fetch_one(&db.pool)
         .await?;

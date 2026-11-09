@@ -5,7 +5,7 @@
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Spinner},
+    components::{Alert, AlertKind, Icon, IconName, Spinner, icon_size},
     features::{
         oauth::{
             model,
@@ -17,13 +17,14 @@ use crate::{
 use leptos::prelude::*;
 use leptos_router::{components::A, hooks::use_location, params::Params};
 
-pub const CARD: &str = "min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800";
+pub const CARD: &str =
+    "min-w-0 rounded-lg border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800";
 pub const INPUT: &str = "block w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm text-gray-900 focus:border-blue-500 focus:ring-blue-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-white";
 pub const LABEL: &str = "mb-2 block text-sm font-medium text-gray-900 dark:text-white";
-pub const LINK: &str = "cursor-pointer rounded text-blue-600 hover:text-blue-800 hover:underline focus:ring-2 focus:ring-blue-500 dark:text-blue-400 dark:hover:text-blue-300";
-pub const SECONDARY: &str = "cursor-pointer rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700";
+pub const LINK: &str = "cursor-pointer rounded text-blue-600 hover:text-blue-800 hover:underline focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-400 dark:hover:text-blue-300";
+pub const SECONDARY: &str = "inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700";
 
-pub const DESTRUCTIVE: &str = "inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus:ring-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30";
+pub const DESTRUCTIVE: &str = "inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30";
 
 #[derive(Params, Clone, PartialEq)]
 pub struct ResourceParams {
@@ -100,19 +101,23 @@ pub fn Loading(message: &'static str) -> impl IntoView {
     view! { <div class="flex items-center gap-3 py-6" role="status"><Spinner /><span class="text-sm text-gray-500 dark:text-gray-400">{message}</span></div> }
 }
 
-/// Presents a resource empty state with explicit, non-protocol wording.
+/// Presents a quiet, semantic empty state without suggesting a protocol action.
 #[component]
-pub fn EmptyState(title: &'static str, message: &'static str) -> impl IntoView {
-    view! { <div class="rounded-lg border border-dashed border-gray-300 p-8 text-center dark:border-gray-700"><h3 class="font-medium">{title}</h3><p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{message}</p></div> }
+pub fn EmptyState(
+    title: &'static str,
+    message: &'static str,
+    #[prop(default = IconName::Clients)] icon: IconName,
+) -> impl IntoView {
+    view! { <div class="rounded-lg border border-dashed border-gray-300 px-5 py-8 text-center dark:border-gray-700"><Icon name=icon size=icon_size::EMPTY class="mx-auto mb-3 text-gray-400 dark:text-gray-500" /><h3 class="font-medium">{title}</h3><p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{message}</p></div> }
 }
 
-/// Renders shared, labelled Material Symbols links with section-aware active styles.
+/// Renders shared, labelled Lucide icon links with section-aware active styles.
 /// Icons are decorative; pathname state affects presentation, never authorization.
 #[component]
 fn NavigationLink(
     href: String,
     label: &'static str,
-    icon: &'static str,
+    icon: IconName,
     #[prop(default = false)] descendants: bool,
     #[prop(default = false)] secondary: bool,
 ) -> impl IntoView {
@@ -123,20 +128,20 @@ fn NavigationLink(
     });
     let class = move || match (secondary, active.get()) {
         (false, true) => {
-            "inline-flex cursor-pointer items-center gap-2 border-b-2 border-blue-600 px-3 py-3 text-sm font-semibold text-blue-700 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-gray-800"
+            "inline-flex cursor-pointer items-center gap-2 border-b-2 border-gray-900 px-3 py-3 text-sm font-medium text-gray-900 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-200 dark:text-white dark:hover:bg-gray-800"
         }
         (false, false) => {
-            "inline-flex cursor-pointer items-center gap-2 border-b-2 border-transparent px-3 py-3 text-sm font-medium text-gray-600 hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:bg-gray-800 dark:hover:text-white"
+            "inline-flex cursor-pointer items-center gap-2 border-b-2 border-transparent px-3 py-3 text-sm font-medium text-gray-600 hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:bg-gray-800 dark:hover:text-white"
         }
         (true, true) => {
-            "inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-500 dark:bg-gray-700 dark:text-blue-300 dark:hover:bg-gray-600"
+            "inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-sm hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600"
         }
         (true, false) => {
-            "inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            "inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-200 hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
         }
     };
     view! { <A href=href.get_value() exact=!descendants attr:class=class attr:aria-label=label attr:aria-current=move || active.get().then_some("page")>
-        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">{icon}</span>
+        <Icon name=icon size=if secondary { icon_size::INLINE } else { icon_size::NAV } class="text-gray-400 dark:text-gray-500" />
         <span>{label}</span>
     </A> }
 }
@@ -146,8 +151,8 @@ fn NavigationLink(
 pub fn ApplicationNav(paths: ApplicationPaths) -> impl IntoView {
     let paths = StoredValue::new(paths);
     view! { <nav aria-label="Application" class="flex flex-wrap gap-2 border-b border-gray-200 dark:border-gray-700">
-        <NavigationLink href=paths.get_value().console() label="Overview" icon="dashboard" />
-        <NavigationLink href=paths.get_value().oauth() label="OAuth Configuration" icon="key" descendants=true />
+        <NavigationLink href=paths.get_value().console() label="Overview" icon=IconName::Dashboard />
+        <NavigationLink href=paths.get_value().oauth() label="OAuth Configuration" icon=IconName::Clients descendants=true />
     </nav> }
 }
 
@@ -156,8 +161,8 @@ pub fn ApplicationNav(paths: ApplicationPaths) -> impl IntoView {
 pub fn OAuthNav(paths: ApplicationPaths) -> impl IntoView {
     let paths = StoredValue::new(paths);
     view! { <nav aria-label="OAuth configuration" class="flex w-fit max-w-full flex-wrap gap-1 rounded-lg bg-gray-100 p-1 dark:bg-gray-900">
-        <NavigationLink href=paths.get_value().oauth() label="Summary" icon="space_dashboard" secondary=true />
-        <NavigationLink href=paths.get_value().clients() label="Clients" icon="devices" descendants=true secondary=true />
-        <NavigationLink href=paths.get_value().scopes() label="Scopes" icon="rule" secondary=true />
+        <NavigationLink href=paths.get_value().oauth() label="Summary" icon=IconName::Overview secondary=true />
+        <NavigationLink href=paths.get_value().clients() label="Clients" icon=IconName::Clients descendants=true secondary=true />
+        <NavigationLink href=paths.get_value().scopes() label="Scopes" icon=IconName::Scopes secondary=true />
     </nav> }
 }

@@ -2,12 +2,15 @@
 //!
 //! Flow Overview: Fetch server-filtered, tenant-bound grants in bounded pages.
 //! Revocation uses a dedicated confirmation dialog and the server rechecks
-//! session identity before permanently changing the grant. Browser state never
-//! selects a user, organization or additional delegated scope.
+//! session identity before permanently changing the grant. Compact identifiers and UTC
+//! dates aid inspection; browser state never selects a user, organization or extra scope.
 
 use crate::{
     app_lib::AppError,
-    components::{Alert, AlertKind, Spinner, ui::Dialog},
+    components::{
+        Alert, AlertKind, CopyValue, DateTime, EntityHeader, Icon, IconName, MetaItem, Spinner,
+        icon_size, ui::Dialog,
+    },
     features::me::{
         client,
         types::{SavedGrant, SavedGrantPage},
@@ -27,11 +30,17 @@ pub fn ConnectedAppsPage() -> impl IntoView {
 
     view! {
         <div class="space-y-6">
-            <div>
-                <h1 class="text-2xl font-bold text-gray-900 dark:text-white">"Connected apps"</h1>
-                <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                    "Review the OAuth access you granted to applications in each organization."
-                </p>
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">"Connected apps"</h1>
+                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                        "Review the OAuth access you granted to applications in each organization."
+                    </p>
+                </div>
+                <button type="button" on:click=move |_| grants.refetch()
+                    class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
+                    <Icon name=IconName::Refresh size=icon_size::INLINE />"Refresh"
+                </button>
             </div>
             <Suspense fallback=|| view! { <Spinner /> }>
                 {move || match grants.get() {
@@ -106,25 +115,27 @@ fn GrantCard(
         }
     });
     view! {
-        <article class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <article class="min-w-0 rounded-lg border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
             <div class="flex flex-wrap items-start justify-between gap-4">
-                <div class="min-w-0 space-y-1">
-                    <h2 class="break-words text-base font-semibold text-gray-900 dark:text-white">{grant.client_name}</h2>
-                    <p class="text-sm text-gray-600 dark:text-gray-300">{grant.application_name}</p>
-                    <p class="text-sm text-gray-600 dark:text-gray-300">
-                        {format!("Organization: {} ({})", grant.organization_name, grant.organization_slug)}
-                    </p>
-                    <p class="break-all font-mono text-xs text-gray-500 dark:text-gray-400">
-                        {format!("Client ID: {}", grant.client_id)}
-                    </p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">
-                        {format!("Granted: {}", grant.created_at)}
-                    </p>
+                <div class="min-w-0 flex-1 space-y-1">
+                    <EntityHeader icon=IconName::Clients>{grant.client_name}</EntityHeader>
+                    <p class="break-words text-sm text-gray-600 dark:text-gray-300">{grant.application_name}</p>
+                    <dl class="mt-3 min-w-0">
+                        <MetaItem icon=IconName::Organizations label="Organization">
+                            {format!("{} ({})", grant.organization_name, grant.organization_slug)}
+                        </MetaItem>
+                        <MetaItem icon=IconName::Clients label="Client ID">
+                            <CopyValue value=grant.client_id label="client ID" compact=true />
+                        </MetaItem>
+                        <MetaItem icon=IconName::Calendar label="Granted">
+                            <DateTime value=grant.created_at with_time=true />
+                        </MetaItem>
+                    </dl>
                 </div>
                 <button type="button"
                     class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus:ring-2 focus:ring-red-500 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/20"
                     on:click=move |_| { error.set(String::new()); open.set(true); }>
-                    <span class="material-symbols-outlined text-base" aria-hidden="true">"link_off"</span>
+                    <Icon name=IconName::Unlink size=icon_size::INLINE />
                     "Revoke access"
                 </button>
             </div>
@@ -132,11 +143,11 @@ fn GrantCard(
                 <p class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">"Granted OAuth scopes"</p>
                 <div class="mt-2 flex flex-wrap gap-2">
                     {grant.scopes.into_iter().map(|scope| view! {
-                        <span class="rounded-full bg-blue-50 px-2.5 py-1 font-mono text-xs text-blue-800 dark:bg-blue-900/30 dark:text-blue-200">{scope}</span>
+                        <span class="min-w-0 break-words rounded border border-gray-200 px-2 py-1 font-mono text-xs text-gray-600 dark:border-gray-700 dark:text-gray-300">{scope}</span>
                     }).collect_view()}
                 </div>
             </div>
-            <Dialog id=format!("revoke-oauth-grant-{}", grant.id) title="Revoke application access" icon="link_off" open=open busy=revoke.pending()>
+            <Dialog id=format!("revoke-oauth-grant-{}", grant.id) title="Revoke application access" icon=IconName::Unlink open=open busy=revoke.pending()>
                 <form class="space-y-4" on:submit=move |event| {
                     event.prevent_default();
                     if !revoke.pending().get_untracked() { revoke.dispatch(()); }

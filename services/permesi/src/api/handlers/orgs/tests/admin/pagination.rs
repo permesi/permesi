@@ -103,16 +103,9 @@ async fn collect_pages(f: &Fixture, path: &str) -> Result<Vec<Uuid>> {
         assert_ne!(items.len(), 0);
         assert!(items.len() <= 50);
         for row in items {
-            assert!(
-                row.as_object().context("metadata")?.keys().all(|key| [
-                    "id",
-                    "name",
-                    "slug",
-                    "tier",
-                    "created_at"
-                ]
-                .contains(&key.as_str()))
-            );
+            assert!(row.as_object().context("metadata")?.keys().all(|key| {
+                ["id", "name", "slug", "tier", "created_at", "owners"].contains(&key.as_str())
+            }));
             let id = Uuid::parse_str(row["id"].as_str().context("metadata id")?)?;
             assert!(!seen.contains(&id));
             seen.push(id);

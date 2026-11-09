@@ -20,6 +20,7 @@ built = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 leptos = { version = "0.8", features = ["csr"] }
 leptos_router = { version = "0.8" }
+lucide-leptos = { version = "3.63", default-features = false, features = ["account", "arrows", "development", "devices", "files", "layout", "navigation", "notifications", "security", "text", "time"] }
 leptos_dom = { version = "0.8" }
 gloo-net = { version = "0.7", features = ["json"] }
 gloo-timers = { version = "0.4", features = ["futures"] }

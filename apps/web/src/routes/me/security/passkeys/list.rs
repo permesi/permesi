@@ -1,10 +1,11 @@
 //! Persisted passkey rows and password-confirmed delete controls.
 //! Credential identifiers select a row; the server still verifies ownership.
 
-use super::super::display::{format_relative, format_rfc3339};
 use crate::{
     app_lib::{AppError, theme::Theme},
-    components::{Alert, AlertKind, Spinner},
+    components::{
+        Alert, AlertKind, DateTime, EmptyValue, Icon, IconName, MetaItem, Spinner, icon_size,
+    },
     features::passkeys::types::PasskeyCredentialListResponse,
 };
 use leptos::prelude::*;
@@ -51,10 +52,11 @@ pub(super) fn PasskeyList(
                                             let id_for_keydown = id.clone();
                                             Some(view! {
                                                 <span
-                                                    class="text-slate-300 hover:text-slate-600 transition-colors cursor-pointer"
+                                                    class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-red-50 hover:text-red-700 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none cursor-pointer dark:hover:bg-red-950 dark:hover:text-red-300"
                                                     role="button"
                                                     tabindex="0"
                                                     aria-label="Remove passkey"
+                                                    title="Remove passkey"
                                                     on:click=move |_| {
                                                         set_show_delete_passkey_form
                                                             .set(Some(id_for_click.clone()));
@@ -66,34 +68,27 @@ pub(super) fn PasskeyList(
                                                         }
                                                     }
                                                 >
-                                                    <span class="material-symbols-outlined text-sm">
-                                                        "delete"
-                                                    </span>
+                                                    <Icon name=IconName::Delete size=icon_size::INLINE />
                                                 </span>
                                             })
                                         };
                                         view! {
                                             <div class="flex flex-col space-y-4">
                                                 <div class=move || format!("{} group", Theme::LIST_ITEM_FLAT)>
-                                                    <div class="flex items-center space-x-3">
-                                                        <span class=Theme::ICON_SMALL>
-                                                            "key"
-                                                        </span>
-                                                        <div>
+                                                    <div class="flex min-w-0 flex-1 items-start space-x-3">
+                                                        <Icon name=IconName::KeyRound size=icon_size::INLINE class=Theme::ICON />
+                                                        <div class="min-w-0 flex-1">
                                                             <p class="text-sm text-gray-700 dark:text-gray-200 font-medium">
                                                                 {cred.label.unwrap_or_else(|| "Passkey".to_string())}
                                                             </p>
-                                                            <p class="text-xs text-gray-500 dark:text-gray-400">
-                                                                {format!(
-                                                                    "Added {} | Last used {}",
-                                                                    cred.created_at
-                                                                        .as_deref().map_or_else(|| {
-                                                                            "date unavailable".to_string()
-                                                                        }, format_rfc3339),
-                                                                    cred.last_used_at
-                                                                        .as_deref().map_or_else(|| "Never".to_string(), format_relative)
-                                                                )}
-                                                            </p>
+                                                            <dl class="mt-2">
+                                                                <MetaItem icon=IconName::Calendar label="Added">
+                                                                    {cred.created_at.map_or_else(|| view! { <EmptyValue text="Not recorded" /> }.into_any(), |at| view! { <DateTime value=at /> }.into_any())}
+                                                                </MetaItem>
+                                                                <MetaItem icon=IconName::Clock label="Last used">
+                                                                    {cred.last_used_at.map_or_else(|| view! { <EmptyValue text="Never" /> }.into_any(), |at| view! { <DateTime value=at /> }.into_any())}
+                                                                </MetaItem>
+                                                            </dl>
                                                         </div>
                                                     </div>
                                                     {remove_button}
