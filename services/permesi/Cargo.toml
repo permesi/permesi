@@ -31,6 +31,20 @@ assets = [
     ["../../contrib/systemd/permesi.env.example", "usr/share/doc/permesi/permesi.env.example", "644"],
 ]
 
+[package.metadata.generate-rpm]
+summary = "Permesi service"
+# gzip keeps the package installable on the oldest supported RPM distributions.
+payload_compress = "gzip"
+post_install_script = "../../contrib/rpm/permesi/post.sh"
+pre_uninstall_script = "../../contrib/rpm/permesi/preun.sh"
+post_uninstall_script = "../../contrib/rpm/permesi/postun.sh"
+assets = [
+    { source = "../../target/release/permesi", dest = "/usr/bin/permesi", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/permesi/README.md", mode = "644", doc = true },
+    { source = "../../contrib/systemd/permesi.service", dest = "/usr/lib/systemd/system/permesi.service", mode = "644" },
+    { source = "../../contrib/systemd/permesi.env.example", dest = "/usr/share/doc/permesi/permesi.env.example", mode = "644", doc = true },
+]
+
 [lints]
 workspace = true
 
