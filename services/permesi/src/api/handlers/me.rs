@@ -590,5 +590,8 @@ pub(super) fn recent_auth_ok(principal: &super::auth::principal::Principal) -> b
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or_default(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+        .map_or_else(
+            |_| 0,
+            |duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+        )
 }

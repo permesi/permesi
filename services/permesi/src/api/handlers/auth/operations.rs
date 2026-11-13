@@ -45,7 +45,7 @@ impl OperationsConfig {
             mfa_limit: value("auth-pending-mfa-limit")?,
             trusted_proxies: matches
                 .get_many::<IpNetwork>("auth-trusted-proxy")
-                .map_or_default(|v| v.copied().collect()),
+                .map_or_else(Vec::new, |v| v.copied().collect()),
             trust_unix_proxy: matches.get_flag("auth-trust-unix-proxy"),
         };
         ensure!(
