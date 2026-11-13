@@ -4,7 +4,7 @@
 # contain dist-bin/genesis, a static x86_64-unknown-linux-musl release binary.
 
 # Stage 1: grab CA certs from Alpine (for TLS).
-FROM docker.io/library/alpine:3.21 AS certs
+FROM docker.io/library/alpine:3.21@sha256:bc21487101ae47172509130ee1092cc273a831968d64b617776d1f69c81e42ab AS certs
 RUN apk add --no-cache ca-certificates
 
 # Stage 2: ultra-small runtime (scratch + prebuilt binary + certs).

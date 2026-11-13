@@ -171,7 +171,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot
 
       - name: Install cargo-deb
-        run: cargo install --locked cargo-deb
+        run: cargo install --locked cargo-deb --version 3.8.0
 
       # cargo-deb names the package after the runner's architecture, which is the target's.
       - name: Build Debian packages
@@ -196,7 +196,7 @@ jobs:
         run: sudo apt-get install -y rpm
 
       - name: Install cargo-generate-rpm
-        run: cargo install --locked cargo-generate-rpm
+        run: cargo install --locked cargo-generate-rpm --version 0.21.1
 
       # The release binaries were built above for the runner's architecture, which is the
       # target's; cargo-generate-rpm names the package after that architecture too.
