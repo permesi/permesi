@@ -118,10 +118,21 @@ genesis-it: dev-start-infra
 # Container images (podman)
 # ----------------------
 
-image-permesi:
+# The Dockerfiles copy a prebuilt static binary, built the way CI builds it. This needs the
+# x86_64-unknown-linux-musl rustup target and musl-gcc on the host.
+[private]
+image-binaries:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  target=x86_64-unknown-linux-musl
+  CC_x86_64_unknown_linux_musl=musl-gcc cargo build --release --locked --target "${target}" -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
+  mkdir -p dist-bin
+  cp "target/${target}/release/permesi" "target/${target}/release/genesis" dist-bin/
+
+image-permesi: image-binaries
   podman build -f services/permesi/Dockerfile -t permesi:{{ branch }} .
 
-image-genesis:
+image-genesis: image-binaries
   podman build -f services/genesis/Dockerfile -t genesis:{{ branch }} .
 
 images: image-permesi image-genesis

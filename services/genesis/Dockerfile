@@ -1,32 +1,19 @@
-# Stage 1: build a static binary with musl.
-FROM docker.io/messense/rust-musl-cross:x86_64-musl AS builder
-ARG TARGET=x86_64-unknown-linux-musl
-ARG BUILD_GIT_COMMIT_HASH=unknown
-ENV BUILD_GIT_COMMIT_HASH=${BUILD_GIT_COMMIT_HASH}
+# The service binary is compiled once by CI (or `just image`) with the run's Rust
+# toolchain and copied in here, so the image holds exactly the bytes the release
+# publishes and no base image decides the compiler version. The build context must
+# contain dist-bin/genesis, a static x86_64-unknown-linux-musl release binary.
 
-# Keep the builder minimal; we only need git for Cargo deps.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY . .
-
-RUN cargo build --release --locked -p genesis --features telemetry --target "${TARGET}" && \
-    strip "target/${TARGET}/release/genesis"
-
-# Stage 2: grab CA certs from Alpine (for TLS).
+# Stage 1: grab CA certs from Alpine (for TLS).
 FROM docker.io/library/alpine:3.21 AS certs
 RUN apk add --no-cache ca-certificates
 
-# Stage 3: ultra-small runtime (scratch + binary + certs).
+# Stage 2: ultra-small runtime (scratch + prebuilt binary + certs).
 FROM scratch
-ARG TARGET=x86_64-unknown-linux-musl
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 WORKDIR /app
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /app/target/${TARGET}/release/genesis /app/genesis
+# Artifact downloads drop file modes, so set the executable bit explicitly.
+COPY --chmod=0555 dist-bin/genesis /app/genesis
 USER 65532:65532
 
 EXPOSE 8080

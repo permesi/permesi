@@ -77,7 +77,7 @@ OpenAPI regeneration:
 - `just openapi` regenerates both service artifacts; use `just openapi-permesi` or `just openapi-genesis` for one service.
 
 Container builds (local):
-- `podman build -f services/permesi/Dockerfile -t permesi:dev .` (and `genesis` analog)
+- `just image-permesi` / `just image-genesis` (or `just images`) build the musl binaries into `dist-bin/`, then the images with podman; the service Dockerfiles copy `dist-bin/<service>` and do not compile.
 
 ## Database Inspection (psql)
 - Connect: `podman exec -it postgres-permesi psql -U postgres -d permesi`

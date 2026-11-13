@@ -389,6 +389,28 @@ jobs:
           fi
           test -f apps/web/dist/index.html
 
+      - name: Download the x86_64 binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: dist-binaries-x86_64-unknown-linux-musl
+          path: dist
+
+      # The images carry the very binaries the release archives publish, so one compiler
+      # build backs the tarballs, the packages and the containers.
+      - name: Extract the image binaries
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          target=x86_64-unknown-linux-musl
+          mkdir -p dist-bin
+          for binary_name in permesi genesis; do
+            dirname="${binary_name}-${VERSION}-${target}"
+            tar -xzf "dist/${dirname}.tar.gz" -C dist-bin --strip-components=1 "${dirname}/${binary_name}"
+          done
+          test -s dist-bin/permesi && test -s dist-bin/genesis
+
       - name: Build, push and resolve the digests
         id: push
         shell: bash
@@ -402,7 +424,6 @@ jobs:
               dockerfile="apps/web/Dockerfile"
             fi
             ${CONTAINER_TOOL} build \
-              --build-arg "BUILD_GIT_COMMIT_HASH=${GITHUB_SHA}" \
               -f "${dockerfile}" \
               -t "${image}:${tag}" \
               .

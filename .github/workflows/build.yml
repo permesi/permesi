@@ -62,6 +62,16 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
 
+      - name: Upload image binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: image-binaries
+          path: |
+            target/${{ matrix.target }}/release/permesi
+            target/${{ matrix.target }}/release/genesis
+          if-no-files-found: error
+          overwrite: true
+
   frontend-build:
     name: Build Frontend
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
@@ -342,10 +352,17 @@ jobs:
           fi
           test -f apps/web/dist/index.html
 
+      - name: Download image binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: image-binaries
+          path: dist-bin
+
       - name: Build & Push images
         shell: bash
         run: |-
           set -euo pipefail
+          test -s dist-bin/permesi && test -s dist-bin/genesis
           for service in permesi genesis web; do
             image="ghcr.io/permesi/${service}"
             dockerfile="services/${service}/Dockerfile"
@@ -353,7 +370,6 @@ jobs:
               dockerfile="apps/web/Dockerfile"
             fi
             ${CONTAINER_TOOL} build \
-              --build-arg "BUILD_GIT_COMMIT_HASH=${GITHUB_SHA}" \
               -f "${dockerfile}" \
               -t "${image}:develop" \
               .

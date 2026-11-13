@@ -722,12 +722,16 @@ pushes, pull requests and releases without rewriting the artifacts.
 
 ## Containers
 
-- `podman build -f services/permesi/Dockerfile -t permesi:dev .`
-- `podman build -f services/genesis/Dockerfile -t genesis:dev .`
+- `just image-permesi`, `just image-genesis` or `just images`: build the static musl binaries, then the service images with podman.
 - `podman build -f apps/web/Dockerfile -t web:dev .`
 
-The Dockerfiles use fully qualified Docker Hub base images, so these builds do
-not depend on the host's unqualified registry search configuration.
+The service Dockerfiles compile nothing. They copy `dist-bin/<service>`, the same binary CI builds
+with the run's Rust toolchain and the release publishes in its archives, so a plain `podman build`
+needs `dist-bin/` first. The host needs the `x86_64-unknown-linux-musl` rustup target and `musl-gcc`.
+
+The Dockerfiles use fully qualified Docker Hub base images pinned by digest, so these builds do
+not depend on the host's unqualified registry search configuration. Dependabot refreshes each tag and
+digest together.
 
 ## Local Tracing (Jaeger)
 

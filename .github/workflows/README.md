@@ -103,8 +103,11 @@ before interpreting queue or wall-time differences as a speedup.
   overrides, so a later CI run cannot overwrite the tested production frontend. The regression suite
   `python3 scripts/test-frontend-preview.py` executes that branch resolver and checks that rejected
   publication targets do not reach the deployment environment.
-  The service image builds inject `github.sha` as `BUILD_GIT_COMMIT_HASH` because the Docker build context
-  excludes `.git`, and the binaries would otherwise report an unknown commit.
+  The `permesi` and `genesis` images do not compile Rust. `Build` uploads its musl binaries as the
+  `image-binaries` artifact, built with the run's toolchain in a checkout, so they report the real commit;
+  `Package GHCR` downloads that artifact into `dist-bin/` and the Dockerfiles copy it. The release builds
+  its images the same way from the `dist-binaries-x86_64-unknown-linux-musl` archives, so the containers,
+  tarballs and packages of a release hold the same compiled bytes.
   Its required `Browser tests` job downloads the same run's `frontend-dist` artifact and invokes
   `just web-test-browser-built` without rebuilding WASM or running npm installation. It runs the console
   fixture suite and explicitly executes the ignored real PostgreSQL browser tests for

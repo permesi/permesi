@@ -3,6 +3,7 @@
 .tmp/
 !.tmp/.gitkeep
 dist/
+dist-bin/
 node_modules/
 apps/web/dist/
 apps/web/dist-dev/
