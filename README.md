@@ -99,6 +99,17 @@ Then open `https://permesi.localhost:8443`. Without `--start`, SSH in your own w
 
 The laptop's mkcert CA issues the HAProxy certificate, limited to the `permesi.localhost` names, and only that leaf plus the CA's public certificate are copied to the VM. The CA private key never leaves the laptop, and the laptop never trusts a CA that lives on a server. Remote helpers such as `just genesis-token` pin the copied public CA directly instead of adding it to the VM's system trust store. If `just start` on the VM stops at a missing TLS certificate, run `scripts/dev-remote` from the laptop first. CORS and passkeys compare origins including the port, so `PERMESI_HTTPS_PORT` must be the same on both ends, and the script refuses to forward when the remote HAProxy listens on another port. Editors that forward ports automatically (VS Code Remote-SSH, JetBrains Gateway) switch to a different local port when the one they want is busy, which breaks those origins: turn automatic forwarding off (`"remote.autoForwardPorts": false` in VS Code) and let `scripts/dev-remote` own the tunnel. On the VM, keep the firewall closed to everything but SSH, because the backend ports listen on all interfaces (see Local Development below). If the stack runs for days, refresh the 24-hour backend certificates with `just dev-tls-certs`; the services pick them up without a restart.
 
+### Keeping Rust aligned with CI
+
+`stable` selects a release channel; it does not automatically update an already installed
+compiler. Run `rustup update stable` periodically. `just rust-check` checks online without
+installing anything and refuses an outdated or missing stable toolchain, an active compiler
+that differs from installed stable, or a failed update check. It runs before `just build`,
+`build-permesi`, `build-genesis` and `clippy`, including the `test`, `verify-release` and default
+validation flows. Formatting remains offline. Check `PATH`, `RUSTUP_TOOLCHAIN` and rustup
+overrides if an updated stable toolchain is installed but another compiler is active.
+This checks today's stable, not the compiler recorded by a past CI run.
+
 ## Workspace Layout
 
 This repository is a Rust workspace (monorepo) containing:

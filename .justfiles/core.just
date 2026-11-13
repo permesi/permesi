@@ -33,7 +33,35 @@ setup-network:
 fmt:
   cargo fmt --all -- --check
 
-clippy:
+[doc("Check online that installed stable is current and matches the active compiler; install nothing")]
+rust-check:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  status=0
+  report="$(rustup check --no-self-update)" || status=$?
+  if [[ "${status}" != 0 && "${status}" != 100 ]]; then
+    echo "Could not check Rust updates; check your connection and run just rust-check again." >&2
+    exit 1
+  fi
+  stable_status="$(printf '%s\n' "${report}" | awk '$1 ~ /^stable-/ { print; exit }')"
+  printf '%s\n' "${stable_status}"
+  case "$(printf '%s' "${stable_status}" | tr '[:upper:]' '[:lower:]')" in
+    *" - up to date"*) ;;
+    *)
+      echo "Stable Rust is missing or outdated. Run: rustup update stable" >&2
+      exit 1
+      ;;
+  esac
+  stable="$(rustup run stable rustc --version)"
+  active="$(rustc --version)"
+  if [[ "${active}" != "${stable}" ]]; then
+    echo "Active compiler: ${active}; expected stable: ${stable}." >&2
+    echo "Check PATH, RUSTUP_TOOLCHAIN and rustup overrides; select the updated stable toolchain." >&2
+    exit 1
+  fi
+  echo "Rust toolchain matches current stable: ${active}"
+
+clippy: rust-check
   cargo clippy --locked --all-targets --all-features -- -D warnings
   cargo clippy --locked -p permesi_web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
@@ -58,13 +86,13 @@ test-build-identity:
 ci-timings run_id:
   python3 "{{root}}/scripts/ci-timings.py" {{quote(run_id)}}
 
-build:
+build: rust-check
   cargo build --workspace
 
-build-permesi:
+build-permesi: rust-check
   cargo build -p permesi
 
-build-genesis:
+build-genesis: rust-check
   cargo build -p genesis
 
 update:
