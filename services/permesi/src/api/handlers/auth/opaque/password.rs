@@ -248,6 +248,5 @@ fn recent_auth_ok(principal: &Principal) -> bool {
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or_default()
+        .map_or_default(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
 }

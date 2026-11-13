@@ -139,7 +139,7 @@ pub(super) fn OperatorManager(user_id: String, email: String) -> impl IntoView {
         <Dialog id="operator-designation" title="Manage Operator Designation" icon=IconName::Operator open=open busy=busy>
             <form class="space-y-4" on:submit=move |ev| {
                 ev.prevent_default();
-                let actor_email = auth.session.get_untracked().map(|session| session.email).unwrap_or_default();
+                let actor_email = auth.session.get_untracked().map_or_default(|session| session.email);
                 if !busy.get_untracked() && typed.get_untracked() == email_for_confirm
                     && !password.get_untracked().is_empty() && !actor_email.is_empty() {
                     error.set(String::new());

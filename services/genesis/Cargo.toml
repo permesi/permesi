@@ -6,7 +6,6 @@ publish = false
 authors.workspace = true
 description = "Token Zero generator for permesi"
 documentation = "https://github.com/permesi/genesis/blob/main/README.md"
-homepage = "https://github.com/permesi/genesis"
 repository = "https://github.com/permesi/genesis"
 readme = "../../README.md"
 keywords = ["password", "security", "token"]
@@ -29,6 +28,22 @@ assets = [
     ["README.md", "usr/share/doc/genesis/README.md", "644"],
     ["../../contrib/systemd/genesis.service", "lib/systemd/system/genesis.service", "644"],
     ["../../contrib/systemd/genesis.env.example", "usr/share/doc/genesis/genesis.env.example", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Genesis service"
+vendor = "Team Permesi <team@permesi.dev>"
+url = "https://permesi.dev"
+# gzip keeps the package installable on the oldest supported RPM distributions.
+payload_compress = "gzip"
+post_install_script = "../../contrib/rpm/genesis/post.sh"
+pre_uninstall_script = "../../contrib/rpm/genesis/preun.sh"
+post_uninstall_script = "../../contrib/rpm/genesis/postun.sh"
+assets = [
+    { source = "../../target/release/genesis", dest = "/usr/bin/genesis", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/genesis/README.md", mode = "644", doc = true },
+    { source = "../../contrib/systemd/genesis.service", dest = "/usr/lib/systemd/system/genesis.service", mode = "644" },
+    { source = "../../contrib/systemd/genesis.env.example", dest = "/usr/share/doc/genesis/genesis.env.example", mode = "644", doc = true },
 ]
 
 [lints]

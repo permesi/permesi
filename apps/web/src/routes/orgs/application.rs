@@ -88,7 +88,7 @@ pub fn EnvironmentDetailPage() -> impl IntoView {
                 Some(Ok(items)) => view! {
                     <div class="grid gap-4 sm:grid-cols-2">
                         {items.into_iter().map(|app| {
-                            let path = context.get().ok().map(|value| value.application(&app.id).console()).unwrap_or_default();
+                            let path = context.get().ok().map_or_default(|value| value.application(&app.id).console());
                             view! {
                                 <A href=path attr:class="block min-w-0 cursor-pointer rounded-lg border border-gray-200 bg-white p-5 hover:border-gray-400 focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-500">
                                     <EntityHeader icon=IconName::Clients navigable=true>{app.name}</EntityHeader>
@@ -134,7 +134,7 @@ fn EnvironmentHeader(
             <div class="min-w-0 w-full sm:w-auto sm:flex-1">
                 <h1 class="break-words text-2xl font-semibold">
                     {move || environment.get().and_then(Result::ok).flatten().map_or_else(
-                        || context.get().ok().map(|path| path.environment).unwrap_or_default(),
+                        || context.get().ok().map_or_default(|path| path.environment),
                         |env| env.name,
                     )}
                 </h1>

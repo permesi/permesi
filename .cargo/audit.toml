@@ -1,9 +1,11 @@
 # cargo-audit policy for this repository.
 #
-# Reviewed on: 2026-10-05
+# Reviewed on: 2026-11-13
 # Revisit when:
 # - production adds Rust RSA private-key operations, or
-# - a fixed advisory path is available for RUSTSEC-2023-0071.
+# - a fixed advisory path is available for RUSTSEC-2023-0071, or
+# - a sqlx release lets sqlx-sqlite use libsqlite3-sys >= 0.39 (RUSTSEC-2026-0459), or
+# - any workspace crate enables a SQLite driver.
 
 [advisories]
 # Active RSA paths include Permesi OIDC/WebAuthn public-key verification and the
@@ -11,7 +13,13 @@
 # Vault; Rust private-key operations are limited to ephemeral test fixtures. The
 # private-key timing advisory remains ignored on this reviewed usage boundary;
 # this does not claim the upstream advisory is fixed.
-ignore = ["RUSTSEC-2023-0071"]
+#
+# RUSTSEC-2026-0459 affects the C SQLite bundled by libsqlite3-sys. The workspace is
+# Postgres-only: libsqlite3-sys is present in Cargo.lock only through sqlx's optional
+# sqlx-sqlite driver, and `cargo tree --workspace --target all` resolves no SQLite
+# crate, so the vulnerable code is never compiled or linked. sqlx-sqlite 0.9.0 pins
+# libsqlite3-sys 0.37, so the lockfile cannot move to the fixed 0.39 until sqlx does.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0459"]
 
 # Keep surfacing maintenance risk without failing CI on these warnings.
 informational_warnings = ["unmaintained"]

@@ -82,13 +82,12 @@ impl Options {
 
         let cors_allowed_origins: Vec<String> = matches
             .get_one::<String>(ARG_CORS_ALLOWED_ORIGINS)
-            .map(|s| {
+            .map_or_default(|s| {
                 s.split(',')
                     .map(|o| o.trim().to_string())
                     .filter(|o| !o.is_empty())
                     .collect()
-            })
-            .unwrap_or_default();
+            });
 
         Ok(Self {
             frontend_base_url,

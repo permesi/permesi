@@ -286,7 +286,7 @@ mod tests {
 
         let signal = wait_for_shutdown(&mut rx).await?;
         if signal != ShutdownSignal::TokenRenewalFailed {
-            bail!("expected token renewal failure, got {:?}", signal);
+            bail!("expected token renewal failure, got {signal:?}");
         }
 
         let Some(requests) = server.received_requests().await else {
@@ -345,7 +345,7 @@ mod tests {
 
         let signal = wait_for_shutdown(&mut rx).await?;
         if signal != ShutdownSignal::DbLeaseRenewalFailed {
-            bail!("expected DB lease renewal failure, got {:?}", signal);
+            bail!("expected DB lease renewal failure, got {signal:?}");
         }
 
         let Some(requests) = server.received_requests().await else {

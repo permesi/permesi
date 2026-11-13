@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 license = "BSD-3-Clause"
 authors = ["Team Permesi <team@permesi.dev>"]
@@ -28,7 +28,6 @@ anyhow = "1"
 axum = { version = "0.8", features = ["macros", "tracing"] }
 base64 = "0.23"
 base64ct = { version = "1.8.3", features = ["alloc"] }
-blake2 = "0.11"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
 getrandom = "0.4"
 hmac = "0.13"
@@ -48,7 +47,7 @@ rand_core = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rcgen = "0.14"
 rustls = "0.23"
-rustls-pki-types = "1.15.1"
+rustls-pki-types = "1.16.0"
 socket2 = "0.6"
 axum-server = { version = "0.9", features = ["tls-rustls"] }
 secrecy = "0.10.3"

@@ -71,6 +71,7 @@ pub struct ApiError {
 
 impl ApiError {
     /// Build an error with an explicit code, truncating the message to a safe length.
+    #[must_use]
     pub fn new(status: StatusCode, code: &'static str, message: &str) -> Self {
         Self {
             status,
@@ -283,6 +284,7 @@ fn is_json(headers: &HeaderMap) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::{ErrorEnvelope, MESSAGE_MAX_CHARS, with_error_envelope};
     use anyhow::Result;

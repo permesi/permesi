@@ -99,9 +99,8 @@ pub fn load_server_config() -> Result<ServerConfig> {
 /// # Errors
 /// Returns an error if the configured CA bundle cannot be read or parsed.
 pub fn load_reqwest_ca() -> Result<Vec<Certificate>> {
-    let paths = match runtime_paths() {
-        Ok(p) => p,
-        Err(_) => return Ok(Vec::new()),
+    let Ok(paths) = runtime_paths() else {
+        return Ok(Vec::new());
     };
     if let Some(path) = paths.extra_ca_path() {
         return load_reqwest_ca_from(path);
@@ -376,6 +375,7 @@ fn load_root_store(path: &Path) -> Result<RootCertStore> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rcgen::{CertificateParams, KeyPair};
@@ -422,12 +422,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("utils-tls-test-multi-key-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let bundle_path = dir.join("multi_key.pem");
-        let cert1 = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
-        let cert2 = rcgen::generate_simple_self_signed(vec!["other".to_string()]).unwrap();
+        let first_cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let updated_cert = rcgen::generate_simple_self_signed(vec!["other".to_string()]).unwrap();
         let mut content = String::new();
-        content.push_str(&cert1.signing_key.serialize_pem());
-        content.push_str(&cert2.signing_key.serialize_pem());
-        content.push_str(&cert1.cert.pem());
+        content.push_str(&first_cert.signing_key.serialize_pem());
+        content.push_str(&updated_cert.signing_key.serialize_pem());
+        content.push_str(&first_cert.cert.pem());
         std::fs::write(&bundle_path, content).unwrap();
         assert!(load_bundle(&bundle_path).is_err());
     }
@@ -525,9 +525,9 @@ mod tests {
         let bundle_path = dir.join("tls.bundle.pem");
 
         // Initial cert
-        let cert1 = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
-        let mut bundle1 = cert1.signing_key.serialize_pem();
-        bundle1.push_str(&cert1.cert.pem());
+        let first_cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let mut bundle1 = first_cert.signing_key.serialize_pem();
+        bundle1.push_str(&first_cert.cert.pem());
         std::fs::write(&bundle_path, &bundle1).unwrap();
 
         let (certs, key) = load_bundle(&bundle_path).unwrap();
@@ -542,9 +542,9 @@ mod tests {
         spawn_watcher(cert_key.clone(), paths, Duration::from_millis(100));
 
         // Update cert
-        let cert2 = rcgen::generate_simple_self_signed(vec!["updated".to_string()]).unwrap();
-        let mut bundle2 = cert2.signing_key.serialize_pem();
-        bundle2.push_str(&cert2.cert.pem());
+        let updated_cert = rcgen::generate_simple_self_signed(vec!["updated".to_string()]).unwrap();
+        let mut bundle2 = updated_cert.signing_key.serialize_pem();
+        bundle2.push_str(&updated_cert.cert.pem());
 
         // Ensure filesystem timestamp changes
         tokio::time::sleep(Duration::from_millis(1100)).await;

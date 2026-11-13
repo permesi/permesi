@@ -35,11 +35,7 @@ pub(super) fn SecurityKeysSection() -> impl IntoView {
             let password = password.clone();
             let auth = auth;
             async move {
-                let email = auth
-                    .session
-                    .get_untracked()
-                    .map(|s| s.email)
-                    .unwrap_or_default();
+                let email = auth.session.get_untracked().map_or_default(|s| s.email);
                 reauthenticate(&email, password).await?;
 
                 // 2. Call delete

@@ -20,7 +20,7 @@ use vault_client::DatabaseCreds;
 /// Returns an error if:
 /// - The Vault request fails (network error, 4xx/5xx response).
 /// - The Vault response body is not valid JSON or is missing required fields
-///   (lease_id, lease_duration, username, password).
+///   (`lease_id`, `lease_duration`, `username`, `password`).
 #[instrument(skip(globals))]
 pub async fn database_creds(globals: &mut GlobalArgs, role: &str) -> Result<()> {
     let token_str = globals.vault_token.expose_secret();

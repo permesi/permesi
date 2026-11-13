@@ -21,7 +21,7 @@
 //! `application_name` so they can be told apart in `pg_stat_activity`.
 //!
 //! Flow Overview: [`begin`] acquires a connection in the caller, then completes
-//! BEGIN in an owned task. Cancelling the caller cannot interrupt SQLx before it
+//! BEGIN in an owned task. Cancelling the caller cannot interrupt `SQLx` before it
 //! tracks the server transaction. An abandoned task result drops the tracked
 //! transaction and schedules rollback before the connection can be reused.
 
@@ -44,7 +44,7 @@ const MAX_LIFETIME_MAX: Duration = Duration::from_hours(24);
 /// Longest wait for pooled connections to close during shutdown.
 pub const POOL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Starts a pool-owned transaction without exposing SQLx's interrupted-BEGIN window.
+/// Starts a pool-owned transaction without exposing `SQLx`'s interrupted-BEGIN window.
 ///
 /// Pool acquisition stays cancellable and bounded by existing caller/pool deadlines.
 /// After acquisition, the owned task finishes BEGIN even if its receiver disappears;
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(options.get_min_connections(), 3);
         assert_eq!(options.get_acquire_timeout(), Duration::from_millis(2_500));
         assert_eq!(options.get_idle_timeout(), Some(Duration::from_secs(300)));
-        assert_eq!(options.get_max_lifetime(), Some(Duration::from_secs(900)));
+        assert_eq!(options.get_max_lifetime(), Some(Duration::from_mins(15)));
         assert!(options.get_test_before_acquire());
         Ok(())
     }

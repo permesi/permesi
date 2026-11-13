@@ -61,8 +61,7 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or_default()
+        .map_or_default(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// A fresh random password per test; OPAQUE only needs the bytes to match between

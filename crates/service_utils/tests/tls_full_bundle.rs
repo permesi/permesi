@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use rcgen::{CertificateParams, KeyPair};
 use service_utils::tls::{TlsPaths, load_reqwest_ca, load_server_config, set_runtime_paths};
 use std::fs;

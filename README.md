@@ -516,7 +516,7 @@ Production readiness checklist:
 
 Trace export is behind the default-off `telemetry` Cargo feature, so a plain build carries
 only local structured logging and none of the OpenTelemetry/tonic stack. The container
-images, release tarballs, Debian packages, and the `just` dev recipes all build with
+images, release tarballs, Debian and RPM packages, and the `just` dev recipes all build with
 `--features telemetry`. The feature only makes export possible: a telemetry build sends
 spans only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set at startup, and a build without the
 feature logs a warning if that variable is present instead of silently dropping traces.
@@ -608,7 +608,7 @@ exactly the commit CI tested, and the workflow changes nothing in the repository
 Release workflow (workflow_dispatch on develop)
  guard         develop only; the version is X.Y.Z, above the latest tag and untagged; both
                OpenAPI specs carry it; main is an ancestor; `CI OK` passed on this commit
- build         musl archives and Debian packages for x86_64 (amd64) and aarch64 (arm64),
+ build         musl archives, Debian and RPM packages for x86_64 (amd64) and aarch64 (arm64),
                each on a native hosted runner, nothing from a cache
  frontend      the production web build, signed (checksums, cosign, build provenance)
  images        permesi, genesis and web, pushed only as `:sha-<commit>`, keylessly signed

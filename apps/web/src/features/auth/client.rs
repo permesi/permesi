@@ -277,9 +277,7 @@ pub fn is_token_expired(expires_at: &str) -> bool {
 }
 
 fn auth_headers(token: Option<&str>) -> Vec<(String, String)> {
-    token
-        .map(|token| vec![("Authorization".to_string(), format!("Bearer {token}"))])
-        .unwrap_or_default()
+    token.map_or_default(|token| vec![("Authorization".to_string(), format!("Bearer {token}"))])
 }
 
 /// Fetches the system health status.

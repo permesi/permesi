@@ -595,13 +595,12 @@ fn recent_auth_ok(principal: &Principal, max_age_seconds: i64) -> bool {
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| {
+        .map_or_default(|duration| {
             #[allow(clippy::cast_possible_wrap)]
             {
                 duration.as_secs() as i64
             }
         })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

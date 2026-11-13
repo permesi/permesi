@@ -45,8 +45,7 @@ impl OperationsConfig {
             mfa_limit: value("auth-pending-mfa-limit")?,
             trusted_proxies: matches
                 .get_many::<IpNetwork>("auth-trusted-proxy")
-                .map(|v| v.copied().collect())
-                .unwrap_or_default(),
+                .map_or_default(|v| v.copied().collect()),
             trust_unix_proxy: matches.get_flag("auth-trust-unix-proxy"),
         };
         ensure!(

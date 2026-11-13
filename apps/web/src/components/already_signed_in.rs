@@ -10,8 +10,7 @@ use leptos_router::components::A;
 #[component]
 pub fn AlreadySignedInPanel() -> impl IntoView {
     let auth = use_auth();
-    let user_email =
-        Signal::derive(move || auth.session.get().map(|s| s.email).unwrap_or_default());
+    let user_email = Signal::derive(move || auth.session.get().map_or_default(|s| s.email));
 
     view! {
         <div class="max-w-sm mx-auto text-center space-y-6 py-8">

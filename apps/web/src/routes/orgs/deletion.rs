@@ -190,7 +190,7 @@ pub(super) fn DeleteResource(
                     <input node_ref=confirmation id="resource-delete-confirmation" class=INPUT autofocus autocomplete="off" spellcheck="false" aria-describedby="resource-delete-error" prop:value=move || state.typed.get()
                         disabled=move || busy.get() on:input=move |ev| state.typed.set(event_target_value(&ev)) />
                 }>
-                    <p class="text-sm">"Verify your password for "<strong>{move || auth.session.get().map(|s| s.email).unwrap_or_default()}</strong>". Deletion still requires your confirmation afterwards."</p>
+                    <p class="text-sm">"Verify your password for "<strong>{move || auth.session.get().map_or_default(|s| s.email)}</strong>". Deletion still requires your confirmation afterwards."</p>
                     <label for="resource-delete-password" class=LABEL>"Password"</label>
                     <input node_ref=password id="resource-delete-password" type="password" class=INPUT autocomplete="current-password" aria-describedby="resource-delete-error" prop:value=move || state.password.get()
                         disabled=move || busy.get() on:input=move |ev| state.password.set(event_target_value(&ev)) />
