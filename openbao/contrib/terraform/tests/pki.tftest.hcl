@@ -37,6 +37,16 @@ run "pki_roles_and_cert_auth" {
   }
 
   assert {
+    condition     = alltrue([for role in [vault_pki_secret_backend_role.permesi_runtime, vault_pki_secret_backend_role.genesis_runtime] : role.client_flag == false && toset(role.ext_key_usage) == toset(["ServerAuth"])])
+    error_message = "Runtime certificates must be server-only so they cannot authenticate to cert auth."
+  }
+
+  assert {
+    condition     = alltrue([for role in [vault_pki_secret_backend_role.permesi_bootstrap, vault_pki_secret_backend_role.genesis_bootstrap] : contains(role.ext_key_usage, "ClientAuth")])
+    error_message = "Bootstrap certificates are the only ones allowed to authenticate to cert auth."
+  }
+
+  assert {
     condition     = vault_pki_secret_backend_role.permesi_bootstrap.ttl == "604800"
     error_message = "Permesi bootstrap role must default to 7 days."
   }

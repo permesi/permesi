@@ -268,21 +268,25 @@ impl OpenBaoTransport {
                     Vec::new()
                 };
                 let request = builder.body(Full::from(body_bytes))?;
-                let response = timeout(OPENBAO_REQUEST_TIMEOUT, client.request(request))
-                    .await
-                    .map_err(|_| anyhow!("openbao request timed out"))?
-                    .map_err(|e| {
+                // One deadline covers the headers and the body, so an Agent that
+                // answers and then stalls cannot hold a renewal loop open.
+                let (status, collected) = timeout(OPENBAO_REQUEST_TIMEOUT, async {
+                    let response = client.request(request).await.map_err(|e| {
                         anyhow!(
                             "hyper request error: {e}. Check permissions for socket: {}",
                             socket_path.display()
                         )
                     })?;
-                let status = response.status();
-                let collected = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| anyhow!("body collection error: {e}"))?;
+                    let status = response.status();
+                    let collected = response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(|e| anyhow!("body collection error: {e}"))?;
+                    Ok::<_, anyhow::Error>((status, collected))
+                })
+                .await
+                .map_err(|_| anyhow!("openbao request timed out"))??;
                 let json_body: Value = serde_json::from_slice(&collected.to_bytes())?;
                 Ok(OpenBaoResponse {
                     url,

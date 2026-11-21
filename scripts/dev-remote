@@ -259,7 +259,7 @@ if [ ! -f "$repo/.justfile" ]; then
   echo "fatal: no permesi checkout at $repo"
   exit 3
 fi
-for tool in zsh podman just jq curl terraform openbao cargo; do
+for tool in zsh podman just jq curl terraform bao cargo; do
   command -v "$tool" >/dev/null 2>&1 || echo "warn: $tool is not installed on the VM (see just doctor there)"
 done
 if ! command -v herdr >/dev/null 2>&1 && ! command -v tmux >/dev/null 2>&1; then

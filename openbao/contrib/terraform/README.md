@@ -9,7 +9,7 @@ This Terraform module provides a production-ready configuration for OpenBao to s
 - **KV Store**: Generates and stores the persistent OPAQUE seed and MFA recovery pepper under `secret/permesi/config`.
 - **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the OpenBao root database credentials.
 - **Policies**: Implements least-privilege policies for services and operators.
-- **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for OpenBao Agent-based certificate delivery.
+- **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for OpenBao Agent-based certificate delivery. Runtime certificates are server-only (`client_flag = false`); only the longer-lived bootstrap certificates carry `ClientAuth` and can log in to cert auth.
 
 Terraform state is sensitive in this module. It can contain values such as the Postgres root passwords and the generated OPAQUE seed. Use an encrypted remote backend (or tightly lock down local state files), and never commit `.tfstate` files or variable files containing secrets.
 

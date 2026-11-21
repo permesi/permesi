@@ -73,6 +73,11 @@ resource "vault_pki_secret_backend_config_urls" "pki_int" {
 
 # ----------------------------------------------------------------------------
 # Runtime PKI roles (short-lived TLS)
+#
+# Server-only: a runtime leaf shares its DNS SAN and issuer with the bootstrap
+# certificate, so without ClientAuth (client_flag adds it
+# unless disabled) it cannot be replayed against cert auth to
+# obtain the service's OpenBao token.
 # ----------------------------------------------------------------------------
 resource "vault_pki_secret_backend_role" "permesi_runtime" {
   backend                     = vault_mount.pki_int.path
@@ -88,7 +93,9 @@ resource "vault_pki_secret_backend_role" "permesi_runtime" {
   key_type                    = "ec"
   key_bits                    = 256
   key_usage                   = ["DigitalSignature", "KeyAgreement"]
-  ext_key_usage               = ["ClientAuth", "ServerAuth"]
+  ext_key_usage               = ["ServerAuth"]
+  server_flag                 = true
+  client_flag                 = false
   ttl                         = "86400"  # 24h
   max_ttl                     = "259200" # 72h
 }
@@ -107,7 +114,9 @@ resource "vault_pki_secret_backend_role" "genesis_runtime" {
   key_type                    = "ec"
   key_bits                    = 256
   key_usage                   = ["DigitalSignature", "KeyAgreement"]
-  ext_key_usage               = ["ClientAuth", "ServerAuth"]
+  ext_key_usage               = ["ServerAuth"]
+  server_flag                 = true
+  client_flag                 = false
   ttl                         = "86400"  # 24h
   max_ttl                     = "259200" # 72h
 }

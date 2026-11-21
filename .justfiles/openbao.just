@@ -362,7 +362,7 @@ dev-env:
   trap 'rm -f "$tmp"' EXIT
   just --quiet openbao-env > "$tmp"
   openbao_block="$(
-    rg -N '^export OPENBAO_' "$tmp"
+    rg -N '^export BAO_' "$tmp"
   )"
   operator_block="$(
     rg -N '^export PERMESI_OPERATOR_TOKEN=' "$tmp"

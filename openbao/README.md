@@ -1,6 +1,6 @@
 # OpenBao (dev)
 
-Local dev OpenBao runs as the `permesi-openbao` container (pinned `docker.io/openbao/openbao:2.7`, on the `permesi-net` network) and is configured using **Terraform** from the host.
+Local dev OpenBao runs as the `permesi-openbao` container (pinned `docker.io/openbao/openbao:2.7.3`, on the `permesi-net` network) and is configured using **Terraform** from the host.
 
 - **Dev-only (in-memory)**: `just openbao` runs OpenBao in dev mode and configures it via Terraform.
 - **Persistent (recommended)**: `just openbao-persist-ready` runs OpenBao in server mode with `openbao/config.hcl` and configures it via Terraform.
@@ -41,7 +41,7 @@ Persistent bootstrapping outputs the AppRole `role_id` / `secret_id` and the **O
 
 ## Operator Token (Admin Claim)
 
-To test the **Platform Operator** claim flow (bootstrapping the first admin or elevating privileges), 
+To test the **Platform Operator** claim flow (bootstrapping the first admin or elevating privileges),
 you need an OpenBao token with the `permesi-operators` policy. The root token (`dev-root`) will **not** work.
 
 The Terraform setup provisions the policy, and the `just` recipes generate a long-lived (24h) token with this policy.

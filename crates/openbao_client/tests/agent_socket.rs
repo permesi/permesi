@@ -143,3 +143,52 @@ impl Drop for SocketGuard {
         let _ = std::fs::remove_file(&self.path);
     }
 }
+
+/// An Agent that answers with headers and then stalls must hit the request
+/// deadline instead of holding the caller (and its renewal loop) open.
+#[tokio::test(start_paused = true)]
+async fn agent_socket_request_times_out_when_the_body_stalls() -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let dir = temp_env::with_vars(Vec::<(&str, Option<&str>)>::new(), std::env::temp_dir);
+    let socket_path = dir.join(format!("openbao-agent-stall-{}.sock", uuid::Uuid::new_v4()));
+    let _guard = SocketGuard {
+        path: socket_path.clone(),
+    };
+
+    let listener = UnixListener::bind(&socket_path)?;
+    let (headers_sent, mut headers_seen) = tokio::sync::mpsc::unbounded_channel();
+    let server_handle = tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).await;
+        let _ = stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n",
+            )
+            .await;
+        let _ = headers_sent.send(());
+        // Keep the connection open without ever sending the promised body.
+        std::future::pending::<()>().await;
+    });
+
+    let target = OpenBaoTarget::parse(&format!("unix://{}", socket_path.display()))?;
+    let transport = OpenBaoTransport::from_target("test-suite", target)?;
+    let request = tokio::spawn(async move {
+        transport
+            .request_json(Method::GET, "/v1/auth/token/lookup-self", None, None)
+            .await
+            .map(|response| response.status)
+    });
+
+    assert!(headers_seen.recv().await.is_some());
+    let error = request
+        .await?
+        .expect_err("a stalled body must not be awaited forever");
+    assert!(error.to_string().contains("timed out"), "{error}");
+
+    server_handle.abort();
+    Ok(())
+}
