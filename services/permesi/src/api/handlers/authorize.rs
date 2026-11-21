@@ -333,7 +333,7 @@ async fn advance(
         }) => redirect_response(&format!(
             "{}/login?oauth_request={request_id}&oauth_expires={}",
             auth.config().frontend_base_url().trim_end_matches('/'),
-            expires_at.timestamp_millis()
+            expires_at.to_jiff().as_millisecond()
         )),
         Ok(Outcome::Consent {
             request_id,

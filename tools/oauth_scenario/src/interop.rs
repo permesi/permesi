@@ -417,7 +417,7 @@ mod tests {
     fn standard_id_verifier_rejects_signed_bad_issuer_audience_expiry_nonce_and_hash() -> Result<()>
     {
         let party = party()?;
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         let claims = id_claims(now)?;
         let header = serde_json::json!({"alg":"RS256","typ":"JWT","kid":"test-key"});
         let nonce = Nonce::new("test-nonce".into());
@@ -456,7 +456,7 @@ mod tests {
     fn standard_id_verifier_rejects_missing_type_and_tampered_known_key_signature() -> Result<()> {
         use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
         let party = party()?;
-        let claims = id_claims(chrono::Utc::now().timestamp())?;
+        let claims = id_claims(jiff::Timestamp::now().as_second())?;
         let header = serde_json::json!({"alg":"RS256","typ":"JWT","kid":"test-key"});
         let nonce = Nonce::new("test-nonce".into());
         let valid = response(&header, &claims)?;
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn standard_id_parser_rejects_duplicate_header_and_claim_members() -> Result<()> {
         let party = party()?;
-        let claims = id_claims(chrono::Utc::now().timestamp())?;
+        let claims = id_claims(jiff::Timestamp::now().as_second())?;
         let header = serde_json::json!({"alg":"RS256","typ":"JWT","kid":"test-key"});
         party.verify(
             &response(&header, &claims)?,

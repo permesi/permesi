@@ -33,7 +33,7 @@ pub(super) async fn credentials(context: &mut Context<'_>, fixture: &Fixture) ->
             .contains(&plaintext),
         "Metadata exposed a client secret.",
     )?;
-    let rotation_started = chrono::Utc::now();
+    let rotation_started = jiff::Timestamp::now();
     let rotated: Value = context
         .api
         .json(
@@ -43,20 +43,25 @@ pub(super) async fn credentials(context: &mut Context<'_>, fixture: &Fixture) ->
             StatusCode::CREATED,
         )
         .await?;
-    let rotation_finished = chrono::Utc::now();
+    let rotation_finished = jiff::Timestamp::now();
     let expires = rotated
         .pointer("/previous/expires_at")
         .and_then(Value::as_str)
         .ok_or_else(|| Failure::assertion("Rotation omitted overlap expiration."))?;
-    let expires =
-        chrono::DateTime::parse_from_rfc3339(expires).safe("Invalid overlap timestamp.")?;
-    let grace = chrono::Duration::seconds(context.credential_grace_seconds);
-    let tolerance = chrono::Duration::seconds(1);
+    let expires: jiff::Timestamp = expires.parse().safe("Invalid overlap timestamp.")?;
+    let grace = jiff::SignedDuration::from_secs(context.credential_grace_seconds);
+    let tolerance = jiff::SignedDuration::from_secs(1);
+    let earliest = rotation_started
+        .checked_add(grace - tolerance)
+        .safe("Invalid earliest overlap deadline.")?;
+    let latest = rotation_finished
+        .checked_add(grace + tolerance)
+        .safe("Invalid latest overlap deadline.")?;
     check(
         text_field(&rotated, "client_secret")? != plaintext
             && expires > rotation_finished
-            && expires >= rotation_started + grace - tolerance
-            && expires <= rotation_finished + grace + tolerance,
+            && expires >= earliest
+            && expires <= latest,
         "Secret rotation did not enforce the configured overlap lifetime.",
     )?;
     let new_id = rotated

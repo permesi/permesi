@@ -5,6 +5,7 @@
 
 pub mod grants;
 
+use crate::api::timestamp::rfc3339;
 use axum::{
     Json,
     extract::{Path, State},
@@ -206,8 +207,8 @@ pub async fn list_security_keys(headers: HeaderMap, pool: State<PgPool>) -> impl
                 .map(|k| SecurityKeySummary {
                     credential_id: hex::encode(k.credential_id),
                     label: k.label,
-                    created_at: k.created_at.to_rfc3339(),
-                    last_used_at: k.last_used_at.map(|t| t.to_rfc3339()),
+                    created_at: rfc3339(k.created_at),
+                    last_used_at: k.last_used_at.map(rfc3339),
                 })
                 .collect();
             (StatusCode::OK, Json(summaries)).into_response()

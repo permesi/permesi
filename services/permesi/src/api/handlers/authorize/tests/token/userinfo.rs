@@ -68,7 +68,7 @@ async fn userinfo_discloses_only_issued_oidc_scopes() -> Result<()> {
     let access = response["access_token"].as_str().context("access token")?;
     let id_token = response["id_token"].as_str().context("ID token")?;
     let hash = Sha256::digest(access.as_bytes()).to_vec();
-    let issued_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+    let issued_at: jiff_sqlx::Timestamp = sqlx::query_scalar(
         "SELECT issued_at FROM oauth_token_issuances WHERE access_token_hash=$1",
     )
     .bind(hash)
@@ -77,14 +77,14 @@ async fn userinfo_discloses_only_issued_oidc_scopes() -> Result<()> {
     assert!(
         t.f.state
             .oauth
-            .verify_access_token(access, issued_at.timestamp())
+            .verify_access_token(access, issued_at.to_jiff().as_second())
             .await
             .is_ok()
     );
     assert!(
         t.f.state
             .oauth
-            .verify_access_token(access, issued_at.timestamp() - 1)
+            .verify_access_token(access, issued_at.to_jiff().as_second() - 1)
             .await
             .is_err()
     );
@@ -98,7 +98,7 @@ async fn userinfo_discloses_only_issued_oidc_scopes() -> Result<()> {
     assert!(
         t.f.state
             .oauth
-            .verify_access_token(&downgraded, issued_at.timestamp())
+            .verify_access_token(&downgraded, issued_at.to_jiff().as_second())
             .await
             .is_err()
     );

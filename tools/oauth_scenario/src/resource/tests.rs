@@ -122,7 +122,7 @@ async fn verifier() -> Result<Verifier> {
 #[tokio::test]
 async fn bearer_rejects_correctly_signed_invalid_claims() -> Result<()> {
     let verifier = verifier().await?;
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     let good = claims(now);
     let header = json!({"alg":"RS256","typ":"at+jwt","kid":"test-key"});
     verifier
@@ -158,7 +158,7 @@ async fn bearer_rejects_correctly_signed_invalid_claims() -> Result<()> {
 #[tokio::test]
 async fn bearer_rejects_type_algorithm_header_and_signature_substitution() -> Result<()> {
     let verifier = verifier().await?;
-    let claims = claims(chrono::Utc::now().timestamp());
+    let claims = claims(jiff::Timestamp::now().as_second());
     let header = json!({"alg":"RS256","typ":"at+jwt","kid":"test-key"});
     let good = test_tokens::sign(&header, &claims)?;
     verifier.authenticate(&good).await?;
@@ -229,7 +229,7 @@ fn resource_access_requires_exact_tenant_application_and_delegated_scope() -> Re
 #[tokio::test]
 async fn bearer_rejects_duplicate_json_members_and_array_audience() -> Result<()> {
     let verifier = verifier().await?;
-    let claims = claims(chrono::Utc::now().timestamp());
+    let claims = claims(jiff::Timestamp::now().as_second());
     let header = json!({"alg":"RS256","typ":"at+jwt","kid":"test-key"});
     verifier
         .authenticate(&test_tokens::sign(&header, &claims)?)

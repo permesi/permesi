@@ -9,7 +9,7 @@
 //! one colon. This convention is required for application tokens; protocol tokens never acquire
 //! resource/action semantics. Only the original token is persisted or authorized.
 
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use sqlx::{Row, postgres::PgRow};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -150,8 +150,8 @@ pub(crate) struct ScopeRecord {
     pub name: String,
     pub description: String,
     pub kind: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 impl sqlx::FromRow<'_, PgRow> for ScopeRecord {

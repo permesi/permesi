@@ -7,7 +7,7 @@
 //! Request handles and browser cookies alone authorize nothing; full sessions and
 //! current tenant authority are independently required before consent or code issuance.
 
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -47,7 +47,7 @@ pub(crate) enum Decision {
 pub(crate) enum Outcome {
     Login {
         request_id: Uuid,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
     },
     Consent {
         request_id: Uuid,
@@ -93,7 +93,7 @@ pub(super) struct RequestRecord {
     pub user_id: Option<Uuid>,
     pub session_hash: Option<Vec<u8>>,
     pub csrf_hash: Option<Vec<u8>>,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
 }
 
 impl RequestRecord {
@@ -313,7 +313,7 @@ impl AuthorizationService<'_> {
         request: &RequestRecord,
         user_id: Uuid,
         grant_id: Uuid,
-        auth_time: DateTime<Utc>,
+        auth_time: Timestamp,
         redirect: &RedirectUri,
     ) -> Result<Outcome, Error> {
         let code = SecretValue::generate()?;
@@ -402,7 +402,7 @@ async fn lock_session_membership(
     tx: &mut Transaction<'_, Postgres>,
     org: Uuid,
     session: &SessionBinding,
-) -> Result<(DateTime<Utc>, String), Error> {
+) -> Result<(Timestamp, String), Error> {
     sqlx::query_as("SELECT s.auth_time,u.email::text FROM user_sessions s JOIN users u ON u.id=s.user_id JOIN org_memberships m ON m.user_id=u.id WHERE s.session_hash=$1 AND s.user_id=$2 AND m.org_id=$3 AND s.expires_at>clock_timestamp() AND u.status='active' AND m.status='active' FOR SHARE OF s,u,m")
         .bind(&session.hash).bind(session.user_id).bind(org).fetch_optional(&mut **tx).await?.ok_or_else(|| Error::protocol(ProtocolError::AccessDenied))
 }

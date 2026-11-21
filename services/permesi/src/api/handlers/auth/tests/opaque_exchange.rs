@@ -134,7 +134,7 @@ async fn opaque_login_completes_after_replica_restart_and_rejects_replay() -> Re
     .await?;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert!(response.headers().contains_key(SET_COOKIE));
-    let recorded: chrono::DateTime<chrono::Utc> =
+    let recorded: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT last_login_at FROM users WHERE email=$1")
             .bind(email)
             .fetch_one(&db.pool)
@@ -149,7 +149,7 @@ async fn opaque_login_completes_after_replica_restart_and_rejects_replay() -> Re
     .await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(
-        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(
             "SELECT last_login_at FROM users WHERE email=$1"
         )
         .bind(email)
@@ -377,7 +377,7 @@ async fn opaque_exchange_malformed_finalization_preserves_pending_proof() -> Res
             "/v1/auth/opaque/login/finish"
         };
         let proof = f.proof(cookie).await?;
-        let expires: chrono::DateTime<chrono::Utc> =
+        let expires: jiff_sqlx::Timestamp =
             sqlx::query_scalar("SELECT expires_at FROM opaque_exchanges WHERE id_hash=$1")
                 .bind(hash_id(proof.id).as_slice())
                 .fetch_one(&f.db.pool)
@@ -391,7 +391,7 @@ async fn opaque_exchange_malformed_finalization_preserves_pending_proof() -> Res
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
             assert!(!response.headers().contains_key(SET_COOKIE));
             assert_eq!(
-                sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(
                     "SELECT expires_at FROM opaque_exchanges WHERE id_hash=$1"
                 )
                 .bind(hash_id(proof.id).as_slice())
@@ -431,7 +431,7 @@ async fn opaque_exchange_uses_configured_deadline_and_restores_connection_policy
         user_id: f.user,
         credential_hash: Sha256::digest(record).into(),
     };
-    let mut guard = lock_identity(&single, &identity, chrono::Utc::now(), 5000)
+    let mut guard = lock_identity(&single, &identity, jiff::Timestamp::now().into(), 5000)
         .await?
         .context("verified identity")?;
     let configured: (String, String) = sqlx::query_as(settings).fetch_one(&mut *guard).await?;
@@ -684,7 +684,7 @@ impl Fixture {
     }
 
     /// Session timestamps establish that rejected or foreign proofs cannot elevate any session.
-    async fn time(&self, token: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    async fn time(&self, token: &str) -> Result<jiff_sqlx::Timestamp> {
         Ok(
             sqlx::query_scalar("SELECT auth_time FROM user_sessions WHERE session_hash=$1")
                 .bind(hash_session_token(token))
@@ -1589,7 +1589,7 @@ async fn opaque_identity_lock_prevents_password_rotation_from_racing_issuance() 
         user_id: f.user,
         credential_hash: Sha256::digest(&record).into(),
     };
-    let mut guard = lock_identity(&f.db.pool, &identity, chrono::Utc::now(), 1000)
+    let mut guard = lock_identity(&f.db.pool, &identity, jiff::Timestamp::now().into(), 1000)
         .await?
         .context("verified identity lock")?;
     let pool = f.db.pool.clone();

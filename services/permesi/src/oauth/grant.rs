@@ -10,7 +10,7 @@
 //! lifecycle, consent, and protocol-specific conditions; future refresh must do the same.
 //! Membership existence or a saved grant alone never authorizes a resource.
 
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ pub(crate) struct SavedGrant {
     pub organization_slug: String,
     pub organization_name: String,
     pub scopes: Vec<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 /// Lists only the authenticated user's active grants under current tenant ancestry.
@@ -48,7 +48,7 @@ pub(crate) async fn list_user_grants(
             String,
             String,
             String,
-            DateTime<Utc>,
+            Timestamp,
             Vec<String>,
         ),
     >(

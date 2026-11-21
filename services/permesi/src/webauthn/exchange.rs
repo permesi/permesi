@@ -11,8 +11,9 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
 };
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use jiff::SignedDuration;
+use jiff_sqlx::Timestamp;
 use secrecy::{ExposeSecret, SecretBox, zeroize::Zeroizing};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -189,10 +190,13 @@ impl ExchangeStore {
         }
         let id = Uuid::new_v4();
         let hash = Sha256::digest(id.as_bytes()).to_vec();
-        let created: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        let created: Timestamp = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut *tx)
             .await?;
-        let expires = created + chrono::Duration::seconds(self.ttl);
+        let expires = created
+            .to_jiff()
+            .checked_add(SignedDuration::from_secs(self.ttl))?
+            .into();
         let aad = self.aad(
             &hash,
             &binding,
@@ -242,7 +246,7 @@ impl ExchangeStore {
         &self,
         id: Uuid,
         binding: Binding<'_>,
-    ) -> Result<(T, DateTime<Utc>)> {
+    ) -> Result<(T, Timestamp)> {
         let mut observation = crate::api::handlers::auth::operations::Observation::new(
             binding.purpose.name(),
             "finish",
@@ -309,8 +313,8 @@ impl ExchangeStore {
         &self,
         hash: &[u8],
         binding: &Binding<'_>,
-        created: DateTime<Utc>,
-        expires: DateTime<Utc>,
+        created: Timestamp,
+        expires: Timestamp,
         subject: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
         Ok(serde_json::to_vec(&(
@@ -322,8 +326,8 @@ impl ExchangeStore {
             binding.user,
             binding.session,
             subject,
-            created.timestamp_micros(),
-            expires.timestamp_micros(),
+            created.to_jiff().as_microsecond(),
+            expires.to_jiff().as_microsecond(),
         ))?)
     }
 }

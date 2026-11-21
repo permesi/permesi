@@ -5,7 +5,8 @@
 //! profile attributes, refresh tokens or browser-submitted authority enter these claims.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, Utc};
+use jiff::SignedDuration;
+use jiff_sqlx::Timestamp;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Serialize, Serializer, ser::SerializeStruct as _};
 use sha2::{Digest as _, Sha256};
@@ -57,9 +58,9 @@ impl Serialize for TokenResponse {
 pub(super) struct Issued {
     pub response: TokenResponse,
     pub jti: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub access_expires_at: DateTime<Utc>,
-    pub id_expires_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub access_expires_at: Timestamp,
+    pub id_expires_at: Option<Timestamp>,
 }
 
 /// RFC 9068 access token with an explicit single tenant/application/grant boundary.
@@ -98,11 +99,13 @@ pub(super) async fn issue(
     code: &RedeemedCode,
     include_id: bool,
 ) -> Result<Issued, TokenError> {
-    let issued_at: DateTime<Utc> =
-        sqlx::query_scalar("SELECT date_trunc('second',clock_timestamp())")
-            .fetch_one(&mut **tx)
-            .await?;
-    let access_expires_at = issued_at + Duration::seconds(oauth.config.tokens.access_ttl);
+    let issued_at: Timestamp = sqlx::query_scalar("SELECT date_trunc('second',clock_timestamp())")
+        .fetch_one(&mut **tx)
+        .await?;
+    let access_expires_at = issued_at
+        .to_jiff()
+        .checked_add(SignedDuration::from_secs(oauth.config.tokens.access_ttl))
+        .map_err(|_| TokenError::Unavailable)?;
     let mut random = [0; 16];
     getrandom::fill(&mut random).map_err(|_| TokenError::Unavailable)?;
     let jti = uuid::Builder::from_random_bytes(random).into_uuid();
@@ -124,8 +127,8 @@ pub(super) async fn issue(
                 iss: &code.issuer,
                 sub: code.user_id,
                 aud: &code.audience,
-                iat: issued_at.timestamp(),
-                exp: access_expires_at.timestamp(),
+                iat: issued_at.to_jiff().as_second(),
+                exp: access_expires_at.as_second(),
                 jti,
                 client_id: code.client_id,
                 scope: &scope,
@@ -139,7 +142,10 @@ pub(super) async fn issue(
     let (id_token, id_expires_at) =
         if include_id && code.scopes.iter().any(|s| s.as_str() == "openid") {
             let nonce = code.nonce.as_deref().ok_or(TokenError::InvalidGrant)?;
-            let expires = issued_at + Duration::seconds(oauth.config.tokens.id_ttl);
+            let expires = issued_at
+                .to_jiff()
+                .checked_add(SignedDuration::from_secs(oauth.config.tokens.id_ttl))
+                .map_err(|_| TokenError::Unavailable)?;
             let digest = Sha256::digest(access_token.expose_secret().as_bytes());
             let token = oauth
                 .sign_jwt(
@@ -149,9 +155,9 @@ pub(super) async fn issue(
                         iss: &code.issuer,
                         sub: code.user_id,
                         aud: code.client_id,
-                        iat: issued_at.timestamp(),
-                        exp: expires.timestamp(),
-                        auth_time: code.auth_time.timestamp(),
+                        iat: issued_at.to_jiff().as_second(),
+                        exp: expires.as_second(),
+                        auth_time: code.auth_time.to_jiff().as_second(),
                         nonce,
                         at_hash: URL_SAFE_NO_PAD
                             .encode(digest.get(..16).ok_or(TokenError::Unavailable)?),
@@ -159,7 +165,7 @@ pub(super) async fn issue(
                 )
                 .await
                 .map_err(|_| TokenError::Unavailable)?;
-            (Some(token), Some(expires))
+            (Some(token), Some(expires.into()))
         } else {
             (None, None)
         };
@@ -174,7 +180,7 @@ pub(super) async fn issue(
         },
         jti,
         created_at: issued_at,
-        access_expires_at,
+        access_expires_at: access_expires_at.into(),
         id_expires_at,
     })
 }

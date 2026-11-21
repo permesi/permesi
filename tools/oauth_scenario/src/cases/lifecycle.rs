@@ -199,7 +199,7 @@ async fn no_codes(context: &Context<'_>, fixture: &Fixture) -> Result<()> {
 struct OriginalCode {
     record: String,
     grant: Uuid,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    expires_at: jiff_sqlx::Timestamp,
 }
 
 impl OriginalCode {

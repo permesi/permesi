@@ -58,6 +58,7 @@ pub(crate) mod handlers;
 mod openapi;
 mod state;
 pub mod tenant;
+mod timestamp;
 
 pub use openapi::openapi;
 pub use state::AppState;

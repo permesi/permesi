@@ -4,6 +4,7 @@
 //! passkeys. It integrates with the OPAQUE authentication system and
 //! requires a fresh zero token for sensitive registration actions.
 
+use crate::api::timestamp::rfc3339;
 use axum::{
     Json,
     body::Bytes,
@@ -378,8 +379,8 @@ pub async fn list_credentials(
                 .map(|row| PasskeyCredentialSummary {
                     id: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(row.credential_id),
                     label: row.label,
-                    created_at: Some(row.created_at.to_rfc3339()),
-                    last_used_at: row.last_used_at.map(|ts| ts.to_rfc3339()),
+                    created_at: Some(rfc3339(row.created_at)),
+                    last_used_at: row.last_used_at.map(rfc3339),
                 })
                 .collect::<Vec<_>>();
             (

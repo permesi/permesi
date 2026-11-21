@@ -365,10 +365,8 @@ impl PasskeyService {
         &self,
         auth_id: Uuid,
         origin: &str,
-    ) -> Result<
-        (DiscoverableAuthentication, chrono::DateTime<chrono::Utc>),
-        PasskeyAuthenticationError,
-    > {
+    ) -> Result<(DiscoverableAuthentication, jiff_sqlx::Timestamp), PasskeyAuthenticationError>
+    {
         let authentication = self
             .exchanges
             .take_with_created_at::<DiscoverableAuthentication>(

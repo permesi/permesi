@@ -53,11 +53,11 @@ pub(crate) async fn resolve(
         .ok_or(UserInfoError::Unavailable)?;
     let hash = Sha256::digest(token.as_bytes()).to_vec();
     let row = load_receipt(pool, issuer, audience, &hash).await?;
-    let db_now: chrono::DateTime<chrono::Utc> = row
+    let db_now: jiff_sqlx::Timestamp = row
         .try_get("db_now")
         .map_err(|_| UserInfoError::Unavailable)?;
     let claims = oauth
-        .verify_access_token(token, db_now.timestamp())
+        .verify_access_token(token, db_now.to_jiff().as_second())
         .await
         .map_err(|error| match error {
             AccessVerifyError::Invalid => UserInfoError::InvalidToken,
@@ -144,10 +144,10 @@ fn check_receipt(row: &PgRow, claims: &AccessClaims) -> Result<Vec<String>, User
     let grant: Uuid = row
         .try_get("grant_id")
         .map_err(|_| UserInfoError::Unavailable)?;
-    let issued_at: chrono::DateTime<chrono::Utc> = row
+    let issued_at: jiff_sqlx::Timestamp = row
         .try_get("issued_at")
         .map_err(|_| UserInfoError::Unavailable)?;
-    let expires_at: chrono::DateTime<chrono::Utc> = row
+    let expires_at: jiff_sqlx::Timestamp = row
         .try_get("access_expires_at")
         .map_err(|_| UserInfoError::Unavailable)?;
     if claims.sub != subject
@@ -156,8 +156,8 @@ fn check_receipt(row: &PgRow, claims: &AccessClaims) -> Result<Vec<String>, User
         || claims.application_id != application
         || claims.organization_id != organization
         || claims.grant_id != grant
-        || claims.iat != issued_at.timestamp()
-        || claims.exp != expires_at.timestamp()
+        || claims.iat != issued_at.to_jiff().as_second()
+        || claims.exp != expires_at.to_jiff().as_second()
         || claims.scope != scopes.join(" ")
     {
         return Err(UserInfoError::InvalidToken);

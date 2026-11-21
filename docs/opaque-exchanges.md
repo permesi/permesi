@@ -7,13 +7,12 @@ writer, Vault `opaque_server_seed` and OPAQUE server identifier. Pending exchang
 never depend on a process-local map, sticky sessions or a local file. WebAuthn/passkey
 ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges.md).
 
-The backend, browser client and scenario runner share upstream `opaque-ke` revision
-`027abbc91115baa38b70ad3af7f5a22f072f978b`, pinned once in the workspace manifest.
-It includes the unpublished RustCrypto migration, using Argon2 0.6, rand_core 0.10,
-SHA-2 0.11 and the patched elliptic-curve stack. The existing
-Ristretto255/TripleDH/SHA-512/Argon2 suite and disabled optional KEM feature remain
-unchanged. A published release containing this migration can replace the workspace
-Git dependency after the same compatibility and audit checks pass.
+The backend, browser client and scenario runner share the published
+`opaque-ke` 5.0.0-pre.0 prerelease, pinned once in the workspace manifest.
+It contains the RustCrypto migration already used by the former Git pin:
+Argon2 0.6, rand 0.10 and SHA-2 0.11. The existing
+Ristretto255/TripleDH/SHA-512/Argon2 suite and disabled optional KEM
+feature remain unchanged.
 
 Each fresh ceremony uses a CSPRNG seeded from operating-system/browser entropy;
 entropy failure rejects the operation before an exchange is issued. Deterministic

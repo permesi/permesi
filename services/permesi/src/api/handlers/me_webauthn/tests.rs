@@ -14,8 +14,8 @@ use axum::{
     http::{Request, StatusCode, header::CONTENT_TYPE},
     routing::{delete, get, post},
 };
-use chrono::Utc;
 use ed25519_dalek::Signer;
+use jiff::Timestamp;
 use service_utils::request_id::with_request_correlation;
 use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
 use test_support::{postgres::PostgresContainer, runtime};
@@ -126,7 +126,7 @@ fn build_admission() -> anyhow::Result<(Arc<AdmissionVerifier>, String)> {
         "permesi".to_string(),
     ));
 
-    let now_unix = Utc::now().timestamp();
+    let now_unix = Timestamp::now().as_second();
     let admission_claims = admission_token::AdmissionTokenClaims {
         iss: "https://genesis.test".to_string(),
         aud: "permesi".to_string(),

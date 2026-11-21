@@ -10,7 +10,7 @@
 //! a rotated successor cannot outlive a committed revocation. No grace window or
 //! process-local state exists. Lost responses require reauthorization.
 
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use secrecy::{ExposeSecret as _, SecretString};
 use sha2::{Digest as _, Sha256};
 use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
@@ -106,9 +106,7 @@ pub(super) async fn rotate(
     .await?;
     let row = sqlx::query("SELECT *,expires_at>clock_timestamp() AS alive FROM oauth_refresh_families WHERE id=$1 FOR UPDATE")
         .bind(family).fetch_optional(&mut **tx).await?.ok_or(TokenError::InvalidGrant)?;
-    if row
-        .try_get::<Option<DateTime<Utc>>, _>("revoked_at")?
-        .is_some()
+    if row.try_get::<Option<Timestamp>, _>("revoked_at")?.is_some()
         || !row.try_get::<bool, _>("alive")?
     {
         return Err(TokenError::InvalidGrant);
@@ -116,7 +114,7 @@ pub(super) async fn rotate(
     let proof = sqlx::query("SELECT consumed_at,expires_at>clock_timestamp() AS alive FROM oauth_refresh_tokens WHERE token_hash=$1 AND family_id=$2 FOR UPDATE")
         .bind(token.hash()).bind(family).fetch_optional(&mut **tx).await?.ok_or(TokenError::InvalidGrant)?;
     if proof
-        .try_get::<Option<DateTime<Utc>>, _>("consumed_at")?
+        .try_get::<Option<Timestamp>, _>("consumed_at")?
         .is_some()
     {
         revoke(tx, family, "reuse").await?;

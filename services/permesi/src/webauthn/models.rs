@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row, postgres::PgRow};
 use uuid::Uuid;
@@ -10,8 +10,8 @@ pub struct SecurityKey {
     pub label: String,
     pub public_key: Vec<u8>,
     pub sign_count: i64,
-    pub created_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
 }
 
 impl<'r> FromRow<'r, PgRow> for SecurityKey {
@@ -36,7 +36,7 @@ pub struct SecurityKeyAuditLog {
     pub action: String,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,8 +45,8 @@ pub struct PasskeyCredential {
     pub user_id: Uuid,
     pub label: Option<String>,
     pub passkey_data: Vec<u8>,
-    pub created_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
 }
 
 impl<'r> FromRow<'r, PgRow> for PasskeyCredential {
@@ -70,5 +70,5 @@ pub struct PasskeyAuditLog {
     pub action: String,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }

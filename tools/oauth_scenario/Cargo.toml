@@ -16,7 +16,8 @@ test_support.workspace = true
 axum.workspace = true
 axum-server.workspace = true
 base64.workspace = true
-chrono.workspace = true
+jiff.workspace = true
+jiff-sqlx.workspace = true
 clap = { workspace = true, features = ["derive"] }
 getrandom.workspace = true
 openidconnect = { version = "4.1.0", default-features = false }

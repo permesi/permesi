@@ -247,8 +247,8 @@ pub(super) async fn claims(
                 .as_i64()
                 .ok_or_else(|| Failure::assertion("Missing TTL."))?
             && exp - iat == context.access_token_ttl_seconds
-            && iat <= chrono::Utc::now().timestamp()
-            && exp > chrono::Utc::now().timestamp(),
+            && iat <= jiff::Timestamp::now().as_second()
+            && exp > jiff::Timestamp::now().as_second(),
         "Token expiration policy incorrect.",
     )?;
     let digest = Sha256::digest(access.as_bytes());
@@ -270,14 +270,14 @@ pub(super) async fn claims(
         "OIDC claims or token binding incorrect.",
     )?;
     let hash = Sha256::digest(code.as_bytes()).to_vec();
-    let auth_time: chrono::DateTime<chrono::Utc> =
+    let auth_time: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT auth_time FROM oauth_authorization_codes WHERE code_hash=$1")
             .bind(&hash)
             .fetch_one(context.pool)
             .await
             .safe("Cannot inspect auth time.")?;
     check(
-        value(&identity, "auth_time") == auth_time.timestamp(),
+        value(&identity, "auth_time") == auth_time.to_jiff().as_second(),
         "OIDC auth time changed.",
     )?;
     let receipt:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_token_issuances WHERE code_hash=$1 AND access_token_hash=$2 AND id_token_hash=$3 AND access_jti=$4 AND organization_id=$5 AND user_id=$6)")

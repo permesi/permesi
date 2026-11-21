@@ -58,7 +58,7 @@ pub(super) async fn management_client(
     if row.try_get::<&str, _>("client_type")? != "confidential"
         || (active
             && row
-                .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("disabled_at")?
+                .try_get::<Option<jiff_sqlx::Timestamp>, _>("disabled_at")?
                 .is_some())
     {
         return Err(CredentialError::Invalid);

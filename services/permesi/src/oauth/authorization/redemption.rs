@@ -8,7 +8,7 @@
 //! This API does not authenticate confidential clients and is not an HTTP endpoint.
 //! Future token adapters must authenticate the client before invoking this function.
 
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -40,7 +40,7 @@ pub struct RedeemedCode {
     pub nonce: Option<String>,
     pub issuer: String,
     pub audience: String,
-    pub auth_time: DateTime<Utc>,
+    pub auth_time: Timestamp,
 }
 
 /// Value-free failure shared by wrong, expired, reused or no-longer-authorized codes.

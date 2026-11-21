@@ -368,13 +368,13 @@ async fn token_exchange_public_claims_receipt_replay_and_internal_boundary() -> 
                 == URL_SAFE_NO_PAD.encode(&Sha256::digest(access.as_bytes())[..16]),
         "incorrect ID binding"
     );
-    let bound: chrono::DateTime<chrono::Utc> =
+    let bound: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT auth_time FROM oauth_authorization_codes WHERE code_hash=$1")
             .bind(Sha256::digest(code.as_bytes()).to_vec())
             .fetch_one(&f.pool)
             .await?;
     ensure!(
-        identity["auth_time"] == bound.timestamp(),
+        identity["auth_time"] == bound.to_jiff().as_second(),
         "auth time widened"
     );
     let recorded: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_token_issuances WHERE code_hash=$1 AND access_token_hash=$2 AND id_token_hash=$3 AND access_jti=$4 AND user_id=$5 AND organization_id=$6)")

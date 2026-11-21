@@ -537,7 +537,7 @@ pub(super) async fn invalid_access(context: &mut Context<'_>, fixture: &Fixture)
         .get("exp")
         .and_then(Value::as_i64)
         .ok_or_else(|| Failure::assertion("JWT expiration missing."))?;
-    while chrono::Utc::now().timestamp() < expiration {
+    while jiff::Timestamp::now().as_second() < expiration {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     resource_status(

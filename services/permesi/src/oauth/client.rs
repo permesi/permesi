@@ -4,7 +4,7 @@
 //! classification is immutable: converting between public and confidential requires
 //! a new registration. Credential management/verification is separate from token issuance.
 
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgRow};
 use utoipa::ToSchema;
@@ -38,10 +38,10 @@ pub struct Client {
     pub client_id: Uuid,
     pub name: String,
     pub client_type: ClientType,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub disabled_at: Option<DateTime<Utc>>,
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub disabled_at: Option<Timestamp>,
+    pub deleted_at: Option<Timestamp>,
 }
 
 impl sqlx::FromRow<'_, PgRow> for Client {

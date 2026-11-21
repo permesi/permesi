@@ -65,7 +65,7 @@ telemetry = [
 ]
 
 [dependencies]
-lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 admission_token = { workspace = true }
 vault_client = { workspace = true }
 argon2 = { workspace = true }
@@ -97,16 +97,15 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 totp-rs = { version = "6.0", features = ["qr", "gen_secret"] }
-chrono = { workspace = true }
+jiff.workspace = true
+jiff-sqlx.workspace = true
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
     "ipnetwork",
     "uuid",
-    "chrono",
 ] }
-temp-env = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
@@ -145,6 +144,7 @@ http-body-util.workspace = true
 hyper = { workspace = true }
 hyper-util.workspace = true
 rcgen = { workspace = true }
+temp-env = { workspace = true }
 test_support = { workspace = true }
 wiremock = "0.6"
 

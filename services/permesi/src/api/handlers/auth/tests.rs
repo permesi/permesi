@@ -1616,13 +1616,13 @@ async fn login_tracking_preserves_newer_timestamp_and_rolls_back_failed_issuance
         .context("Login tracking regression requires PostgreSQL")?;
     let user = insert_active_user(&db.pool, "login-history@example.test").await?;
     let mut older = db.pool.begin().await?;
-    let old_time: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT NOW()")
+    let old_time: jiff_sqlx::Timestamp = sqlx::query_scalar("SELECT NOW()")
         .fetch_one(&mut *older)
         .await?;
     let mut newer = db.pool.begin().await?;
     super::storage::insert_login_session_on(&mut newer, user, 300).await?;
     newer.commit().await?;
-    let recorded: chrono::DateTime<chrono::Utc> =
+    let recorded: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT last_login_at FROM users WHERE id=$1")
             .bind(user)
             .fetch_one(&db.pool)
@@ -1631,7 +1631,7 @@ async fn login_tracking_preserves_newer_timestamp_and_rolls_back_failed_issuance
     super::storage::insert_login_session_on(&mut older, user, 300).await?;
     older.commit().await?;
     assert_eq!(
-        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(
             "SELECT last_login_at FROM users WHERE id=$1"
         )
         .bind(user)

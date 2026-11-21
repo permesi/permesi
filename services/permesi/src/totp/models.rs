@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff_sqlx::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row, postgres::PgRow};
 use uuid::Uuid;
@@ -33,8 +33,8 @@ pub struct TotpDek {
     pub wrapped_dek: String,
     pub kek_mount: String,
     pub kek_key: String,
-    pub created_at: DateTime<Utc>,
-    pub rotated_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub rotated_at: Option<Timestamp>,
 }
 
 impl<'r> FromRow<'r, PgRow> for TotpDek {
@@ -62,9 +62,9 @@ pub struct TotpCredential {
     pub algo: String,
     pub dek_id: Uuid,
     pub seed_ciphertext: Vec<u8>,
-    pub confirmed_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
+    pub confirmed_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
 }
 
 impl<'r> FromRow<'r, PgRow> for TotpCredential {
@@ -93,5 +93,5 @@ pub struct TotpAuditLog {
     pub action: String,
     pub ip_address: Option<String>, // INET types can be tricky, using String for simplicity in struct
     pub user_agent: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }

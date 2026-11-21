@@ -16,8 +16,9 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
 };
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use jiff::SignedDuration;
+use jiff_sqlx::Timestamp;
 use opaque_ke::{ServerLogin, ServerSetup};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
@@ -77,7 +78,7 @@ impl ExchangePurpose {
 pub(in crate::api::handlers::auth) struct OpaqueLoginState {
     pub(in crate::api::handlers::auth) state: ServerLogin<OpaqueSuite>,
     /// AEAD-authenticated database creation time, checked against the account containment cutoff.
-    pub(in crate::api::handlers::auth) created_at: DateTime<Utc>,
+    pub(in crate::api::handlers::auth) created_at: Timestamp,
     pub(in crate::api::handlers::auth) identity: Option<ExchangeIdentity>,
 }
 
@@ -98,8 +99,8 @@ struct ExchangeRow {
     credential_hash: Option<Vec<u8>>,
     session_hash: Option<Vec<u8>>,
     sealed_state: Vec<u8>,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    created_at: Timestamp,
+    expires_at: Timestamp,
     valid: bool,
 }
 
@@ -178,8 +179,8 @@ impl OpaqueState {
             &row.credential_hash,
             &row.session_hash,
             &row.subject_tag,
-            row.created_at.timestamp_micros(),
-            row.expires_at.timestamp_micros(),
+            row.created_at.to_jiff().as_microsecond(),
+            row.expires_at.to_jiff().as_microsecond(),
             &self.server_id,
         ))?)
     }
@@ -229,7 +230,7 @@ impl OpaqueState {
             return Ok(None);
         }
         let id = Uuid::new_v4();
-        let created_at: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        let created_at: Timestamp = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut *tx)
             .await?;
         let mut row = ExchangeRow {
@@ -241,7 +242,10 @@ impl OpaqueState {
             session_hash: purpose.session_hash().map(|value| value.to_vec()),
             sealed_state: Vec::new(),
             created_at,
-            expires_at: created_at + chrono::Duration::seconds(ttl),
+            expires_at: created_at
+                .to_jiff()
+                .checked_add(SignedDuration::from_secs(ttl))?
+                .into(),
             valid: true,
         };
         let plaintext = Zeroizing::new(state.serialize());
@@ -353,7 +357,7 @@ pub(in crate::api::handlers::auth) fn hash_id(id: Uuid) -> [u8; 32] {
 pub(in crate::api::handlers::auth) async fn lock_identity<'a>(
     pool: &'a PgPool,
     identity: &ExchangeIdentity,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
     timeout_ms: i64,
 ) -> Result<Option<Transaction<'a, Postgres>>> {
     let mut tx = begin(pool, timeout_ms).await?;

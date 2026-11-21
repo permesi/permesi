@@ -744,7 +744,7 @@ async fn webauthn_http_login_commits_authority_and_rejects_replay_or_disabled_us
     let response =
         tokio::time::timeout(Duration::from_secs(5), router.clone().oneshot(request()?)).await??;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let recorded: chrono::DateTime<chrono::Utc> =
+    let recorded: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT last_login_at FROM users WHERE id=$1")
             .bind(user)
             .fetch_one(&db.pool)
@@ -808,7 +808,7 @@ async fn webauthn_http_login_commits_authority_and_rejects_replay_or_disabled_us
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(response.headers().get(SET_COOKIE).is_none());
     assert_eq!(
-        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(
             "SELECT last_login_at FROM users WHERE id=$1"
         )
         .bind(user)

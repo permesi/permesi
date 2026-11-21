@@ -19,4 +19,3 @@ time = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
-temp-env = { workspace = true }

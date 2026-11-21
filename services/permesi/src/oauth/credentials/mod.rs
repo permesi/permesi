@@ -11,8 +11,8 @@ mod crypto;
 mod storage;
 
 use anyhow::{Context, Result, ensure};
-use chrono::{DateTime, Utc};
 use clap::ArgMatches;
+use jiff_sqlx::Timestamp;
 use secrecy::SecretString;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
@@ -101,8 +101,8 @@ pub enum CredentialError {
 #[derive(Clone)]
 pub(crate) struct SecretMetadata {
     pub id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub expires_at: Option<Timestamp>,
 }
 
 impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for SecretMetadata {

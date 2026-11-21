@@ -7,7 +7,7 @@
 //! the same metadata query; neither creator identity nor per-owner queries are used.
 
 use axum::http::StatusCode;
-use chrono::{DateTime, SecondsFormat, Utc};
+use jiff_sqlx::Timestamp;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgRow};
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ pub(super) enum Selector {
 
 pub(super) struct Record {
     pub(super) id: Uuid,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
     name: String,
     slug: Option<String>,
     tier: Option<String>,
@@ -40,7 +40,7 @@ impl Record {
         AdminMetadata {
             id: self.id.to_string(),
             name: self.name,
-            created_at: self.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            created_at: format!("{:.0}", self.created_at.to_jiff()),
             slug: self.slug,
             tier: self.tier,
             owners: self.owners,

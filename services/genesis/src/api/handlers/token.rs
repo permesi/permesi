@@ -10,7 +10,7 @@ use axum::{
     extract::{Query, State, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgDatabaseError};
 use std::{env, future::Future, net::IpAddr, pin::Pin, process, sync::Arc};
@@ -277,7 +277,7 @@ async fn issue_admission_token<S: AdmissionSignerLike>(
     token_id: Uuid,
     client_uuid: Uuid,
 ) -> Result<Token, (StatusCode, String)> {
-    let now = Utc::now().timestamp();
+    let now = Timestamp::now().as_second();
     let exp = now + TOKEN_EXPIRATION;
 
     let claims = admission

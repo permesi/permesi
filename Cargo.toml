@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 license = "BSD-3-Clause"
 authors = ["Team Permesi <team@permesi.dev>"]
@@ -32,16 +32,16 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["allo
 getrandom = "0.4"
 hmac = "0.13"
 pasetors = "0.8"
-# Pin the upstream RustCrypto migration until a crates.io release includes it.
-# Keep backend, browser and scenario clients on this same revision.
-opaque-ke = { git = "https://github.com/meta/opaque-ke", rev = "027abbc91115baa38b70ad3af7f5a22f072f978b", features = ["argon2", "std"] }
-# rsa 0.9 still exposes digest 0.10 traits for RS256 verification.
+# Keep the backend, browser and scenario runner on the same published prerelease.
+opaque-ke = { version = "=5.0.0-pre.0", features = ["argon2", "std"] }
+# RS256 uses rsa 0.9's digest 0.10 traits. Stable rsa 0.10 cannot coexist with
+# the rsa 0.10 prerelease required by webauthn-rs 0.6.2 via crypto-glue.
 rsa_sha2 = { package = "sha2", version = "0.10" }
 clap = { version = "4", features = ["env"] }
 opentelemetry = "0.33"
 opentelemetry-otlp = { version = "0.33", features = ["tls-roots", "tls-ring", "grpc-tonic", "gzip-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
-rand = "0.10.3"
+rand = "0.10.4"
 rand_chacha = "0.10"
 rand_core = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -56,7 +56,8 @@ serde_json = "1.0"
 sha2 = "0.11"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
-chrono = { version = "0.4", features = ["serde"] }
+jiff = { version = "1", default-features = false, features = ["std"] }
+jiff-sqlx = { version = "1", features = ["postgres", "serde"] }
 hyper = "1"
 hyper-util = "0.1"
 hyperlocal = "0.9"
@@ -69,7 +70,6 @@ sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
     "ipnetwork",
     "uuid",
-    "chrono",
 ] }
 temp-env = "0.3.6"
 tokio = { version = "1", features = ["full"] }
@@ -91,7 +91,7 @@ url = "2.5"
 utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-axum = "0.3.0"
 uuid = { version = "1.29", features = ["v1", "v4", "v7", "serde"] }
-built = { version = "0.8", features = ["git2"] }
+built = { version = "0.9", features = ["git2"] }
 git2 = { version = "0.21", default-features = false }
 
 [profile.release]

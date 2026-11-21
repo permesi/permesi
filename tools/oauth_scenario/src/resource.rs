@@ -175,7 +175,7 @@ impl Verifier {
             &claims,
             &self.transport.issuer,
             &self.audience,
-            chrono::Utc::now().timestamp(),
+            jiff::Timestamp::now().as_second(),
         )?;
         Ok(claims)
     }

@@ -100,7 +100,7 @@ pub(super) async fn race_authority(
     let access = text_field(body, "access_token")?;
     let keys = token::verification_keys(context.api, &access).await?;
     let (_, claims) = token::verify(&access, &keys, "at+jwt")?;
-    expected.validate(&claims, body, chrono::Utc::now().timestamp())?;
+    expected.validate(&claims, body, jiff::Timestamp::now().as_second())?;
     let successor = text_field(body, "refresh_token")?;
     let revoked = expected
         .revoked_lineage(

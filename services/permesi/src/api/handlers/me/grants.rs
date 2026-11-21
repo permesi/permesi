@@ -6,6 +6,7 @@
 //! recheck under PostgreSQL locks. Internal principal permissions are never
 //! presented as delegated OAuth scopes.
 
+use crate::api::timestamp::rfc3339;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -54,7 +55,7 @@ impl From<grant::SavedGrant> for SavedGrantResponse {
             organization_slug: value.organization_slug,
             organization_name: value.organization_name,
             scopes: value.scopes,
-            created_at: value.created_at.to_rfc3339(),
+            created_at: rfc3339(value.created_at),
         }
     }
 }

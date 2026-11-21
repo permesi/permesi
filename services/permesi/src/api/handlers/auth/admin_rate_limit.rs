@@ -151,12 +151,12 @@ impl AdminRateLimiter {
 
         match row {
             Ok(Some(row)) => {
-                let last_failure_at: chrono::DateTime<chrono::Utc> = row.get("last_failure_at");
-                let now = chrono::Utc::now();
-                let elapsed = now.signed_duration_since(last_failure_at);
+                let last_failure_at: jiff_sqlx::Timestamp = row.get("last_failure_at");
+                let now = jiff::Timestamp::now();
+                let elapsed = now.duration_since(last_failure_at.to_jiff()).as_secs();
                 let cooldown_secs = i64::try_from(COOLDOWN_DURATION.as_secs()).unwrap_or(i64::MAX);
-                if elapsed.num_seconds() < cooldown_secs {
-                    u64::try_from(cooldown_secs - elapsed.num_seconds()).unwrap_or(0)
+                if elapsed < cooldown_secs {
+                    u64::try_from(cooldown_secs - elapsed).unwrap_or(0)
                 } else {
                     0
                 }

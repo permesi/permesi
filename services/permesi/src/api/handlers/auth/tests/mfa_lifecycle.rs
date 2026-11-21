@@ -421,7 +421,7 @@ async fn mfa_completion_records_login_only_when_promoting_limited_authority() ->
             .issue_full(&auth)
             .await
             .map_err(|_| anyhow!("factor completion"))?;
-        let recorded: chrono::DateTime<chrono::Utc> =
+        let recorded: jiff_sqlx::Timestamp =
             sqlx::query_scalar("SELECT last_login_at FROM users WHERE id=$1")
                 .bind(user)
                 .fetch_one(&db.pool)
@@ -435,7 +435,7 @@ async fn mfa_completion_records_login_only_when_promoting_limited_authority() ->
             .await
             .map_err(|_| anyhow!("full renewal"))?;
         assert_eq!(
-            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(
                 "SELECT last_login_at FROM users WHERE id=$1"
             )
             .bind(user)

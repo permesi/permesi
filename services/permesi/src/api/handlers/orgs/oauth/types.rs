@@ -3,6 +3,7 @@
 //! Unknown request fields are rejected so IDs, client classification changes, and
 //! client-supplied roles cannot be silently accepted as configuration.
 
+use crate::api::timestamp::rfc3339;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -86,9 +87,9 @@ impl From<Client> for ClientResponse {
             client_id: client.client_id.to_string(),
             name: client.name,
             client_type: client.client_type,
-            created_at: client.created_at.to_rfc3339(),
-            updated_at: client.updated_at.to_rfc3339(),
-            disabled_at: client.disabled_at.map(|time| time.to_rfc3339()),
+            created_at: rfc3339(client.created_at),
+            updated_at: rfc3339(client.updated_at),
+            disabled_at: client.disabled_at.map(rfc3339),
         }
     }
 }
@@ -132,8 +133,8 @@ impl From<ScopeRecord> for ScopeResponse {
             name: scope.name,
             description: scope.description,
             kind: scope.kind,
-            created_at: scope.created_at.to_rfc3339(),
-            updated_at: scope.updated_at.to_rfc3339(),
+            created_at: rfc3339(scope.created_at),
+            updated_at: rfc3339(scope.updated_at),
         }
     }
 }
@@ -172,8 +173,8 @@ impl From<crate::oauth::credentials::SecretMetadata> for SecretResponse {
     fn from(value: crate::oauth::credentials::SecretMetadata) -> Self {
         Self {
             id: value.id.to_string(),
-            created_at: value.created_at.to_rfc3339(),
-            expires_at: value.expires_at.map(|time| time.to_rfc3339()),
+            created_at: rfc3339(value.created_at),
+            expires_at: value.expires_at.map(rfc3339),
         }
     }
 }

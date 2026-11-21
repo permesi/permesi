@@ -132,7 +132,7 @@ async fn oauth_credentials_rotation_overlap_stale_ids_and_lost_response_recovery
         .0,
         StatusCode::CONFLICT
     );
-    let deadline: chrono::DateTime<chrono::Utc> =
+    let deadline: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT expires_at FROM oauth_client_secrets WHERE id=$1")
             .bind(first_id)
             .fetch_one(&f.db.pool)
@@ -142,7 +142,7 @@ async fn oauth_credentials_rotation_overlap_stale_ids_and_lost_response_recovery
         .await?;
     let (status, recovered) = f.call("POST", &path, &f.token, Some(json!({}))).await?;
     assert_eq!(status, StatusCode::CREATED);
-    let after: chrono::DateTime<chrono::Utc> =
+    let after: jiff_sqlx::Timestamp =
         sqlx::query_scalar("SELECT expires_at FROM oauth_client_secrets WHERE id=$1")
             .bind(first_id)
             .fetch_one(&f.db.pool)
@@ -663,7 +663,7 @@ async fn oauth_credentials_failed_rotation_rolls_back_retirement() -> Result<()>
         .0,
         StatusCode::INTERNAL_SERVER_ERROR
     );
-    let expiry: Option<chrono::DateTime<chrono::Utc>> =
+    let expiry: Option<jiff_sqlx::Timestamp> =
         sqlx::query_scalar("SELECT expires_at FROM oauth_client_secrets WHERE id=$1")
             .bind(current)
             .fetch_one(&f.db.pool)
