@@ -65,10 +65,10 @@ for the privilege matrix, migration boundary and completed validation evidence.
 Both `cleanup_expired_tokens()` and `genesis_tokens_rollover()` explicitly search trusted
 `public` objects before `pg_temp`, with PostgreSQL's implicit trusted catalog search.
 Temporary tables/views must never execute caller-defined code under a function owner's
-authority. Vault integration tests exercise harmless temporary-object rejection on
+authority. OpenBao integration tests exercise harmless temporary-object rejection on
 initial and replacement Permesi runtime credentials. Genesis runtime credentials are
 denied parameterized partition maintenance; the maintenance owner retains execution,
-including the temporary-catalog regression. Scheduled jobs already use `vault_genesis`.
+including the temporary-catalog regression. Scheduled jobs already use `openbao_genesis`.
 Bootstrap transfers only application objects in each dedicated service database and
 fails on unexpected owners, privileged runtime roles or unsafe owner memberships.
 Catalog-only administrator passes pin trusted lookup paths; separate authenticated
@@ -76,7 +76,7 @@ owner connections apply schemas, seeds and transactional verification. `SET ROLE
 inside an administrator connection is not an owner security boundary. Catalogs and extension-managed members retain their
 own ownership. Future tables/sequences require explicit runtime grants; broad legacy
 default grants are removed. Independent Claude/Herdr source-review corrections are
-applied. PostgreSQL/Vault regressions, refreshed dependency checks and all 32
+applied. PostgreSQL/OpenBao regressions, refreshed dependency checks and all 32
 three-replica scenarios pass on CI; the completed milestone is recorded in
 [TODO.md](../../TODO.md).
 
@@ -101,9 +101,9 @@ Use these psql commands to verify runtime roles and grants after bootstrap:
 
 ```sql
 -- roles + membership
-\du+ vault_genesis
+\du+ openbao_genesis
 \du+ genesis_runtime
-\du+ vault_permesi
+\du+ openbao_permesi
 \du+ permesi_runtime
 
 -- database-level grants (run in postgres)

@@ -89,7 +89,7 @@ connection recovery during network partitions.
 | --- | --- |
 | `cargo test --locked --workspace --no-fail-fast` | 688 pass, zero failures, two browser tests intentionally ignored |
 | `cargo test --locked --workspace --all-features --no-fail-fast` | 718 pass, zero failures, two browser tests intentionally ignored |
-| PostgreSQL schema/runtime authority and Vault integration | Included in both successful workspace runs, including all seven database privilege regressions |
+| PostgreSQL schema/runtime authority and OpenBao integration | Included in both successful workspace runs, including all seven database privilege regressions |
 | `cargo test --locked -p permesi --lib tenant_mutation -- --nocapture` | 14 pass, no fixture skips; twelve PostgreSQL regressions plus configuration/OpenAPI checks |
 | Final environment-isolation hygiene | Hostile-environment focused test passes after observed failure; subsequent complete default Permesi library run passes 442 with two browser tests ignored |
 | `cargo test --locked -p permesi --lib -- --ignored` | Both actual PostgreSQL browser tests pass; rerun against the fresh release assets in the normal generated Web directory |

@@ -1,11 +1,11 @@
 //! HTTP API router and server lifecycle for Permesi.
 //!
-//! `new` loads configuration secrets from Vault, connects the PostgreSQL pool,
+//! `new` loads configuration secrets from OpenBao, connects the PostgreSQL pool,
 //! builds the per-module state (auth, admin, TOTP, `WebAuthn`), and serves the
 //! router over TLS or a Unix socket until a shutdown is requested.
 //!
 //! Flow Overview:
-//! 1) Start the Vault token/lease renewers, which send a `ShutdownSignal` when
+//! 1) Start the OpenBao token/lease renewers, which send a `ShutdownSignal` when
 //!    renewal fails so the process fails closed.
 //! 2) Build state and the router, then start the email outbox worker.
 //! 3) Serve until SIGTERM/SIGINT or a fail-closed signal starts a drain bounded
@@ -15,15 +15,14 @@
 //!    worker can recover on expiry; network delivery never holds a SQL transaction.
 //!
 //! A platform-requested stop returns `Ok` (clean exit); a fail-closed stop
-//! returns an error so the supervisor restarts the process with fresh Vault
+//! returns an error so the supervisor restarts the process with fresh OpenBao
 //! credentials.
 
 use crate::{
     api::handlers::{auth, health, root},
     cli::globals::GlobalArgs,
-    tls,
+    openbao, tls,
     totp::{DekManager, TotpService},
-    vault,
     webauthn::{PasskeyService, SecurityKeyService},
 };
 use anyhow::{Context, Result, anyhow};
@@ -82,9 +81,9 @@ where
     ))
 }
 
-/// Configuration for Vault KV-v2 configuration secrets.
+/// Configuration for OpenBao KV-v2 configuration secrets.
 #[derive(Debug, Clone)]
-pub struct VaultKvConfig {
+pub struct OpenBaoKvConfig {
     /// Mount path of the KV-v2 engine.
     pub mount: String,
     /// Path to the configuration secret.
@@ -102,8 +101,8 @@ pub struct AppConfig {
     pub email: email::EmailWorkerConfig,
     /// Explicit outbox/SMTP transport with bounded durable claims.
     pub(crate) email_delivery: email::DeliveryConfig,
-    /// Vault KV module configuration.
-    pub kv: VaultKvConfig,
+    /// OpenBao KV module configuration.
+    pub kv: OpenBaoKvConfig,
     /// PostgreSQL pool shape shared by handlers and the email outbox worker.
     pub database: PoolConfig,
     /// Opt-in OAuth issuer, resource audience, and bounded transaction lifetimes.
@@ -123,19 +122,19 @@ pub async fn new(
     admission: Arc<handlers::AdmissionVerifier>,
     config: AppConfig,
 ) -> Result<()> {
-    // Renew vault token, gracefully shutdown if failed
+    // Renew bao token, gracefully shutdown if failed
     let (shutdown_tx, rx) = mpsc::unbounded_channel();
 
-    vault::renew::try_renew(globals, shutdown_tx.clone()).await?;
+    openbao::renew::try_renew(globals, shutdown_tx.clone()).await?;
 
     let pool = config
         .database
         .connect(&dsn, env!("CARGO_PKG_NAME"))
         .await?;
 
-    let secrets = vault::kv::read_config_secrets(globals, &config.kv.mount, &config.kv.path)
+    let secrets = openbao::kv::read_config_secrets(globals, &config.kv.mount, &config.kv.path)
         .await
-        .context("Failed to load configuration secrets from Vault")?;
+        .context("Failed to load configuration secrets from OpenBao")?;
 
     let opaque_state = auth::OpaqueState::from_seed(
         secrets.opaque_server_seed,
@@ -145,12 +144,12 @@ pub async fn new(
     );
 
     let mut mfa_config = auth::mfa::MfaConfig::from_env();
-    // Set pepper from Vault
+    // Set pepper from OpenBao
     mfa_config = mfa_config.with_recovery_pepper(Arc::from(secrets.mfa_recovery_pepper));
 
     if mfa_config.required() && mfa_config.recovery_pepper().is_none() {
         return Err(anyhow!(
-            "MFA is required but recovery pepper is missing from Vault configuration"
+            "MFA is required but recovery pepper is missing from OpenBao configuration"
         ));
     }
     let auth_state = Arc::new(auth::AuthState::new(
@@ -171,7 +170,7 @@ pub async fn new(
         auth::AdminState::new(
             config.admin.clone(),
             pool.clone(),
-            globals.vault_transport.clone(),
+            globals.openbao_transport.clone(),
         )
         .context("Failed to initialize admin state")?,
     );
@@ -309,7 +308,7 @@ fn build_router(state: AppState) -> Result<Router> {
 async fn serve_socket(
     app: Router,
     path: String,
-    mut shutdown_rx: mpsc::UnboundedReceiver<vault::renew::ShutdownSignal>,
+    mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
 ) -> Result<()> {
     let path = std::path::PathBuf::from(path);
     if path.exists() {
@@ -362,7 +361,7 @@ async fn serve_socket(
     Ok(())
 }
 
-/// Serve the API over TLS using Vault-issued certificates.
+/// Serve the API over TLS using OpenBao-issued certificates.
 ///
 /// The listener prefers a dual-stack IPv6 socket so one bind can accept both
 /// IPv6 and IPv4 traffic. Hosts without usable IPv6 support fall back to an
@@ -377,7 +376,7 @@ async fn serve_socket(
 async fn serve_tls(
     app: Router,
     port: u16,
-    mut shutdown_rx: mpsc::UnboundedReceiver<vault::renew::ShutdownSignal>,
+    mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
 ) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
@@ -454,7 +453,7 @@ fn init_security_key_service(
     .with_operations(auth.operations().clone()))
 }
 
-/// Constructs shared passkey storage using only the validated runtime policy and Vault seed.
+/// Constructs shared passkey storage using only the validated runtime policy and OpenBao seed.
 fn init_passkey_service(
     auth_config: &auth::AuthConfig,
     pool: sqlx::PgPool,
@@ -478,7 +477,7 @@ fn init_passkey_service(
 #[cfg(test)]
 mod tests {
     use super::serve_socket;
-    use crate::vault::renew::ShutdownSignal;
+    use crate::openbao::renew::ShutdownSignal;
     use anyhow::{Context, Result};
     use axum::Router;
     use std::fs;

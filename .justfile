@@ -10,8 +10,8 @@ net := env_var_or_default("PERMESI_NET", "permesi-net")
 subnet := env_var_or_default("PERMESI_SUBNET", "172.31.20.0/24")
 
 # Unique container names and a shared label keep permesi's containers apart from
-# other projects' (`podman run --replace --name vault` would delete a foreign one).
-vault_ctr := "permesi-vault"
+# other projects' (`podman run --replace --name openbao` would delete a foreign one).
+openbao_ctr := "permesi-openbao"
 jaeger_ctr := "permesi-jaeger"
 stack_label := "io.permesi.stack=dev"
 # Herdr names workspaces after their directory, so the dev session gets a label that
@@ -20,8 +20,8 @@ herdr_label := "permesi-dev"
 
 # Where published container ports listen, and the browser-facing HTTPS port.
 # PERMESI_BIND_ADDR defaults to loopback because Postgres uses trust auth and
-# vault/keys.json holds the Vault root token; 0.0.0.0 restores LAN access. Host clients
-# hard-code loopback (VAULT_ADDR, the DSNs, terraform), so no other address works.
+# openbao/keys.json holds the OpenBao root token; 0.0.0.0 restores LAN access. Host clients
+# hard-code loopback (BAO_ADDR, the DSNs, terraform), so no other address works.
 # PERMESI_HTTPS_PORT is the HAProxy port the browser uses; every browser-facing URL
 # carries it when it is not 443, because CORS and WebAuthn compare origins including
 # the port. Over an SSH forward, use the same number on both ends.
@@ -42,7 +42,7 @@ _knobs_ok := if net !~ '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$' { error("PERMESI_NET 
 
 # Local infra images: pinned and fully qualified, so rootless podman never has to
 # resolve a short name and every developer runs the same versions.
-vault_image := "docker.io/hashicorp/vault:2.0"
+openbao_image := "docker.io/openbao/openbao:2.7"
 jaeger_image := "docker.io/jaegertracing/jaeger:2.19.0"
 haproxy_image := "docker.io/library/haproxy:3.4"
 
@@ -59,5 +59,5 @@ import '.justfiles/services.just'
 import '.justfiles/docs_openapi.just'
 import '.justfiles/schemathesis.just'
 import '.justfiles/helpers.just'
-import '.justfiles/vault.just'
+import '.justfiles/openbao.just'
 import '.justfiles/infra.just'

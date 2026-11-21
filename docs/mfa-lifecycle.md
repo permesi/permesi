@@ -62,7 +62,7 @@ Real PostgreSQL tests cover both password/elevation ordering, full/limited revoc
 exact-session consumption, rollback, pending ceremony cleanup and wrong-kind rejection.
 Real RSA HTTP hardware-key flows register on A and finish on B, replace bootstrap and
 challenge cookies, reject replay/rotation and work with a one-connection issuance pool.
-Vault/PostgreSQL TOTP tests cover replacement cookies, revoked enrollment/verification/
+OpenBao/PostgreSQL TOTP tests cover replacement cookies, revoked enrollment/verification/
 recovery routes, removed pending TOTP credentials and the confirmed-credential bypass
 regression. Existing MFA deletion/state tests stay enabled.
 

@@ -165,7 +165,7 @@ mod tests {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
-    /// Builds the normal command without contacting Vault or production infrastructure.
+    /// Builds the normal command without contacting OpenBao or production infrastructure.
     fn arguments() -> Vec<&'static str> {
         vec![
             "permesi",
@@ -173,8 +173,8 @@ mod cli_tests {
             "postgres://",
             "--socket-path",
             "/tmp/oauth-test.sock",
-            "--vault-url",
-            "/tmp/vault-test.sock",
+            "--openbao-url",
+            "/tmp/openbao-test.sock",
             "--admission-paserk-url",
             "https://genesis.test/paserk.json",
         ]

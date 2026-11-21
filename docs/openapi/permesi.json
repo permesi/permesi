@@ -387,7 +387,7 @@
           "health"
         ],
         "summary": "Perform a detailed dependency health check.",
-        "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh Vault\nDB credentials.",
+        "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh OpenBao\nDB credentials.",
         "operationId": "health",
         "responses": {
           "200": {
@@ -418,11 +418,11 @@
         "tags": [
           "oauth"
         ],
-        "summary": "Publishes cached public Vault key versions without using the authentication database.\nSingle-flight refresh and negative caching bound upstream reads; malformed keys fail closed.",
+        "summary": "Publishes cached public OpenBao key versions without using the authentication database.\nSingle-flight refresh and negative caching bound upstream reads; malformed keys fail closed.",
         "operationId": "jwks",
         "responses": {
           "200": {
-            "description": "Retained Vault RSA public signing versions",
+            "description": "Retained OpenBao RSA public signing versions",
             "content": {
               "application/json": {
                 "schema": {
@@ -1565,7 +1565,7 @@
             }
           },
           "503": {
-            "description": "Vault unavailable.",
+            "description": "OpenBao unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1645,7 +1645,7 @@
             }
           },
           "503": {
-            "description": "Vault unavailable.",
+            "description": "OpenBao unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8188,7 +8188,7 @@
       "AdminBootstrapRequest": {
         "type": "object",
         "required": [
-          "vault_token"
+          "openbao_token"
         ],
         "properties": {
           "note": {
@@ -8197,7 +8197,7 @@
               "null"
             ]
           },
-          "vault_token": {
+          "openbao_token": {
             "type": "string"
           }
         },
@@ -8221,10 +8221,10 @@
       "AdminElevateRequest": {
         "type": "object",
         "required": [
-          "vault_token"
+          "openbao_token"
         ],
         "properties": {
-          "vault_token": {
+          "openbao_token": {
             "type": "string"
           }
         },
@@ -8249,18 +8249,18 @@
         "type": "object",
         "required": [
           "database",
-          "vault",
+          "openbao",
           "platform"
         ],
         "properties": {
           "database": {
             "$ref": "#/components/schemas/DatabaseStats"
           },
+          "openbao": {
+            "$ref": "#/components/schemas/OpenBaoStatus"
+          },
           "platform": {
             "$ref": "#/components/schemas/PlatformStats"
-          },
-          "vault": {
-            "$ref": "#/components/schemas/VaultStatus"
           }
         }
       },
@@ -8873,7 +8873,7 @@
       },
       "Jwks": {
         "type": "object",
-        "description": "Public-only JSON Web Key Set; every retained Vault version is independently identifiable.",
+        "description": "Public-only JSON Web Key Set; every retained OpenBao version is independently identifiable.",
         "required": [
           "keys"
         ],
@@ -9201,6 +9201,25 @@
         ],
         "properties": {
           "registration_response": {
+            "type": "string"
+          }
+        }
+      },
+      "OpenBaoStatus": {
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "sealed"
+        ],
+        "properties": {
+          "sealed": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
             "type": "string"
           }
         }
@@ -10017,25 +10036,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "VaultStatus": {
-        "type": "object",
-        "required": [
-          "status",
-          "version",
-          "sealed"
-        ],
-        "properties": {
-          "sealed": {
-            "type": "boolean"
-          },
-          "status": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        }
       },
       "VerifyEmailRequest": {
         "type": "object",

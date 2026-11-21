@@ -82,7 +82,7 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
     } else {
         "text-red-500"
     };
-    let vault_color = if data.vault.status == "ok" && !data.vault.sealed {
+    let openbao_color = if data.openbao.status == "ok" && !data.openbao.sealed {
         "text-green-500"
     } else {
         "text-red-500"
@@ -116,24 +116,24 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
                 </div>
             </div>
 
-            // Vault Card
+            // OpenBao Card
             <div class="min-w-0 p-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
                 <div class="flex items-center justify-between gap-3 mb-4">
-                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">"Vault"</h3>
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">"OpenBao"</h3>
                     <Icon name=IconName::LockedKey size=icon_size::CONTROL class="text-gray-400 dark:text-gray-500" />
                 </div>
                 <div class="space-y-2">
                     <div class="flex min-w-0 justify-between gap-3 text-sm">
                         <span class="shrink-0 text-gray-500 dark:text-gray-400">"Version"</span>
-                        <span class="min-w-0 break-words text-right font-medium dark:text-white">{data.vault.version}</span>
+                        <span class="min-w-0 break-words text-right font-medium dark:text-white">{data.openbao.version}</span>
                     </div>
                     <div class="flex justify-between text-sm">
                         <span class="text-gray-500 dark:text-gray-400">"Sealed"</span>
-                        <span class="font-medium dark:text-white">{data.vault.sealed.to_string()}</span>
+                        <span class="font-medium dark:text-white">{data.openbao.sealed.to_string()}</span>
                     </div>
                     <div class="flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm">
                         <span class="text-gray-500 dark:text-gray-400">"Status"</span>
-                        <span class=vault_color>{data.vault.status}</span>
+                        <span class=openbao_color>{data.openbao.status}</span>
                     </div>
                 </div>
             </div>

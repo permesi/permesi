@@ -1,7 +1,7 @@
 //! Admin claim page for platform operator bootstrap and elevation.
 //!
 //! Flow Overview: Fetch admin status, render the appropriate form, then submit
-//! the Vault token to bootstrap or elevate. The admin token is stored in memory
+//! the OpenBao token to bootstrap or elevate. The admin token is stored in memory
 //! and must be re-issued after expiration.
 
 use crate::{
@@ -42,7 +42,7 @@ enum PageState {
 struct ClaimUiState {
     error: WriteSignal<Option<AppError>>,
     success: WriteSignal<Option<String>>,
-    vault_token: WriteSignal<String>,
+    openbao_token: WriteSignal<String>,
     note: WriteSignal<String>,
     page_state: WriteSignal<PageState>,
 }
@@ -50,7 +50,7 @@ struct ClaimUiState {
 #[component]
 pub fn AdminClaimPage() -> impl IntoView {
     let auth = use_auth();
-    let (vault_token, set_vault_token) = signal(String::new());
+    let (openbao_token, set_openbao_token) = signal(String::new());
     let (note, set_note) = signal(String::new());
     let (error, set_error) = signal::<Option<AppError>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
@@ -84,7 +84,7 @@ pub fn AdminClaimPage() -> impl IntoView {
         ClaimUiState {
             error: set_error,
             success: set_success,
-            vault_token: set_vault_token,
+            openbao_token: set_openbao_token,
             note: set_note,
             page_state: set_page_state,
         },
@@ -95,7 +95,7 @@ pub fn AdminClaimPage() -> impl IntoView {
     let on_claim_submit = move |event: SubmitEvent| {
         submit_claim(
             &event,
-            vault_token,
+            openbao_token,
             note,
             status_signal,
             claim_action,
@@ -111,7 +111,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                     "Admin Claim"
                 </h1>
                 <p class="text-sm text-gray-600 dark:text-gray-300">
-                    "Use a short-lived Vault token to bootstrap or elevate platform admin privileges."
+                    "Use a short-lived OpenBao token to bootstrap or elevate platform admin privileges."
                 </p>
             </div>
 
@@ -123,8 +123,8 @@ pub fn AdminClaimPage() -> impl IntoView {
                         .get().map_or_else(|| view! { <Spinner /> }.into_any(), |result: Result<AdminStatusResponse, _>| match result {
                             Ok(status) => render_admin_forms(
                                 &status,
-                                vault_token,
-                                set_vault_token,
+                                openbao_token,
+                                set_openbao_token,
                                 note,
                                 set_note,
                                 on_claim_submit,
@@ -177,8 +177,8 @@ fn AdminClaimSuccess(success: ReadSignal<Option<String>>) -> impl IntoView {
 #[allow(clippy::too_many_arguments)]
 fn render_admin_forms(
     status: &AdminStatusResponse,
-    vault_token: ReadSignal<String>,
-    set_vault_token: WriteSignal<String>,
+    openbao_token: ReadSignal<String>,
+    set_openbao_token: WriteSignal<String>,
     note: ReadSignal<String>,
     set_note: WriteSignal<String>,
     on_claim_submit: impl Fn(SubmitEvent) + Copy + Send + 'static,
@@ -217,13 +217,13 @@ fn render_admin_forms(
                     <form class="space-y-4" on:submit=on_claim_submit>
                         <div>
                             <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">
-                                "Vault token"
+                                "OpenBao token"
                             </label>
                             <input
                                 type="password"
                                 class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                                on:input=move |event| set_vault_token.set(event_target_value(&event))
-                                value=vault_token.get()
+                                on:input=move |event| set_openbao_token.set(event_target_value(&event))
+                                value=openbao_token.get()
                                 placeholder="s.xxxxx"
                             />
                         </div>
@@ -251,13 +251,13 @@ fn render_admin_forms(
                     <form class="space-y-4" on:submit=on_claim_submit>
                         <div>
                             <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">
-                                "Vault token"
+                                "OpenBao token"
                             </label>
                             <input
                                 type="password"
                                 class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-                                on:input=move |event| set_vault_token.set(event_target_value(&event))
-                                value=vault_token.get()
+                                on:input=move |event| set_openbao_token.set(event_target_value(&event))
+                                value=openbao_token.get()
                                 placeholder="s.xxxxx"
                             />
                         </div>
@@ -316,7 +316,7 @@ fn active_token_notice(
 async fn perform_claim(input: ClaimInput) -> Result<ClaimOutcome, AppError> {
     if input.status.bootstrap_open && !input.status.operator {
         let request = AdminBootstrapRequest {
-            vault_token: input.token.clone(),
+            openbao_token: input.token.clone(),
             note: input.note.clone(),
         };
         let response = client::admin_bootstrap(&request).await?;
@@ -325,16 +325,16 @@ async fn perform_claim(input: ClaimInput) -> Result<ClaimOutcome, AppError> {
         }
     }
     let response = client::admin_elevate(&AdminElevateRequest {
-        vault_token: input.token,
+        openbao_token: input.token,
     })
     .await?;
     Ok(ClaimOutcome::Elevated(response))
 }
 
-/// Validates the visible Vault token and current status before dispatching the claim.
+/// Validates the visible OpenBao token and current status before dispatching the claim.
 fn submit_claim(
     event: &SubmitEvent,
-    vault_token: ReadSignal<String>,
+    openbao_token: ReadSignal<String>,
     note: ReadSignal<String>,
     status_signal: Signal<Option<AdminStatusResponse>>,
     claim_action: Action<ClaimInput, Result<ClaimOutcome, AppError>>,
@@ -344,10 +344,10 @@ fn submit_claim(
     event.prevent_default();
     set_error.set(None);
     set_success.set(None);
-    let token = vault_token.get_untracked();
+    let token = openbao_token.get_untracked();
     if token.trim().is_empty() {
         set_error.set(Some(AppError::Config(
-            "Vault token is required.".to_string(),
+            "OpenBao token is required.".to_string(),
         )));
         return;
     }
@@ -396,7 +396,7 @@ fn watch_claim_results(
     let ClaimUiState {
         error: set_error,
         success: set_success,
-        vault_token: set_vault_token,
+        openbao_token: set_openbao_token,
         note: set_note,
         page_state: set_page_state,
     } = state;
@@ -409,7 +409,7 @@ fn watch_claim_results(
             match result {
                 Ok(outcome) => {
                     set_error.set(None);
-                    set_vault_token.set(String::new());
+                    set_openbao_token.set(String::new());
                     set_note.set(String::new());
                     match outcome {
                         ClaimOutcome::Elevated(token) => {

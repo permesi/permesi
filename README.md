@@ -13,15 +13,15 @@
 **Prerequisites (intentional):**
 - **System**: `zsh`, `podman`, `jq`, `curl`, `xh`, `ripgrep` (rg), and [`herdr`](https://herdr.dev) (or `tmux` as the fallback)
 - **Languages**: `rust` (stable) with `cargo-watch`, `node` (LTS)
-- **Infrastructure**: `just`, `terraform`, `vault`, `mkcert`, `direnv`
-> These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, Vault-backed cryptography, and reproducible infrastructure. `zsh` is a hard requirement: the justfile runs under it, so no recipe works without it.
+- **Infrastructure**: `just`, `terraform`, `openbao`, `mkcert`, `direnv`
+> These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, OpenBao-backed cryptography, and reproducible infrastructure. `zsh` is a hard requirement: the justfile runs under it, so no recipe works without it.
 
 ```bash
 # 1. Clone the repo
 git clone https://github.com/permesi/permesi.git
 cd permesi
 
-# 2. Check the host: tools, ports, name resolution, network and Vault state
+# 2. Check the host: tools, ports, name resolution, network and OpenBao state
 just doctor
 
 # 3. Allow listening on privileged ports (Linux only, for HAProxy on :443),
@@ -41,13 +41,13 @@ recipe launches it with the isolated `dev` profile, falling back to the system
 Firefox when Developer Edition is absent. It imports the laptop's mkcert public
 CA into that profile's NSS database only; `TRUST_MKCERT_CA=0 just firefox` disables
 the import without changing any system or other Firefox trust store. The profile
-opens the web console, both API health pages, Jaeger, and the Vault UI as separate
+opens the web console, both API health pages, Jaeger, and the OpenBao UI as separate
 tabs. Its HTTPS pages default to port 8443; set `PERMESI_HTTPS_PORT=443` when the
 stack uses the standard HTTPS port.
 
 [![asciicast](https://asciinema.org/a/782038.svg)](https://asciinema.org/a/782038)
 
-*`just start` launches the full infrastructure (Postgres, Vault, Jaeger,
+*`just start` launches the full infrastructure (Postgres, OpenBao, Jaeger,
 HAProxy) and starts the services (`genesis`, `permesi`, and the `web` console)
 in a Herdr workspace over HTTPS/TLS — the same transport used in production and
 k8s, so local dev mirrors real deployments. Without Herdr it falls back to a `tmux`
@@ -63,11 +63,11 @@ hosts/pods).*
 - **API (Permesi):** [https://api.permesi.localhost/health](https://api.permesi.localhost/health)
 - **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
 - **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
-- **Secrets (Vault):** [http://localhost:8200](http://localhost:8200)
+- **Secrets (OpenBao):** [http://localhost:8200](http://localhost:8200)
 
 ### 🛰️ Remote VM (one per developer)
 
-The same stack runs on a remote Linux VM while the browser stays on your laptop. Everything runs on the VM with `just start`; the laptop only needs a clone of this repository (for `scripts/dev-remote`), `mkcert` and SSH. One SSH connection carries the HTTPS port plus the Jaeger and Vault UIs, so the browser keeps using the usual `https://*.permesi.localhost` URLs.
+The same stack runs on a remote Linux VM while the browser stays on your laptop. Everything runs on the VM with `just start`; the laptop only needs a clone of this repository (for `scripts/dev-remote`), `mkcert` and SSH. One SSH connection carries the HTTPS port plus the Jaeger and OpenBao UIs, so the browser keeps using the usual `https://*.permesi.localhost` URLs.
 
 On the VM, once:
 
@@ -125,7 +125,7 @@ Note: service HTTP modules live under `src/api/` (previously `src/permesi/` and 
 ### Isolated OAuth scenarios
 
 `just oauth-scenario` builds and runs the full suite on fresh, disposable PostgreSQL
-and Vault containers, with real Genesis, three Permesi replicas by default, the compiled Web console
+and OpenBao containers, with real Genesis, three Permesi replicas by default, the compiled Web console
 and Chromium. It creates accounts and tenant fixtures through the APIs and cleans up
 its own resources. Linux and local Podman are required; the development stack and
 production endpoints are never used.
@@ -186,11 +186,11 @@ To bootstrap Postgres without the local container flow, run the SQL directly. `d
 single source of truth for dev containers and bare-metal setups:
 
 ```sh
-# 1) Create Vault root users, runtime roles, grants, and load schemas (edit passwords first).
+# 1) Create OpenBao root users, runtime roles, grants, and load schemas (edit passwords first).
 psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_init.sql
 ```
 
-`db/sql/00_init.sql` uses dev defaults (`vault_genesis` / `vault_permesi` with the same password).
+`db/sql/00_init.sql` uses dev defaults (`openbao_genesis` / `openbao_permesi` with the same password).
 For production, update those passwords and remove the `seed_test_client.sql` include before
 running it, or use it as a template for your own bootstrap script. If you choose not to run
 `db/sql/00_init.sql`, load the service schemas directly with `db/sql/01_genesis.sql` and
@@ -205,21 +205,21 @@ schedule pg_cron jobs directly.
 The [database hardening phase](docs/database-hardening.md) adds verified non-superuser
 schema ownership, explicit runtime grants and retained-history parent-deletion restrictions.
 Independent Claude/Herdr source review has identified and corrected bootstrap and test
-issues. The refreshed dependency graph passes database/Vault regressions, both
+issues. The refreshed dependency graph passes database/OpenBao regressions, both
 workspace test variants, browser checks, all 32 three-replica scenarios and seven
 harness checks on CI. See the linked validation evidence and rollout instructions.
 
 ## Cryptography
 
-- **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via Vault Transit; private keys never leave Vault. Public keys are published via a PASERK keyset for offline verification.
-- **TOTP protection:** Per-user TOTP secrets use envelope encryption backed by the Vault Transit `chacha20-poly1305` key at `transit/permesi` / `totp`; plaintext seeds are not stored in PostgreSQL.
-- **OPAQUE (user auth):** Client-side OPAQUE; permanent credentials are registration records, while temporary login/reauthentication state is sealed in shared PostgreSQL. The server setup seed is stored in Vault KV v2 (`opaque_server_seed`).
+- **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via OpenBao Transit; private keys never leave OpenBao. Public keys are published via a PASERK keyset for offline verification.
+- **TOTP protection:** Per-user TOTP secrets use envelope encryption backed by the OpenBao Transit `chacha20-poly1305` key at `transit/permesi` / `totp`; plaintext seeds are not stored in PostgreSQL.
+- **OPAQUE (user auth):** Client-side OPAQUE; permanent credentials are registration records, while temporary login/reauthentication state is sealed in shared PostgreSQL. The server setup seed is stored in OpenBao KV v2 (`opaque_server_seed`).
 
 ## Admission Token Verification (Offline)
 
 Admission token verification never calls `genesis` on the hot path. The flow is:
 
-1. `genesis` signs a PASETO v4.public token with Vault Transit and puts the PASERK ID (`k4.pid...`) in the token footer as `kid`.
+1. `genesis` signs a PASETO v4.public token with OpenBao Transit and puts the PASERK ID (`k4.pid...`) in the token footer as `kid`.
 2. `permesi` parses the footer `kid`, looks up the matching `k4.public...` key in the PASERK keyset, and verifies the signature.
 3. `permesi` validates claims (`iss`, `aud`, `action`, `iat/exp`, TTL). If any check fails, the request is rejected.
 
@@ -303,7 +303,7 @@ accounts requires cancelling, signing out of Permesi, and starting a new request
 application. Expired requests show a restart instruction without accepting a
 browser-supplied callback.
 PKCE is required for public and confidential clients. `POST /token` owns client
-authentication, S256 redemption, Vault signing and hash-only
+authentication, S256 redemption, OpenBao signing and hash-only
 issuance receipts in one PostgreSQL transaction. Public clients supply their ID;
 confidential clients use HTTP Basic with bounded Argon2id current/retiring credentials.
 Access tokens bind the explicit resource audience and tenant/application/grant; OIDC
@@ -331,7 +331,7 @@ The [current release-readiness record](docs/release-readiness.md) covers the
 2026-10-27 Helm/passkey qualification and the unresolved dependency audit blocker.
 
 Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
-enable the protocol routes. `/jwks.json` publishes retained shared Vault RSA versions;
+enable the protocol routes. `/jwks.json` publishes retained shared OpenBao RSA versions;
 discovery advertises the implemented code/token and refresh revocation endpoints, S256, Basic/public-none
 methods and issuer response identification. Runtime signs but cannot rotate/export/retire
 keys. Confidential secret management includes one-time creation, overlap rotation and
@@ -471,7 +471,7 @@ Organizations. Workspace Organizations retains membership-scoped management.
 
 ### Admin Rate Limiting
 
-Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against Vault token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
+Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against OpenBao token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
 
 Unauthenticated authentication flows also use PostgreSQL-backed fixed-window
 limits shared across replicas. The defaults are 100 attempts per IP and 10 per
@@ -496,22 +496,23 @@ for purpose/subject ceilings and the shared admission policy.
 | `POST` | `/v1/auth/verify-email` | Consume email verification token; requires zero token |
 | `POST` | `/v1/auth/resend-verification` | Resend verification link; requires zero token |
 
-## Vault Dependency
+## OpenBao Dependency
 
-Vault is required for both services in production (AppRole auth or Agent proxy, dynamic DB creds, transit encryption, and the OPAQUE seed in KV v2). Running without Vault is not supported.
+OpenBao is required for both services in production (AppRole auth or Agent proxy, dynamic DB creds, transit encryption, and the OPAQUE seed in KV v2). Running without OpenBao is not supported.
 
 ### Connectivity Modes
 
-The `vault-url` (and its env equivalents) supports two operational modes:
+The `openbao-url` (and its env equivalents) supports two operational modes:
 
 1.  **TCP Mode (`http://` or `https://`)**:
-    -   Requires `vault-role-id` and `vault-secret-id` (or `vault-wrapped-token`).
+    -   Requires `openbao-role-id` and `openbao-secret-id` (or `openbao-wrapped-token`).
     -   The application performs the AppRole login and manages background token/lease renewals.
 2.  **Agent Mode (`/path/to/socket` or `unix:///path/to/socket`)**:
-    -   Connects to a Vault Agent `api_proxy` via a Unix domain socket.
+    -   Connects to an OpenBao Agent `api_proxy` via a Unix domain socket.
     -   No role/secret IDs are required.
     -   The application delegates authentication and renewals to the Agent.
-    -   **Requirement**: Vault Agent must be configured with `use_auto_auth_token = true`.
+    -   **Requirement**: OpenBao Agent must be configured with `use_auto_auth_token = true`.
+    -   OpenBao 2.7 still serves `api_proxy` from `bao agent` but logs that this function is moving to `bao proxy`; re-check the sidecar setup when upgrading OpenBao.
 
 Production readiness checklist:
 - HA cluster with tested failover.
@@ -531,7 +532,7 @@ images, release tarballs, Debian and RPM packages, and the `just` dev recipes al
 `--features telemetry`. The feature only makes export possible: a telemetry build sends
 spans only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set at startup, and a build without the
 feature logs a warning if that variable is present instead of silently dropping traces.
-- **Terraform** (v1.7+): Required for provisioning local Vault infrastructure.
+- **Terraform** (v1.7+): Required for provisioning local OpenBao infrastructure.
 
 ## Web Console
 
@@ -549,9 +550,9 @@ upgrade requirements, outage responses, telemetry and encryption lifetime policy
 
 Default ports: genesis `8000`, permesi `8001`, web `8081`.
 
-Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using Vault-issued certificates. `just start` launches HAProxy with TLS termination on port `443` and runs the backends over HTTPS/TLS (the same transport as production and k8s). The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
+Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using OpenBao-issued certificates. `just start` launches HAProxy with TLS termination on port `443` and runs the backends over HTTPS/TLS (the same transport as production and k8s). The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
 
-Two environment variables adapt the stack to the host. `PERMESI_BIND_ADDR` (default `127.0.0.1`) is where every container publishes its ports: Postgres runs with trust auth and `vault/keys.json` holds the Vault root token, so no container port is reachable from the network unless you set it to `0.0.0.0`. `PERMESI_HTTPS_PORT` (default `443`) is the HAProxy port the browser uses; any other value, for example `8443`, is carried into every browser-facing URL (`.envrc`, the compiled web console, CORS and passkey origins), so the console lives at `https://permesi.localhost:8443` and no `sysctl` change is needed. `just dev-envrc` records both values in `.envrc`, and later recipes (`just restart`, `just web`, `just genesis-token`) fall back to them, so the running stack keeps its port without re-exporting it; an explicit value in your environment always wins (`PERMESI_HTTPS_PORT=443 just restart` switches back). One caveat on shared or cloud hosts: genesis (`:8000`), permesi (`:8001`) and trunk (`:8081`) still listen on all interfaces because HAProxy reaches them from its container through `host.containers.internal`, so keep the host firewall closed to everything but SSH.
+Two environment variables adapt the stack to the host. `PERMESI_BIND_ADDR` (default `127.0.0.1`) is where every container publishes its ports: Postgres runs with trust auth and `openbao/keys.json` holds the OpenBao root token, so no container port is reachable from the network unless you set it to `0.0.0.0`. `PERMESI_HTTPS_PORT` (default `443`) is the HAProxy port the browser uses; any other value, for example `8443`, is carried into every browser-facing URL (`.envrc`, the compiled web console, CORS and passkey origins), so the console lives at `https://permesi.localhost:8443` and no `sysctl` change is needed. `just dev-envrc` records both values in `.envrc`, and later recipes (`just restart`, `just web`, `just genesis-token`) fall back to them, so the running stack keeps its port without re-exporting it; an explicit value in your environment always wins (`PERMESI_HTTPS_PORT=443 just restart` switches back). One caveat on shared or cloud hosts: genesis (`:8000`), permesi (`:8001`) and trunk (`:8081`) still listen on all interfaces because HAProxy reaches them from its container through `host.containers.internal`, so keep the host firewall closed to everything but SSH.
 If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
 `just start-socket` is an opt-in alternative that serves the backends over Unix domain sockets for a same-host performance optimization. In that mode the HAProxy container runs with your current UID/GID so it can open the `0660` Unix sockets created under `.tmp/` without widening local socket permissions. Sockets are same-host only and are not portable across separate hosts/pods (k8s), so HTTPS remains the default.
 
@@ -561,8 +562,8 @@ If you want to run services manually instead of using the all-in-one `just start
 `just start` runs genesis, permesi and web, plus a fourth pane for ad hoc commands, in a `permesi-dev` [Herdr](https://herdr.dev) workspace, and falls back to a `tmux` session named `permesi` when Herdr is not installed. Set `PERMESI_MUX=herdr|tmux|none` to force a choice; `none` starts the infra and prints the three commands for your own terminals. Inside Herdr the command creates the workspace and switches to it (Herdr does not nest); outside it attaches to your running Herdr, starting a headless Herdr server first if none is running. `PERMESI_NO_ATTACH=1` builds the session without attaching. Re-running `just start` while the session is alive only attaches, `just attach` does the same from any shell, and `just logs [genesis|permesi|web]` prints a pane's recent output without attaching. Before opening the panes, `just start` builds genesis and permesi once so the two cargo-watch runs do not queue on the shared build lock; set `PERMESI_NO_PREBUILD=1` to skip that. `just stop` stops the containers and dev processes first and closes the session last, so it also works from the session's own spare pane (it then keeps that pane open).
 
 Because AppRole SecretIDs are single-use (`secret_id_num_uses=1`), `just genesis` and `just permesi` fetch a fresh
-SecretID before each `cargo watch` run using the Vault CLI. Make sure `vault` is installed and authenticated (via
-`VAULT_ADDR`/`VAULT_TOKEN` or your Vault token helper).
+SecretID before each `cargo watch` run using the OpenBao CLI. Make sure the `bao` CLI is installed and authenticated (via
+`BAO_ADDR`/`BAO_TOKEN` or your OpenBao token helper).
 
 If you want infra only: `just infra` (the infra containers plus `.envrc`; it also runs `direnv allow` if available), then `just genesis`, `just permesi` and `just web` in terminals of your choice.
 
@@ -570,11 +571,11 @@ To connect to the local development database from the project root, run `PGSERVI
 If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
 to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
 
-Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe Vault data, and delete local Postgres data/logs (`db/data`, `db/log`).
+Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe OpenBao data, and delete local Postgres data/logs (`db/data`, `db/log`).
 
-The dev stack keeps to itself so it can share a host with other projects. Every container (`postgres-permesi`, `permesi-vault`, `permesi-jaeger`, `permesi-haproxy`) runs on the dedicated `permesi-net` podman network with subnet `172.31.20.0/24` and carries the label `io.permesi.stack=dev`. Set `PERMESI_NET` or `PERMESI_SUBNET` when that range collides with something else on the host; `just setup-network` reports the clash instead of silently picking another subnet. `just stop` only signals processes whose working directory is inside this checkout, so another project's `cargo watch` or port-8000 server survives it. Integration tests create their own uniquely named `permesi-test-*` networks and containers; `just test-clean` removes any that an interrupted run left behind. It removes every `permesi-test-*` resource of your user, so do not run it while tests of any permesi checkout are running. Container names and ports are fixed, so a host user runs one permesi stack at a time (one VM per developer). If you ran the stack before the containers were renamed, remove the old `vault` and `jaeger` containers once (`podman rm -f vault jaeger`) after confirming they are permesi's: the Vault data volume `permesi-vault-data` is reused by `permesi-vault`.
+The dev stack keeps to itself so it can share a host with other projects. Every container (`postgres-permesi`, `permesi-openbao`, `permesi-jaeger`, `permesi-haproxy`) runs on the dedicated `permesi-net` podman network with subnet `172.31.20.0/24` and carries the label `io.permesi.stack=dev`. Set `PERMESI_NET` or `PERMESI_SUBNET` when that range collides with something else on the host; `just setup-network` reports the clash instead of silently picking another subnet. `just stop` only signals processes whose working directory is inside this checkout, so another project's `cargo watch` or port-8000 server survives it. Integration tests create their own uniquely named `permesi-test-*` networks and containers; `just test-clean` removes any that an interrupted run left behind. It removes every `permesi-test-*` resource of your user, so do not run it while tests of any permesi checkout are running. Container names and ports are fixed, so a host user runs one permesi stack at a time (one VM per developer). If you ran the stack before the containers were renamed, remove the old `openbao` and `jaeger` containers once (`podman rm -f openbao jaeger`) after confirming they are permesi's: the OpenBao data volume `permesi-openbao-data` is reused by `permesi-openbao`.
 
-`just dev-envrc` emits Vault credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single Vault PKI CA. `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis Vault CA bundle when fetching `paserk.json` directly from the Genesis service.
+`just dev-envrc` emits OpenBao credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single OpenBao PKI CA. `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis OpenBao CA bundle when fetching `paserk.json` directly from the Genesis service.
 - `PERMESI_TLS_PEM_BUNDLE=.../certs/permesi/tls.bundle.pem`
 - `PERMESI_ADMISSION_PASERK_CA_PATH=.../certs/genesis/ca.pem`
 - `GENESIS_TLS_PEM_BUNDLE=.../certs/genesis/tls.bundle.pem`
@@ -708,7 +709,7 @@ On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysct
 You can run `just haproxy-sysctl` to apply the sysctl setting, or avoid it entirely with `export PERMESI_HTTPS_PORT=8443`.
 
 ### Testing Admin Claim (Platform Operator)
-To test bootstrapping the first admin or elevating privileges, you need a Vault token with the `permesi-operators` policy.
+To test bootstrapping the first admin or elevating privileges, you need an OpenBao token with the `permesi-operators` policy.
 The dev bootstrap generates one and exports it as `PERMESI_OPERATOR_TOKEN` in `.envrc` (via `just dev-envrc`); it is never printed to the startup logs.
 
 1. Run `echo $PERMESI_OPERATOR_TOKEN` (with `.envrc` loaded), or mint a fresh one with `just operator-token`.

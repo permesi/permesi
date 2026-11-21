@@ -1,0 +1,2 @@
+# Product names that are not code identifiers; ".." keeps Clippy's defaults.
+doc-valid-idents = ["OpenBao", ".."]

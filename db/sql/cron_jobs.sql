@@ -8,29 +8,29 @@
 -- Requirements:
 --   - cron.database_name = 'postgres'
 --   - pg_cron installed and listed in shared_preload_libraries
---   - genesis/permesi databases and vault_* roles already created
+--   - genesis/permesi databases and openbao_* roles already created
 --
--- Authentication for Vault-Managed Users (Critical):
---   These cron jobs run as `vault_genesis` and `vault_permesi`. Because Vault can
---   rotate passwords for these roles (either automatically in Vault Enterprise or
+-- Authentication for OpenBao-Managed Users (Critical):
+--   These cron jobs run as `openbao_genesis` and `openbao_permesi`. Because OpenBao can
+--   rotate passwords for these roles (either automatically in OpenBao Enterprise or
 --   manually via API), `pg_cron` cannot safely use password authentication.
 --   Instead, it must use `peer` authentication over the local socket, mapping the
---   internal system user (usually `postgres`) to the target Vault roles.
+--   internal system user (usually `postgres`) to the target OpenBao roles.
 --
 --   Manual Rotation Command (for reference):
---     vault write -f database/rotate-root/permesi
---     vault write -f database/rotate-root/genesis
+--     bao write -f database/rotate-root/permesi
+--     bao write -f database/rotate-root/genesis
 --
 --   1. Update `pg_ident.conf` (User Name Maps):
 --      # MAPNAME   SYSTEM-USERNAME   PG-USERNAME
---      cronmap     postgres          vault_genesis
---      cronmap     postgres          vault_permesi
+--      cronmap     postgres          openbao_genesis
+--      cronmap     postgres          openbao_permesi
 --
 --   2. Update `pg_hba.conf` (Host-Based Authentication):
 --      Insert these lines *before* generic local rules:
 --      # TYPE  DATABASE  USER            ADDRESS  METHOD  OPTIONS
---      local   genesis   vault_genesis            peer    map=cronmap
---      local   permesi   vault_permesi            peer    map=cronmap
+--      local   genesis   openbao_genesis            peer    map=cronmap
+--      local   permesi   openbao_permesi            peer    map=cronmap
 --
 --   3. Reload configuration:
 --      SELECT pg_reload_conf();
@@ -74,12 +74,12 @@ BEGIN
         RAISE EXCEPTION 'permesi database is missing';
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_genesis') THEN
-        RAISE EXCEPTION 'vault_genesis role is missing';
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_genesis') THEN
+        RAISE EXCEPTION 'openbao_genesis role is missing';
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_permesi') THEN
-        RAISE EXCEPTION 'vault_permesi role is missing';
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_permesi') THEN
+        RAISE EXCEPTION 'openbao_permesi role is missing';
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'genesis_tokens_rollover') THEN
@@ -88,7 +88,7 @@ BEGIN
             '5 0 * * *',
             $cron$SELECT genesis_tokens_rollover(7, 2);$cron$,
             'genesis',
-            'vault_genesis'
+            'openbao_genesis'
         );
     END IF;
 
@@ -98,7 +98,7 @@ BEGIN
             '15 0 * * *',
             $cron$SELECT cleanup_expired_tokens();$cron$,
             'permesi',
-            'vault_permesi'
+            'openbao_permesi'
         );
     END IF;
 END;

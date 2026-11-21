@@ -2,22 +2,22 @@
 
 Core IAM/OIDC authority.
 
-## Vault requirement
+## OpenBao requirement
 
-Vault is required in production for authentication, dynamic DB creds, and transit encryption. Running without Vault is not supported.
-See the canonical checklist in `../../README.md#vault-dependency` and the Vault ops notes in `../../vault/README.md`.
+OpenBao is required in production for authentication, dynamic DB creds, and transit encryption. Running without OpenBao is not supported.
+See the canonical checklist in `../../README.md#openbao-dependency` and the OpenBao ops notes in `../../openbao/README.md`.
 TL;DR:
-- Run Vault in HA with tested failover.
+- Run OpenBao in HA with tested failover.
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
-When Vault token renewal or the DB lease renewal fails repeatedly, `permesi` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `permesi` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
+When OpenBao token renewal or the DB lease renewal fails repeatedly, `permesi` shuts down with an error so your supervisor can restart it and force a fresh OpenBao login (especially important during standby/active transitions). `permesi` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
 On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `permesi` stops accepting connections and lets in-flight requests finish for up to 30 seconds, then stops the email outbox worker at a batch boundary, flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process.
 
 ## CLI example
 
-The `dsn` can omit username/password because Vault injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).
+The `dsn` can omit username/password because OpenBao injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).
 Admission PASERK keyset can be provided via a local file/string or fetched from a URL.
 Admission tokens use RFC3339 `iat` / `exp` claims.
 
@@ -29,7 +29,7 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
 
 ### TCP Mode (AppRole)
 
-`--vault-url` accepts a Vault origin (`http(s)://host[:port]`) or an explicit AppRole login URL. An origin is completed to the standard AppRole login path; any other URL is used as-is (its path and query preserved). Requires role-id and secret-id (or wrapped token).
+`--openbao-url` accepts an OpenBao origin (`http(s)://host[:port]`) or an explicit AppRole login URL. An origin is completed to the standard AppRole login path; any other URL is used as-is (its path and query preserved). Requires role-id and secret-id (or wrapped token).
 
 ```sh
  cargo run -p permesi --bin permesi -- \
@@ -37,14 +37,14 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
    --dsn "postgres://postgres@localhost:5432/permesi" \
    --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
    --tls-pem-bundle "certs/permesi/tls.bundle.pem" \
-   --vault-url "http://vault:8200/v1/auth/approle/login" \
-   --vault-role-id "$PERMESI_ROLE_ID" \
-   --vault-secret-id "$PERMESI_SECRET_ID"
+   --openbao-url "http://openbao:8200/v1/auth/approle/login" \
+   --openbao-role-id "$PERMESI_ROLE_ID" \
+   --openbao-secret-id "$PERMESI_SECRET_ID"
  ```
  
  ### Agent Mode (Unix Socket)
  
- `--vault-url` points to the Vault Agent `api_proxy` socket. No authentication args required.
+ `--openbao-url` points to the OpenBao Agent `api_proxy` socket. No authentication args required.
  
  ```sh
  cargo run -p permesi --bin permesi -- \
@@ -52,33 +52,33 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
    --dsn "postgres://postgres@localhost:5432/permesi" \
    --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
    --tls-pem-bundle "/run/permesi/tls.bundle.pem" \
-   --vault-url "/run/vault/proxy.sock"
+   --openbao-url "/run/openbao/proxy.sock"
  ```
 
 ### Native Kubernetes authentication (opt-in)
 
-`--vault-auth-method` / `PERMESI_VAULT_AUTH_METHOD` defaults to `auto`: sockets use
+`--openbao-auth-method` / `PERMESI_OPENBAO_AUTH_METHOD` defaults to `auto`: sockets use
 Agent and TCP uses AppRole. Explicit `approle` or `kubernetes` requires TCP; failed
 login never falls back. Agent remains recommended when it also renders PKI.
 
-For native login, set `--vault-url https://vault.example:8200 --vault-auth-method kubernetes
---vault-kubernetes-role permesi`. The URL must be a Vault origin without credentials,
+For native login, set `--openbao-url https://openbao.example:8200 --openbao-auth-method kubernetes
+--openbao-kubernetes-role permesi`. The URL must be an OpenBao origin without credentials,
 path, query or fragment. Omit all AppRole role-id, secret-id and wrapped-token settings.
-`--vault-kubernetes-auth-mount` / `PERMESI_VAULT_KUBERNETES_AUTH_MOUNT` defaults to
+`--openbao-kubernetes-auth-mount` / `PERMESI_OPENBAO_KUBERNETES_AUTH_MOUNT` defaults to
 `kubernetes` and accepts a relative mount (including nested mounts), without `/v1/auth/`,
-traversal, query or empty segments. `--vault-kubernetes-role` /
-`PERMESI_VAULT_KUBERNETES_ROLE` is required only in Kubernetes mode.
-`--vault-kubernetes-token-path` / `PERMESI_VAULT_KUBERNETES_TOKEN_PATH` defaults to
+traversal, query or empty segments. `--openbao-kubernetes-role` /
+`PERMESI_OPENBAO_KUBERNETES_ROLE` is required only in Kubernetes mode.
+`--openbao-kubernetes-token-path` / `PERMESI_OPENBAO_KUBERNETES_TOKEN_PATH` defaults to
 `/var/run/secrets/kubernetes.io/serviceaccount/token`; use a read-only audience-scoped
 projected token instead of broad default automount. Kubernetes-only settings are
 rejected in other auth modes.
 
-Each login reads the current JWT file and requires a usable renewable Vault token
+Each login reads the current JWT file and requires a usable renewable OpenBao token
 with a positive lease. The existing renewal worker owns that token; repeated token
 or database renewal failure shuts down fail-closed. A supervisor restart logs in with
 the current projection and reacquires database credentials. This is restart-based
 reauthentication, not seamless hot token replacement. See the
-[Vault native-auth operations notes](../../vault/README.md#native-kubernetes-authentication)
+[OpenBao native-auth operations notes](../../openbao/README.md#native-kubernetes-authentication)
 for role/audience boundaries and reviewer permissions; the application ServiceAccount
 must not receive TokenReview privileges.
 
@@ -96,7 +96,7 @@ the database.
 
 `db/sql/` is the single source of truth for dev, containers, and bare-metal production schemas.
 
-Vault-managed DB credentials also require bootstrap roles and grants. The canonical SQL for those
+OpenBao-managed DB credentials also require bootstrap roles and grants. The canonical SQL for those
 roles lives in `db/sql/00_init.sql`; it also applies the Permesi schema. For production, update the
 passwords before running it, or apply the schema directly as shown above.
 
@@ -187,7 +187,7 @@ re-auth (default 10 minutes) and revoke all sessions once the new registration r
 
 Browser clients authenticate with the `permesi_session` cookie. Admin bootstrap/elevation calls
 (`POST /v1/auth/admin/bootstrap` and `POST /v1/auth/admin/elevate`) require this cookie-backed
-session and accept the Vault token in the JSON request body. On successful elevation, `permesi`
+session and accept the OpenBao token in the JSON request body. On successful elevation, `permesi`
 returns a short-lived admin `PASETO` (`v4.public`) token. That admin token is then sent as
 `Authorization: Bearer <admin_token>` for elevated endpoints such as `GET /v1/auth/admin/infra`.
 
@@ -344,16 +344,16 @@ See `SETUP.md` for the canonical `pg_cron` setup steps.
 SELECT cleanup_expired_tokens();
 ```
 
-### OPAQUE seed (Vault KV v2)
+### OPAQUE seed (OpenBao KV v2)
 
-OPAQUE server setup is derived from a 32-byte seed stored in Vault KV v2:
+OPAQUE server setup is derived from a 32-byte seed stored in OpenBao KV v2:
 
 - Mount: `--opaque-kv-mount` / `PERMESI_OPAQUE_KV_MOUNT` (default: `secret/permesi`)
 - Fields:
   - `opaque_server_seed` (base64-encoded 32 bytes)
   - `mfa_recovery_pepper` (base64-encoded string)
 
-To initialize these in Vault:
+To initialize these in OpenBao:
 
 - Generate 32 random bytes and store the base64 value as `opaque_server_seed`.
 - Generate a random string and store it as `mfa_recovery_pepper`.
@@ -361,7 +361,7 @@ To initialize these in Vault:
   ```bash
   OPAQUE_SEED=$(openssl rand -base64 32)
   MFA_PEPPER=$(openssl rand -base64 32)
-  vault kv put secret/permesi/config opaque_server_seed="$OPAQUE_SEED" mfa_recovery_pepper="$MFA_PEPPER"
+  bao kv put secret/permesi/config opaque_server_seed="$OPAQUE_SEED" mfa_recovery_pepper="$MFA_PEPPER"
   ```
 
 Rotation:
@@ -401,7 +401,7 @@ Maintenance:
 - `--db-idle-timeout-seconds` / `PERMESI_DB_IDLE_TIMEOUT_SECONDS` (default `600`, at least 10 and below the lifetime)
 - `--db-max-lifetime-seconds` / `PERMESI_DB_MAX_LIFETIME_SECONDS` (default `1800`, range 60-86400)
 
-The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`permesi`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the Vault-issued username and password are fixed for the life of the process, and a new database lease means a restart.
+The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`permesi`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the OpenBao-issued username and password are fixed for the life of the process, and a new database lease means a restart.
 
 ## Admission Token Verification
 
@@ -414,10 +414,10 @@ The pool is shared by request handlers and background work. A request that canno
 
 ## Admin Rate Limiting
 
-Endpoints under `/v1/auth/admin/*` (bootstrap and elevation) are strictly rate-limited to prevent brute-force attacks on Vault tokens.
+Endpoints under `/v1/auth/admin/*` (bootstrap and elevation) are strictly rate-limited to prevent brute-force attacks on OpenBao tokens.
 
 - **Attempt Limit**: 3 attempts per user and 10 attempts per IP within a rolling 10-minute window.
-- **Failure Cooldown**: 3 consecutive failed attempts (invalid Vault tokens) trigger a **15-minute cooldown** for the user.
+- **Failure Cooldown**: 3 consecutive failed attempts (invalid OpenBao tokens) trigger a **15-minute cooldown** for the user.
 - **Response**: `429 Too Many Requests` is returned when limits are exceeded. The `/v1/auth/admin/status` endpoint includes a `cooldown_seconds` field to help the UI surface the remaining time.
 
 ## OAuth foundation
@@ -434,6 +434,6 @@ See [the foundation design](../../docs/oauth-foundation.md) for routes and invar
 The authorization phase implements `/authorize`, PostgreSQL-backed login resume and
 minimal consent, and hashed single-use codes with S256 required for all clients. It
 exposes no `/token` or signed access/ID/refresh-token issuance. Explicit issuer/resource
-audience and a shared Vault RSA key enable preparatory discovery and public JWKS.
+audience and a shared OpenBao RSA key enable preparatory discovery and public JWKS.
 See [OAuth/OIDC flow and rollout](../../docs/oauth-foundation.md#authorization-code--pkce)
 for configuration, tenant/consent policy, transaction semantics and discovery limitations.

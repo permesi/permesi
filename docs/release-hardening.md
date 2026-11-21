@@ -1,7 +1,7 @@
 # Authentication and OAuth release batch
 
 This batch closes the remaining replica-local authentication exchanges and adds
-rotating OAuth refresh tokens. It uses the existing session, tenant, consent, Vault,
+rotating OAuth refresh tokens. It uses the existing session, tenant, consent, OpenBao,
 PostgreSQL and isolated scenario architecture. Each milestone receives a separate
 imperative-subject commit, applicable regression checks and independent Claude review
 through Herdr. Final GitHub CI must pass before the batch is called release-ready.
@@ -9,7 +9,7 @@ through Herdr. Final GitHub CI must pass before the batch is called release-read
 ## Milestones
 
 1. Finish hosted browser CI and reconcile existing OPAQUE documentation/TODO evidence.
-   Chrome readiness works; PostgreSQL/Vault fixture ports require explicit loopback
+   Chrome readiness works; PostgreSQL/OpenBao fixture ports require explicit loopback
    bindings for Podman 4.x compatibility. The corrected hosted gate is pending.
 2. Replace pending passkey registration/login and hardware-key registration/MFA
    challenges with hashed, sealed, bounded PostgreSQL state. Verify actual proofs

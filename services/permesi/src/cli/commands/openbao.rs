@@ -1,0 +1,111 @@
+use clap::{Arg, ArgGroup, ArgMatches, Command};
+
+pub const ARG_OPENBAO_URL: &str = "openbao-url";
+pub const ARG_OPENBAO_ROLE_ID: &str = "openbao-role-id";
+pub const ARG_OPENBAO_SECRET_ID: &str = "openbao-secret-id";
+pub const ARG_OPENBAO_WRAPPED_TOKEN: &str = "openbao-wrapped-token";
+pub const ARG_OPENBAO_KV_MOUNT: &str = "openbao-kv-mount";
+pub const ARG_OPENBAO_KV_PATH: &str = "openbao-kv-path";
+pub const ARG_OPENBAO_TRANSIT_MOUNT: &str = "openbao-transit-mount";
+
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub url: String,
+    pub role_id: Option<String>,
+    pub secret_id: Option<String>,
+    pub wrapped_token: Option<String>,
+    pub kv_mount: String,
+    pub kv_path: String,
+    pub transit_mount: String,
+}
+
+impl Options {
+    /// Parse openbao arguments from matches.
+    ///
+    /// # Errors
+    /// Returns an error if required arguments are missing.
+    pub fn parse(matches: &ArgMatches) -> anyhow::Result<Self> {
+        let url = matches
+            .get_one::<String>(ARG_OPENBAO_URL)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: --{ARG_OPENBAO_URL}"))?;
+
+        Ok(Self {
+            url,
+            role_id: matches.get_one::<String>(ARG_OPENBAO_ROLE_ID).cloned(),
+            secret_id: matches.get_one::<String>(ARG_OPENBAO_SECRET_ID).cloned(),
+            wrapped_token: matches
+                .get_one::<String>(ARG_OPENBAO_WRAPPED_TOKEN)
+                .cloned(),
+            kv_mount: matches
+                .get_one::<String>(ARG_OPENBAO_KV_MOUNT)
+                .cloned()
+                .unwrap_or_else(|| "secret/permesi".to_string()),
+            kv_path: matches
+                .get_one::<String>(ARG_OPENBAO_KV_PATH)
+                .cloned()
+                .unwrap_or_else(|| "config".to_string()),
+            transit_mount: matches
+                .get_one::<String>(ARG_OPENBAO_TRANSIT_MOUNT)
+                .cloned()
+                .unwrap_or_else(|| "transit/permesi".to_string()),
+        })
+    }
+}
+
+#[must_use]
+pub fn with_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new(ARG_OPENBAO_URL)
+                .long(ARG_OPENBAO_URL)
+                .help("OpenBao URL: an origin (http(s)://host[:port]) is completed to the standard AppRole login path; any other URL is used as-is. Also accepts a unix socket path (unix:///path or /path)")
+                .env("PERMESI_OPENBAO_URL")
+                .required(true),
+        )
+        .arg(
+            Arg::new(ARG_OPENBAO_ROLE_ID)
+                .long(ARG_OPENBAO_ROLE_ID)
+                .help("OpenBao role id (Required for TCP mode)")
+                .env("PERMESI_OPENBAO_ROLE_ID"),
+        )
+        .arg(
+            Arg::new(ARG_OPENBAO_SECRET_ID)
+                .long(ARG_OPENBAO_SECRET_ID)
+                .help("OpenBao secret id (Required for TCP mode unless using wrapped token)")
+                .env("PERMESI_OPENBAO_SECRET_ID")
+                .conflicts_with(ARG_OPENBAO_WRAPPED_TOKEN),
+        )
+        .arg(
+            Arg::new(ARG_OPENBAO_WRAPPED_TOKEN)
+                .long(ARG_OPENBAO_WRAPPED_TOKEN)
+                .help("OpenBao wrapped token (TCP mode only)")
+                .env("PERMESI_OPENBAO_WRAPPED_TOKEN"),
+        )
+        .arg(
+            Arg::new(ARG_OPENBAO_KV_MOUNT)
+                .long(ARG_OPENBAO_KV_MOUNT)
+                .help("OpenBao KV-v2 mount path for configuration secrets")
+                .env("PERMESI_OPENBAO_KV_MOUNT")
+                .default_value("secret/permesi"),
+        )
+        .arg(
+            Arg::new(ARG_OPENBAO_KV_PATH)
+                .long(ARG_OPENBAO_KV_PATH)
+                .help("OpenBao KV-v2 secret path for configuration secrets")
+                .env("PERMESI_OPENBAO_KV_PATH")
+                .default_value("config"),
+        )
+        .arg(
+            Arg::new(ARG_OPENBAO_TRANSIT_MOUNT)
+                .long(ARG_OPENBAO_TRANSIT_MOUNT)
+                .help("OpenBao Transit secrets engine mount path")
+                .env("PERMESI_OPENBAO_TRANSIT_MOUNT")
+                .default_value("transit/permesi"),
+        )
+        .group(
+            ArgGroup::new("openbao-auth")
+                .args([ARG_OPENBAO_ROLE_ID, ARG_OPENBAO_SECRET_ID, ARG_OPENBAO_WRAPPED_TOKEN])
+                .multiple(true),
+        )
+}

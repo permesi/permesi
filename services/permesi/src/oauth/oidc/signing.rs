@@ -1,7 +1,7 @@
-//! Vault-owned RS256 signing with an explicitly selected, independently verified version.
+//! OpenBao-owned RS256 signing with an explicitly selected, independently verified version.
 //!
 //! Flow Overview: read current shared metadata, select one retained RSA version for the
-//! exchange, ask Vault to sign each compact JWT, and verify the returned signature against
+//! exchange, ask OpenBao to sign each compact JWT, and verify the returned signature against
 //! that version before exposure. Private keys and active-version authority never live here.
 
 use anyhow::{Context as _, Result, ensure};
@@ -27,7 +27,7 @@ pub(crate) struct SigningKey {
 }
 
 impl OAuthState {
-    /// Resolves the current Vault version afresh so different replicas share signing authority.
+    /// Resolves the current OpenBao version afresh so different replicas share signing authority.
     /// Never reads or writes the public cache: delayed reads cannot overwrite newer JWKS.
     pub(crate) async fn signing_key(&self) -> Result<SigningKey> {
         let path = format!(
@@ -58,7 +58,7 @@ impl OAuthState {
             .context("missing public key")?;
         let key = RsaPublicKey::from_public_key_pem(pem)?;
         let kid = jwks.keys.last().context("missing JWK")?.kid.clone();
-        // parse_jwks orders versions; Vault's declared latest must actually be the greatest.
+        // parse_jwks orders versions; OpenBao's declared latest must actually be the greatest.
         let greatest = data
             .get("keys")
             .and_then(Value::as_object)
@@ -74,7 +74,7 @@ impl OAuthState {
     }
 
     /// Signs fixed-algorithm JWTs through transit, checks exact version and verifies RS256.
-    /// Untrusted Vault responses cannot substitute a kid, algorithm, payload or signature.
+    /// Untrusted OpenBao responses cannot substitute a kid, algorithm, payload or signature.
     pub(crate) async fn sign_jwt<T: Serialize>(
         &self,
         key: &SigningKey,

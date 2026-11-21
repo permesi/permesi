@@ -34,9 +34,9 @@
 pub mod api;
 pub mod cli;
 pub mod oauth;
+pub mod openbao;
 pub mod tls;
 pub mod totp;
-pub mod vault;
 pub mod webauthn;
 
 #[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]

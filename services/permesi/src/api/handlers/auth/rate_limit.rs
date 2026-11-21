@@ -5,7 +5,7 @@
 //! no-op backend where throttling is outside the behavior under test.
 //!
 //! Subjects (client IPs and normalized emails) are stored only as HMAC-SHA256
-//! tags under a [`SubjectKey`] derived from a Vault-held server secret. A plain
+//! tags under a [`SubjectKey`] derived from an OpenBao-held server secret. A plain
 //! hash would not protect them: the IPv4 space and likely email addresses are
 //! small enough to enumerate, so anyone reading `auth_rate_limits` could recover
 //! who attempted to log in. The key is identical on every replica, so counters

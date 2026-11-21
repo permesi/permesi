@@ -583,7 +583,7 @@ async fn unknown_key_flood(context: &Context<'_>, fixture: &Fixture, access: &st
     )
 }
 
-/// A cached relying party and resource refresh the fixed issuer once after real Vault rotation.
+/// A cached relying party and resource refresh the fixed issuer once after real OpenBao rotation.
 pub(super) async fn rotation(context: &mut Context<'_>, fixture: &Fixture) -> Result<()> {
     let description = jobs_description(context, fixture).await?;
     let party = party(context, fixture, false).await?;

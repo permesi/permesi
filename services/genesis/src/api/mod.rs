@@ -1,17 +1,17 @@
 //! API entrypoint and router configuration for Genesis.
 //!
 //! This module coordinates the server lifecycle, including database connectivity,
-//! background task management (Vault renewals), and TLS serving.
+//! background task management (OpenBao renewals), and TLS serving.
 //!
 //! The server runs until SIGTERM/SIGINT or a fail-closed `ShutdownSignal` from
-//! the Vault renewers starts a drain bounded by `shutdown::DRAIN_TIMEOUT`. A
+//! the OpenBao renewers starts a drain bounded by `shutdown::DRAIN_TIMEOUT`. A
 //! platform-requested stop returns `Ok`; a fail-closed stop returns an error so
 //! the supervisor restarts the process with fresh credentials.
 
 use crate::{
     api::handlers::{health, root},
     cli::globals::GlobalArgs,
-    tls, vault,
+    openbao, tls,
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -54,7 +54,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// Initialize and start the Genesis server.
 ///
 /// # Errors
-/// Returns an error if database connectivity fails, Vault initialization fails,
+/// Returns an error if database connectivity fails, OpenBao initialization fails,
 /// or the TLS server fails to start.
 pub async fn new(
     port: u16,
@@ -63,10 +63,10 @@ pub async fn new(
     pool_config: PoolConfig,
     globals: &GlobalArgs,
 ) -> Result<()> {
-    // Renew vault token, gracefully shutdown if failed
+    // Renew bao token, gracefully shutdown if failed
     let (shutdown_tx, rx) = mpsc::unbounded_channel();
 
-    vault::renew::try_renew(globals, shutdown_tx.clone()).await?;
+    openbao::renew::try_renew(globals, shutdown_tx.clone()).await?;
 
     let pool = pool_config.connect(&dsn, env!("CARGO_PKG_NAME")).await?;
 
@@ -121,7 +121,7 @@ fn build_router(state: AppState) -> Router {
 async fn serve_socket(
     app: Router,
     path: String,
-    mut shutdown_rx: mpsc::UnboundedReceiver<vault::renew::ShutdownSignal>,
+    mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
 ) -> Result<()> {
     let path = std::path::PathBuf::from(path);
     if path.exists() {
@@ -170,7 +170,7 @@ async fn serve_socket(
     Ok(())
 }
 
-/// Serve the API over TLS using Vault-issued certificates.
+/// Serve the API over TLS using OpenBao-issued certificates.
 ///
 /// The listener prefers a dual-stack IPv6 socket so one bind can accept both
 /// IPv6 and IPv4 traffic. Hosts without usable IPv6 support fall back to an
@@ -185,7 +185,7 @@ async fn serve_socket(
 async fn serve_tls(
     app: Router,
     port: u16,
-    mut shutdown_rx: mpsc::UnboundedReceiver<vault::renew::ShutdownSignal>,
+    mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
 ) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
@@ -226,7 +226,7 @@ async fn serve_tls(
 #[cfg(test)]
 mod tests {
     use super::serve_socket;
-    use crate::vault::renew::ShutdownSignal;
+    use crate::openbao::renew::ShutdownSignal;
     use anyhow::{Context, Result};
     use axum::Router;
     use std::fs;

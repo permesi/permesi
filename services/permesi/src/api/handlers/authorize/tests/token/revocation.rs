@@ -1,4 +1,4 @@
-//! RFC 7009 refresh-family revocation through real HTTP, PostgreSQL and Vault authority.
+//! RFC 7009 refresh-family revocation through real HTTP, PostgreSQL and OpenBao authority.
 use super::*;
 use crate::api::handlers::auth::{
     AuthState, OpaqueState, RateLimitConfig, RateLimiter, SubjectKey, mfa::MfaConfig,

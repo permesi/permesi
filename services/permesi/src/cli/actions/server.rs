@@ -1,4 +1,4 @@
-use crate::{api, cli::globals::GlobalArgs, vault};
+use crate::{api, cli::globals::GlobalArgs, openbao};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
 use service_utils::database::PoolConfig;
@@ -17,12 +17,12 @@ pub struct Args {
     pub db_pool: PoolConfig,
     pub oauth: crate::oauth::config::OAuthConfig,
     pub tenant_mutations: api::tenant::MutationPolicy,
-    pub vault_url: String,
-    pub vault_target: vault_client::VaultTarget,
-    pub vault_kubernetes: Option<vault_client::kubernetes::KubernetesAuth>,
-    pub vault_role_id: Option<String>,
-    pub vault_secret_id: Option<String>,
-    pub vault_wrapped_token: Option<String>,
+    pub openbao_url: String,
+    pub openbao_target: openbao_client::OpenBaoTarget,
+    pub openbao_kubernetes: Option<openbao_client::kubernetes::KubernetesAuth>,
+    pub openbao_role_id: Option<String>,
+    pub openbao_secret_id: Option<String>,
+    pub openbao_wrapped_token: Option<String>,
     pub admission_paserk_url: String,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
@@ -49,16 +49,16 @@ pub struct Args {
     pub auth_rate_limit_account_attempts: i64,
     pub platform_admin_ttl_seconds: i64,
     pub platform_recent_auth_seconds: i64,
-    pub vault_kv_mount: String,
-    pub vault_kv_path: String,
-    pub vault_transit_mount: String,
+    pub openbao_kv_mount: String,
+    pub openbao_kv_path: String,
+    pub openbao_transit_mount: String,
 }
 
 /// Start with Agent, `AppRole`, or the explicitly selected Kubernetes login.
 /// Kubernetes token renewal uses the existing fail-closed shutdown; a supervisor
 /// restart reads the current JWT and reacquires all credentials, without hot replacement.
 /// # Errors
-/// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
+/// Returns an error if OpenBao login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
     configure_tls_paths(&args);
 
@@ -70,8 +70,9 @@ pub async fn execute(args: Args) -> Result<()> {
         .admission_audience
         .clone()
         .unwrap_or_else(|| "permesi".to_string());
-    let vault_addr = vault_base_url(&args.vault_url).unwrap_or_else(|_| args.vault_url.clone());
-    log_startup_args(&args, &issuer, &audience, &vault_addr);
+    let openbao_addr =
+        openbao_base_url(&args.openbao_url).unwrap_or_else(|_| args.openbao_url.clone());
+    log_startup_args(&args, &issuer, &audience, &openbao_addr);
 
     let admission_verifier = Arc::new(if args.admission_paserk_url.trim().starts_with('{') {
         let keyset = admission_token::PaserkKeySet::from_json(&args.admission_paserk_url)
@@ -86,47 +87,47 @@ pub async fn execute(args: Args) -> Result<()> {
         .await?
     });
 
-    let vault_transport = vault_client::VaultTransport::from_target(
+    let openbao_transport = openbao_client::OpenBaoTransport::from_target(
         crate::APP_USER_AGENT,
-        args.vault_target.clone(),
+        args.openbao_target.clone(),
     )?;
-    let mut globals = GlobalArgs::new(args.vault_url.clone(), vault_transport);
-    globals.vault_transit_mount = args.vault_transit_mount.clone();
+    let mut globals = GlobalArgs::new(args.openbao_url.clone(), openbao_transport);
+    globals.openbao_transit_mount = args.openbao_transit_mount.clone();
 
-    if let Some(config) = &args.vault_kubernetes {
-        let (token, _) = vault_client::kubernetes::kubernetes_login(
+    if let Some(config) = &args.openbao_kubernetes {
+        let (token, _) = openbao_client::kubernetes::kubernetes_login(
             crate::APP_USER_AGENT,
-            &globals.vault_url,
+            &globals.openbao_url,
             config,
         )
         .await?;
         globals.set_token(token);
-    } else if args.vault_target.is_tcp() {
-        let vault_role_id = args
-            .vault_role_id
+    } else if args.openbao_target.is_tcp() {
+        let openbao_role_id = args
+            .openbao_role_id
             .as_deref()
-            .ok_or_else(|| anyhow!("Vault role-id is required for TCP mode"))?;
-        let login_url = vault::approle_login_url(&globals.vault_url)?;
-        // If vault wrapped token try to unwrap, otherwise use secret-id.
-        let vault_token: String = if let Some(wrapped) = &args.vault_wrapped_token {
-            let vault_session_id = vault::unwrap(&globals.vault_url, wrapped).await?;
+            .ok_or_else(|| anyhow!("OpenBao role-id is required for TCP mode"))?;
+        let login_url = openbao::approle_login_url(&globals.openbao_url)?;
+        // If openbao wrapped token try to unwrap, otherwise use secret-id.
+        let openbao_token: String = if let Some(wrapped) = &args.openbao_wrapped_token {
+            let openbao_session_id = openbao::unwrap(&globals.openbao_url, wrapped).await?;
             let (token, _) =
-                vault::approle_login(&login_url, &vault_session_id, vault_role_id).await?;
+                openbao::approle_login(&login_url, &openbao_session_id, openbao_role_id).await?;
             token
         } else {
             let secret_id = args
-                .vault_secret_id
+                .openbao_secret_id
                 .as_deref()
-                .ok_or_else(|| anyhow!("Vault secret-id is required"))?;
-            let (token, _) = vault::approle_login(&login_url, secret_id, vault_role_id).await?;
+                .ok_or_else(|| anyhow!("OpenBao secret-id is required"))?;
+            let (token, _) = openbao::approle_login(&login_url, secret_id, openbao_role_id).await?;
             token
         };
 
-        globals.set_token(SecretString::from(vault_token));
+        globals.set_token(SecretString::from(openbao_token));
     }
 
-    // Get database username and password from Vault
-    vault::database::database_creds(&mut globals)
+    // Get database username and password from OpenBao
+    openbao::database::database_creds(&mut globals)
         .await
         .context("Could not get database username and password")?;
 
@@ -135,13 +136,13 @@ pub async fn execute(args: Args) -> Result<()> {
     let mut dsn = Url::parse(&args.dsn)?;
 
     // Set username & password from GlobalArgs
-    dsn.set_username(&globals.vault_db_username)
+    dsn.set_username(&globals.openbao_db_username)
         .map_err(|()| anyhow!("Error setting username"))?;
 
-    dsn.set_password(Some(globals.vault_db_password.expose_secret()))
+    dsn.set_password(Some(globals.openbao_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
-    let app_config = build_app_config(&args, vault_addr);
+    let app_config = build_app_config(&args, openbao_addr);
 
     api::new(
         args.port,
@@ -154,7 +155,7 @@ pub async fn execute(args: Args) -> Result<()> {
     .await
 }
 
-fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
+fn build_app_config(args: &Args, openbao_addr: String) -> api::AppConfig {
     let auth_config = api::handlers::auth::AuthConfig::new(args.frontend_base_url.clone())
         .with_registration(args.registration.clone())
         .with_operations(args.auth_operations.clone())
@@ -174,8 +175,8 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
             args.auth_rate_limit_account_attempts,
         );
 
-    let admin_config = api::handlers::auth::AdminConfig::new(vault_addr)
-        .with_vault_policy("permesi-operators".to_string())
+    let admin_config = api::handlers::auth::AdminConfig::new(openbao_addr)
+        .with_openbao_policy("permesi-operators".to_string())
         .with_admin_ttl_seconds(args.platform_admin_ttl_seconds)
         .with_recent_auth_seconds(args.platform_recent_auth_seconds);
 
@@ -186,9 +187,9 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
         .with_backoff_base_seconds(args.email_outbox_backoff_base_seconds)
         .with_backoff_max_seconds(args.email_outbox_backoff_max_seconds);
 
-    let kv_config = api::VaultKvConfig {
-        mount: args.vault_kv_mount.clone(),
-        path: args.vault_kv_path.clone(),
+    let kv_config = api::OpenBaoKvConfig {
+        mount: args.openbao_kv_mount.clone(),
+        path: args.openbao_kv_path.clone(),
     };
 
     api::AppConfig {
@@ -203,10 +204,10 @@ fn build_app_config(args: &Args, vault_addr: String) -> api::AppConfig {
     }
 }
 
-fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str) {
-    let mode = match args.vault_target {
-        vault_client::VaultTarget::Tcp { .. } => "Direct Access (TCP)",
-        vault_client::VaultTarget::AgentProxy { .. } => "Agent (Sidecar)",
+fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &str) {
+    let mode = match args.openbao_target {
+        openbao_client::OpenBaoTarget::Tcp { .. } => "Direct Access (TCP)",
+        openbao_client::OpenBaoTarget::AgentProxy { .. } => "Agent (Sidecar)",
     };
 
     let admission_paserk_ca = args
@@ -224,14 +225,14 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
         ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
         ("db_pool", args.db_pool.to_string()),
-        ("vault_url", args.vault_url.clone()),
-        ("vault_addr", vault_addr.to_string()),
-        ("vault_mode", mode.to_string()),
+        ("openbao_url", args.openbao_url.clone()),
+        ("openbao_addr", openbao_addr.to_string()),
+        ("openbao_mode", mode.to_string()),
         (
-            "vault_auth_method",
-            if args.vault_kubernetes.is_some() {
+            "openbao_auth_method",
+            if args.openbao_kubernetes.is_some() {
                 "kubernetes"
-            } else if args.vault_target.is_tcp() {
+            } else if args.openbao_target.is_tcp() {
                 "approle"
             } else {
                 "agent"
@@ -239,20 +240,20 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, vault_addr: &str)
             .to_string(),
         ),
         (
-            "vault_role_id",
-            args.vault_role_id
+            "openbao_role_id",
+            args.openbao_role_id
                 .clone()
                 .unwrap_or_else(|| "n/a".to_string()),
         ),
         (
-            "vault_secret_id_set",
-            args.vault_secret_id.is_some().to_string(),
+            "openbao_secret_id_set",
+            args.openbao_secret_id.is_some().to_string(),
         ),
         (
-            "vault_wrapped_token_set",
-            args.vault_wrapped_token.is_some().to_string(),
+            "openbao_wrapped_token_set",
+            args.openbao_wrapped_token.is_some().to_string(),
         ),
-        ("vault_policy", "permesi-operators".to_string()),
+        ("openbao_policy", "permesi-operators".to_string()),
         (
             "tls_pem_bundle",
             args.tls_pem_bundle
@@ -395,14 +396,14 @@ const PERMESI_BANNER: &str = r"
  *   * *   *
    *     *";
 
-fn vault_base_url(url: &str) -> Result<String> {
-    let parsed = Url::parse(url).context("Invalid Vault URL")?;
+fn openbao_base_url(url: &str) -> Result<String> {
+    let parsed = Url::parse(url).context("Invalid OpenBao URL")?;
     let host = parsed
         .host_str()
-        .ok_or_else(|| anyhow!("Vault URL missing host"))?;
+        .ok_or_else(|| anyhow!("OpenBao URL missing host"))?;
     let port = parsed
         .port_or_known_default()
-        .ok_or_else(|| anyhow!("Vault URL missing port"))?;
+        .ok_or_else(|| anyhow!("OpenBao URL missing port"))?;
     Ok(format!("{}://{}:{}", parsed.scheme(), host, port))
 }
 
@@ -454,14 +455,14 @@ mod tests {
                 std::time::Duration::from_mins(10),
                 std::time::Duration::from_mins(30),
             )?,
-            vault_url: "http://localhost:8200".to_string(),
-            vault_target: vault_client::VaultTarget::Tcp {
+            openbao_url: "http://localhost:8200".to_string(),
+            openbao_target: openbao_client::OpenBaoTarget::Tcp {
                 base_url: "http://localhost:8200".to_string(),
             },
-            vault_kubernetes: None,
-            vault_role_id: None,
-            vault_secret_id: None,
-            vault_wrapped_token: None,
+            openbao_kubernetes: None,
+            openbao_role_id: None,
+            openbao_secret_id: None,
+            openbao_wrapped_token: None,
             admission_paserk_url: "https://genesis.example.com/paserk.json".to_string(),
             oauth: crate::oauth::config::OAuthConfig::disabled(),
             tenant_mutations: api::tenant::MutationPolicy::for_tests(),
@@ -497,9 +498,9 @@ mod tests {
             auth_rate_limit_account_attempts: 10,
             platform_admin_ttl_seconds: 3600,
             platform_recent_auth_seconds: 60,
-            vault_kv_mount: "kv".to_string(),
-            vault_kv_path: "config".to_string(),
-            vault_transit_mount: "transit/permesi".to_string(),
+            openbao_kv_mount: "kv".to_string(),
+            openbao_kv_path: "config".to_string(),
+            openbao_transit_mount: "transit/permesi".to_string(),
         })
     }
 

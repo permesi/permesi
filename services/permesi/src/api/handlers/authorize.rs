@@ -73,8 +73,8 @@ pub(crate) async fn discovery(State(oauth): State<Arc<OAuthState>>) -> Response 
     )
 }
 
-#[utoipa::path(get,path="/jwks.json",responses((status=200,description="Retained Vault RSA public signing versions",body=crate::oauth::oidc::Jwks),(status=429,description="Shared JWKS refresh budget exhausted"),(status=503,description="OAuth/key source unavailable")),tag="oauth")]
-/// Publishes cached public Vault key versions without using the authentication database.
+#[utoipa::path(get,path="/jwks.json",responses((status=200,description="Retained OpenBao RSA public signing versions",body=crate::oauth::oidc::Jwks),(status=429,description="Shared JWKS refresh budget exhausted"),(status=503,description="OAuth/key source unavailable")),tag="oauth")]
+/// Publishes cached public OpenBao key versions without using the authentication database.
 /// Single-flight refresh and negative caching bound upstream reads; malformed keys fail closed.
 pub(crate) async fn jwks(
     State(oauth): State<Arc<OAuthState>>,
@@ -508,7 +508,7 @@ fn authorization_unavailable() -> Response {
     secured((StatusCode::BAD_REQUEST, Html("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorization unavailable · Permesi</title><h1>Authorization unavailable</h1><p>This authorization request has expired or is no longer available.</p><p>Open the application that requested access and start sign-in again. Do not reuse this page.</p></html>")).into_response())
 }
 
-/// Applies shared IP protection before OAuth transactions or Vault/cache work.
+/// Applies shared IP protection before OAuth transactions or OpenBao/cache work.
 async fn oauth_rate_limited(
     auth: &AuthState,
     headers: &HeaderMap,

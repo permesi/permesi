@@ -932,7 +932,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
 CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions (expires_at);
 
--- Temporary OPAQUE transcripts are AEAD sealed under a Vault-derived key. External
+-- Temporary OPAQUE transcripts are AEAD sealed under an OpenBao-derived key. External
 -- login UUIDs are hashed, and DELETE ... RETURNING consumes one attempt across replicas.
 -- WebAuthn protocol state is transient, sealed, and consumed before proof checking.
 CREATE TABLE IF NOT EXISTS webauthn_exchanges (
@@ -1143,7 +1143,7 @@ CREATE INDEX IF NOT EXISTS user_mfa_challenge_sessions_expires_at_idx ON user_mf
 CREATE TABLE IF NOT EXISTS totp_deks (
     dek_id UUID PRIMARY KEY,
     status TEXT NOT NULL CHECK (status IN ('active', 'decrypt_only', 'retired')),
-    wrapped_dek TEXT NOT NULL, -- Vault transit ciphertext
+    wrapped_dek TEXT NOT NULL, -- OpenBao transit ciphertext
     kek_mount TEXT NOT NULL DEFAULT 'transit/permesi',
     kek_key TEXT NOT NULL DEFAULT 'totp',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

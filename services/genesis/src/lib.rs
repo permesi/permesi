@@ -1,7 +1,7 @@
 //! # Genesis (Edge Admission Mint)
 //!
 //! `genesis` is a specialized HTTP service that sits at the network edge. Its primary
-//! responsibility is to issue short-lived **Admission Tokens** (signed via Vault Transit)
+//! responsibility is to issue short-lived **Admission Tokens** (signed via OpenBao Transit)
 //! to clients after they pass basic noise filters (rate limits, `PoW`, etc.).
 //!
 //! These tokens allow `permesi` (the core IAM) to verify requests offline without
@@ -36,8 +36,8 @@
 
 pub mod api;
 pub mod cli;
+pub mod openbao;
 pub mod tls;
-pub mod vault;
 
 #[allow(clippy::doc_markdown, clippy::needless_raw_string_hashes)]
 pub mod built_info {

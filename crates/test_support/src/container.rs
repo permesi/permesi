@@ -147,13 +147,13 @@ mod tests {
                 "postgres-test",
                 network,
             );
-            let vault = crate::vault::fixture_request(
-                &crate::vault::VaultConfig::new(),
-                "vault-test",
+            let openbao = crate::openbao::fixture_request(
+                &crate::openbao::OpenBaoConfig::new(),
+                "openbao-test",
                 network,
             );
             assert_loopback(&postgres, 5432)?;
-            assert_loopback(&vault, 8200)?;
+            assert_loopback(&openbao, 8200)?;
         }
         Ok(())
     }
@@ -272,14 +272,15 @@ mod tests {
 
     #[test]
     fn is_port_race_ignores_an_address_in_use_that_is_not_the_host_port() {
-        let err =
-            anyhow!("failed to start a container: vault: listen tcp :8200: address already in use");
+        let err = anyhow!(
+            "failed to start a container: openbao: listen tcp :8200: address already in use"
+        );
         assert!(!is_port_race(&err));
     }
 
     #[test]
     fn is_port_race_ignores_other_start_errors() {
-        let err = anyhow!("failed to start a container: image not found: hashicorp/vault:1.17.3");
+        let err = anyhow!("failed to start a container: image not found: openbao/openbao:2.7.3");
         assert!(!is_port_race(&err));
     }
 }

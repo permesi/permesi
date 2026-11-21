@@ -65,7 +65,7 @@ telemetry = [
 
 [dependencies]
 admission_token = { workspace = true }
-vault_client = { workspace = true }
+openbao_client = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 axum = { workspace = true, features = ["tracing"] }

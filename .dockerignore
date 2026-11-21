@@ -6,7 +6,7 @@
 .hypothesis
 db/data
 db/log
-vault/contrib
+openbao/contrib
 apps/web/node_modules
 apps/web/dist-build
 apps/web/dist-dev

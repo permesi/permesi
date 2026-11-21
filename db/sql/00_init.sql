@@ -19,9 +19,9 @@ END $$;
 SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtext('permesi-initdb')::bigint);
 
 -- -----------------------------------------------------------------------------
--- Vault database root users (dev defaults).
+-- OpenBao database root users (dev defaults).
 --
--- Vault's Postgres database secrets engine needs a non-superuser "root" user per
+-- OpenBao's Postgres database secrets engine needs a non-superuser "root" user per
 -- database connection to create/revoke short-lived roles.
 --
 -- Local/dev runs with `trust` auth (see `.justfile`), so these passwords are not
@@ -30,17 +30,17 @@ SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtext('permesi-initdb')::bigint
 -- -----------------------------------------------------------------------------
 SELECT pg_catalog.format(
     'CREATE ROLE %I WITH LOGIN PASSWORD %L CREATEROLE',
-    'vault_permesi',
+    'openbao_permesi',
     'change-me'
 )
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_permesi')\gexec
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_permesi')\gexec
 
 SELECT pg_catalog.format(
     'CREATE ROLE %I WITH LOGIN PASSWORD %L CREATEROLE',
-    'vault_genesis',
+    'openbao_genesis',
     'change-me'
 )
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_genesis')\gexec
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_genesis')\gexec
 
 -- Validate roles before any membership or database-ownership mutation.
 SELECT pg_catalog.format('CREATE ROLE %I NOLOGIN', 'genesis_runtime')
@@ -49,9 +49,9 @@ SELECT pg_catalog.format('CREATE ROLE %I NOLOGIN', 'permesi_runtime')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime')\gexec
 \ir bootstrap_ownership.sql
 
--- Allow Vault to terminate sessions during lease revocation (non-superuser).
-GRANT pg_signal_backend TO vault_permesi;
-GRANT pg_signal_backend TO vault_genesis;
+-- Allow OpenBao to terminate sessions during lease revocation (non-superuser).
+GRANT pg_signal_backend TO openbao_permesi;
+GRANT pg_signal_backend TO openbao_genesis;
 
 SELECT pg_catalog.format('CREATE DATABASE %I', 'genesis')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'genesis')\gexec
@@ -59,15 +59,15 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'genesis')\gexec
 SELECT pg_catalog.format('CREATE DATABASE %I', 'permesi')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'permesi')\gexec
 
--- Ensure the databases are owned by the Vault root users.
-ALTER DATABASE genesis OWNER TO vault_genesis;
-ALTER DATABASE permesi OWNER TO vault_permesi;
+-- Ensure the databases are owned by the OpenBao root users.
+ALTER DATABASE genesis OWNER TO openbao_genesis;
+ALTER DATABASE permesi OWNER TO openbao_permesi;
 
 -- Prevent cross-database access via the default PUBLIC grants.
 REVOKE ALL ON DATABASE genesis FROM PUBLIC;
 REVOKE ALL ON DATABASE permesi FROM PUBLIC;
-GRANT CONNECT ON DATABASE genesis TO vault_genesis;
-GRANT CONNECT ON DATABASE permesi TO vault_permesi;
+GRANT CONNECT ON DATABASE genesis TO openbao_genesis;
+GRANT CONNECT ON DATABASE permesi TO openbao_permesi;
 
 SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtext('permesi-initdb')::bigint);
 
@@ -79,10 +79,10 @@ SET search_path = pg_catalog, pg_temp;
 BEGIN;
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('genesis-schema-bootstrap')::bigint);
 \ir bootstrap_ownership.sql
-GRANT genesis_runtime TO vault_genesis WITH ADMIN OPTION;
+GRANT genesis_runtime TO openbao_genesis WITH ADMIN OPTION;
 COMMIT;
 
-\connect genesis vault_genesis
+\connect genesis openbao_genesis
 SET search_path = public, pg_temp;
 BEGIN;
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('genesis-schema-bootstrap')::bigint);
@@ -102,10 +102,10 @@ SET search_path = pg_catalog, pg_temp;
 BEGIN;
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('permesi-schema-bootstrap')::bigint);
 \ir bootstrap_ownership.sql
-GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION;
+GRANT permesi_runtime TO openbao_permesi WITH ADMIN OPTION;
 COMMIT;
 
-\connect permesi vault_permesi
+\connect permesi openbao_permesi
 SET search_path = public, pg_temp;
 BEGIN;
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('permesi-schema-bootstrap')::bigint);

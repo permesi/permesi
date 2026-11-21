@@ -1,6 +1,6 @@
 # Database ownership and runtime authority
 
-Each service uses a dedicated PostgreSQL database. The trusted Vault database login
+Each service uses a dedicated PostgreSQL database. The trusted OpenBao database login
 owns its service's application objects and can mint short-lived login roles. Those
 logins inherit `permesi_runtime` or `genesis_runtime`; runtime roles never own schema
 objects and have no login, role-creation, database-creation, replication or RLS-bypass
@@ -20,7 +20,7 @@ extension-managed ownership; PostgreSQL catalogs and shared objects are excluded
 There is no database-wide `REASSIGN OWNED BY postgres` or swallowed ownership error.
 Owner membership is limited to its runtime group and `pg_signal_backend`. The only
 additional exception is PostgreSQL's ADMIN-only grant for safe login roles that belong
-solely to that owner's runtime group; a live Vault lease must not prevent reapplication.
+solely to that owner's runtime group; a live OpenBao lease must not prevent reapplication.
 Unexpected inherited/settable or administrative memberships fail closed.
 
 The canonical runtime policy lives at the end of each service schema. Reapplication
@@ -44,7 +44,7 @@ bindings, and existing client/scope retirement cascades still remove them.
 
 These are service-role privileges, not tenant-specific database credentials or RLS.
 Application handlers continue enforcing identity, tenant membership and delegated
-authority. The trusted bootstrap/Vault owner credentials remain outside runtime
+authority. The trusted bootstrap/OpenBao owner credentials remain outside runtime
 configuration and must be protected separately.
 
 ## Retained authorization history
@@ -66,7 +66,7 @@ by altering constraints or triggers. The trusted schema owner remains a privileg
 maintenance identity and must not be used as the service runtime login.
 Genesis partition rollover is executable only by its maintenance owner or an explicitly
 authorized maintenance identity. Runtime credentials and PUBLIC cannot invoke its
-parameterized retention/partition DDL. Scheduled jobs already run as `vault_genesis`.
+parameterized retention/partition DDL. Scheduled jobs already run as `openbao_genesis`.
 
 ## Rollout and HA
 
@@ -81,8 +81,8 @@ separately authorized PostgreSQL client-certificate mapping for remote maintenan
 Positional reconnects reuse the administrator's certificate/key, so the server's
 `pg_ident` mapping must explicitly allow that certificate identity for both owner roles;
 separate owner certificates are not selected automatically.
-Vault rotates owner passwords, so a static password file becomes stale; do not reset
-those passwords with `ALTER ROLE` and break Vault's connection. Use peer/certificate
+OpenBao rotates owner passwords, so a static password file becomes stale; do not reset
+those passwords with `ALTER ROLE` and break OpenBao's connection. Use peer/certificate
 authentication for the owner connections rather than maintaining stale owner-password
 files. If the administrator uses a protected libpq password file, unset `PGPASSWORD`:
 it overrides the password file for every reconnect. The local container
@@ -91,13 +91,13 @@ with `SET ROLE` to avoid an owner-login failure. See the existing maintenance ma
 [`cron_jobs.sql`](../db/sql/cron_jobs.sql).
 For the local development stack, `just db-bootstrap` reapplies bootstrap and the
 transactional verifier. Existing installations need the ownership and grant changes,
-not only a new service binary. Provision production Vault passwords beforehand as
+not only a new service binary. Provision production OpenBao passwords beforehand as
 described in the database bootstrap documentation; the local defaults are for local
 development only. Stop rollout if ownership verification or the verifier fails.
 Remove the test-only `seed_test_client.sql` include from a production bootstrap,
 as described in the README; do not deploy the local development defaults unchanged.
 
-All replicas inherit the same PostgreSQL runtime policy through their own Vault-issued
+All replicas inherit the same PostgreSQL runtime policy through their own OpenBao-issued
 credentials. No instance owns the shared tables, no authorization state moves into
 process memory, and code/refresh transitions still use PostgreSQL locks and transactions.
 The isolated runner now starts actual A/B/C processes, requires three distinct runtime
@@ -105,7 +105,7 @@ database identities, exchanges codes concurrently on all three, rotates A/B-issu
 refresh authority on C, and checks replay-family revocation on every process.
 This exercises three same-host replicas; it does not establish multi-host throughput
 or network-failure coverage.
-Keep PostgreSQL's `createrole_self_grant` empty for these Vault owners. An additional
+Keep PostgreSQL's `createrole_self_grant` empty for these OpenBao owners. An additional
 INHERIT/SET grant on created logins is intentionally rejected during reapplication.
 
 ## Verification status
@@ -114,13 +114,13 @@ The completed implementation and refreshed lockfiles at `bc8a402` pass
 [Test & Build run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785)
 and the separate Rust security audit. The default workspace coverage run passed 655
 tests; the complete all-feature workspace run passed 685. Both include the real
-PostgreSQL/Vault regressions. The two browser tests ignored in ordinary workspace
+PostgreSQL/OpenBao regressions. The two browser tests ignored in ordinary workspace
 runs passed in the dedicated browser job, alongside the console smoke suite.
 All 32 isolated scenarios passed with actual A/B/C processes, including cross-replica
 OPAQUE exchanges, code and refresh races, failover and replay rejection. All seven
 harness checks passed, with zero cleanup errors in the full protocol report.
 
-Seven database privilege tests and the actual Vault credential test cover hostile
+Seven database privilege tests and the actual OpenBao credential test cover hostile
 owners, failed bootstrap, legacy repair, three independent runtime identities,
 immutable consent and live-lease reapplication. Two runtime-login HTTP regressions
 also pass in both workspace variants. Claude/Herdr review corrections are applied,
@@ -144,10 +144,10 @@ The current validation record is:
 | Bootstrap diagnostic mutation | Assertion fails with SQLSTATE check removed; passes after restoration |
 | OpenAPI generation | Local generation before dependency refresh reproduces committed artifacts |
 | Native release, WASM/Web release and exact scenario binaries | Pass in CI against refreshed lockfiles |
-| Seven database privilege tests and actual Vault runtime test | Eight pass against real disposable dependencies, including refreshed default/all-feature CI runs |
+| Seven database privilege tests and actual OpenBao runtime test | Eight pass against real disposable dependencies, including refreshed default/all-feature CI runs |
 | Canonical schema verifier | Corrected verifier passes locally and in CI |
 | Default/all-feature workspace tests | 655/685 pass; Permesi library 427/442 pass; two browser tests run separately |
-| Database safeguard mutations | Consent rewrites, administrator-session restoration and skipped global preflight each fail at their intended assertion; restored sources and all eight database/Vault tests pass |
+| Database safeguard mutations | Consent rewrites, administrator-session restoration and skipped global preflight each fail at their intended assertion; restored sources and all eight database/OpenBao tests pass |
 | Browser | Console smoke suite and both real PostgreSQL browser tests pass in CI |
 | Full three-replica scenario suite | 32/32 pass; zero cleanup errors |
 | Harness cleanup and isolation | All seven checks pass, including repetitions and concurrent stacks |
@@ -170,10 +170,10 @@ scopes. They passed separately locally and in both refreshed hosted workspace ru
 Three temporary SQL mutations removed
 the consent guard, restored an administrator session, or skipped global preflight.
 Each failed at the intended security assertion. Sources were restored byte-for-byte,
-and all seven database tests plus the Vault test returned to green.
+and all seven database tests plus the OpenBao test returned to green.
 The corrected hosted protocol suite passes. The initial integration job separately timed out starting
 PostgreSQL containers for existing Genesis tests and stopped before the Permesi
-database/Vault targets. Its new `--no-fail-fast` flag preserves later test-binary results
+database/OpenBao targets. Its new `--no-fail-fast` flag preserves later test-binary results
 when an earlier dependency fails. The unit job also recorded three PostgreSQL startup
 timeouts alongside the refresh assertion; its final result was 421 pass, four fail.
 The complete local Genesis integration target and the corrected hosted default and
@@ -225,8 +225,8 @@ finding was reported. The confirmed findings and corrections are:
 | Severity | Finding | Correction |
 | --- | --- | --- |
 | MEDIUM | Administrator `SET ROLE` left a restorable privileged session; owner-controlled triggers, overloads or search paths could cross that boundary | Fresh owner-authenticated connections; catalog-only administrator passes and qualified helper calls |
-| LOW | Owner memberships could carry unrelated or privileged authority | Fail-closed membership checks, with a narrow exception for safe ADMIN-only grants on live Vault logins |
-| LOW | Owner-password guidance conflicted with Vault rotation and libpq reconnect behavior | Existing peer or explicitly mapped certificate authentication; password-file and certificate-reuse limitations documented |
+| LOW | Owner memberships could carry unrelated or privileged authority | Fail-closed membership checks, with a narrow exception for safe ADMIN-only grants on live OpenBao logins |
+| LOW | Owner-password guidance conflicted with OpenBao rotation and libpq reconnect behavior | Existing peer or explicitly mapped certificate authentication; password-file and certificate-reuse limitations documented |
 | LOW | Negative bootstrap tests accepted unrelated setup errors | Typed exact policy diagnostics, private raw stderr and a mutation-tested SQLSTATE classifier |
 | LOW | Historical A/B results and review status could overstate final validation | Separate historical evidence from pending PostgreSQL/A/B/C gates |
 | LOW | A negative test used effective superuser membership rather than actual grants | Query direct `pg_auth_members` rows before restoring mutated attributes |
@@ -267,7 +267,7 @@ Run `cargo test -p permesi --test database_privileges` for canonical bootstrap,
 legacy ownership/grant repair, hostile role/object rejection, three independent
 runtime-login privilege checks, Genesis partition/maintenance permissions and
 receipt/family parent-deletion regressions.
-`cargo test -p permesi --test vault_db_runtime` verifies real Vault credential
+`cargo test -p permesi --test openbao_db_runtime` verifies real OpenBao credential
 issuance/revocation and non-superuser maintenance after reapplication. The full live
 protocol gate is `just oauth-scenario --suite full --access-token-ttl-seconds 10`,
 followed by `just oauth-scenario-harness-test`. Database setup errors are failures,

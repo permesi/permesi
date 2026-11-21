@@ -4,7 +4,7 @@
 //! registry. Client configuration is an upper bound on future delegation, never proof
 //! that a user may access a resource. Protocol scopes have fixed server semantics.
 //! Authorization Code + S256 PKCE, transaction-owned token issuance and rotating refresh
-//! families use PostgreSQL state and Vault signing. OIDC metadata and shared Vault public keys are opt-in.
+//! families use PostgreSQL state and OpenBao signing. OIDC metadata and shared OpenBao public keys are opt-in.
 //!
 //! Flow Overview:
 //! Session-authenticated management resolves active organization membership and the

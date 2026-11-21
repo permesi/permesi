@@ -212,7 +212,7 @@ jobs:
       PERMESI_SCENARIO_EXPECTED_COMMIT: ${{ github.sha }}
     strategy:
       fail-fast: false
-      # Each topology runs several local PostgreSQL/Vault/service stacks, and the
+      # Each topology runs several local PostgreSQL/OpenBao/service stacks, and the
       # harness starts two more stacks concurrently. Share the host sequentially.
       max-parallel: 1
       matrix:

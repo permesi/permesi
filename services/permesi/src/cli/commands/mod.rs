@@ -2,8 +2,8 @@ pub mod admission;
 pub mod auth;
 pub mod database;
 pub mod logging;
+pub mod openbao;
 pub mod tls;
-pub mod vault;
 
 /// Whole-operation persistence deadline for signup, verification and resend.
 pub(crate) const DEFAULT_REGISTRATION_TIMEOUT_MS: i64 = 1000;
@@ -206,37 +206,37 @@ use clap::{
 };
 
 #[cfg(test)]
-use self::vault::{ARG_VAULT_KV_MOUNT, ARG_VAULT_KV_PATH, ARG_VAULT_TRANSIT_MOUNT};
+use self::openbao::{ARG_OPENBAO_KV_MOUNT, ARG_OPENBAO_KV_PATH, ARG_OPENBAO_TRANSIT_MOUNT};
 #[cfg(test)]
-use self::vault::{ARG_VAULT_ROLE_ID, ARG_VAULT_SECRET_ID, ARG_VAULT_URL};
+use self::openbao::{ARG_OPENBAO_ROLE_ID, ARG_OPENBAO_SECRET_ID, ARG_OPENBAO_URL};
 
 /// Validate auth-mode requirements without attempting login or falling back.
 ///
 /// # Errors
 /// Rejects incompatible transport/credential settings and missing mode requirements.
 pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
-    crate::cli::dispatch::vault_auth(matches)
+    crate::cli::dispatch::openbao_auth(matches)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
 /// Define opt-in native login settings; auto preserves the existing auth selection.
-fn with_native_vault_args(command: Command) -> Command {
+fn with_native_openbao_args(command: Command) -> Command {
     command
-        .arg(Arg::new("vault-auth-method").long("vault-auth-method")
-            .env("PERMESI_VAULT_AUTH_METHOD").default_value("auto")
+        .arg(Arg::new("openbao-auth-method").long("openbao-auth-method")
+            .env("PERMESI_OPENBAO_AUTH_METHOD").default_value("auto")
             .value_parser(["auto", "approle", "kubernetes"])
-            .help("Vault auth: auto selects Agent for sockets and AppRole for TCP; explicit methods require TCP"))
-        .arg(Arg::new("vault-kubernetes-auth-mount").long("vault-kubernetes-auth-mount")
-            .env("PERMESI_VAULT_KUBERNETES_AUTH_MOUNT").default_value("kubernetes")
-            .value_parser(vault_client::kubernetes::validate_auth_mount)
+            .help("OpenBao auth: auto selects Agent for sockets and AppRole for TCP; explicit methods require TCP"))
+        .arg(Arg::new("openbao-kubernetes-auth-mount").long("openbao-kubernetes-auth-mount")
+            .env("PERMESI_OPENBAO_KUBERNETES_AUTH_MOUNT").default_value("kubernetes")
+            .value_parser(openbao_client::kubernetes::validate_auth_mount)
             .help("Relative Kubernetes auth mount, without /v1/auth/ (Kubernetes mode only)"))
-        .arg(Arg::new("vault-kubernetes-role").long("vault-kubernetes-role")
-            .env("PERMESI_VAULT_KUBERNETES_ROLE")
+        .arg(Arg::new("openbao-kubernetes-role").long("openbao-kubernetes-role")
+            .env("PERMESI_OPENBAO_KUBERNETES_ROLE")
             .value_parser(clap::builder::NonEmptyStringValueParser::new())
-            .help("Vault Kubernetes role (required only for Kubernetes mode)"))
-        .arg(Arg::new("vault-kubernetes-token-path").long("vault-kubernetes-token-path")
-            .env("PERMESI_VAULT_KUBERNETES_TOKEN_PATH")
+            .help("OpenBao Kubernetes role (required only for Kubernetes mode)"))
+        .arg(Arg::new("openbao-kubernetes-token-path").long("openbao-kubernetes-token-path")
+            .env("PERMESI_OPENBAO_KUBERNETES_TOKEN_PATH")
             .default_value("/var/run/secrets/kubernetes.io/serviceaccount/token")
             .value_parser(clap::builder::NonEmptyStringValueParser::new())
             .help("JWT file read at login; prefer an audience-scoped projected token"))
@@ -282,7 +282,7 @@ pub fn new() -> Command {
                 .long("dsn")
                 .help("Database connection string")
                 .long_help(
-                    "Database connection string. Username/password are injected from Vault DB creds, so they are not required in the DSN.",
+                    "Database connection string. Username/password are injected from OpenBao DB creds, so they are not required in the DSN.",
                 )
                 .env("PERMESI_DSN")
                 .required(true),
@@ -291,8 +291,8 @@ pub fn new() -> Command {
     let command = oauth_args(command);
     let command = admission::with_args(command);
     let command = tls::with_args(command);
-    let command = vault::with_args(command);
-    let command = with_native_vault_args(command);
+    let command = openbao::with_args(command);
+    let command = with_native_openbao_args(command);
     let command = auth::with_args(command);
     let command = database::with_args(command);
     logging::with_args(command)
@@ -309,7 +309,7 @@ fn oauth_args(command: Command) -> Command {
             .help("Explicit delegated access-token resource audience; ID token audience is the client"))
         .arg(Arg::new("oidc-signing-key").long("oidc-signing-key").env("PERMESI_OIDC_SIGNING_KEY")
             .default_value("oidc-signing").value_parser(crate::oauth::config::parse_key_name)
-            .help("Vault transit RSA-2048 key; rotation and retirement are operator-managed"))
+            .help("OpenBao transit RSA-2048 key; rotation and retirement are operator-managed"))
         .arg(Arg::new("oauth-code-ttl-seconds").long("oauth-code-ttl-seconds")
             .env("PERMESI_OAUTH_CODE_TTL_SECONDS").default_value("120")
             .value_parser(clap::value_parser!(i64).range(1..=300)))
@@ -410,11 +410,11 @@ mod tests {
             "https://genesis.permesi.localhost:8000/paserk.json",
             "--tls-pem-bundle",
             "/tmp/permesi-bundle.pem",
-            "--vault-url",
-            "https://vault.tld:8200",
-            "--vault-role-id",
+            "--openbao-url",
+            "https://openbao.tld:8200",
+            "--openbao-role-id",
             "role-id",
-            "--vault-secret-id",
+            "--openbao-secret-id",
             "secret-id",
         ]);
 
@@ -424,15 +424,15 @@ mod tests {
             Some("postgres://user:password@localhost:5432/permesi".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>(ARG_VAULT_URL).cloned(),
-            Some("https://vault.tld:8200".to_string())
+            matches.get_one::<String>(ARG_OPENBAO_URL).cloned(),
+            Some("https://openbao.tld:8200".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>(ARG_VAULT_ROLE_ID).cloned(),
+            matches.get_one::<String>(ARG_OPENBAO_ROLE_ID).cloned(),
             Some("role-id".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>(ARG_VAULT_SECRET_ID).cloned(),
+            matches.get_one::<String>(ARG_OPENBAO_SECRET_ID).cloned(),
             Some("secret-id".to_string())
         );
     }
@@ -446,18 +446,18 @@ mod tests {
                     Some("https://genesis.permesi.localhost:8000/paserk.json"),
                 ),
                 ("PERMESI_TLS_PEM_BUNDLE", Some("/tmp/permesi-bundle.pem")),
-                ("PERMESI_VAULT_URL", Some("https://vault.tld:8200")),
-                ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
-                ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
+                ("PERMESI_OPENBAO_URL", Some("https://openbao.tld:8200")),
+                ("PERMESI_OPENBAO_ROLE_ID", Some("role_id")),
+                ("PERMESI_OPENBAO_SECRET_ID", Some("secret_id")),
                 ("PERMESI_PORT", Some("443")),
                 (
                     "PERMESI_DSN",
                     Some("postgres://user:password@localhost:5432/permesi"),
                 ),
                 ("PERMESI_LOG_LEVEL", Some("info")),
-                ("PERMESI_VAULT_KV_MOUNT", Some("secret/custom")),
-                ("PERMESI_VAULT_KV_PATH", Some("config/custom")),
-                ("PERMESI_VAULT_TRANSIT_MOUNT", Some("transit/custom")),
+                ("PERMESI_OPENBAO_KV_MOUNT", Some("secret/custom")),
+                ("PERMESI_OPENBAO_KV_PATH", Some("config/custom")),
+                ("PERMESI_OPENBAO_TRANSIT_MOUNT", Some("transit/custom")),
             ],
             || {
                 let command = new();
@@ -468,8 +468,8 @@ mod tests {
                     Some("postgres://user:password@localhost:5432/permesi".to_string())
                 );
                 assert_eq!(
-                    matches.get_one::<String>(ARG_VAULT_URL).cloned(),
-                    Some("https://vault.tld:8200".to_string())
+                    matches.get_one::<String>(ARG_OPENBAO_URL).cloned(),
+                    Some("https://openbao.tld:8200".to_string())
                 );
                 assert_eq!(
                     matches.get_one::<u8>(logging::ARG_VERBOSITY).copied(),
@@ -477,19 +477,19 @@ mod tests {
                 );
                 assert_eq!(
                     matches
-                        .get_one::<String>(ARG_VAULT_KV_MOUNT)
+                        .get_one::<String>(ARG_OPENBAO_KV_MOUNT)
                         .map(String::as_str),
                     Some("secret/custom")
                 );
                 assert_eq!(
                     matches
-                        .get_one::<String>(ARG_VAULT_KV_PATH)
+                        .get_one::<String>(ARG_OPENBAO_KV_PATH)
                         .map(String::as_str),
                     Some("config/custom")
                 );
                 assert_eq!(
                     matches
-                        .get_one::<String>(ARG_VAULT_TRANSIT_MOUNT)
+                        .get_one::<String>(ARG_OPENBAO_TRANSIT_MOUNT)
                         .map(String::as_str),
                     Some("transit/custom")
                 );
@@ -498,12 +498,12 @@ mod tests {
     }
 
     #[test]
-    fn test_vault_mount_defaults() {
+    fn test_openbao_mount_defaults() {
         temp_env::with_vars(
             [
-                ("PERMESI_VAULT_KV_MOUNT", None::<&str>),
-                ("PERMESI_VAULT_KV_PATH", None::<&str>),
-                ("PERMESI_VAULT_TRANSIT_MOUNT", None::<&str>),
+                ("PERMESI_OPENBAO_KV_MOUNT", None::<&str>),
+                ("PERMESI_OPENBAO_KV_PATH", None::<&str>),
+                ("PERMESI_OPENBAO_TRANSIT_MOUNT", None::<&str>),
             ],
             || {
                 let command = new();
@@ -515,29 +515,29 @@ mod tests {
                     "https://genesis.permesi.localhost:8000/paserk.json",
                     "--tls-pem-bundle",
                     "/tmp/permesi-bundle.pem",
-                    "--vault-url",
-                    "https://vault.tld:8200",
-                    "--vault-role-id",
+                    "--openbao-url",
+                    "https://openbao.tld:8200",
+                    "--openbao-role-id",
                     "role-id",
-                    "--vault-secret-id",
+                    "--openbao-secret-id",
                     "secret-id",
                 ]);
 
                 assert_eq!(
                     matches
-                        .get_one::<String>(ARG_VAULT_KV_MOUNT)
+                        .get_one::<String>(ARG_OPENBAO_KV_MOUNT)
                         .map(String::as_str),
                     Some("secret/permesi")
                 );
                 assert_eq!(
                     matches
-                        .get_one::<String>(ARG_VAULT_KV_PATH)
+                        .get_one::<String>(ARG_OPENBAO_KV_PATH)
                         .map(String::as_str),
                     Some("config")
                 );
                 assert_eq!(
                     matches
-                        .get_one::<String>(ARG_VAULT_TRANSIT_MOUNT)
+                        .get_one::<String>(ARG_OPENBAO_TRANSIT_MOUNT)
                         .map(String::as_str),
                     Some("transit/permesi")
                 );
@@ -558,9 +558,9 @@ mod tests {
                         Some("https://genesis.permesi.localhost:8000/paserk.json"),
                     ),
                     ("PERMESI_TLS_PEM_BUNDLE", Some("/tmp/permesi-bundle.pem")),
-                    ("PERMESI_VAULT_URL", Some("http://vault.tld:8200")),
-                    ("PERMESI_VAULT_ROLE_ID", Some("role_id")),
-                    ("PERMESI_VAULT_SECRET_ID", Some("secret_id")),
+                    ("PERMESI_OPENBAO_URL", Some("http://openbao.tld:8200")),
+                    ("PERMESI_OPENBAO_ROLE_ID", Some("role_id")),
+                    ("PERMESI_OPENBAO_SECRET_ID", Some("secret_id")),
                     (
                         "PERMESI_DSN",
                         Some("postgres://user:password@localhost:5432/permesi"),
@@ -592,11 +592,11 @@ mod tests {
                     "https://genesis.permesi.localhost:8000/paserk.json".to_string(),
                     "--tls-pem-bundle".to_string(),
                     "/tmp/permesi-bundle.pem".to_string(),
-                    "--vault-url".to_string(),
-                    "https://vault.tld:8200".to_string(),
-                    "--vault-role-id".to_string(),
+                    "--openbao-url".to_string(),
+                    "https://openbao.tld:8200".to_string(),
+                    "--openbao-role-id".to_string(),
                     "role_id".to_string(),
-                    "--vault-secret-id".to_string(),
+                    "--openbao-secret-id".to_string(),
                     "secret_id".to_string(),
                 ];
 
@@ -621,12 +621,12 @@ mod tests {
     #[test]
     fn test_removed_args_fail() {
         let command = new();
-        // vault-addr should be rejected
+        // openbao-addr should be rejected
         let result = command.clone().try_get_matches_from(vec![
             "permesi",
             "--dsn",
             "postgres://localhost",
-            "--vault-addr",
+            "--openbao-addr",
             "http://addr",
         ]);
         assert_eq!(
@@ -634,12 +634,12 @@ mod tests {
             Err(clap::error::ErrorKind::UnknownArgument)
         );
 
-        // vault-policy should be rejected
+        // openbao-policy should be rejected
         let result = command.try_get_matches_from(vec![
             "permesi",
             "--dsn",
             "postgres://localhost",
-            "--vault-policy",
+            "--openbao-policy",
             "policy",
         ]);
         assert_eq!(
@@ -649,15 +649,15 @@ mod tests {
     }
 
     // Helper to clear env vars for TCP validation tests
-    fn with_cleared_vault_env<F, R>(f: F) -> R
+    fn with_cleared_openbao_env<F, R>(f: F) -> R
     where
         F: FnOnce() -> R,
     {
         temp_env::with_vars(
             [
-                ("PERMESI_VAULT_ROLE_ID", None::<&str>),
-                ("PERMESI_VAULT_SECRET_ID", None::<&str>),
-                ("PERMESI_VAULT_WRAPPED_TOKEN", None::<&str>),
+                ("PERMESI_OPENBAO_ROLE_ID", None::<&str>),
+                ("PERMESI_OPENBAO_SECRET_ID", None::<&str>),
+                ("PERMESI_OPENBAO_WRAPPED_TOKEN", None::<&str>),
             ],
             f,
         )
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_validate_tcp_missing_role() -> Result<(), Box<dyn std::error::Error>> {
-        with_cleared_vault_env(|| {
+        with_cleared_openbao_env(|| {
             let command = new();
             // 1. TCP mode (http) missing role-id
             let matches = command.try_get_matches_from(vec![
@@ -676,8 +676,8 @@ mod tests {
                 "https://url",
                 "--tls-pem-bundle",
                 "bundle",
-                "--vault-url",
-                "http://vault:8200",
+                "--openbao-url",
+                "http://openbao:8200",
             ])?;
             assert!(validate(&matches).is_err(), "Should fail missing role-id");
             Ok(())
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_validate_tcp_missing_secret() -> Result<(), Box<dyn std::error::Error>> {
-        with_cleared_vault_env(|| {
+        with_cleared_openbao_env(|| {
             let command = new();
             // 2. TCP mode (https) missing secret-id/wrapped-token
             let matches = command.try_get_matches_from(vec![
@@ -697,9 +697,9 @@ mod tests {
                 "https://url",
                 "--tls-pem-bundle",
                 "bundle",
-                "--vault-url",
-                "https://vault:8200",
-                "--vault-role-id",
+                "--openbao-url",
+                "https://openbao:8200",
+                "--openbao-role-id",
                 "role",
             ])?;
             assert!(
@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_validate_tcp_valid() -> Result<(), Box<dyn std::error::Error>> {
-        with_cleared_vault_env(|| {
+        with_cleared_openbao_env(|| {
             let command = new();
             // 3. TCP mode (http) valid
             let matches = command.try_get_matches_from(vec![
@@ -723,11 +723,11 @@ mod tests {
                 "https://url",
                 "--tls-pem-bundle",
                 "bundle",
-                "--vault-url",
-                "http://vault:8200",
-                "--vault-role-id",
+                "--openbao-url",
+                "http://openbao:8200",
+                "--openbao-role-id",
                 "role",
-                "--vault-secret-id",
+                "--openbao-secret-id",
                 "secret",
             ])?;
             assert!(
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_validate_agent_unix() -> Result<(), Box<dyn std::error::Error>> {
-        with_cleared_vault_env(|| {
+        with_cleared_openbao_env(|| {
             let command = new();
             // 4. Agent mode (unix socket) valid without auth
             let matches = command.try_get_matches_from(vec![
@@ -751,7 +751,7 @@ mod tests {
                 "https://url",
                 "--tls-pem-bundle",
                 "bundle",
-                "--vault-url",
+                "--openbao-url",
                 "unix:///tmp/agent.sock",
             ])?;
             assert!(validate(&matches).is_ok(), "Should pass with unix socket");
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn test_validate_agent_path() -> Result<(), Box<dyn std::error::Error>> {
-        with_cleared_vault_env(|| {
+        with_cleared_openbao_env(|| {
             let command = new();
             // 5. Agent mode (path) valid without auth
             let matches = command.try_get_matches_from(vec![
@@ -772,7 +772,7 @@ mod tests {
                 "https://url",
                 "--tls-pem-bundle",
                 "bundle",
-                "--vault-url",
+                "--openbao-url",
                 "/tmp/agent.sock",
             ])?;
             assert!(validate(&matches).is_ok(), "Should pass with socket path");

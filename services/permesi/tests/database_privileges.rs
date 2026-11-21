@@ -31,7 +31,7 @@ async fn owner_lacks_role(admin: &mut PgConnection, role: &str) -> Result<()> {
     let member: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
          JOIN pg_catalog.pg_roles r ON r.oid=m.roleid
-         WHERE m.member='vault_permesi'::regrole AND r.rolname=$1)",
+         WHERE m.member='openbao_permesi'::regrole AND r.rolname=$1)",
     )
     .bind(role)
     .fetch_one(admin)
@@ -46,7 +46,7 @@ async fn genesis_runtime_appends_partitioned_receipts_without_maintenance_author
 {
     let (postgres, _) = database().await?;
     let mut admin = PgConnection::connect(&postgres.admin_dsn_for_db("genesis")).await?;
-    sqlx::raw_sql("SET ROLE vault_genesis; SELECT public.genesis_tokens_rollover(7,2)")
+    sqlx::raw_sql("SET ROLE openbao_genesis; SELECT public.genesis_tokens_rollover(7,2)")
         .execute(&mut admin)
         .await?;
     sqlx::query("RESET ROLE").execute(&mut admin).await?;
@@ -75,7 +75,7 @@ async fn genesis_runtime_appends_partitioned_receipts_without_maintenance_author
             "SELECT public.genesis_tokens_rollover(-100,100)",
             "DELETE FROM public.tokens",
             "TRUNCATE public.tokens CASCADE",
-            "SET ROLE vault_genesis",
+            "SET ROLE openbao_genesis",
         ] {
             rejected(
                 sqlx::query(statement).execute(&mut connection).await,
@@ -152,17 +152,17 @@ async fn bootstrap_repairs_ownership_and_removes_legacy_privileges() -> Result<(
     sqlx::raw_sql("ALTER TABLE public.users OWNER TO postgres;
         ALTER FUNCTION public.cleanup_expired_tokens() OWNER TO postgres;
         GRANT ALL ON ALL TABLES IN SCHEMA public TO permesi_runtime;
-        ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public GRANT ALL ON TABLES TO permesi_runtime;
-        ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi GRANT ALL ON TABLES TO PUBLIC;
-        ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public GRANT ALL ON TABLES TO PUBLIC;
-        ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi GRANT ALL ON SEQUENCES TO PUBLIC;
-        ALTER DEFAULT PRIVILEGES FOR ROLE vault_permesi IN SCHEMA public GRANT ALL ON SEQUENCES TO PUBLIC;")
+        ALTER DEFAULT PRIVILEGES FOR ROLE openbao_permesi IN SCHEMA public GRANT ALL ON TABLES TO permesi_runtime;
+        ALTER DEFAULT PRIVILEGES FOR ROLE openbao_permesi GRANT ALL ON TABLES TO PUBLIC;
+        ALTER DEFAULT PRIVILEGES FOR ROLE openbao_permesi IN SCHEMA public GRANT ALL ON TABLES TO PUBLIC;
+        ALTER DEFAULT PRIVILEGES FOR ROLE openbao_permesi GRANT ALL ON SEQUENCES TO PUBLIC;
+        ALTER DEFAULT PRIVILEGES FOR ROLE openbao_permesi IN SCHEMA public GRANT ALL ON SEQUENCES TO PUBLIC;")
         .execute(&mut admin).await?;
     postgres.bootstrap().await?;
     let safe: bool=sqlx::query_scalar("SELECT
-        (SELECT relowner='vault_permesi'::regrole FROM pg_catalog.pg_class WHERE oid='public.users'::regclass)
-        AND (SELECT proowner='vault_permesi'::regrole FROM pg_catalog.pg_proc WHERE oid='public.cleanup_expired_tokens()'::regprocedure)
-        AND (SELECT NOT rolsuper FROM pg_catalog.pg_roles WHERE rolname='vault_permesi')
+        (SELECT relowner='openbao_permesi'::regrole FROM pg_catalog.pg_class WHERE oid='public.users'::regclass)
+        AND (SELECT proowner='openbao_permesi'::regrole FROM pg_catalog.pg_proc WHERE oid='public.cleanup_expired_tokens()'::regprocedure)
+        AND (SELECT NOT rolsuper FROM pg_catalog.pg_roles WHERE rolname='openbao_permesi')
         AND (SELECT relowner='postgres'::regrole FROM pg_catalog.pg_class WHERE oid='pg_catalog.pg_class'::regclass)
         AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class c,unnest(ARRAY['TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
             WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p') AND has_table_privilege('permesi_runtime',c.oid,p))")
@@ -171,7 +171,7 @@ async fn bootstrap_repairs_ownership_and_removes_legacy_privileges() -> Result<(
         safe,
         "Bootstrap retained unsafe ownership or runtime maintenance authority"
     );
-    sqlx::raw_sql("SET ROLE vault_permesi; CREATE TABLE public.future_privilege_probe(id INTEGER); CREATE SEQUENCE public.future_sequence_probe; RESET ROLE;")
+    sqlx::raw_sql("SET ROLE openbao_permesi; CREATE TABLE public.future_privilege_probe(id INTEGER); CREATE SEQUENCE public.future_sequence_probe; RESET ROLE;")
         .execute(&mut admin).await?;
     let implicit: bool=sqlx::query_scalar("SELECT has_table_privilege('permesi_runtime','public.future_privilege_probe','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') OR has_sequence_privilege('permesi_runtime','public.future_sequence_probe','USAGE,SELECT,UPDATE')")
         .fetch_one(&mut admin).await?;
@@ -181,7 +181,7 @@ async fn bootstrap_repairs_ownership_and_removes_legacy_privileges() -> Result<(
     );
     for database in ["genesis", "permesi"] {
         let mut connection = PgConnection::connect(&postgres.admin_dsn_for_db(database)).await?;
-        let wrong:i64=sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_roles r ON r.oid=c.relowner WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','S') AND (r.rolsuper OR r.rolname<>('vault_'||current_database()))")
+        let wrong:i64=sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_roles r ON r.oid=c.relowner WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','S') AND (r.rolsuper OR r.rolname<>('openbao_'||current_database()))")
             .fetch_one(&mut connection).await?;
         ensure!(
             wrong == 0,
@@ -198,9 +198,9 @@ async fn bootstrap_rejects_privileged_runtime_roles_and_foreign_objects() -> Res
     for mutation in [
         "ALTER ROLE permesi_runtime CREATEROLE",
         "GRANT pg_read_all_data TO permesi_runtime",
-        "ALTER ROLE vault_permesi SUPERUSER",
-        "GRANT pg_write_server_files TO vault_permesi",
-        "GRANT genesis_runtime TO vault_permesi",
+        "ALTER ROLE openbao_permesi SUPERUSER",
+        "GRANT pg_write_server_files TO openbao_permesi",
+        "GRANT genesis_runtime TO openbao_permesi",
     ] {
         let mut transaction = admin.begin().await?;
         sqlx::query(mutation).execute(&mut *transaction).await?;
@@ -218,22 +218,22 @@ async fn bootstrap_rejects_privileged_runtime_roles_and_foreign_objects() -> Res
         .await?;
     for (mutation, restore, expected) in [
         (
-            "ALTER ROLE vault_permesi SUPERUSER",
-            "ALTER ROLE vault_permesi NOSUPERUSER",
+            "ALTER ROLE openbao_permesi SUPERUSER",
+            "ALTER ROLE openbao_permesi NOSUPERUSER",
             BootstrapPolicyViolation::OwnerAttributes,
         ),
         (
-            "GRANT pg_write_server_files TO vault_permesi",
-            "REVOKE pg_write_server_files FROM vault_permesi",
+            "GRANT pg_write_server_files TO openbao_permesi",
+            "REVOKE pg_write_server_files FROM openbao_permesi",
             BootstrapPolicyViolation::OwnerMemberships,
         ),
         (
-            "GRANT genesis_runtime TO vault_permesi",
-            "REVOKE genesis_runtime FROM vault_permesi",
+            "GRANT genesis_runtime TO openbao_permesi",
+            "REVOKE genesis_runtime FROM openbao_permesi",
             BootstrapPolicyViolation::OwnerMemberships,
         ),
     ] {
-        sqlx::query("REVOKE pg_signal_backend FROM vault_permesi")
+        sqlx::query("REVOKE pg_signal_backend FROM openbao_permesi")
             .execute(&mut admin)
             .await?;
         sqlx::query(mutation).execute(&mut admin).await?;
@@ -243,7 +243,7 @@ async fn bootstrap_rejects_privileged_runtime_roles_and_foreign_objects() -> Res
         postgres.bootstrap().await?;
     }
     sqlx::raw_sql(
-        "REVOKE permesi_runtime,pg_signal_backend FROM vault_permesi;
+        "REVOKE permesi_runtime,pg_signal_backend FROM openbao_permesi;
         ALTER ROLE permesi_runtime CREATEROLE;",
     )
     .execute(&mut admin)
@@ -267,7 +267,7 @@ async fn bootstrap_reapplication_never_executes_owner_code_as_administrator() ->
     let (postgres, mut admin) = database().await?;
     let password = Uuid::new_v4().simple().to_string();
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "ALTER ROLE vault_permesi PASSWORD '{password}'"
+        "ALTER ROLE openbao_permesi PASSWORD '{password}'"
     )))
     .execute(&mut admin)
     .await?;
@@ -275,7 +275,7 @@ async fn bootstrap_reapplication_never_executes_owner_code_as_administrator() ->
         .host("127.0.0.1")
         .port(postgres.host_port())
         .database("permesi")
-        .username("vault_permesi")
+        .username("openbao_permesi")
         .password(&password);
     let mut owner = PgConnection::connect_with(&options).await?;
     sqlx::raw_sql("CREATE TABLE public.bootstrap_identity_probe(actor NAME NOT NULL);
@@ -293,8 +293,8 @@ async fn bootstrap_reapplication_never_executes_owner_code_as_administrator() ->
     postgres.bootstrap().await?;
     let safe: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM public.bootstrap_identity_probe)
-        AND NOT EXISTS(SELECT 1 FROM public.bootstrap_identity_probe WHERE actor<>'vault_permesi')
-        AND NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname='vault_permesi')",
+        AND NOT EXISTS(SELECT 1 FROM public.bootstrap_identity_probe WHERE actor<>'openbao_permesi')
+        AND NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname='openbao_permesi')",
     )
     .fetch_one(&mut admin)
     .await?;
@@ -336,7 +336,7 @@ async fn runtime_parent_deletion_and_ddl_are_denied_for_independent_identities()
             "TRUNCATE public.users CASCADE",
             "ALTER TABLE public.oauth_refresh_tokens DISABLE TRIGGER ALL",
             "CREATE TABLE public.runtime_probe(id INTEGER)",
-            "SET ROLE vault_permesi",
+            "SET ROLE openbao_permesi",
         ] {
             rejected(sqlx::query(statement).execute(&mut runtime).await, "42501")?;
         }

@@ -16,8 +16,8 @@ use crate::{
         AdmissionVerifier,
         auth::{AdminState, AuthState},
     },
+    openbao::renew::ShutdownSignal,
     totp::TotpService,
-    vault::renew::ShutdownSignal,
     webauthn::{PasskeyService, SecurityKeyService},
 };
 use axum::extract::FromRef;
@@ -32,7 +32,7 @@ pub struct AppState {
     pub tenant_mutations: super::tenant::MutationPolicy,
     /// OPAQUE, session, MFA, and rate-limit state for the auth endpoints.
     pub auth: Arc<AuthState>,
-    /// Shared OAuth policy and Vault verification key source.
+    /// Shared OAuth policy and OpenBao verification key source.
     pub oauth: Arc<crate::oauth::oidc::OAuthState>,
     /// Platform-admin elevation state.
     pub admin: Arc<AdminState>,
@@ -54,7 +54,7 @@ pub struct AppState {
 impl AppState {
     /// Build a complete state with inert defaults for router tests.
     ///
-    /// Nothing here contacts Vault or the network: the Vault transport points at an
+    /// Nothing here contacts OpenBao or the network: the OpenBao transport points at an
     /// unused address and `pool` may be lazy. Tests override the parts they exercise
     /// with struct-update syntax, e.g. `AppState { auth, ..AppState::for_tests(pool)? }`.
     pub(crate) fn for_tests(pool: PgPool) -> anyhow::Result<Self> {
@@ -69,11 +69,11 @@ impl AppState {
         use admission_token::{PaserkKey, PaserkKeySet};
         use std::time::Duration;
 
-        let vault_url = "http://127.0.0.1:1".to_string();
-        let transport = vault_client::VaultTransport::from_target(
+        let openbao_url = "http://127.0.0.1:1".to_string();
+        let transport = openbao_client::OpenBaoTransport::from_target(
             crate::APP_USER_AGENT,
-            vault_client::VaultTarget::Tcp {
-                base_url: vault_url.clone(),
+            openbao_client::OpenBaoTarget::Tcp {
+                base_url: openbao_url.clone(),
             },
         )?;
         let key = PaserkKey::from_ed25519_public_key_bytes(&[7u8; 32])?;
@@ -85,7 +85,7 @@ impl AppState {
         };
         let origins = vec!["https://permesi.dev".to_string()];
 
-        let globals = GlobalArgs::new(vault_url.clone(), transport.clone());
+        let globals = GlobalArgs::new(openbao_url.clone(), transport.clone());
         Ok(Self {
             tenant_mutations: super::tenant::MutationPolicy::for_tests(),
             oauth: Arc::new(crate::oauth::oidc::OAuthState::new(
@@ -104,7 +104,7 @@ impl AppState {
                 MfaConfig::new(),
             )),
             admin: Arc::new(AdminState::new(
-                AdminConfig::new(vault_url.clone()),
+                AdminConfig::new(openbao_url.clone()),
                 pool.clone(),
                 transport.clone(),
             )?),
@@ -115,7 +115,7 @@ impl AppState {
             )),
             shutdown: mpsc::unbounded_channel().0,
             totp: TotpService::new(
-                DekManager::new(GlobalArgs::new(vault_url, transport)),
+                DekManager::new(GlobalArgs::new(openbao_url, transport)),
                 pool.clone(),
                 "Permesi".to_string(),
             ),

@@ -1,4 +1,4 @@
-//! Fresh PostgreSQL schemas and Vault `AppRoles` for actual service binaries.
+//! Fresh PostgreSQL schemas and OpenBao `AppRoles` for actual service binaries.
 //!
 //! Flow Overview: create labeled containers, wait for local readiness, apply the
 //! repository schemas, bootstrap least-privilege dynamic database roles and fresh
@@ -16,7 +16,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18";
-pub const VAULT_IMAGE: &str = "docker.io/hashicorp/vault:1.17.3";
+pub const OPENBAO_IMAGE: &str = "docker.io/openbao/openbao:2.7.3";
 const GENESIS_SQL: &str = include_str!("../../../db/sql/01_genesis.sql");
 const GENESIS_CLIENT_SQL: &str = include_str!("../../../db/sql/seed_test_client.sql");
 const PERMESI_SQL: &str = include_str!("../../../db/sql/02_permesi.sql");
@@ -32,18 +32,18 @@ pub struct AppRole {
 
 /// Only the owned stack's endpoint/credentials can be constructed by this bootstrap.
 pub struct Infrastructure {
-    vault: Vault,
+    openbao: OpenBao,
     pub permesi_dsn: String,
     pub genesis_dsn: String,
     pub admin_dsn: String,
     pub pool: PgPool,
-    pub vault_url: String,
+    pub openbao_url: String,
     pub permesi_role: AppRole,
     pub genesis_role: AppRole,
 }
 
 impl Infrastructure {
-    /// Provisions a fresh database and Vault; every asynchronous failure is scrubbed at this boundary.
+    /// Provisions a fresh database and OpenBao; every asynchronous failure is scrubbed at this boundary.
     pub async fn start(
         engine: &mut Podman,
         files: &PrivateDir,
@@ -58,20 +58,18 @@ impl Infrastructure {
         let (postgres_name, pg_port) = engine
             .container("postgres", POSTGRES_IMAGE, &postgres_env, 5432)
             .await?;
-        let vault_env = files.write(
-            "vault.env",
-            format!(
-                "VAULT_DEV_ROOT_TOKEN_ID={root_token}\nVAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200\n"
-            )
-            .as_bytes(),
+        let openbao_env = files.write(
+            "openbao.env",
+            format!("BAO_DEV_ROOT_TOKEN_ID={root_token}\nBAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200\n")
+                .as_bytes(),
         )?;
-        let (_, vault_port) = engine
-            .container("vault", VAULT_IMAGE, &vault_env, 8200)
+        let (_, openbao_port) = engine
+            .container("openbao", OPENBAO_IMAGE, &openbao_env, 8200)
             .await?;
         let genesis_admin =
             format!("postgres://postgres:{password}@127.0.0.1:{pg_port}/postgres?sslmode=disable");
         let mut connection = wait_postgres(&genesis_admin, ready_seconds).await?;
-        let (genesis_password, vault_password) =
+        let (genesis_password, openbao_password) =
             bootstrap_service_schemas(&mut connection, &password, pg_port).await?;
         let admin_dsn =
             format!("postgres://postgres:{password}@127.0.0.1:{pg_port}/permesi?sslmode=disable");
@@ -79,7 +77,7 @@ impl Infrastructure {
             .await
             .safe("Cannot open isolated assertion pool.")?;
         let verification_dsn = format!(
-            "postgres://vault_permesi:{vault_password}@127.0.0.1:{pg_port}/permesi?sslmode=disable"
+            "postgres://openbao_permesi:{openbao_password}@127.0.0.1:{pg_port}/permesi?sslmode=disable"
         );
         let mut verification = PgConnection::connect(&verification_dsn)
             .await
@@ -87,27 +85,27 @@ impl Infrastructure {
         test_support::sql::execute_script(&mut verification, "verify_permesi.sql", VERIFY_SQL)
             .await
             .safe("Canonical runtime grants violate schema protections.")?;
-        let vault_base = format!("http://127.0.0.1:{vault_port}");
-        let vault = Vault {
-            base: vault_base.clone(),
+        let openbao_base = format!("http://127.0.0.1:{openbao_port}");
+        let openbao = OpenBao {
+            base: openbao_base.clone(),
             token: root_token,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .safe("Cannot configure Vault bootstrap client.")?,
+                .safe("Cannot configure OpenBao bootstrap client.")?,
         };
-        vault.ready(ready_seconds).await?;
-        let (genesis_role, permesi_role) = vault
-            .bootstrap(&postgres_name, &genesis_password, &vault_password)
+        openbao.ready(ready_seconds).await?;
+        let (genesis_role, permesi_role) = openbao
+            .bootstrap(&postgres_name, &genesis_password, &openbao_password)
             .await?;
         Ok(Self {
-            vault,
+            openbao,
             permesi_dsn: format!("postgres://127.0.0.1:{pg_port}/permesi?sslmode=disable"),
             genesis_dsn: format!("postgres://127.0.0.1:{pg_port}/genesis?sslmode=disable"),
             admin_dsn,
             pool,
-            vault_url: format!("{vault_base}/v1/auth/approle/login"),
+            openbao_url: format!("{openbao_base}/v1/auth/approle/login"),
             permesi_role,
             genesis_role,
         })
@@ -115,7 +113,7 @@ impl Infrastructure {
 
     /// Rotates only this run's newly provisioned key; production endpoints cannot be supplied.
     pub async fn rotate_oidc_key(&self) -> Result<()> {
-        self.vault
+        self.openbao
             .post("transit/permesi/keys/oidc-signing/rotate", json!({}))
             .await?;
         Ok(())
@@ -124,7 +122,10 @@ impl Infrastructure {
     /// Fault injection changes only the owned runtime policy's signing path, preserving renewals.
     pub async fn signing_allowed(&self, allowed: bool) -> Result<()> {
         let path = "sys/policies/acl/permesi";
-        let existing = self.vault.request(reqwest::Method::GET, path, None).await?;
+        let existing = self
+            .openbao
+            .request(reqwest::Method::GET, path, None)
+            .await?;
         let policy = existing
             .pointer("/data/policy")
             .and_then(Value::as_str)
@@ -143,7 +144,7 @@ impl Infrastructure {
             policy.matches(from).count() == 1,
             "Unexpected isolated signing policy.",
         )?;
-        self.vault
+        self.openbao
             .request(
                 reqwest::Method::PUT,
                 path,
@@ -161,20 +162,20 @@ async fn bootstrap_service_schemas(
     password: &str,
     pg_port: u16,
 ) -> Result<(String, String)> {
-    let vault_password = Uuid::new_v4().simple().to_string();
+    let openbao_password = Uuid::new_v4().simple().to_string();
     let genesis_password = Uuid::new_v4().simple().to_string();
     for (database, owner, runtime, owner_password) in [
         (
             "genesis",
-            "vault_genesis",
+            "openbao_genesis",
             "genesis_runtime",
             &genesis_password,
         ),
         (
             "permesi",
-            "vault_permesi",
+            "openbao_permesi",
             "permesi_runtime",
-            &vault_password,
+            &openbao_password,
         ),
     ] {
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -208,7 +209,7 @@ async fn bootstrap_service_schemas(
         apply_owned_schema(database, owner, owner_password, pg_port).await?;
         ownership_pass(&mut schema).await?;
     }
-    Ok((genesis_password, vault_password))
+    Ok((genesis_password, openbao_password))
 }
 
 /// Catalog-only administrator passes pin lookup before touching owner-controlled databases.
@@ -259,7 +260,7 @@ async fn apply_owned_schema(database: &str, owner: &str, password: &str, port: u
     Ok(())
 }
 
-/// Uses OS entropy only; fixture seed cannot influence passwords, PKCE, CA keys or Vault seeds.
+/// Uses OS entropy only; fixture seed cannot influence passwords, PKCE, CA keys or OpenBao seeds.
 pub fn random() -> Result<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).safe("Operating-system entropy is unavailable.")?;
@@ -280,18 +281,18 @@ async fn wait_postgres(dsn: &str, seconds: u64) -> Result<PgConnection> {
     .safe("Isolated PostgreSQL did not become ready.")
 }
 
-struct Vault {
+struct OpenBao {
     base: String,
     token: String,
     client: reqwest::Client,
 }
-impl Vault {
+impl OpenBao {
     /// Configures fresh signing and database authority for only the owned containers.
     async fn bootstrap(
         &self,
         postgres_name: &str,
         password: &str,
-        vault_password: &str,
+        openbao_password: &str,
     ) -> Result<(AppRole, AppRole)> {
         self.request(reqwest::Method::DELETE, "sys/mounts/secret", None)
             .await?;
@@ -323,11 +324,11 @@ impl Vault {
             json!({"data":{"opaque_server_seed":random()?, "mfa_recovery_pepper":random()?}}),
         )
         .await?;
-        self.database("genesis", postgres_name, "genesis", "vault_genesis", password, json!([
+        self.database("genesis", postgres_name, "genesis", "openbao_genesis", password, json!([
             "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
             "GRANT genesis_runtime TO \"{{name}}\";"
         ])).await?;
-        self.database("permesi", postgres_name, "permesi", "vault_permesi", vault_password, json!([
+        self.database("permesi", postgres_name, "permesi", "openbao_permesi", openbao_password, json!([
             "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';", "GRANT permesi_runtime TO \"{{name}}\";"
         ])).await?;
         let genesis_role = self.role("genesis", "path \"transit/genesis/keys/genesis-signing\" { capabilities=[\"read\"] }\npath \"transit/genesis/sign/genesis-signing\" { capabilities=[\"update\"] }").await?;
@@ -335,7 +336,7 @@ impl Vault {
         Ok((genesis_role, permesi_role))
     }
 
-    /// Waits for the owned dev Vault without printing its token or response body.
+    /// Waits for the owned dev OpenBao without printing its token or response body.
     async fn ready(&self, seconds: u64) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(seconds), async {
             loop {
@@ -352,13 +353,13 @@ impl Vault {
             }
         })
         .await
-        .safe("Isolated Vault did not become ready.")
+        .safe("Isolated OpenBao did not become ready.")
     }
     /// Sends a fixed bootstrap path; externally generated error values are discarded.
     async fn post(&self, path: &str, body: Value) -> Result<Value> {
         self.request(reqwest::Method::POST, path, Some(body)).await
     }
-    /// Reads only the isolated Vault; response values remain private, never report inputs.
+    /// Reads only the isolated OpenBao; response values remain private, never report inputs.
     async fn request(
         &self,
         method: reqwest::Method,
@@ -375,10 +376,10 @@ impl Vault {
         let response = request
             .send()
             .await
-            .safe("Vault bootstrap request failed.")?;
+            .safe("OpenBao bootstrap request failed.")?;
         check(
             response.status().is_success(),
-            "Vault rejected isolated bootstrap configuration.",
+            "OpenBao rejected isolated bootstrap configuration.",
         )?;
         if response.status() == reqwest::StatusCode::NO_CONTENT {
             Ok(Value::Null)
@@ -386,7 +387,7 @@ impl Vault {
             response
                 .json()
                 .await
-                .safe("Invalid Vault bootstrap response.")
+                .safe("Invalid OpenBao bootstrap response.")
         }
     }
     /// Creates a least-privilege dynamic role against the owned database container, with explicit revocation.
@@ -436,12 +437,12 @@ impl Vault {
     }
 }
 
-/// Extracts known Vault data keys without formatting the secret-bearing response on failure.
+/// Extracts known OpenBao data keys without formatting the secret-bearing response on failure.
 fn field(value: &Value, name: &str) -> Result<String> {
     value
         .get("data")
         .and_then(|data| data.get(name))
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| Failure::infrastructure("Vault response omitted required credentials."))
+        .ok_or_else(|| Failure::infrastructure("OpenBao response omitted required credentials."))
 }

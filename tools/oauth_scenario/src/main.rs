@@ -110,7 +110,7 @@ async fn run(options: &Options) -> Result<bool> {
             genesis_commit: identity::binary_version(&genesis).await?,
             web_sha256: web_fingerprint(&web)?,
             postgres_image: infrastructure::POSTGRES_IMAGE.into(),
-            vault_image: infrastructure::VAULT_IMAGE.into(),
+            openbao_image: infrastructure::OPENBAO_IMAGE.into(),
             browser_image: options.browser_image.clone(),
         };
         if let Some(expected) = &options.expected_commit {

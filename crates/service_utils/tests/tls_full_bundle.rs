@@ -57,7 +57,7 @@ async fn test_tls_lifecycle_with_bundle() {
         "Expected 2 certs extracted from bundle (Leaf + CA)"
     );
 
-    // 7. Test atomic reload: Simulate Vault Agent updating the file
+    // 7. Test atomic reload: Simulate OpenBao Agent updating the file
     let new_leaf_key = KeyPair::generate().expect("Failed to generate new leaf key");
     let new_leaf_cert = CertificateParams::new(vec!["localhost".to_string()])
         .unwrap()

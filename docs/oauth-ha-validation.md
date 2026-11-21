@@ -2,8 +2,8 @@
 
 The standalone runner accepts `--replicas 3` through `--replicas 5`, with three as
 the default. Each replica is an actual Permesi process with its own private socket
-and Vault-issued runtime database credentials. All use one issuer, audience, shared
-PostgreSQL and shared Vault configuration. Replica selection is controlled only by
+and OpenBao-issued runtime database credentials. All use one issuer, audience, shared
+PostgreSQL and shared OpenBao configuration. Replica selection is controlled only by
 the harness; browser parameters or headers cannot choose a backend.
 
 Build with `just oauth-scenario-build`, then run:
@@ -85,7 +85,7 @@ children and a child-observation failure that must still kill and reap the runne
 `python3 -m unittest discover -s tools/oauth_scenario/tests -p '*_test.py'`.
 
 This is one-host process/state coverage. It does not establish multi-host network
-partitions, throughput, database/Vault outage policy, crashes inside a token commit,
+partitions, throughput, database/OpenBao outage policy, crashes inside a token commit,
 ambiguous response-loss recovery, zero-downtime draining of in-flight requests or
 host-power-loss journal durability. There remains an unavoidable process-level
 SIGKILL window between spawning a child and publishing its identity; the recovery
@@ -171,5 +171,5 @@ and both PostgreSQL browser tests pass. The signed correction was published as `
 Hosted builds, browser checks, both workspace suites and both three/five scenario suites
 passed in run `39103751747` after the isolated retries described above. Details are recorded in
 [the mutation validation record](tenant-mutation-validation.md).
-The validated topology remains single-host with a shared PostgreSQL/Vault stack; multi-host
+The validated topology remains single-host with a shared PostgreSQL/OpenBao stack; multi-host
 load, network partitions and in-flight response-loss ambiguity remain separate work.

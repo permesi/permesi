@@ -28,7 +28,7 @@ impl DekManager {
         }
     }
 
-    /// Loads all active and decrypt-only DEKs from the database, unwraps them via Vault,
+    /// Loads all active and decrypt-only DEKs from the database, unwraps them via OpenBao,
     /// and populates the in-memory cache.
     ///
     /// # Errors
@@ -130,12 +130,12 @@ impl DekManager {
     /// Rotates the DEK: generates a new one, marks it active, demotes the old one.
     ///
     /// # Errors
-    /// Returns an error if Vault key generation fails or if database transaction fails.
+    /// Returns an error if OpenBao key generation fails or if database transaction fails.
     #[instrument(skip(self, pool))]
     pub async fn rotate(&self, pool: &PgPool) -> Result<Uuid> {
         info!("Rotating TOTP DEK...");
 
-        // 1. Generate new datakey from Vault
+        // 1. Generate new datakey from OpenBao
         let (ciphertext, plaintext) = self.generate_datakey().await?;
         let plaintext_bytes = Base64::decode_vec(&plaintext)?;
         let new_dek_id = Uuid::new_v4();
@@ -151,7 +151,7 @@ impl DekManager {
         .await?;
 
         // Insert new
-        let transit_mount = self.globals.vault_transit_mount.trim_matches('/');
+        let transit_mount = self.globals.openbao_transit_mount.trim_matches('/');
         sqlx::query(
             r"
             INSERT INTO totp_deks (dek_id, status, wrapped_dek, kek_mount, kek_key)
@@ -176,17 +176,17 @@ impl DekManager {
         Ok(new_dek_id)
     }
 
-    // --- Vault Helpers ---
+    // --- OpenBao Helpers ---
 
-    fn vault_token(&self) -> Option<&str> {
+    fn openbao_token(&self) -> Option<&str> {
         self.globals
-            .vault_transport
+            .openbao_transport
             .is_tcp()
-            .then(|| self.globals.vault_token.expose_secret())
+            .then(|| self.globals.openbao_token.expose_secret())
     }
 
     async fn unwrap_dek(&self, wrapped_dek: &str) -> Result<Vec<u8>> {
-        let mount = self.globals.vault_transit_mount.trim_matches('/');
+        let mount = self.globals.openbao_transit_mount.trim_matches('/');
         let path = format!("/v1/{mount}/decrypt/totp");
 
         let payload = json!({
@@ -195,13 +195,13 @@ impl DekManager {
 
         let response = self
             .globals
-            .vault_transport
-            .request_json(Method::POST, &path, self.vault_token(), Some(&payload))
+            .openbao_transport
+            .request_json(Method::POST, &path, self.openbao_token(), Some(&payload))
             .await?;
 
         if !response.status.is_success() {
             return Err(anyhow!(
-                "Vault decrypt failed: {} - {:?}",
+                "OpenBao decrypt failed: {} - {:?}",
                 response.status,
                 response.body
             ));
@@ -212,23 +212,23 @@ impl DekManager {
             .get("data")
             .and_then(|d| d.get("plaintext"))
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("No plaintext in Vault response"))?;
+            .ok_or_else(|| anyhow!("No plaintext in OpenBao response"))?;
 
         Ok(Base64::decode_vec(plaintext_b64)?)
     }
 
     async fn generate_datakey(&self) -> Result<(String, String)> {
-        let mount = self.globals.vault_transit_mount.trim_matches('/');
+        let mount = self.globals.openbao_transit_mount.trim_matches('/');
         let path = format!("/v1/{mount}/datakey/plaintext/totp");
         let response = self
             .globals
-            .vault_transport
-            .request_json(Method::POST, &path, self.vault_token(), None)
+            .openbao_transport
+            .request_json(Method::POST, &path, self.openbao_token(), None)
             .await?;
 
         if !response.status.is_success() {
             return Err(anyhow!(
-                "Vault datakey gen failed: {} - {:?}",
+                "OpenBao datakey gen failed: {} - {:?}",
                 response.status,
                 response.body
             ));
@@ -265,10 +265,10 @@ mod tests {
     use http_body_util::Full;
     use hyper::{body::Bytes, service::service_fn};
     use hyper_util::rt::TokioIo;
+    use openbao_client::{OpenBaoTarget, OpenBaoTransport};
     use serde_json::json;
     use std::path::PathBuf;
     use tokio::net::UnixListener;
-    use vault_client::{VaultTarget, VaultTransport};
 
     async fn mock_agent_service(
         req: Request<hyper::body::Incoming>,
@@ -307,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn generate_datakey_supports_agent_socket_mode() -> Result<()> {
         let socket_path = std::env::temp_dir().join(format!(
-            "vault-agent-dek-manager-{}.sock",
+            "openbao-agent-dek-manager-{}.sock",
             uuid::Uuid::new_v4()
         ));
         let _guard = SocketGuard {
@@ -329,10 +329,10 @@ mod tests {
             }
         });
 
-        let target = VaultTarget::parse(&format!("unix://{}", socket_path.display()))?;
-        let transport = VaultTransport::from_target("test-suite", target)?;
+        let target = OpenBaoTarget::parse(&format!("unix://{}", socket_path.display()))?;
+        let transport = OpenBaoTransport::from_target("test-suite", target)?;
         let mut globals = GlobalArgs::new(socket_path.display().to_string(), transport);
-        globals.vault_transit_mount = "transit/permesi".to_string();
+        globals.openbao_transit_mount = "transit/permesi".to_string();
 
         let manager = DekManager::new(globals);
         let (ciphertext, plaintext) = manager.generate_datakey().await?;

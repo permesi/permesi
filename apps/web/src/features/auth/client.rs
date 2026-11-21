@@ -260,7 +260,7 @@ pub async fn admin_bootstrap(
     post_json_with_headers_with_credentials_response("/v1/auth/admin/bootstrap", request, &[]).await
 }
 
-/// Exchanges a Vault token for a short-lived admin elevation token.
+/// Exchanges an OpenBao token for a short-lived admin elevation token.
 pub async fn admin_elevate(
     request: &AdminElevateRequest,
 ) -> Result<AdminElevateResponse, AppError> {

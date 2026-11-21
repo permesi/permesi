@@ -1,7 +1,7 @@
 # Isolated OAuth scenarios
 
 The `permesi-oauth-scenario` workspace binary is an extensible integration foundation
-for the OAuth roadmap. Its disposable PostgreSQL and Vault launch actual Permesi and
+for the OAuth roadmap. Its disposable PostgreSQL and OpenBao launch actual Permesi and
 Genesis from an empty identity/tenant schema. It tests the compiled Web console and a
 small owned callback client, rather than mocking an OAuth application. Accounts are
 registered and verified through real admission-protected OPAQUE APIs; browser login
@@ -71,7 +71,7 @@ adds graceful rolling replacements, abrupt backend loss and journaled process re
 multi-host transport/load testing remains separate.
 
 Service children receive explicit existing CLI inputs and fresh private credential
-environments, with inherited deployment/proxy/Vault settings cleared. The runner
+environments, with inherited deployment/proxy/OpenBao settings cleared. The runner
 selects local Podman or verifies a local Unix Podman API for CI; remote TCP/Docker
 engines are rejected. It never adopts existing resources or prunes the shared engine.
 The run CA is trusted only by its native clients and disposable Chromium container.
@@ -133,7 +133,7 @@ HTTP payloads/headers and callback query strings are excluded. Errors use curate
 static messages; third-party diagnostic strings are discarded. Positive browser
 navigation failures distinguish protocol, rate-limit and dependency HTTP statuses
 using fixed messages, without reporting URLs, request values or response bodies. Podman logging is
-disabled and checked for every run container, including private browser IPC and Vault
+disabled and checked for every run container, including private browser IPC and OpenBao
 dev output. Chromium CDP uses inherited pipes, with no host debugging TCP listener. Validate runner
 ownership, startup failure, interruption, deadline expiry, injected cleanup failure,
 repetitions and parallel isolation with
@@ -172,7 +172,7 @@ repetitions and parallel isolation with
 | `token.confidential_credentials` | HTTP Basic current/retiring credentials, missing/wrong/revoked secrets, mandatory S256 and valid retry controls |
 | `token.validation` | Wrong verifier/redirect/client, duplicate and browser authority fields, valid retry, no ID token without openid |
 | `token.replica_replay_race` | HTTP race on every configured private socket, exactly one committed receipt, replay rejection and independently verified winner |
-| `token.signing_rollback_rotation` | Deny signing in owned Vault policy, code remains unconsumed/unexpired, restore and exchange; rotate actual shared key, forced B JWKS refresh verifies old/new tokens |
+| `token.signing_rollback_rotation` | Deny signing in owned OpenBao policy, code remains unconsumed/unexpired, restore and exchange; rotate actual shared key, forced B JWKS refresh verifies old/new tokens |
 
 | Case | Interoperability assertion |
 | --- | --- |
@@ -181,7 +181,7 @@ repetitions and parallel isolation with
 | `interop.callback_identity_rejection` | Exact callback, state/issuer/duplicates/error/fragment rejection before exchange; wrong nonce/client, substituted access-token hash and tampered ID signature rejected with successful controls |
 | `interop.resource_scope_tenant` | Allow-list never grants unrequested jobs scope; 403 without jobs:read, 404 for another owned organization/application, 401 for cookie-only/absent bearer |
 | `interop.invalid_access_tokens` | Malformed/tampered/ID/algorithm/header/unknown-kid negatives, 16 concurrent unknown keys produce one refresh; client disable preserves issued JWT authority only until actual expiry |
-| `interop.signing_key_rotation` | Rotate actual Vault authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
+| `interop.signing_key_rotation` | Rotate actual OpenBao authority; cached relying party refreshes public keys without retrying exchange, resource refreshes unknown kid once, old/new tokens remain verifiable |
 | `interop.userinfo_cross_replica` | Browser consent on A and standard-client exchange on B; header-only GET/POST on C disclose only the issued subject and reject ID, malformed and missing Bearer tokens |
 | `interop.better_auth_login` | Real Better Auth sign-in through the app, Permesi login/consent and the exact registered callback; verified linked subject, exact scopes and a usable local session |
 | `interop.better_auth_state_reject` | A one-character state tamper on an actual callback is rejected with unchanged storage/issuance state; the same unmodified callback succeeds as a fresh valid control |
@@ -200,7 +200,7 @@ blocks the remaining selection instead of silently testing a smaller topology.
 Repeated `--case` flags select exact IDs independently of suite; unknown IDs fail.
 Redemption is explicitly the existing transaction-owned internal domain API in the
 runner process, using an isolated administrator pool. It tests domain bindings and
-transactions, rather than runtime-role SQL permissions. The separate `token.*` cases test real `/token` with Vault-minted runtime database roles and confidential authentication.
+transactions, rather than runtime-role SQL permissions. The separate `token.*` cases test real `/token` with OpenBao-minted runtime database roles and confidential authentication.
 Expiration waits the normal 120-second code TTL instead of modifying immutable code
 fields or weakening product configuration.
 
@@ -512,9 +512,9 @@ OAuth scenarios and seven harness checks, but both attempts fail during PostgreS
 fixture port resolution. Claude reproduced the failure against Podman 4.9.3: implicit
 publish-all bindings report an empty `HostIp`, which testcontainers 0.28 cannot parse.
 Podman 5.x supplies `0.0.0.0`, explaining the passing local tests. Fixtures now explicitly
-request a random `127.0.0.1` port for PostgreSQL and Vault; this is discoverable on both
+request a random `127.0.0.1` port for PostgreSQL and OpenBao; this is discoverable on both
 versions and avoids exposing test services to the LAN. A regression checks the requested
-binding and its discoverability on the actual PostgreSQL/Vault builders and both network modes.
+binding and its discoverability on the actual PostgreSQL/OpenBao builders and both network modes.
 Claude independently ran all three browser stages on Podman 4.9.3 and 5.4.2; removing either
 explicit binding makes the regression fail. The [corrected hosted run](https://github.com/permesi/permesi/actions/runs/37426417421)
 on e78ae6f passes every required job, including browser and isolated OAuth scenarios.

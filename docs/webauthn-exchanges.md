@@ -2,7 +2,7 @@
 
 Passkey registration, discoverable passkey login, security-key registration and MFA
 verification store pending `webauthn-rs` state in PostgreSQL. Start and finish may run
-on different replicas or after a process restart. Replicas share the Vault OPAQUE
+on different replicas or after a process restart. Replicas share the OpenBao OPAQUE
 server seed and relying-party/origin policy; no pending state depends on local memory,
 a sticky session or a local file. Permanent passkeys and security keys remain in their
 existing tables.
@@ -65,7 +65,7 @@ a valid TTL and use lowercase `true`/`false`. These formerly accepted forms now 
 startup intentionally instead of silently substituting security policy. Defaults derive from the configured frontend/CORS policy.
 Apply `db/sql/02_permesi.sql` and its runtime grants before rolling out. In-flight
 ceremonies from the previous memory-backed implementation must restart. Rotating the
-Vault seed or changing origin/RP policy invalidates outstanding ceremonies; permanent
+OpenBao seed or changing origin/RP policy invalidates outstanding ceremonies; permanent
 credential records are unaffected. Mixed old/new replicas require draining old starts.
 
 ## Regression checks

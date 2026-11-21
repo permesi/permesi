@@ -1,9 +1,9 @@
-//! Explicit OIDC discovery, public verification keys and Vault-owned RS256 signing.
+//! Explicit OIDC discovery, public verification keys and OpenBao-owned RS256 signing.
 //!
 //! Flow Overview: deployment configuration enables code/token metadata; JWKS converts
 //! retained shared transit versions through a bounded public-response cache. Token exchanges
-//! select a fresh shared version and locally verify Vault signatures before database commit.
-//! Vault owns private material and rotation. No process-local key/version confers authority.
+//! select a fresh shared version and locally verify OpenBao signatures before database commit.
+//! OpenBao owns private material and rotation. No process-local key/version confers authority.
 //! Unknown-kid refresh is explicitly rate limited; retirement is operator-only after all
 //! token lifetimes and downstream caches expire. `UserInfo` uses exact issuance receipts;
 //! signing keys are not a second source of tenant or scope authority.
@@ -11,6 +11,7 @@
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use http::Method;
+use openbao_client::OpenBaoTransport;
 use rsa::{RsaPublicKey, pkcs8::DecodePublicKey, traits::PublicKeyParts};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
@@ -19,20 +20,19 @@ use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::Instant};
 use utoipa::ToSchema;
-use vault_client::VaultTransport;
 
 use super::config::OAuthConfig;
 mod signing;
 mod verify;
 pub(crate) use verify::{AccessClaims, AccessVerifyError, MAX_ACCESS_JWT_BYTES};
 
-/// Immutable policy plus shared Vault connectivity; contains no locally generated keys.
+/// Immutable policy plus shared OpenBao connectivity; contains no locally generated keys.
 #[derive(Clone)]
 pub struct OAuthState {
     pub config: OAuthConfig,
     /// Bounded credential hashing; all credential authority lives in PostgreSQL.
     pub credentials: super::credentials::CredentialService,
-    transport: VaultTransport,
+    transport: OpenBaoTransport,
     token: SecretString,
     transit_mount: String,
     cache: Arc<Mutex<Option<CachedJwks>>>,
@@ -45,20 +45,20 @@ struct CachedJwks {
 }
 
 impl OAuthState {
-    /// Connects to an operator-provisioned key; authentication/renewal reuse existing Vault state.
+    /// Connects to an operator-provisioned key; authentication/renewal reuse existing OpenBao state.
     pub(crate) fn new(config: OAuthConfig, globals: &crate::cli::globals::GlobalArgs) -> Self {
         Self {
             credentials: super::credentials::CredentialService::new(config.credentials.clone()),
             config,
-            transport: globals.vault_transport.clone(),
-            token: globals.vault_token.clone(),
-            transit_mount: globals.vault_transit_mount.clone(),
+            transport: globals.openbao_transport.clone(),
+            token: globals.openbao_token.clone(),
+            transit_mount: globals.openbao_transit_mount.clone(),
             cache: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Reads all retained verification versions, requiring a usable current RSA key.
-    /// Only public key fields are returned; neither Vault errors nor bodies reach clients.
+    /// Only public key fields are returned; neither OpenBao errors nor bodies reach clients.
     pub(crate) async fn jwks(&self) -> Result<Jwks> {
         let mut cache = self.cache.lock().await;
         if let Some(cached) = cache
@@ -104,7 +104,7 @@ impl OAuthState {
     }
 }
 
-/// Public-only JSON Web Key Set; every retained Vault version is independently identifiable.
+/// Public-only JSON Web Key Set; every retained OpenBao version is independently identifiable.
 #[derive(Clone, Serialize, ToSchema)]
 pub(crate) struct Jwks {
     pub keys: Vec<Jwk>,
@@ -154,7 +154,7 @@ pub(crate) struct TokenSecurityMetadata {
 }
 
 /// Validates the transit key type and converts all available public versions without
-/// trusting Vault's map order. RFC 7638 thumbprints make kid stable across replicas/rotation.
+/// trusting OpenBao's map order. RFC 7638 thumbprints make kid stable across replicas/rotation.
 fn parse_jwks(body: &Value) -> Result<Jwks> {
     let data = body.get("data").context("missing key data")?;
     ensure!(

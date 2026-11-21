@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 const HEADER: &str = "v4.public.";
 const ADMIN_SCOPE: &str = "platform:admin";
-const ADMIN_STEP_UP: &str = "vault";
+const ADMIN_STEP_UP: &str = "openbao";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AdminTokenClaims {

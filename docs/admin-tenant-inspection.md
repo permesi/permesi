@@ -50,7 +50,7 @@ boundaries with equal timestamps.
 
 `admin_inspection_browser_real_postgres` uses compiled WASM, actual sessions and
 operator authorization, the production router and PostgreSQL. Only the external
-Vault step-up lookup is simulated. It checks the dashboard target, global paging,
+OpenBao step-up lookup is simulated. It checks the dashboard target, global paging,
 foreign-resource navigation, absence of write controls, ordinary owner controls
 and retirement of displayed data after a rejected read. The test runs explicitly
 through `just web-test-browser-built` beside the existing OAuth console,

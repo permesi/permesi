@@ -12,22 +12,22 @@ Token Zero generator (edge admission token mint).
 
 `genesis` is an HTTP service that:
 
-- Issues short-lived **Admission Tokens** (PASETO v4.public signed via Vault Transit)
+- Issues short-lived **Admission Tokens** (PASETO v4.public signed via OpenBao Transit)
 - Publishes its public keys as a **PASERK keyset** at `GET /paserk.json` so `permesi` can verify tokens offline
 - Persists minted token IDs (`jti`) and request metadata in Postgres for short-term validation/auditing
-- Uses Vault (AppRole, Agent, or opt-in native Kubernetes auth) to obtain DB credentials and keeps Vault leases renewed at runtime
+- Uses OpenBao (AppRole, Agent, or opt-in native Kubernetes auth) to obtain DB credentials and keeps OpenBao leases renewed at runtime
 - Acts as the **Zero Token** mint for user-facing auth flows; `permesi` validates these tokens offline via the PASERK keyset
 
-## Vault requirement
+## OpenBao requirement
 
-Vault is required in production for authentication, dynamic DB creds, and transit encryption. Running without Vault is not supported.
-See the canonical checklist in `../../README.md#vault-dependency` and the Vault ops notes in `../../vault/README.md`.
+OpenBao is required in production for authentication, dynamic DB creds, and transit encryption. Running without OpenBao is not supported.
+See the canonical checklist in `../../README.md#openbao-dependency` and the OpenBao ops notes in `../../openbao/README.md`.
 TL;DR:
-- Run Vault in HA with tested failover.
+- Run OpenBao in HA with tested failover.
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
-When Vault token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh Vault login (especially important during standby/active transitions). `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
+When OpenBao token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh OpenBao login (especially important during standby/active transitions). `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
 On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `genesis` stops accepting connections and lets in-flight requests finish for up to 30 seconds, then flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process.
 
@@ -75,12 +75,12 @@ admission tokens.
 CLI args (also available via env vars):
 
 - `GENESIS_PORT` (default: `8080`)
-- `GENESIS_DSN` (required) base DSN; username/password are overwritten with Vault DB creds (e.g. `postgres://postgres@localhost:5432/genesis`)
-- `GENESIS_VAULT_URL` (required) Vault base URL (`https://vault.tld:8200`) or unix socket path (`/run/vault/proxy.sock` or `unix:///run/vault/proxy.sock`)
+- `GENESIS_DSN` (required) base DSN; username/password are overwritten with OpenBao DB creds (e.g. `postgres://postgres@localhost:5432/genesis`)
+- `GENESIS_OPENBAO_URL` (required) OpenBao base URL (`https://openbao.tld:8200`) or unix socket path (`/run/openbao/proxy.sock` or `unix:///run/openbao/proxy.sock`)
 - `GENESIS_TLS_PEM_BUNDLE` (required) Path to TLS bundle (Key + Cert + CA) (PEM)
-- `GENESIS_VAULT_ROLE_ID` (required for AppRole TCP mode only)
-- `GENESIS_VAULT_SECRET_ID` (required for AppRole unless `GENESIS_VAULT_WRAPPED_TOKEN` is set)
-- `GENESIS_VAULT_WRAPPED_TOKEN` (optional; alternative to secret-id for AppRole)
+- `GENESIS_OPENBAO_ROLE_ID` (required for AppRole TCP mode only)
+- `GENESIS_OPENBAO_SECRET_ID` (required for AppRole unless `GENESIS_OPENBAO_WRAPPED_TOKEN` is set)
+- `GENESIS_OPENBAO_WRAPPED_TOKEN` (optional; alternative to secret-id for AppRole)
 - `GENESIS_LOG_LEVEL` (optional) numeric or string log level (e.g. `info`) / `-v` flags
 
 PostgreSQL pool (also CLI flags):
@@ -91,7 +91,7 @@ PostgreSQL pool (also CLI flags):
 - `--db-idle-timeout-seconds` / `GENESIS_DB_IDLE_TIMEOUT_SECONDS` (default `600`, at least 10 and below the lifetime)
 - `--db-max-lifetime-seconds` / `GENESIS_DB_MAX_LIFETIME_SECONDS` (default `1800`, range 60-86400)
 
-The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`genesis`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the Vault-issued username and password are fixed for the life of the process, and a new database lease means a restart.
+The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`genesis`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the OpenBao-issued username and password are fixed for the life of the process, and a new database lease means a restart.
 
 Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8000` to avoid collisions.
 
@@ -110,64 +110,64 @@ cargo run -p genesis --bin genesis -- \
   --port 8000 \
   --dsn "postgres://postgres@localhost:5432/genesis" \
   --tls-pem-bundle "certs/genesis/tls.bundle.pem" \
-  --vault-url "http://vault:8200" \
-  --vault-role-id "$GENESIS_ROLE_ID" \
-  --vault-secret-id "$GENESIS_SECRET_ID"
+  --openbao-url "http://openbao:8200" \
+  --openbao-role-id "$GENESIS_ROLE_ID" \
+  --openbao-secret-id "$GENESIS_SECRET_ID"
 ```
 
 **2. Agent Mode (Unix Socket)**
 
-Use when connecting via a Vault Agent `api_proxy` socket. No credentials required.
+Use when connecting via an OpenBao Agent `api_proxy` socket. No credentials required.
 
 ```sh
 cargo run -p genesis --bin genesis -- \
   --port 8000 \
   --dsn "postgres://postgres@localhost:5432/genesis" \
   --tls-pem-bundle "/run/genesis/tls.bundle.pem" \
-  --vault-url "/run/vault/proxy.sock"
+  --openbao-url "/run/openbao/proxy.sock"
 ```
 
 **3. Native Kubernetes authentication (opt-in)**
 
-`--vault-auth-method` / `GENESIS_VAULT_AUTH_METHOD` defaults to `auto`: sockets use
+`--openbao-auth-method` / `GENESIS_OPENBAO_AUTH_METHOD` defaults to `auto`: sockets use
 Agent and TCP uses AppRole. Explicit `approle` or `kubernetes` requires TCP; failed
 login never falls back. Agent remains recommended when it also renders PKI.
 
-For native login, set `--vault-url https://vault.example:8200 --vault-auth-method kubernetes
---vault-kubernetes-role genesis`. The URL must be a Vault origin without credentials,
+For native login, set `--openbao-url https://openbao.example:8200 --openbao-auth-method kubernetes
+--openbao-kubernetes-role genesis`. The URL must be an OpenBao origin without credentials,
 path, query or fragment. Omit all AppRole role-id, secret-id and wrapped-token settings.
-`--vault-kubernetes-auth-mount` / `GENESIS_VAULT_KUBERNETES_AUTH_MOUNT` defaults to
+`--openbao-kubernetes-auth-mount` / `GENESIS_OPENBAO_KUBERNETES_AUTH_MOUNT` defaults to
 `kubernetes` and accepts a relative mount (including nested mounts), without `/v1/auth/`,
-traversal, query or empty segments. `--vault-kubernetes-role` /
-`GENESIS_VAULT_KUBERNETES_ROLE` is required only in Kubernetes mode.
-`--vault-kubernetes-token-path` / `GENESIS_VAULT_KUBERNETES_TOKEN_PATH` defaults to
+traversal, query or empty segments. `--openbao-kubernetes-role` /
+`GENESIS_OPENBAO_KUBERNETES_ROLE` is required only in Kubernetes mode.
+`--openbao-kubernetes-token-path` / `GENESIS_OPENBAO_KUBERNETES_TOKEN_PATH` defaults to
 `/var/run/secrets/kubernetes.io/serviceaccount/token`; use a read-only audience-scoped
 projected token instead of broad default automount. Kubernetes-only settings are
 rejected in other auth modes.
 
-Each login reads the current JWT file and requires a usable renewable Vault token
+Each login reads the current JWT file and requires a usable renewable OpenBao token
 with a positive lease. The existing renewal worker owns that token; repeated token
 or database renewal failure shuts down fail-closed. A supervisor restart logs in with
 the current projection and reacquires database credentials. This is restart-based
 reauthentication, not seamless hot token replacement. See the
-[Vault native-auth operations notes](../../vault/README.md#native-kubernetes-authentication)
+[OpenBao native-auth operations notes](../../openbao/README.md#native-kubernetes-authentication)
 for role/audience boundaries and reviewer permissions; the application ServiceAccount
 must not receive TokenReview privileges.
 
 
 Startup behavior:
 
-- Logs into Vault via the selected AppRole or Kubernetes method when using TCP mode
-- Fetches DB creds from Vault and injects them into the DSN
+- Logs into OpenBao via the selected AppRole or Kubernetes method when using TCP mode
+- Fetches DB creds from OpenBao and injects them into the DSN
 - Starts the HTTP server
-- Spawns background renew loops for the Vault token (skipped in Agent mode) and the DB lease (all modes)
+- Spawns background renew loops for the OpenBao token (skipped in Agent mode) and the DB lease (all modes)
 
 ### Admission Token Signing
 
 Signing key configuration (required):
 
-- Vault Transit key `genesis-signing` (type `ed25519`) under the `transit/genesis` mount by default.
-- Private keys never leave Vault; `genesis` calls `/v1/transit/genesis/sign/genesis-signing` per token mint (mount configurable).
+- OpenBao Transit key `genesis-signing` (type `ed25519`) under the `transit/genesis` mount by default.
+- Private keys never leave OpenBao; `genesis` calls `/v1/transit/genesis/sign/genesis-signing` per token mint (mount configurable).
 
 Claim defaults (optional):
 
@@ -175,7 +175,7 @@ Claim defaults (optional):
 - `GENESIS_ADMISSION_AUD` (default: `permesi`) — `aud` (“audience”): who the token is intended for (usually the service name); `permesi` must match this.
 - `iat` / `exp` are RFC3339 timestamps in the PASETO payload.
 - `kid` format: PASERK public key ID (`k4.pid...`), embedded in the PASETO footer.
-- `GENESIS_TRANSIT_MOUNT` (default: `transit/genesis`) — Vault Transit mount used for signing/PASERK.
+- `GENESIS_TRANSIT_MOUNT` (default: `transit/genesis`) — OpenBao Transit mount used for signing/PASERK.
 
 ### Header Capture
 
@@ -200,7 +200,7 @@ Load the schema with (only if you did not run `db/sql/00_init.sql`):
 psql "$GENESIS_DSN" -v ON_ERROR_STOP=1 -f db/sql/01_genesis.sql
 ```
 
-Vault-managed DB credentials require bootstrap roles and grants. The canonical SQL for those roles
+OpenBao-managed DB credentials require bootstrap roles and grants. The canonical SQL for those roles
 lives in `db/sql/00_init.sql`; it also applies the Genesis schema and the dev seed client. For
 production, update the passwords and remove the seed include before running it, or apply the
 schema directly as shown above.

@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-vault_client = { workspace = true }
+openbao_client = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 secrecy = { workspace = true }

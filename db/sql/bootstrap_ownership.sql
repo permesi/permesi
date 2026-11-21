@@ -17,8 +17,8 @@ BEGIN
         RAISE EXCEPTION 'Ownership bootstrap requires a dedicated service or maintenance database';
     END IF;
     FOR config IN SELECT * FROM (VALUES
-        ('genesis','vault_genesis','genesis_runtime'),
-        ('permesi','vault_permesi','permesi_runtime')) AS services(database_name,owner_name,runtime_name)
+        ('genesis','openbao_genesis','genesis_runtime'),
+        ('permesi','openbao_permesi','permesi_runtime')) AS services(database_name,owner_name,runtime_name)
         WHERE pg_catalog.current_database() IN ('postgres',database_name)
     LOOP
         service_owner := config.owner_name;
@@ -32,7 +32,7 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE oid=owner_id
             AND (rolsuper OR rolbypassrls OR rolreplication OR rolcreatedb OR NOT rolcanlogin OR NOT rolcreaterole)) THEN
-            RAISE EXCEPTION 'Vault database roles require non-superuser login and CREATEROLE attributes';
+            RAISE EXCEPTION 'OpenBao database roles require non-superuser login and CREATEROLE attributes';
         END IF;
         IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE oid=runtime_id
             AND (rolcanlogin OR rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls))
@@ -42,7 +42,7 @@ BEGIN
         IF EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
             JOIN pg_catalog.pg_roles granted ON granted.oid=m.roleid
             WHERE m.member=owner_id AND m.roleid NOT IN (runtime_id,'pg_signal_backend'::regrole)
-            -- CREATEROLE gives Vault ADMIN-only membership in the safe runtime logins it creates.
+            -- CREATEROLE gives OpenBao ADMIN-only membership in the safe runtime logins it creates.
             AND NOT (m.admin_option AND NOT m.inherit_option AND NOT m.set_option
                 AND EXISTS (SELECT 1 FROM pg_catalog.pg_roles grantor
                     WHERE grantor.oid=m.grantor AND grantor.rolsuper)
@@ -52,7 +52,7 @@ BEGIN
                     WHERE child.member=m.roleid AND child.roleid=runtime_id)
                 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members child
                     WHERE child.member=m.roleid AND child.roleid<>runtime_id))) THEN
-            RAISE EXCEPTION 'Vault database owner has unexpected role memberships';
+            RAISE EXCEPTION 'OpenBao database owner has unexpected role memberships';
         END IF;
     END LOOP;
     -- The maintenance database pass validates roles before granting any authority.

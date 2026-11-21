@@ -1,6 +1,6 @@
 //! TLS configuration shared utilities.
 //!
-//! Loads Vault-issued certificates from disk and builds a rustls server config that
+//! Loads OpenBao-issued certificates from disk and builds a rustls server config that
 //! always enforces HTTPS. The CA bundle is also loaded at startup to fail closed if
 //! runtime trust material is missing. Mixed PEM bundles are parsed in one pass so
 //! certificate order is preserved and multiple private keys are rejected.

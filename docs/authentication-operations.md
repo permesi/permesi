@@ -18,7 +18,7 @@ use the same clap validation. Limits must be 1–1,000,000. Replicas should shar
 OPAQUE subjects are normalized account identifiers, including unknown accounts;
 bound WebAuthn ceremonies use server-resolved users. Anonymous passkey starts use
 the verified transport address, or a shared unknown subject when unavailable.
-Subjects are stored only as domain-separated HMAC-SHA256 tags under a Vault-derived
+Subjects are stored only as domain-separated HMAC-SHA256 tags under an OpenBao-derived
 key, not raw accounts/IPs or enumerable plain hashes. The tag is authenticated
 with sealed state. One subject cannot occupy an entire flow; existing shared IP/
 account request limits also apply. Shared NATs may need a higher explicit budget.
@@ -89,7 +89,7 @@ of 2^48 encryptions per derived key: random-nonce collision probability at that
 volume is approximately 2^-97. Pending row limits do not bound lifetime encryption
 volume; monitor cumulative starts rather than just current pending rows.
 
-Encryption keys currently derive from the long-lived Vault OPAQUE seed. Independent
+Encryption keys currently derive from the long-lived OpenBao OPAQUE seed. Independent
 exchange-key provisioning/rotation is a separate roadmap item. Rotating that root
 also changes permanent OPAQUE setup and needs a deliberate password reenrollment/
 recovery migration; do not rotate it merely to clean up transcripts. Encryption

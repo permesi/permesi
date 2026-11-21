@@ -1,7 +1,7 @@
 //! Shared, encrypted, single-attempt OPAQUE login and reauthentication exchanges.
 //!
 //! Flow Overview: start seals the library's server transcript under a domain-separated
-//! key derived from the Vault OPAQUE seed, then inserts it under a hashed random UUID.
+//! key derived from the OpenBao OPAQUE seed, then inserts it under a hashed random UUID.
 //! Finish atomically deletes the row before verifying the proof. PostgreSQL owns time
 //! and serializes capacity decisions; no exchange cache or replica affinity exists.
 //! AEAD binds identity, password-record revision, purpose, original reauthentication
@@ -123,7 +123,7 @@ impl ExchangeRow {
 }
 
 impl OpaqueState {
-    /// Build deterministic setup for replicas sharing the Vault seed and server ID.
+    /// Build deterministic setup for replicas sharing the OpenBao seed and server ID.
     /// The configured capacity is global across login and reauthentication exchanges.
     #[must_use]
     pub fn from_seed(

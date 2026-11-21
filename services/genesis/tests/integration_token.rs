@@ -1,14 +1,14 @@
 //! Integration tests for the Genesis admission token service.
 //!
 //! This suite verifies the end-to-end flow of the Genesis service by:
-//! 1. Orchestrating transient infrastructure (Postgres and Vault containers).
-//! 2. Provisioning Vault with the required Transit keys and `AppRole` configurations.
+//! 1. Orchestrating transient infrastructure (Postgres and OpenBao containers).
+//! 2. Provisioning OpenBao with the required Transit keys and `AppRole` configurations.
 //! 3. Generating dynamic TLS certificates for the service.
 //! 4. Spawning the actual `genesis` binary as a supervised child process.
 //! 5. Executing real HTTPS requests against the running service.
 //!
 //! The primary goal is to ensure that the binary correctly integrates its
-//! dependencies (DB, Vault, TLS) and adheres to the admission token contract.
+//! dependencies (DB, OpenBao, TLS) and adheres to the admission token contract.
 
 use admission_token::{PaserkKeySet, VerificationOptions, verify_v4_public};
 use anyhow::{Context, Result, bail, ensure};
@@ -25,8 +25,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use test_support::{
-    TestNetwork, genesis as genesis_support, postgres::PostgresContainer, runtime,
-    vault::VaultContainer,
+    TestNetwork, genesis as genesis_support, openbao::OpenBaoContainer,
+    postgres::PostgresContainer, runtime,
 };
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -40,7 +40,7 @@ struct TokenResponse {
 
 struct TestConfig {
     dsn: String,
-    vault_url: String,
+    openbao_url: String,
     role_id: String,
     wrapped_token: String,
     client_id: String,
@@ -49,7 +49,7 @@ struct TestConfig {
 
 struct TestContext {
     postgres: PostgresContainer,
-    vault: VaultContainer,
+    openbao: OpenBaoContainer,
     tls: TestTlsPaths,
     config: TestConfig,
 }
@@ -93,21 +93,22 @@ impl TestContext {
         postgres.wait_until_ready().await?;
         genesis_support::apply_genesis_schema(&postgres).await?;
 
-        let vault = VaultContainer::start(network.name()).await?;
-        let vault_config = genesis_support::configure_genesis_vault(&vault, &postgres).await?;
+        let openbao = OpenBaoContainer::start(network.name()).await?;
+        let openbao_config =
+            genesis_support::configure_genesis_openbao(&openbao, &postgres).await?;
 
         let config = TestConfig {
             dsn: postgres.dsn(),
-            vault_url: vault_config.login_url,
-            role_id: vault_config.role_id,
-            wrapped_token: vault_config.wrapped_secret_id,
+            openbao_url: openbao_config.login_url,
+            role_id: openbao_config.role_id,
+            wrapped_token: openbao_config.wrapped_secret_id,
             client_id: DEFAULT_CLIENT_ID.to_string(),
             port: pick_port()?,
         };
 
         Ok(Self {
             postgres,
-            vault,
+            openbao,
             tls,
             config,
         })
@@ -144,8 +145,8 @@ fn spawn_genesis(config: &TestConfig, tls: &TestTlsPaths) -> Result<ChildGuard> 
         command.env("GENESIS_LOG_LEVEL", "info");
     }
     // Clear conflicting env vars that might leak from the host
-    command.env_remove("GENESIS_VAULT_SECRET_ID");
-    command.env_remove("GENESIS_VAULT_WRAPPED_TOKEN");
+    command.env_remove("GENESIS_OPENBAO_SECRET_ID");
+    command.env_remove("GENESIS_OPENBAO_WRAPPED_TOKEN");
 
     let child = command
         .args([
@@ -155,11 +156,11 @@ fn spawn_genesis(config: &TestConfig, tls: &TestTlsPaths) -> Result<ChildGuard> 
             &config.dsn,
             "--tls-pem-bundle",
             &tls.bundle,
-            "--vault-url",
-            &config.vault_url,
-            "--vault-role-id",
+            "--openbao-url",
+            &config.openbao_url,
+            "--openbao-role-id",
             &config.role_id,
-            "--vault-wrapped-token",
+            "--openbao-wrapped-token",
             &config.wrapped_token,
         ])
         .stdout(Stdio::inherit())
@@ -407,8 +408,8 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_genesis"));
     command.env("GENESIS_LOG_LEVEL", "error");
-    command.env_remove("GENESIS_VAULT_SECRET_ID");
-    command.env_remove("GENESIS_VAULT_WRAPPED_TOKEN");
+    command.env_remove("GENESIS_OPENBAO_SECRET_ID");
+    command.env_remove("GENESIS_OPENBAO_WRAPPED_TOKEN");
 
     let mut child = ChildGuard(
         command
@@ -419,11 +420,11 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
                 &config.dsn,
                 "--tls-pem-bundle",
                 &context.tls.bundle,
-                "--vault-url",
-                &config.vault_url,
-                "--vault-role-id",
+                "--openbao-url",
+                &config.openbao_url,
+                "--openbao-role-id",
                 &config.role_id,
-                "--vault-wrapped-token",
+                "--openbao-wrapped-token",
                 &config.wrapped_token,
             ])
             .stdout(Stdio::null())
@@ -437,7 +438,7 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
     wait_for_healthy(&client, &base).await?;
 
     context
-        .vault
+        .openbao
         .revoke_lease_prefix("database/creds/genesis")
         .await
         .context("Failed to revoke genesis DB lease prefix")?;

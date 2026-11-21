@@ -2,7 +2,7 @@
 //!
 //! This module handles the creation of short-lived admission tokens for clients.
 //! It verifies the client identity in the database, records the request metadata,
-//! and signs the token using Vault Transit.
+//! and signs the token using OpenBao Transit.
 
 use admission_token::AdmissionTokenClaims;
 use axum::{

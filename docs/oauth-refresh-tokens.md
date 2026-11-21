@@ -36,7 +36,7 @@ refresh token retains the original consented family scope set, as
 Omitted scope restores that original set. Scope removal cannot be bypassed by requesting
 a smaller subset of a stale family.
 
-Consumption, successor insertion, Vault RS256 access signing and an immutable hash-only
+Consumption, successor insertion, OpenBao RS256 access signing and an immutable hash-only
 issuance receipt commit together. SQL, signing, cancellation or deadline failures before
 commit leave the original token usable. An uncertain COMMIT or lost response requires
 fresh authorization; there is no retry grace window. Refresh responses omit ID tokens;
@@ -68,7 +68,7 @@ and three-replica validation. Live A/B/C races require one committed issuance an
 reject reuse of the successor on every replica after losing requests revoke its family.
 Owner-authorized cleanup resolves trusted `public` tables before explicitly searching
 `pg_temp`, preventing runtime-created temporary tables and triggers from crossing the
-function-owner boundary. Actual Vault credential tests exercise that rejection on both
+function-owner boundary. Actual OpenBao credential tests exercise that rejection on both
 initial and replacement connections, following PostgreSQL's
 [security-definer search-path guidance](https://www.postgresql.org/docs/current/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY).
 Canonical bootstrap now requires verified non-superuser application ownership and stops
@@ -125,7 +125,7 @@ This implementation does not claim OIDC certification or cross-browser/multi-hos
 
 ## Validation
 
-Run `cargo test --locked -p permesi --lib token::refresh` for real PostgreSQL/Vault HTTP
+Run `cargo test --locked -p permesi --lib token::refresh` for real PostgreSQL/OpenBao HTTP
 regressions. They cover independent replicas, narrowing and scope preservation, replay
 and concurrent family revocation, wrong clients/tenant inputs, current authority and
 ancestor rejection, explicit offline consent despite saved grants, confidential secret

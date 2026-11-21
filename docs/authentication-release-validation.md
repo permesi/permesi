@@ -15,7 +15,7 @@ by `crypto-bigint`; the successful audit below belongs to the earlier batch.
 
 OPAQUE and all four WebAuthn ceremonies use bounded, AEAD-sealed PostgreSQL state,
 hashed external references and atomic single-attempt consumption. Replicas share the
-database, Vault seed and protocol configuration; no sticky session or local challenge
+database, OpenBao seed and protocol configuration; no sticky session or local challenge
 map is needed. WebAuthn binds purpose, relying party/origin, user and original session.
 The current user, session and credential state is locked through authority issuance.
 See [OPAQUE](opaque-exchanges.md) and [WebAuthn](webauthn-exchanges.md) for migration,
@@ -53,7 +53,7 @@ signed JWTs retain their finite lifetime; refresh revocation does not retract th
 Default and all-feature workspace runs pass 642 and 672 tests respectively. Their two
 ignored PostgreSQL browser tests were exercised explicitly through the browser workflow.
 The real dependency runs include PostgreSQL cryptographic/concurrency tests and initial
-and replacement Vault database credentials; unavailable-dependency skips and zero-test
+and replacement OpenBao database credentials; unavailable-dependency skips and zero-test
 filters are not counted as evidence.
 
 | Check | Result |
@@ -66,7 +66,7 @@ filters are not counted as evidence.
 | Scenario process/harness checks | Seven pass |
 | Browser workflow | Console and both actual PostgreSQL/OPAQUE/authorization stages pass |
 | Fresh canonical database bootstrap, verification and reapplication | Pass |
-| Actual Vault initial/replacement runtime-role checks | Pass |
+| Actual OpenBao initial/replacement runtime-role checks | Pass |
 | OpenAPI regeneration, native/WASM builds and Web checks | Pass |
 | `cargo audit --deny unsound --deny yanked`, existing repository policy | Pass; three allowed maintenance warnings |
 
@@ -81,7 +81,7 @@ The pushed OAuth candidate `994adfb` passed every required job in
 coverage, format/check/Clippy, schema, integration/unit tests, musl and frontend builds,
 browser tests, isolated scenarios, integrity checks and `CI OK`. Package publication
 is skipped on `sandbox`. The final Genesis search-path correction has additional local
-Vault and mutation evidence below. Any subsequent push or release promotion must check
+OpenBao and mutation evidence below. Any subsequent push or release promotion must check
 its own exact commit's hosted results; an earlier green run is not evidence for a later
 head. There are no configured local pre-commit or pre-push hooks to run.
 
@@ -106,7 +106,7 @@ The review confirmed a high-severity temporary-object resolution defect in privi
 Permesi cleanup. A sibling Genesis catalog-lookup path had the same defect. Both now
 explicitly search trusted `public` objects before `pg_temp`, preserving PostgreSQL's
 trusted implicit catalog lookup. Harmless temporary-object probes run using actual
-initial and replacement Vault credentials. Each passes with the fix and fails after a
+initial and replacement OpenBao credentials. Each passes with the fix and fails after a
 scratch-only restoration of the old search path. Fresh bootstrap and schema reapplication
 also pass. No retention predicate, token policy or unrelated database privilege was
 relaxed. The corrected review has no unresolved confirmed critical/high finding.
@@ -165,7 +165,7 @@ The independent review evidence above is from Grok and Claude.
 The subsequent [database hardening phase](database-hardening.md) implements
 non-superuser ownership, explicit runtime grants and parent-delete history restrictions.
 Independent Claude/Herdr source-review corrections are applied. The refreshed graph
-passes 655 default/685 all-feature workspace tests, database/Vault and browser checks,
+passes 655 default/685 all-feature workspace tests, database/OpenBao and browser checks,
 all 32 three-replica scenarios and seven harness checks in
 [run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785).
 The separate Rust security audit also passes; rollout details and remaining limits

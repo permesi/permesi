@@ -87,7 +87,7 @@ pub(crate) struct Binding<'a> {
     pub(crate) session: Option<&'a [u8]>,
 }
 
-/// Replicas share the Vault seed and RP configuration; only sealed state resides in SQL.
+/// Replicas share the OpenBao seed and RP configuration; only sealed state resides in SQL.
 pub(crate) struct ExchangeStore {
     pool: PgPool,
     key: SecretBox<[u8; 32]>,

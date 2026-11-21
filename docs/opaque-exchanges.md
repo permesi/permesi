@@ -3,7 +3,7 @@
 Password login and password reauthentication reuse Permesi's existing OPAQUE suite,
 admission verification and session cookies. Start and finish can execute on different
 Permesi replicas behind the same issuer/load balancer. Both use the same PostgreSQL
-writer, Vault `opaque_server_seed` and OPAQUE server identifier. Pending exchanges
+writer, OpenBao `opaque_server_seed` and OPAQUE server identifier. Pending exchanges
 never depend on a process-local map, sticky sessions or a local file. WebAuthn/passkey
 ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges.md).
 
@@ -16,7 +16,7 @@ feature remain unchanged.
 
 Each fresh ceremony uses a CSPRNG seeded from operating-system/browser entropy;
 entropy failure rejects the operation before an exchange is issued. Deterministic
-ChaCha20 setup derivation still uses the existing Vault seed. No credential rewrite
+ChaCha20 setup derivation still uses the existing OpenBao seed. No credential rewrite
 or seed rotation is needed for this dependency migration. RSA verification separately
 retains SHA-2 0.10 under `rsa_sha2` because RSA 0.9 requires its older digest traits.
 
@@ -25,7 +25,7 @@ retains SHA-2 0.10 under `rsa_sha2` because RSA 0.9 requires its older digest tr
 Start validates the existing request and builds the library's credential response.
 It generates a random UUID and stores only its SHA-256 hash in `opaque_exchanges`.
 The serialized server transcript is encrypted with XChaCha20-Poly1305 using a fresh
-192-bit nonce and a domain-separated HMAC-SHA256 key derived from the Vault seed.
+192-bit nonce and a domain-separated HMAC-SHA256 key derived from the OpenBao seed.
 AEAD authenticates the reference hash, purpose, user, registered credential hash,
 original reauthentication session hash, issuance/expiration and configured server ID.
 The raw reference is returned to the client; it and the decrypted transcript are
@@ -95,13 +95,13 @@ Completed exchanges are physically removed because they are transient protocol s
 not tenant resources. New starts prune expired rows, and the existing scheduled/manual
 `cleanup_expired_tokens()` maintenance also removes them. Expiration rejects use even
 before cleanup runs. Ciphertext may remain in backups, WAL or replicas until normal
-retention removes it. Encryption under a long-lived Vault seed does not provide
+retention removes it. Encryption under a long-lived OpenBao seed does not provide
 cryptographic erasure or forward secrecy for archived transcripts after combined
 database/seed compromise. Permesi uses independent random HTTPS session cookies;
 the OPAQUE session key is not used to encrypt those cookies.
 The 192-bit random nonce and v2 key domain now follow the explicit cumulative-volume
 and upgrade policy in [authentication operations](authentication-operations.md).
-Independent Vault exchange-key rotation remains separate from permanent OPAQUE setup.
+Independent OpenBao exchange-key rotation remains separate from permanent OPAQUE setup.
 
 ## Regression checks
 
@@ -137,7 +137,7 @@ They do not claim complete multi-replica passkey/TOTP browser coverage.
 The isolated binary adds `authentication.shared_exchanges` to the full/security suites.
 Run `just oauth-scenario-build`, then
 `target/debug/permesi-oauth-scenario --case authentication.shared_exchanges`.
-It uses real Vault/Genesis/Permesi A/B/C and runtime-role PostgreSQL access: login on
+It uses real OpenBao/Genesis/Permesi A/B/C and runtime-role PostgreSQL access: login on
 A→B, reauthenticate on B→C, and reject replay or another session of the same user
 across all three replicas. No exchange or session is seeded in SQL. The latest
 three-replica execution remains pending in [database hardening](database-hardening.md).

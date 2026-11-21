@@ -4,7 +4,7 @@ This package proves that the real Better Auth TypeScript library (pinned to
 1.7.18) can authenticate an application through Permesi's OIDC provider. It is
 additional interoperability coverage alongside the `openidconnect-rs` standard
 client, driven entirely by `tools/oauth_scenario` on the same disposable
-PostgreSQL/Vault/Permesi/Genesis/Chromium stack. Everything here is test-only:
+PostgreSQL/OpenBao/Permesi/Genesis/Chromium stack. Everything here is test-only:
 no production service, frontend or authentication path imports it, and its npm
 dependencies are devDependencies of this isolated package.
 

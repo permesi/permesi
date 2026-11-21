@@ -83,7 +83,7 @@ impl Journal {
                 run_id: run_id.into(),
                 engine: "local Podman",
                 network: network.into(),
-                containers: ["postgres", "vault", "browser"]
+                containers: ["postgres", "openbao", "browser"]
                     .map(|name| format!("ps-{run_id}-{name}")),
                 private_directory: private.into(),
                 processes: Vec::new(),

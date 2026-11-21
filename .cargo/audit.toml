@@ -8,7 +8,7 @@
 [advisories]
 # Active RSA paths include Permesi OIDC/WebAuthn public-key verification and the
 # scenario runner's openidconnect client. Production private RSA signing stays in
-# Vault; Rust private-key operations are limited to ephemeral test fixtures. The
+# OpenBao; Rust private-key operations are limited to ephemeral test fixtures. The
 # private-key timing advisory remains ignored on this reviewed usage boundary;
 # this does not claim the upstream advisory is fixed.
 ignore = ["RUSTSEC-2023-0071"]

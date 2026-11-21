@@ -4,11 +4,11 @@ genesis:
   if [[ -f {{root}}/.envrc ]]; then
     source {{root}}/.envrc
   fi
-  if ! command -v vault >/dev/null 2>&1; then
-    echo "vault CLI not found; install it or set GENESIS_VAULT_SECRET_ID manually before running." >&2
+  if ! command -v bao >/dev/null 2>&1; then
+    echo "bao CLI not found; install it or set GENESIS_OPENBAO_SECRET_ID manually before running." >&2
     exit 1
   fi
-  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis --features telemetry -- --port 8000 -vvv'
+  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_OPENBAO_SECRET_ID="$(bao write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis --features telemetry -- --port 8000 -vvv'
 
 permesi:
   #!/usr/bin/env zsh
@@ -64,11 +64,11 @@ permesi:
     exit 1
   fi
   fi
-  if ! command -v vault >/dev/null 2>&1; then
-    echo "vault CLI not found; install it or set PERMESI_VAULT_SECRET_ID manually before running." >&2
+  if ! command -v bao >/dev/null 2>&1; then
+    echo "bao CLI not found; install it or set PERMESI_OPENBAO_SECRET_ID manually before running." >&2
     exit 1
   fi
-  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi --features telemetry -- --port 8001 -vvv'
+  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_OPENBAO_SECRET_ID="$(bao write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi --features telemetry -- --port 8001 -vvv'
 
 genesis-socket:
   #!/usr/bin/env zsh
@@ -80,12 +80,12 @@ genesis-socket:
   fi
   # Unset TLS bundle to avoid conflict with --socket-path
   unset GENESIS_TLS_PEM_BUNDLE
-  if ! command -v vault >/dev/null 2>&1; then
-    echo "vault CLI not found; install it or set GENESIS_VAULT_SECRET_ID manually before running." >&2
+  if ! command -v bao >/dev/null 2>&1; then
+    echo "bao CLI not found; install it or set GENESIS_OPENBAO_SECRET_ID manually before running." >&2
     exit 1
   fi
   echo "Starting genesis on socket: {{root}}/.tmp/genesis.sock"
-  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis --features telemetry -- --socket-path {{root}}/.tmp/genesis.sock -vvv'
+  cargo watch -w {{root}}/services/genesis -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export GENESIS_OPENBAO_SECRET_ID="$(bao write -force -field=secret_id auth/approle/role/genesis/secret-id)"; exec cargo run -p genesis --bin genesis --features telemetry -- --socket-path {{root}}/.tmp/genesis.sock -vvv'
 
 permesi-socket:
   #!/usr/bin/env zsh
@@ -108,14 +108,14 @@ permesi-socket:
     https_suffix=":${https_port}"
   fi
   export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost${https_suffix}/paserk.json"
-  # Override CA path to trust mkcert (HAProxy) instead of internal Vault CA
+  # Override CA path to trust mkcert (HAProxy) instead of internal OpenBao CA
   if [[ -f "{{root}}/certs/mkcert-root.pem" ]]; then
     export PERMESI_ADMISSION_PASERK_CA_PATH="{{root}}/certs/mkcert-root.pem"
   fi
 
-  if ! command -v vault >/dev/null 2>&1; then
-    echo "vault CLI not found; install it or set PERMESI_VAULT_SECRET_ID manually before running." >&2
+  if ! command -v bao >/dev/null 2>&1; then
+    echo "bao CLI not found; install it or set PERMESI_OPENBAO_SECRET_ID manually before running." >&2
     exit 1
   fi
   echo "Starting permesi on socket: {{root}}/.tmp/permesi.sock"
-  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_VAULT_SECRET_ID="$(vault write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi --features telemetry -- --socket-path {{root}}/.tmp/permesi.sock -vvv'
+  cargo watch -w {{root}}/services/permesi -w {{root}}/crates/admission_token --use-shell=zsh -- zsh -c 'set -euo pipefail; export PERMESI_OPENBAO_SECRET_ID="$(bao write -force -field=secret_id auth/approle/role/permesi/secret-id)"; exec cargo run -p permesi --bin permesi --features telemetry -- --socket-path {{root}}/.tmp/permesi.sock -vvv'

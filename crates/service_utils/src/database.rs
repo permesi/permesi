@@ -11,8 +11,8 @@
 //! letting requests queue for sqlx's 30-second default, usually behind a proxy
 //! that has already given up on them. Connections are recycled after
 //! `max_lifetime`; recycling more often would not refresh credentials, because
-//! the Vault-issued username and password are fixed in the DSN for the life of
-//! the process (a new lease means a restart), and Vault's revocation statements
+//! the OpenBao-issued username and password are fixed in the DSN for the life of
+//! the process (a new lease means a restart), and OpenBao's revocation statements
 //! already terminate live sessions. `test_before_acquire` replaces connections a
 //! proxy or the database dropped while idle.
 //!
@@ -149,7 +149,7 @@ impl PoolConfig {
 
     /// Connect a pool whose connections report `application_name` to PostgreSQL.
     ///
-    /// Errors never include the DSN, which carries the Vault-issued password.
+    /// Errors never include the DSN, which carries the OpenBao-issued password.
     ///
     /// # Errors
     /// Returns an error if the DSN is malformed or the initial connections fail.

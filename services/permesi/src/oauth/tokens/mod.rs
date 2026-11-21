@@ -2,7 +2,7 @@
 //!
 //! Flow Overview: the HTTP adapter bounds/parses/throttles the request, this service
 //! authenticates its client in an owned PostgreSQL transaction, redeems the exact
-//! S256 code, signs access/optional ID tokens through Vault, records hashes only,
+//! S256 code, signs access/optional ID tokens through OpenBao, records hashes only,
 //! and commits once before exposing tokens. Failures before commit roll back the
 //! code and receipt. An interrupted commit can leave a consumed code without a response;
 //! retries still cannot issue twice. Authentication proofs cannot escape into a different transaction.
@@ -113,7 +113,7 @@ impl TokenConfig {
     }
 }
 
-/// Protocol-only errors; SQL, Vault and supplied authentication values are discarded.
+/// Protocol-only errors; SQL, OpenBao and supplied authentication values are discarded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TokenError {
     InvalidRequest,

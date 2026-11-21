@@ -6,7 +6,7 @@ use crate::api::handlers::auth::{
 };
 use std::{sync::Arc, time::Duration};
 
-/// Exchanges exact OIDC scopes through the normal consent and Vault signing path.
+/// Exchanges exact OIDC scopes through the normal consent and OpenBao signing path.
 async fn oidc_tokens(t: &TokenFixture, scopes: &str) -> Result<Value> {
     let page =
         t.f.start(&[

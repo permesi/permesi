@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use sqlx::{Connection, PgConnection};
 use std::env;
 
+use crate::openbao::{DatabaseConfig, OpenBaoContainer};
 use crate::postgres::PostgresContainer;
-use crate::vault::{DatabaseConfig, VaultContainer};
 
 const APPROLE_MOUNT: &str = "approle";
 const ROLE_NAME: &str = "genesis";
@@ -23,7 +23,7 @@ const GENESIS_SEED_SQL: &str = include_str!(concat!(
 ));
 
 #[derive(Debug)]
-pub struct GenesisVaultConfig {
+pub struct GenesisOpenBaoConfig {
     pub login_url: String,
     pub role_id: String,
     pub secret_id: String,
@@ -46,68 +46,68 @@ pub async fn apply_genesis_schema(postgres: &PostgresContainer) -> Result<()> {
     Ok(())
 }
 
-/// Configure Vault for Genesis (`AppRole`, transit, and database secrets).
+/// Configure OpenBao for Genesis (`AppRole`, transit, and database secrets).
 ///
 /// # Errors
-/// Returns an error if any Vault configuration step fails.
-pub async fn configure_genesis_vault(
-    vault: &VaultContainer,
+/// Returns an error if any OpenBao configuration step fails.
+pub async fn configure_genesis_openbao(
+    openbao: &OpenBaoContainer,
     postgres: &PostgresContainer,
-) -> Result<GenesisVaultConfig> {
+) -> Result<GenesisOpenBaoConfig> {
     let transit_mount =
         env::var("GENESIS_TRANSIT_MOUNT").unwrap_or_else(|_| DEFAULT_TRANSIT_MOUNT.to_string());
     let transit_mount = transit_mount.trim_matches('/').to_string();
 
     let policy = genesis_policy(&transit_mount);
 
-    vault
+    openbao
         .enable_auth(APPROLE_MOUNT, "approle")
         .await
         .context("Failed to enable AppRole auth")?;
-    vault
+    openbao
         .write_policy(POLICY_NAME, &policy)
         .await
         .context("Failed to write Genesis policy")?;
-    vault
+    openbao
         .create_approle(APPROLE_MOUNT, ROLE_NAME, &[POLICY_NAME])
         .await
         .context("Failed to create Genesis AppRole")?;
 
-    let role_id = vault
+    let role_id = openbao
         .read_role_id(APPROLE_MOUNT, ROLE_NAME)
         .await
         .context("Failed to read Genesis role_id")?;
-    let secret_id = vault
+    let secret_id = openbao
         .create_secret_id(APPROLE_MOUNT, ROLE_NAME)
         .await
         .context("Failed to create Genesis secret_id")?;
-    let wrapped_secret_id = vault
+    let wrapped_secret_id = openbao
         .create_wrapped_secret_id(APPROLE_MOUNT, ROLE_NAME, "300s")
         .await
         .context("Failed to create wrapped Genesis secret_id")?;
 
-    vault
+    openbao
         .enable_secrets_engine(&transit_mount, "transit")
         .await
         .with_context(|| format!("Failed to enable transit at {transit_mount}"))?;
-    vault
+    openbao
         .create_transit_key(&transit_mount, TRANSIT_KEY_NAME, "ed25519")
         .await
         .context("Failed to create Genesis transit key")?;
 
-    vault
+    openbao
         .enable_secrets_engine(DATABASE_MOUNT, "database")
         .await
         .context("Failed to enable database engine")?;
 
     let db_config = DatabaseConfig::new(
-        postgres.vault_connection_url(),
+        postgres.openbao_connection_url(),
         postgres.user(),
         postgres.password(),
         vec![ROLE_NAME.to_string()],
     );
 
-    vault
+    openbao
         .configure_database_connection(DATABASE_NAME, &db_config)
         .await
         .context("Failed to configure database connection")?;
@@ -129,7 +129,7 @@ pub async fn configure_genesis_vault(
         r#"DROP OWNED BY "{{name}}";"#.to_string(),
         r#"DROP ROLE IF EXISTS "{{name}}";"#.to_string(),
     ];
-    vault
+    openbao
         .create_database_role_with_revocation(
             ROLE_NAME,
             DATABASE_NAME,
@@ -141,8 +141,8 @@ pub async fn configure_genesis_vault(
         .await
         .context("Failed to create database role")?;
 
-    Ok(GenesisVaultConfig {
-        login_url: vault.login_url(APPROLE_MOUNT),
+    Ok(GenesisOpenBaoConfig {
+        login_url: openbao.login_url(APPROLE_MOUNT),
         role_id,
         secret_id,
         wrapped_secret_id,

@@ -1,7 +1,7 @@
 //! OIDC `UserInfo` disclosure from exact, hash-only access-token issuance receipts.
 //!
 //! Flow Overview: the HTTP adapter accepts a bounded Bearer token in the Authorization
-//! header. SHA-256 of that exact token locates a receipt committed with Vault signing;
+//! header. SHA-256 of that exact token locates a receipt committed with OpenBao signing;
 //! RS256 and every authority claim are then checked against the receipt. Neither an
 //! unverified JWT field nor a fabricated database receipt supplies identity or scope.
 //! Current user, grant, membership,

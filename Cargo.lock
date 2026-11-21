@@ -1868,6 +1868,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jiff 1.0.2",
+ "openbao_client",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1893,7 +1894,6 @@ dependencies = [
  "utoipa",
  "utoipa-axum",
  "uuid",
- "vault_client",
  "wiremock",
 ]
 
@@ -3463,6 +3463,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "openbao_client"
+version = "0.5.2"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "bytes",
+ "ed25519-dalek",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "hyperlocal",
+ "libc",
+ "reqwest",
+ "secrecy",
+ "serde_json",
+ "temp-env",
+ "test_support",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "openidconnect"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3827,6 +3853,7 @@ dependencies = [
  "jiff-sqlx",
  "lettre",
  "opaque-ke",
+ "openbao_client",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -3866,7 +3893,6 @@ dependencies = [
  "utoipa",
  "utoipa-axum",
  "uuid",
- "vault_client",
  "webauthn-rs",
  "webauthn-rs-proto",
  "wiremock",
@@ -5201,6 +5227,7 @@ dependencies = [
  "anyhow",
  "axum",
  "http",
+ "openbao_client",
  "rand 0.10.4",
  "rcgen",
  "reqwest",
@@ -5218,7 +5245,6 @@ dependencies = [
  "ulid",
  "utoipa",
  "uuid",
- "vault_client",
  "wiremock",
 ]
 
@@ -6416,29 +6442,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "vault_client"
-version = "0.5.2"
-dependencies = [
- "anyhow",
- "bytes",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "hyperlocal",
- "libc",
- "reqwest",
- "secrecy",
- "serde_json",
- "temp-env",
- "tokio",
- "tracing",
- "url",
- "uuid",
- "wiremock",
-]
 
 [[package]]
 name = "vcpkg"

@@ -2,7 +2,7 @@
 //!
 //! A service stops for one of two reasons. Either the platform asks it to stop
 //! (SIGTERM from Kubernetes or systemd, SIGINT from a terminal), or it fails
-//! closed because a Vault renewal or database probe sent a [`ShutdownSignal`].
+//! closed because an OpenBao renewal or database probe sent a [`ShutdownSignal`].
 //! Both start the same bounded drain so in-flight requests can finish, but they
 //! end differently: a platform-requested stop is a clean exit, while a
 //! fail-closed stop is reported as an error so the supervisor restarts the
@@ -12,7 +12,7 @@
 //! process immediately: requests in flight are cut off, a Unix socket file is
 //! left behind, and batched telemetry is never flushed.
 
-use crate::vault::renew::ShutdownSignal;
+use crate::openbao::renew::ShutdownSignal;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{error, info};

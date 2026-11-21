@@ -154,7 +154,7 @@ exit 1
         self.assertNotIn("system migrate", calls)
         self.assertIn(f"--url {endpoint} info", calls)
         self.assertIn(f"--url {endpoint} pull docker.io/library/postgres:18", calls)
-        self.assertIn(f"--url {endpoint} pull docker.io/hashicorp/vault:1.17.3", calls)
+        self.assertIn(f"--url {endpoint} pull docker.io/openbao/openbao:2.7.3", calls)
 
     def test_shared_pause_process_failure_does_not_affect_job_engine(self):
         result, exports = self.run_setup({"TEST_FAIL_SHARED": "1"})

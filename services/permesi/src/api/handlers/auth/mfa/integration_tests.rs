@@ -24,7 +24,7 @@ use secrecy::SecretString;
 use serde_json::json;
 use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
 use std::{sync::Arc, time::Duration};
-use test_support::{TestNetwork, postgres::PostgresContainer, runtime, vault::VaultContainer};
+use test_support::{TestNetwork, openbao::OpenBaoContainer, postgres::PostgresContainer, runtime};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -35,7 +35,7 @@ const PERMESI_SCHEMA_SQL: &str = include_str!(concat!(
 
 struct TestContext {
     _postgres: PostgresContainer,
-    _vault: VaultContainer,
+    _openbao: OpenBaoContainer,
     pool: PgPool,
     totp_service: TotpService,
 }
@@ -56,18 +56,18 @@ impl TestContext {
 
         let network = TestNetwork::new("permesi-mfa");
 
-        // Start Vault
-        let vault = VaultContainer::start(network.name()).await?;
-        vault
+        // Start OpenBao
+        let openbao = OpenBaoContainer::start(network.name()).await?;
+        openbao
             .enable_secrets_engine("transit/permesi", "transit")
             .await?;
-        vault
+        openbao
             .create_transit_key("transit/permesi", "totp", "chacha20-poly1305")
             .await?;
 
-        // Vault dev mode already mounts KV v2 at `secret/`, so a nested `secret/permesi`
+        // OpenBao dev mode already mounts KV v2 at `secret/`, so a nested `secret/permesi`
         // mount is rejected; store the config under the existing mount instead.
-        vault
+        openbao
             .write_kv_v2(
                 "secret",
                 "permesi/config",
@@ -90,13 +90,14 @@ impl TestContext {
             .context("failed to connect test pool")?;
 
         // Initialize DEK Manager
-        let vurl = vault.base_url().to_string();
-        let target = vault_client::VaultTarget::parse(&vurl).expect("test vault URL is valid");
-        let transport = vault_client::VaultTransport::from_target("test", target)
+        let vurl = openbao.base_url().to_string();
+        let target =
+            openbao_client::OpenBaoTarget::parse(&vurl).expect("test openbao URL is valid");
+        let transport = openbao_client::OpenBaoTransport::from_target("test", target)
             .expect("test transport built");
         let mut globals = GlobalArgs::new(vurl, transport);
         globals.set_token(SecretString::from("root-token".to_string()));
-        globals.vault_transit_mount = "transit/permesi".to_string();
+        globals.openbao_transit_mount = "transit/permesi".to_string();
 
         let dek_manager = DekManager::new(globals);
 
@@ -107,7 +108,7 @@ impl TestContext {
 
         Ok(Some(Self {
             _postgres: postgres,
-            _vault: vault,
+            _openbao: openbao,
             pool,
             totp_service,
         }))
@@ -239,7 +240,7 @@ async fn unused_recovery_codes(pool: &PgPool, user: Uuid) -> Result<i64> {
     .await?)
 }
 
-/// Uses the real shared limiter while preserving the normal session, factor and Vault dependencies.
+/// Uses the real shared limiter while preserving the normal session, factor and OpenBao dependencies.
 fn limited_auth(limiter: crate::api::handlers::auth::RateLimiter) -> AuthState {
     let base = auth_state();
     AuthState::new(

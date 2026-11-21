@@ -73,7 +73,7 @@ pub const CASES: &[Case] = &[
     },
     Case {
         id: "token.signing_rollback_rotation",
-        description: "Real Vault signing denial rolls back consumption; shared rotation verifies old/new tokens",
+        description: "Real OpenBao signing denial rolls back consumption; shared rotation verifies old/new tokens",
         group: "token",
     },
     Case {
@@ -208,7 +208,7 @@ pub const CASES: &[Case] = &[
     },
     Case {
         id: "interop.signing_key_rotation",
-        description: "Real Vault rotation, cached old keys, unknown-kid refresh and old/new protected-resource access",
+        description: "Real OpenBao rotation, cached old keys, unknown-kid refresh and old/new protected-resource access",
         group: "interop",
     },
     Case {

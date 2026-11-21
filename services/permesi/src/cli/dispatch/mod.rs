@@ -4,17 +4,17 @@
 //! action, such as starting the API server with its full configuration state.
 
 use crate::cli::actions::{Action, server::Args};
-use crate::cli::commands::{admission, auth, database, tls, vault};
+use crate::cli::commands::{admission, auth, database, openbao, tls};
 use anyhow::{Context, Result, anyhow};
 
 #[cfg(test)]
 mod native_tests;
 
-/// Normalize a Vault mount path received from CLI/env.
+/// Normalize an OpenBao mount path received from CLI/env.
 ///
 /// Mounts are stored without leading/trailing slashes and must not be empty
 /// after normalization.
-fn normalize_vault_mount(arg: &str, value: &str) -> Result<String> {
+fn normalize_openbao_mount(arg: &str, value: &str) -> Result<String> {
     let normalized = value.trim_matches('/').to_string();
     if normalized.is_empty() {
         return Err(anyhow!("invalid argument: --{arg} must not be empty"));
@@ -116,79 +116,84 @@ fn pending_state_limit(value: u64) -> Result<usize> {
 
 /// Revalidate auth selection at dispatch; Kubernetes settings never activate fallback.
 /// Auto sockets retain Agent behavior, including ignored legacy `AppRole` arguments.
-pub(crate) fn vault_auth(
+pub(crate) fn openbao_auth(
     matches: &clap::ArgMatches,
-) -> Result<Option<vault_client::kubernetes::KubernetesAuth>> {
+) -> Result<Option<openbao_client::kubernetes::KubernetesAuth>> {
     let url = matches
-        .get_one::<String>("vault-url")
-        .context("missing --vault-url")?;
-    let target = vault_client::VaultTarget::parse(url)?;
+        .get_one::<String>("openbao-url")
+        .context("missing --openbao-url")?;
+    let target = openbao_client::OpenBaoTarget::parse(url)?;
     let method = matches
-        .get_one::<String>("vault-auth-method")
-        .context("missing --vault-auth-method")?;
-    let role_id = matches.get_one::<String>("vault-role-id");
-    let secret_id = matches.get_one::<String>("vault-secret-id");
-    let wrapped = matches.get_one::<String>("vault-wrapped-token");
+        .get_one::<String>("openbao-auth-method")
+        .context("missing --openbao-auth-method")?;
+    let role_id = matches.get_one::<String>("openbao-role-id");
+    let secret_id = matches.get_one::<String>("openbao-secret-id");
+    let wrapped = matches.get_one::<String>("openbao-wrapped-token");
     let mount = matches
-        .get_one::<String>("vault-kubernetes-auth-mount")
+        .get_one::<String>("openbao-kubernetes-auth-mount")
         .context("missing Kubernetes auth mount")?;
-    vault_client::kubernetes::validate_auth_mount(mount).map_err(|e| anyhow!(e))?;
-    let role = matches.get_one::<String>("vault-kubernetes-role");
+    openbao_client::kubernetes::validate_auth_mount(mount).map_err(|e| anyhow!(e))?;
+    let role = matches.get_one::<String>("openbao-kubernetes-role");
     let token_path = matches
-        .get_one::<String>("vault-kubernetes-token-path")
+        .get_one::<String>("openbao-kubernetes-token-path")
         .context("missing Kubernetes token path")?;
     if token_path.trim().is_empty() {
-        return Err(anyhow!("--vault-kubernetes-token-path must not be empty"));
+        return Err(anyhow!("--openbao-kubernetes-token-path must not be empty"));
     }
     if !matches!(method.as_str(), "auto" | "approle" | "kubernetes") {
-        return Err(anyhow!("invalid --vault-auth-method"));
+        return Err(anyhow!("invalid --openbao-auth-method"));
     }
     if method != "auto" && !target.is_tcp() {
         return Err(anyhow!(
-            "explicit --vault-auth-method requires a TCP Vault URL"
+            "explicit --openbao-auth-method requires a TCP OpenBao URL"
         ));
     }
     if method == "kubernetes" {
         if role_id.is_some() || secret_id.is_some() || wrapped.is_some() {
             return Err(anyhow!(
-                "AppRole credentials are forbidden with --vault-auth-method kubernetes"
+                "AppRole credentials are forbidden with --openbao-auth-method kubernetes"
             ));
         }
         let role = role
             .filter(|r| !r.trim().is_empty())
-            .context("--vault-kubernetes-role is required for Kubernetes authentication")?;
-        vault_client::kubernetes::kubernetes_login_url(url, mount)?;
-        return Ok(Some(vault_client::kubernetes::KubernetesAuth {
+            .context("--openbao-kubernetes-role is required for Kubernetes authentication")?;
+        openbao_client::kubernetes::kubernetes_login_url(url, mount)?;
+        return Ok(Some(openbao_client::kubernetes::KubernetesAuth {
             mount: mount.clone(),
             role: role.clone(),
             token_path: token_path.into(),
         }));
     }
     if role.is_some()
-        || ["vault-kubernetes-auth-mount", "vault-kubernetes-token-path"]
-            .iter()
-            .any(|arg| {
-                matches
-                    .value_source(arg)
-                    .is_some_and(|source| source != clap::parser::ValueSource::DefaultValue)
-            })
+        || [
+            "openbao-kubernetes-auth-mount",
+            "openbao-kubernetes-token-path",
+        ]
+        .iter()
+        .any(|arg| {
+            matches
+                .value_source(arg)
+                .is_some_and(|source| source != clap::parser::ValueSource::DefaultValue)
+        })
     {
         return Err(anyhow!(
-            "Kubernetes settings require --vault-auth-method kubernetes"
+            "Kubernetes settings require --openbao-auth-method kubernetes"
         ));
     }
     if target.is_tcp() {
         if role_id.is_none_or(|r| r.trim().is_empty()) {
-            return Err(anyhow!("--vault-role-id is required for AppRole TCP mode"));
+            return Err(anyhow!(
+                "--openbao-role-id is required for AppRole TCP mode"
+            ));
         }
         if secret_id.is_some() && wrapped.is_some() {
             return Err(anyhow!(
-                "--vault-secret-id conflicts with --vault-wrapped-token"
+                "--openbao-secret-id conflicts with --openbao-wrapped-token"
             ));
         }
         if secret_id.or(wrapped).is_none_or(|s| s.trim().is_empty()) {
             return Err(anyhow!(
-                "--vault-secret-id or --vault-wrapped-token is required for AppRole TCP mode"
+                "--openbao-secret-id or --openbao-wrapped-token is required for AppRole TCP mode"
             ));
         }
     }
@@ -206,14 +211,17 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .cloned()
         .context("missing required argument: --dsn")?;
 
-    let vault_kubernetes = vault_auth(matches)?;
+    let openbao_kubernetes = openbao_auth(matches)?;
 
-    let vault_opts = vault::Options::parse(matches)?;
-    let vault_kv_mount = normalize_vault_mount(vault::ARG_VAULT_KV_MOUNT, &vault_opts.kv_mount)?;
-    let vault_transit_mount =
-        normalize_vault_mount(vault::ARG_VAULT_TRANSIT_MOUNT, &vault_opts.transit_mount)?;
-    let vault_target =
-        vault_client::VaultTarget::parse(&vault_opts.url).context("invalid PERMESI_VAULT_URL")?;
+    let openbao_opts = openbao::Options::parse(matches)?;
+    let openbao_kv_mount =
+        normalize_openbao_mount(openbao::ARG_OPENBAO_KV_MOUNT, &openbao_opts.kv_mount)?;
+    let openbao_transit_mount = normalize_openbao_mount(
+        openbao::ARG_OPENBAO_TRANSIT_MOUNT,
+        &openbao_opts.transit_mount,
+    )?;
+    let openbao_target = openbao_client::OpenBaoTarget::parse(&openbao_opts.url)
+        .context("invalid PERMESI_OPENBAO_URL")?;
 
     let admission_opts = admission::Options::parse(matches)?;
     let auth_opts = auth::Options::parse(matches)?;
@@ -262,12 +270,12 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         db_pool,
         oauth,
         tenant_mutations,
-        vault_url: vault_opts.url,
-        vault_target,
-        vault_kubernetes,
-        vault_role_id: vault_opts.role_id,
-        vault_secret_id: vault_opts.secret_id,
-        vault_wrapped_token: vault_opts.wrapped_token,
+        openbao_url: openbao_opts.url,
+        openbao_target,
+        openbao_kubernetes,
+        openbao_role_id: openbao_opts.role_id,
+        openbao_secret_id: openbao_opts.secret_id,
+        openbao_wrapped_token: openbao_opts.wrapped_token,
         admission_paserk_url: admission_opts.url,
         admission_issuer: admission_opts.issuer,
         admission_audience: admission_opts.audience,
@@ -297,9 +305,9 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         auth_rate_limit_account_attempts,
         platform_admin_ttl_seconds: auth_opts.admin.ttl_seconds,
         platform_recent_auth_seconds: auth_opts.admin.recent_auth_seconds,
-        vault_kv_mount,
-        vault_kv_path: vault_opts.kv_path,
-        vault_transit_mount,
+        openbao_kv_mount,
+        openbao_kv_path: openbao_opts.kv_path,
+        openbao_transit_mount,
     }))
 }
 
@@ -317,11 +325,11 @@ mod tests {
             "https://url",
             "--tls-pem-bundle",
             "bundle",
-            "--vault-url",
-            "http://vault:8200",
-            "--vault-role-id",
+            "--openbao-url",
+            "http://openbao:8200",
+            "--openbao-role-id",
             "role",
-            "--vault-secret-id",
+            "--openbao-secret-id",
             "secret",
         ];
         for value in ["0", "21"] {
@@ -364,11 +372,11 @@ mod tests {
                     "https://url",
                     "--tls-pem-bundle",
                     "bundle",
-                    "--vault-url",
-                    "http://vault:8200",
-                    "--vault-role-id",
+                    "--openbao-url",
+                    "http://openbao:8200",
+                    "--openbao-role-id",
                     "role",
-                    "--vault-secret-id",
+                    "--openbao-secret-id",
                     "secret",
                 ];
                 for (lock, total) in [
@@ -446,11 +454,11 @@ mod tests {
                     Some("postgres://user@localhost:5432/permesi"),
                 ),
                 (
-                    "PERMESI_VAULT_URL",
+                    "PERMESI_OPENBAO_URL",
                     Some("http://127.0.0.1:8200/v1/auth/approle/login"),
                 ),
-                ("PERMESI_VAULT_ROLE_ID", Some("role-id")),
-                ("PERMESI_VAULT_SECRET_ID", Some("secret-id")),
+                ("PERMESI_OPENBAO_ROLE_ID", Some("role-id")),
+                ("PERMESI_OPENBAO_SECRET_ID", Some("secret-id")),
             ],
             || {
                 let command = crate::cli::commands::new();
@@ -468,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_mounts_are_normalized_in_dispatch() {
+    fn openbao_mounts_are_normalized_in_dispatch() {
         let command = crate::cli::commands::new();
         let matches = command.get_matches_from(vec![
             "permesi",
@@ -478,23 +486,23 @@ mod tests {
             "https://url",
             "--tls-pem-bundle",
             "bundle",
-            "--vault-url",
-            "http://vault:8200",
-            "--vault-role-id",
+            "--openbao-url",
+            "http://openbao:8200",
+            "--openbao-role-id",
             "role",
-            "--vault-secret-id",
+            "--openbao-secret-id",
             "secret",
-            "--vault-kv-mount",
+            "--openbao-kv-mount",
             "/secret/permesi/",
-            "--vault-transit-mount",
+            "--openbao-transit-mount",
             "/transit/permesi/",
         ]);
 
         let action = handler(&matches);
         assert!(action.is_ok(), "dispatch should succeed");
         if let Ok(Action::Server(args)) = action {
-            assert_eq!(args.vault_kv_mount, "secret/permesi");
-            assert_eq!(args.vault_transit_mount, "transit/permesi");
+            assert_eq!(args.openbao_kv_mount, "secret/permesi");
+            assert_eq!(args.openbao_transit_mount, "transit/permesi");
         }
     }
 
@@ -509,20 +517,20 @@ mod tests {
             "https://url",
             "--tls-pem-bundle",
             "bundle",
-            "--vault-url",
-            "http://vault:8200",
-            "--vault-role-id",
+            "--openbao-url",
+            "http://openbao:8200",
+            "--openbao-role-id",
             "role",
-            "--vault-secret-id",
+            "--openbao-secret-id",
             "secret",
-            "--vault-transit-mount",
+            "--openbao-transit-mount",
             "///",
         ]);
 
         let result = handler(&matches);
         assert!(result.is_err(), "expected validation error");
         if let Err(err) = result {
-            assert!(err.to_string().contains("--vault-transit-mount"));
+            assert!(err.to_string().contains("--openbao-transit-mount"));
         }
     }
 }

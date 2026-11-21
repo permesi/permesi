@@ -1,0 +1,333 @@
+# Permesi OpenBao Configuration with Terraform
+
+This Terraform module provides a production-ready configuration for OpenBao to support the Permesi and Genesis services.
+
+## Features
+
+- **AppRole**: Configures roles for both `permesi` and `genesis`.
+- **Transit**: Sets up the TOTP protection key (`totp`) and admission token signing key (`genesis-signing`).
+- **KV Store**: Generates and stores the persistent OPAQUE seed and MFA recovery pepper under `secret/permesi/config`.
+- **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the OpenBao root database credentials.
+- **Policies**: Implements least-privilege policies for services and operators.
+- **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for OpenBao Agent-based certificate delivery.
+
+Terraform state is sensitive in this module. It can contain values such as the Postgres root passwords and the generated OPAQUE seed. Use an encrypted remote backend (or tightly lock down local state files), and never commit `.tfstate` files or variable files containing secrets.
+
+## Usage
+
+1. **Set OpenBao Authentication**:
+   ```bash
+   export VAULT_ADDR="https://your-openbao:8200"
+   export VAULT_TOKEN="your-root-token"
+   ```
+
+   This module uses the API-compatible `hashicorp/vault` provider, which keeps its `vault_*` resource names and reads `VAULT_ADDR`/`VAULT_TOKEN` rather than the `BAO_*` variables of the `bao` CLI. Use a real TLS certificate and keep TLS verification enabled. For private PKI, set `VAULT_CACERT` (or `VAULT_CAPATH`) instead of disabling verification.
+
+2. **Configure Variables**:
+   You can provide required variables in two ways:
+
+   This module is security-sensitive. In production, keep OpenBao TLS verification enabled, use Postgres TLS (`database_sslmode = "verify-full"` or `"verify-ca"`) and ensure OpenBao trusts the database CA. For service authentication, AppRole SecretIDs are single-use with a 1-hour TTL (`secret_id_num_uses = 1`, `secret_id_ttl = 3600` in `approle.tf`), so ensure your automation can mint fresh SecretIDs (or tune `approle.tf` to match your rotation process).
+
+   For PKI, set the issuing/CRL URLs to routable endpoints served by OpenBao. The defaults in `variables.tf` and `terraform.tfvars.example` are placeholders (`*.example.invalid`) and must be overridden for real deployments. The PKI hierarchy uses ECDSA P-256 by default to keep interoperability strong with HAProxy and Cloudflare. If you want to move to Ed25519 later, update the PKI key parameters in `openbao/contrib/terraform/pki.tf` only after confirming downstream compatibility.
+
+   For the database secrets engine, OpenBao needs a dedicated Postgres "root" user per connection. Those users should be non-superuser roles with `LOGIN` + `CREATEROLE`, be able to terminate sessions during revocation (`pg_signal_backend`), and own the target database objects they grant privileges on. Local dev uses `db/sql/00_init.sql` to create `openbao_permesi` and `openbao_genesis` with these properties. The file ships with a `change-me` placeholder password; for production, edit it (or use it as a template) to set strong, unique passwords before running it as a superuser.
+
+   This module uses a "runtime role" pattern: OpenBao-minted login roles only receive membership in a NOLOGIN role (`permesi_runtime` / `genesis_runtime`) which holds the database/schema/table grants. This keeps privileges centralized (one place to audit/change) and avoids short-lived users owning persistent database objects. Ensure the OpenBao root users can `GRANT` those runtime roles (by owning them or via `WITH ADMIN OPTION`).
+
+   **Option A: Environment Variables**
+   Prefix any variable name with `TF_VAR_`:
+   ```bash
+   export TF_VAR_database_host="db.internal"
+   export TF_VAR_permesi_database_username="openbao_permesi"
+   export TF_VAR_permesi_database_password="change-me"
+   export TF_VAR_genesis_database_username="openbao_genesis"
+   export TF_VAR_genesis_database_password="change-me"
+   ```
+
+   **Option B: `terraform.tfvars` file**
+   Create a file named `terraform.tfvars` (this file is ignored by git):
+   ```hcl
+   database_host     = "localhost"
+   permesi_database_username = "openbao_permesi"
+   permesi_database_password = "change-me"
+   genesis_database_username = "openbao_genesis"
+   genesis_database_password = "change-me"
+   # Local/dev only; for production use "verify-full" (or at least "verify-ca").
+   database_sslmode  = "disable"
+   pki_root_issuing_certificates_url = "https://openbao.example.invalid/v1/pki-root/ca"
+   pki_root_crl_distribution_points_url = "https://openbao.example.invalid/v1/pki-root/crl"
+   pki_int_issuing_certificates_url = "https://openbao.example.invalid/v1/pki-int/ca"
+   pki_int_crl_distribution_points_url = "https://openbao.example.invalid/v1/pki-int/crl"
+   ```
+
+3. **Initialize and Apply**:
+   ```bash
+   terraform init
+   terraform apply
+   ```
+
+4. **OpenBao audit device**:
+   OpenBao does not allow audit devices to be enabled through the API, so this module does not
+   manage one. Declare it in the server configuration instead (see `openbao/audit.hcl` for the
+   development example) and make sure the OpenBao service user can write to the log path.
+
+
+## Post-Deployment
+
+### 1. Retrieve Service Credentials
+Terraform outputs the `RoleID` for both services. To complete the configuration, generate a `SecretID` for each role.
+
+For production, prefer response-wrapped SecretIDs (short-lived wrapping tokens) so you never have to handle the raw SecretID in logs or shells:
+
+```bash
+# Get permesi RoleID (or check terraform output)
+bao read auth/approle/role/permesi/role-id
+
+# Generate permesi SecretID as a wrapped token (recommended)
+bao write -wrap-ttl=10m -f auth/approle/role/permesi/secret-id -field=wrapping_token
+
+# Repeat for genesis
+bao write -wrap-ttl=10m -f auth/approle/role/genesis/secret-id -field=wrapping_token
+```
+
+### 2. Generate Platform Operator Token
+To perform the initial "Admin Claim" in the Permesi web console, you need a token with the `permesi-operators` policy:
+
+```bash
+bao token create -policy=permesi-operators -period=2h -field=token
+```
+
+### 3. Verification
+You can verify the configuration via the OpenBao CLI:
+```bash
+# Check Transit keys
+bao read transit/permesi/keys/totp
+bao read transit/genesis/keys/genesis-signing
+
+# Check OPAQUE seed
+bao kv get secret/permesi/config
+```
+
+The former `transit/permesi/keys/users` key belonged to the retired reversible
+password flow. The Permesi application policy no longer permits access to that
+key, and Terraform deliberately leaves deletion as a separate operator action:
+an ordinary configuration apply must not make old backups or rollback data
+irreversibly unreadable.
+
+Once every active deployment runs the OPAQUE-only authentication code, no
+legacy credential migration is required, and the backup-retention decision has
+been approved, permanently retire the key with an authorized operator token:
+
+```bash
+bao write transit/permesi/keys/users/config deletion_allowed=true
+bao delete transit/permesi/keys/users
+```
+
+Verify deletion with `bao read transit/permesi/keys/users`; it must return a
+not-found response. Transit key deletion cannot be reversed. Database backups
+that contain old ciphertext cease to expose a recoverable credential after the
+key is deleted, but they also cannot be used to restore the retired login flow.
+There is no in-application ciphertext-to-OPAQUE migration path: the original
+OPAQUE schema transition re-created the user table, and current releases cannot
+authenticate or migrate a legacy encrypted credential. Any required account
+transition must therefore be completed through a separately reviewed reset or
+re-enrollment process before deleting the key.
+
+### 4. PKI Bootstrap and OpenBao Agent cert auth
+The PKI hierarchy provides short-lived runtime roles (`permesi-runtime`, `genesis-runtime`) and longer-lived bootstrap roles (`permesi-bootstrap`, `genesis-bootstrap`) intended only for OpenBao Agent cert-auth onboarding. Bootstrap certificates should be rotated on a slower cadence and never used directly for service TLS. OpenBao must be configured to accept cert-auth logins and trust the issuing chain used by the bootstrap certificates.
+
+OpenBao Agent renders templates when the underlying secret changes. For PKI templates, that means the first render issues a certificate, and subsequent renders happen when the agent renews and re-issues the certificate before the TTL expires. Keep the agent running continuously so it can renew its auth token and rotate certificates on schedule.
+If the agent is stopped long enough for the cert-auth token and runtime certificates to expire, it
+cannot re-issue certs until restarted with valid bootstrap certificates.
+
+Example bootstrap issuance (run with an operator token):
+```bash
+bao write pki-int/issue/permesi-bootstrap \
+  common_name="api.permesi.localhost" \
+  ttl=168h --format=json
+
+
+bao write pki-int/issue/genesis-bootstrap \
+  common_name="genesis.permesi.localhost" \
+  ttl=168h --format=json
+```
+
+Minimal OpenBao Agent configs (one per service) to authenticate via cert auth and render runtime TLS certificates. Update paths and OpenBao address to match your host layout. Run the agent as a long-lived service (for example, `bao agent -config=/etc/openbao/agent.hcl`) so it can renew tokens and rotate certificates before TTLs expire.
+
+`permesi`:
+```hcl
+# OpenBao Agent keeps the upstream stanza name for the server connection.
+vault {
+  address = "https://openbao.example.invalid:8200"
+  ca_cert = "/etc/permesi/bootstrap/ca_cert.pem"
+  client_cert = "/etc/permesi/bootstrap/cert_file.pem"
+  client_key  = "/etc/permesi/bootstrap/key_file.pem"
+}
+
+auto_auth {
+  method "cert" {
+    mount_path = "auth/cert"
+    config = {
+      name        = "permesi-agent"
+      ca_cert     = "/etc/permesi/bootstrap/ca_cert.pem"
+      client_cert = "/etc/permesi/bootstrap/cert_file.pem"
+      client_key  = "/etc/permesi/bootstrap/key_file.pem"
+      reload      = "true"
+    }
+  }
+}
+
+api_proxy {
+  use_auto_auth_token = true
+}
+
+listener "unix" {
+  address      = "/run/permesi/agent.sock"
+  # Note: set to 0666 to allow container users to connect to the socket.
+  # Restrict access at the directory level (/run/permesi) on the host.
+  socket_mode  = "0666"
+  socket_user  = "permesi"
+  socket_group = "permesi"
+
+  tls_disable = true
+}
+
+cache {}
+
+template {
+  destination = "/run/permesi/tls.bundle.pem"
+  # Note: set to 0640 or 0600 to protect the private key.
+  perms = "0640"
+  contents = <<EOH
+{{- with secret "pki-int/issue/permesi-runtime" "ttl=24h" "common_name=api.permesi.dev" "alt_names=api.permesi.dev" -}}
+{{ .Data.private_key }}
+{{ .Data.certificate }}
+{{- range .Data.ca_chain }}
+{{ . }}
+{{- end }}
+{{- end -}}
+EOH
+}
+```
+
+`genesis`:
+```hcl
+# OpenBao Agent keeps the upstream stanza name for the server connection.
+vault {
+  address = "https://openbao.example.invalid:8200"
+  ca_cert = "/etc/genesis/bootstrap/ca_cert.pem"
+  client_cert = "/etc/genesis/bootstrap/cert_file.pem"
+  client_key  = "/etc/genesis/bootstrap/key_file.pem"
+}
+
+auto_auth {
+  method "cert" {
+    mount_path = "auth/cert"
+    config = {
+      name        = "genesis-agent"
+      ca_cert     = "/etc/genesis/bootstrap/ca_cert.pem"
+      client_cert = "/etc/genesis/bootstrap/cert_file.pem"
+      client_key  = "/etc/genesis/bootstrap/key_file.pem"
+      reload      = "true"
+    }
+  }
+
+  sink "file" {
+    config = { path = "/run/genesis/openbao-token" }
+  }
+}
+
+api_proxy {
+  use_auto_auth_token = true
+}
+
+listener "unix" {
+  address      = "/run/genesis/agent.sock"
+  # Note: set to 0666 to allow container users to connect to the socket.
+  # Restrict access at the directory level (/run/genesis) on the host.
+  socket_mode  = "0666"
+  socket_user  = "genesis"
+  socket_group = "genesis"
+
+  tls_disable = true
+}
+
+cache {}
+
+template {
+  destination = "/run/genesis/tls.bundle.pem"
+  perms = "0640"
+  contents = <<EOH
+{{- with secret "pki-int/issue/genesis-runtime" "ttl=24h" "common_name=genesis.permesi.dev" "alt_names=genesis.permesi.dev" -}}
+{{ .Data.private_key }}
+{{ .Data.certificate }}
+{{- range .Data.ca_chain }}
+{{ . }}
+{{- end }}
+{{- end -}}
+EOH
+}
+```
+
+Example systemd units (one per service; adjust paths and domains as needed):
+
+```ini
+[Unit]
+Description=OpenBao Agent (Permesi)
+After=network.target
+Wants=network.target
+
+[Service]
+User=openbao
+Group=openbao
+ExecStart=/usr/bin/bao agent -config=/etc/openbao/permesi.hcl
+Restart=always
+RestartSec=2s
+RuntimeDirectory=permesi
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+[Unit]
+Description=OpenBao Agent (Genesis)
+After=network.target
+Wants=network.target
+
+[Service]
+User=openbao
+Group=openbao
+ExecStart=/usr/bin/bao agent -config=/etc/openbao/genesis.hcl
+Restart=always
+RestartSec=2s
+RuntimeDirectory=genesis
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
+```
+
+For reboot safety, keep the bootstrap cert/key on persistent disk and rotate them before expiration at the same paths referenced by `client_cert` and `client_key` in the agent config. `reload = "true"` allows OpenBao Agent to pick up refreshed files, and `Restart=always` helps it recover after host restarts, but an expired bootstrap certificate will still block `auth/cert/login` until a valid replacement is written.
+
+In practice, automate bootstrap re-issuance (for example with a systemd timer), atomically replace the bootstrap files, and restart or reload the OpenBao Agent. This prevents outages when a VM reboots after the previous bootstrap certificate has expired.
+
+## Tests
+Terraform tests in `openbao/contrib/terraform/tests` validate the PKI and cert-auth wiring at plan time. Run them from this directory with:
+```bash
+terraform init
+terraform test
+```
+
+### OIDC public signing-key lifecycle
+
+The Permesi transit mount also owns a separate nonexportable RSA-2048 `oidc-signing`
+key, automatically rotated every 30 days with deletion disabled. The Permesi runtime
+policy reads public key metadata and signs through the specific transit signing path;
+export/rotation/retirement remain operator-only. Operators retain
+old versions for verification and must account for configured token lifetimes, downstream
+caches and rollback before trimming. The binary uses explicit issuer/audience settings
+and reads retained public versions through a bounded single-flight JWKS response cache.
+Exchanges select the current shared version explicitly and verify its signature; unknown-kid clients can force a rate-limited JWKS refresh. A different runtime
+key/mount requires matching provisioning and policy changes. Deploying token exchange requires applying the signing policy update through the normal operator workflow. Repository tests provision fresh stacks and never apply infrastructure changes.

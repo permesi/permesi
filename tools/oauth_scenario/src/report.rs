@@ -37,7 +37,7 @@ pub struct Components {
     pub genesis_commit: String,
     pub web_sha256: String,
     pub postgres_image: String,
-    pub vault_image: String,
+    pub openbao_image: String,
     pub browser_image: String,
 }
 

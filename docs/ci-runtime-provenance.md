@@ -8,15 +8,15 @@ default/all-feature suites and both three/five-replica gates remain unchanged.
 ## Fixture measurement
 
 Run `just test-fixture-profile` for three rounds of four independent PostgreSQL 18
-and Vault 1.17.3 pairs, matching CI's four concurrent-test limit. An optional round
+and OpenBao 1.17.3 pairs, matching CI's four concurrent-test limit. An optional round
 count from one to ten changes the sample count: `just test-fixture-profile 5`.
 Each pair measures container start/port discovery, PostgreSQL TCP readiness,
-canonical SQL bootstrap, Vault auth/transit setup and explicit removal separately.
+canonical SQL bootstrap, OpenBao auth/transit setup and explicit removal separately.
 The JSON on stdout records milliseconds and fixed phase names; build output goes
 to stderr. Initialization failure, setup failure or unsuccessful removal returns
 nonzero. An incomplete run never produces a successful profile. Images should be
 present before timing; engine initialization is outside the measured interval.
-This representative workload does not measure every test's Vault configuration,
+This representative workload does not measure every test's OpenBao configuration,
 OPAQUE work, deliberate lock waits or service startup.
 
 On the local Linux/Podman host, 12 fresh pairs took 12,715 ms before the change and
@@ -24,7 +24,7 @@ On the local Linux/Podman host, 12 fresh pairs took 12,715 ms before the change 
 3,922 to 3,025 ms. Both helpers previously slept 500 ms unconditionally after their
 container readiness condition, before even querying published ports. They now
 query immediately and retain all 60 bounded mapping attempts, backoff, PostgreSQL
-TCP readiness/startup permits and Vault HTTP-health checks. The database often
+TCP readiness/startup permits and OpenBao HTTP-health checks. The database often
 still needs a short TCP wait after its log readiness. A subsequent run under
 concurrent test load took 10,927 ms. These are local fixture observations, not a
 claim of a 22% reduction in the entire hosted pipeline.

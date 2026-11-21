@@ -2,7 +2,7 @@
 //!
 //! Flow Overview: retain each child before publishing its PID/birth ticks, verify
 //! every private socket, then stop or restart only explicitly selected owned children.
-//! TLS, issuer, PostgreSQL and Vault inputs remain identical across restarts. Secrets
+//! TLS, issuer, PostgreSQL and OpenBao inputs remain identical across restarts. Secrets
 //! stay in memory and child environments, never command output or recovery journals.
 
 use crate::{
@@ -203,8 +203,8 @@ impl Services {
                     socket.display().to_string(),
                     "--dsn".into(),
                     infra.permesi_dsn.clone(),
-                    "--vault-url".into(),
-                    infra.vault_url.clone(),
+                    "--openbao-url".into(),
+                    infra.openbao_url.clone(),
                     "--oidc-issuer".into(),
                     origin.into(),
                     "--oauth-audience".into(),
@@ -239,12 +239,12 @@ impl Services {
                 topology.genesis.display().to_string(),
                 "--dsn".into(),
                 infra.genesis_dsn.clone(),
-                "--vault-url".into(),
-                infra.vault_url.clone(),
+                "--openbao-url".into(),
+                infra.openbao_url.clone(),
             ],
             &[
-                ("GENESIS_VAULT_ROLE_ID", &infra.genesis_role.role),
-                ("GENESIS_VAULT_SECRET_ID", &infra.genesis_role.secret),
+                ("GENESIS_OPENBAO_ROLE_ID", &infra.genesis_role.role),
+                ("GENESIS_OPENBAO_SECRET_ID", &infra.genesis_role.secret),
             ],
         )?);
         self.record()?;
@@ -260,9 +260,9 @@ impl Services {
                 .clone(),
         );
         args.extend([
-            "--vault-role-id".to_owned(),
+            "--openbao-role-id".to_owned(),
             infra.permesi_role.role.clone(),
-            "--vault-secret-id".to_owned(),
+            "--openbao-secret-id".to_owned(),
             infra.permesi_role.secret.clone(),
         ]);
         let matches = permesi::cli::commands::new()
@@ -290,8 +290,8 @@ impl Services {
             &launch.binary,
             &replica.arguments,
             &[
-                ("PERMESI_VAULT_ROLE_ID", launch.role.expose_secret()),
-                ("PERMESI_VAULT_SECRET_ID", launch.secret.expose_secret()),
+                ("PERMESI_OPENBAO_ROLE_ID", launch.role.expose_secret()),
+                ("PERMESI_OPENBAO_SECRET_ID", launch.secret.expose_secret()),
             ],
         )?);
         self.record()

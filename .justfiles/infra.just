@@ -75,7 +75,7 @@ db-verify:
     echo "postgres-permesi is not running. Run: just postgres" >&2
     exit 1
   fi
-  podman exec -i postgres-permesi psql -U vault_permesi -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
+  podman exec -i postgres-permesi psql -U openbao_permesi -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 
 db-bootstrap:
   #!/usr/bin/env zsh
@@ -209,13 +209,13 @@ dev-tls-certs:
     echo "jq not found; install it first." >&2
     exit 1
   fi
-  keys="{{root}}/vault/keys.json"
+  keys="{{root}}/openbao/keys.json"
   if [[ ! -f "$keys" ]]; then
-    echo "Missing ${keys}. Run: just vault-init" >&2
+    echo "Missing ${keys}. Run: just openbao-init" >&2
     exit 1
   fi
-  if [[ -z "$(podman ps -q --filter 'name=^{{vault_ctr}}$')" ]]; then
-    echo "Vault container not running. Run: just vault-persist-ready" >&2
+  if [[ -z "$(podman ps -q --filter 'name=^{{openbao_ctr}}$')" ]]; then
+    echo "OpenBao container not running. Run: just openbao-persist-ready" >&2
     exit 1
   fi
   certs_dir="{{root}}/certs"
@@ -227,7 +227,7 @@ dev-tls-certs:
     chmod_bin="chmod"
   fi
   root_token="$(jq -r '.root_token' "$keys")"
-  vault_addr="http://127.0.0.1:8200"
+  openbao_addr="http://127.0.0.1:8200"
 
   ensure_dir() {
     local dir="$1"
@@ -257,8 +257,8 @@ dev-tls-certs:
     ensure_dir "$out_dir"
 
     cert_json="$(
-      podman exec -e VAULT_ADDR="$vault_addr" -e VAULT_TOKEN="$root_token" \
-        {{vault_ctr}} vault write -format=json "pki-int/issue/${service}-runtime" \
+      podman exec -e BAO_ADDR="$openbao_addr" -e BAO_TOKEN="$root_token" \
+        {{openbao_ctr}} bao write -format=json "pki-int/issue/${service}-runtime" \
         "common_name=${common_name}" \
         "alt_names=${alt_names}" \
         "ttl=24h"
@@ -774,11 +774,11 @@ logs service="":
 _warn-exposed:
   #!/usr/bin/env zsh
   if [[ "{{bind_addr}}" == "0.0.0.0" ]]; then
-    echo "⚠️  PERMESI_BIND_ADDR=0.0.0.0: Postgres (trust auth, no password) and Vault" >&2
-    echo "   (root token in vault/keys.json) are reachable from the network." >&2
+    echo "⚠️  PERMESI_BIND_ADDR=0.0.0.0: Postgres (trust auth, no password) and OpenBao" >&2
+    echo "   (root token in openbao/keys.json) are reachable from the network." >&2
   fi
 
-dev-start-infra: _warn-exposed setup-network postgres vault-persist-ready dev-tls-certs jaeger haproxy-start
+dev-start-infra: _warn-exposed setup-network postgres openbao-persist-ready dev-tls-certs jaeger haproxy-start
 
 # Stop the containers and service processes, then close the dev session. The session
 # closes last so `just stop` typed in its spare shell still finishes the cleanup.
@@ -790,7 +790,7 @@ stop: dev-stop mux-stop
 # working directory is inside this repository; matching by name or port alone would
 # kill another project's cargo-watch or port-8000 server.
 [doc("Stop the dev containers and this checkout's leftover dev processes")]
-dev-stop: vault-stop postgres-stop jaeger-stop haproxy-stop test-clean
+dev-stop: openbao-stop postgres-stop jaeger-stop haproxy-stop test-clean
   #!/usr/bin/env zsh
   set -uo pipefail
   root="{{root}}"
@@ -877,7 +877,7 @@ alias tmux-stop := mux-stop
 reset: stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  just vault-reset
+  just openbao-reset
   rm -rf {{root}}/db/data {{root}}/db/log
   rm -rf {{root}}/config/haproxy/certs
 
@@ -885,14 +885,14 @@ reset: stop
 operator-token:
     #!/usr/bin/env zsh
     set -euo pipefail
-    keys="{{root}}/vault/keys.json"
+    keys="{{root}}/openbao/keys.json"
     if [[ ! -f "$keys" ]]; then
-        echo "❌ Vault keys not found. Is Vault initialized? Run: just vault-init" >&2
+        echo "❌ OpenBao keys not found. Is OpenBao initialized? Run: just openbao-init" >&2
         exit 1
     fi
     root_token=$(jq -r '.root_token' "$keys")
-    podman exec -e VAULT_TOKEN="$root_token" -e VAULT_ADDR="http://127.0.0.1:8200" \
-        {{vault_ctr}} vault token create -policy=permesi-operators -period=24h -field=token
+    podman exec -e BAO_TOKEN="$root_token" -e BAO_ADDR="http://127.0.0.1:8200" \
+        {{openbao_ctr}} bao token create -policy=permesi-operators -period=24h -field=token
 
 podman-check:
   #!/usr/bin/env zsh
@@ -918,7 +918,7 @@ podman-check:
 # prints one line per check (✓ ok, ! warning, ✗ problem, each with a hint) and exits
 # 1 when a required check fails. It is not a dependency of `start`, so startup stays
 # fast; run it on a new laptop or VM and whenever `just start` misbehaves.
-[doc("Check tools, multiplexer, ports, network and Vault state before just start")]
+[doc("Check tools, multiplexer, ports, network and OpenBao state before just start")]
 doctor:
   #!/usr/bin/env zsh
   set -uo pipefail
@@ -936,7 +936,7 @@ doctor:
   hint_install="install it with \`mise trust && mise install\` or your package manager"
 
   section "Required tools"
-  for tool in zsh jq rg curl vault cargo node npm; do
+  for tool in zsh jq rg curl bao cargo node npm; do
     if have "$tool"; then ok "$tool"; else fail "$tool missing: ${hint_install}"; fi
   done
   if have podman; then
@@ -954,7 +954,7 @@ doctor:
   fi
   if have terraform; then
     tv="$(terraform version -json 2>/dev/null | jq -r '.terraform_version // empty')"
-    if [[ -n "$tv" ]] && is-at-least 1.7 "$tv"; then ok "terraform ${tv}"; else fail "terraform ${tv:-unknown} is older than 1.7 (vault/contrib/terraform requires >= 1.7)"; fi
+    if [[ -n "$tv" ]] && is-at-least 1.7 "$tv"; then ok "terraform ${tv}"; else fail "terraform ${tv:-unknown} is older than 1.7 (openbao/contrib/terraform requires >= 1.7)"; fi
   else
     fail "terraform missing: ${hint_install}"
   fi
@@ -1014,7 +1014,7 @@ doctor:
   section "Settings"
   ok "PERMESI_BIND_ADDR={{bind_addr}} PERMESI_HTTPS_PORT={{https_port}} PERMESI_NET={{net}} PERMESI_SUBNET={{subnet}}"
   if [[ "{{bind_addr}}" == "0.0.0.0" ]]; then
-    warn "PERMESI_BIND_ADDR=0.0.0.0 exposes Postgres (trust auth) and Vault (root token on disk) to the network"
+    warn "PERMESI_BIND_ADDR=0.0.0.0 exposes Postgres (trust auth) and OpenBao (root token on disk) to the network"
   fi
   if [[ -f "${root}/.envrc" ]]; then
     baked="$(sed -n 's/^export PERMESI_HTTPS_PORT="\${PERMESI_HTTPS_PORT:-\([0-9]*\)}"$/\1/p' "${root}/.envrc")"
@@ -1072,7 +1072,7 @@ doctor:
     fi
   }
   running() { [[ -n "$(podman ps -q --filter "name=^$1\$" 2>/dev/null)" ]]; }
-  for spec in "5432:postgres-permesi" "8200:{{vault_ctr}}" "16686:{{jaeger_ctr}}" "4317:{{jaeger_ctr}}" "${port}:permesi-haproxy"; do
+  for spec in "5432:postgres-permesi" "8200:{{openbao_ctr}}" "16686:{{jaeger_ctr}}" "4317:{{jaeger_ctr}}" "${port}:permesi-haproxy"; do
     p="${spec%%:*}"
     ctr="${spec#*:}"
     if listening "$p" && ! running "$ctr"; then
@@ -1124,7 +1124,7 @@ doctor:
     if (( leaked + leaked_nets > 0 )); then
       warn "${leaked} leaked test container(s) and ${leaked_nets} test network(s): run \`just test-clean\`"
     fi
-    for legacy in vault jaeger; do
+    for legacy in jaeger; do
       if podman container exists "$legacy" 2>/dev/null; then
         nets="$(podman container inspect "$legacy" --format '{{{{range $k, $v := .NetworkSettings.Networks}}{{{{$k}} {{{{end}}' 2>/dev/null)"
         if [[ " ${nets} " == *" {{net}} "* ]]; then
@@ -1140,22 +1140,22 @@ doctor:
     done
   fi
 
-  section "Vault state"
-  keys="${root}/vault/keys.json"
+  section "OpenBao state"
+  keys="${root}/openbao/keys.json"
   volume=0
-  have podman && podman volume exists permesi-vault-data 2>/dev/null && volume=1
+  have podman && podman volume exists permesi-openbao-data 2>/dev/null && volume=1
   if [[ -f "$keys" ]]; then
     if jq -e '.unseal_keys_b64' "$keys" >/dev/null 2>&1; then
-      ok "vault/keys.json holds the persistent Vault's unseal key"
+      ok "openbao/keys.json holds the persistent OpenBao's unseal key"
     elif (( volume )); then
-      fail "vault/keys.json has no unseal key but the persistent Vault volume exists (overwritten by \`just vault\`?): run \`just vault-reset\`"
+      fail "openbao/keys.json has no unseal key but the persistent OpenBao volume exists (overwritten by \`just openbao\`?): run \`just openbao-reset\`"
     else
-      ok "vault/keys.json is from the ephemeral dev Vault"
+      ok "openbao/keys.json is from the ephemeral dev OpenBao"
     fi
   elif (( volume )); then
-    fail "the Vault volume permesi-vault-data exists but vault/keys.json is missing, so Vault cannot be unsealed: restore the keys file or run \`just vault-reset\`"
+    fail "the OpenBao volume permesi-openbao-data exists but openbao/keys.json is missing, so OpenBao cannot be unsealed: restore the keys file or run \`just openbao-reset\`"
   else
-    ok "no Vault state yet; just start initializes it"
+    ok "no OpenBao state yet; just start initializes it"
   fi
 
   print -r -- ""

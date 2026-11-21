@@ -21,7 +21,7 @@ set -eu
 #      certs/mkcert-root.pem (0644). HAProxy restarts only when the leaf changed, so
 #      rerunning the script is a no-op.
 #   4. Forward the laptop's PERMESI_HTTPS_PORT to the same port on the VM, plus the
-#      Jaeger (16686) and Vault (8200) UIs unless --no-ui, over that connection.
+#      Jaeger (16686) and OpenBao (8200) UIs unless --no-ui, over that connection.
 #   5. With --start, build the dev session on the VM (Herdr workspace, tmux fallback)
 #      without attaching, then attach to it through the same connection. Detaching
 #      leaves both the session and the tunnel running.
@@ -58,7 +58,7 @@ Usage:
   scripts/dev-remote --stop|--status <ssh-host>
 
   --start       build the dev session on the VM, then attach to it
-  --no-ui       do not forward the Jaeger (16686) and Vault (8200) UIs
+  --no-ui       do not forward the Jaeger (16686) and OpenBao (8200) UIs
   --renew-cert  issue a new TLS leaf even if the current one is still valid
   --stop        close the SSH connection and its forwards
   --status      report whether the SSH connection is up
@@ -259,7 +259,7 @@ if [ ! -f "$repo/.justfile" ]; then
   echo "fatal: no permesi checkout at $repo"
   exit 3
 fi
-for tool in zsh podman just jq curl terraform vault cargo; do
+for tool in zsh podman just jq curl terraform openbao cargo; do
   command -v "$tool" >/dev/null 2>&1 || echo "warn: $tool is not installed on the VM (see just doctor there)"
 done
 if ! command -v herdr >/dev/null 2>&1 && ! command -v tmux >/dev/null 2>&1; then
@@ -366,7 +366,7 @@ echo "  API          https://api.permesi.localhost${suffix}/health"
 echo "  Genesis      https://genesis.permesi.localhost${suffix}/health"
 if [ "$ui" = 1 ]; then
     echo "  Jaeger       http://localhost:16686"
-    echo "  Vault        http://localhost:8200"
+    echo "  OpenBao        http://localhost:8200"
 fi
 echo "  Stop         scripts/dev-remote --stop ${host}"
 

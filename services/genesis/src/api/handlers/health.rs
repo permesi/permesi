@@ -60,7 +60,7 @@ pub async fn live() -> impl IntoResponse {
 /// Report readiness based on database connectivity.
 pub async fn ready(
     pool: State<PgPool>,
-    shutdown_tx: State<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+    shutdown_tx: State<mpsc::UnboundedSender<crate::openbao::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
     let status = evaluate_database_probe(&pool.0).await;
     maybe_signal_shutdown(status, &shutdown_tx.0);
@@ -85,12 +85,12 @@ pub async fn ready(
 /// Perform a detailed health check for genesis.
 ///
 /// When the database probe fails due to credential/auth errors, this handler
-/// requests graceful shutdown so the supervisor can restart with fresh Vault
+/// requests graceful shutdown so the supervisor can restart with fresh OpenBao
 /// DB credentials.
 pub async fn health(
     method: Method,
     pool: State<PgPool>,
-    shutdown_tx: State<mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>>,
+    shutdown_tx: State<mpsc::UnboundedSender<crate::openbao::renew::ShutdownSignal>>,
 ) -> impl IntoResponse {
     let status = evaluate_database_probe(&pool.0).await;
     maybe_signal_shutdown(status, &shutdown_tx.0);
@@ -186,13 +186,13 @@ async fn evaluate_database_probe(pool: &PgPool) -> DatabaseProbeStatus {
     }
 }
 
-/// Trigger graceful shutdown when DB authentication errors imply stale Vault creds.
+/// Trigger graceful shutdown when DB authentication errors imply stale OpenBao creds.
 fn maybe_signal_shutdown(
     status: DatabaseProbeStatus,
-    shutdown_tx: &mpsc::UnboundedSender<crate::vault::renew::ShutdownSignal>,
+    shutdown_tx: &mpsc::UnboundedSender<crate::openbao::renew::ShutdownSignal>,
 ) {
     if !status.db_healthy && status.db_auth_error {
-        let _ = shutdown_tx.send(crate::vault::renew::ShutdownSignal::DatabaseHealthcheckFailed);
+        let _ = shutdown_tx.send(crate::openbao::renew::ShutdownSignal::DatabaseHealthcheckFailed);
     }
 }
 
@@ -277,8 +277,9 @@ mod tests {
 
     #[test]
     fn auth_failure_requests_shutdown() {
-        let error =
-            sqlx::Error::Protocol("password authentication failed for user \"vault-user\"".into());
+        let error = sqlx::Error::Protocol(
+            "password authentication failed for user \"openbao-user\"".into(),
+        );
         assert!(should_shutdown_on_db_error(&error));
     }
 
@@ -313,7 +314,7 @@ mod tests {
     fn auth_message_without_code_requests_shutdown() {
         let error = sqlx::Error::Database(Box::new(TestDbError {
             code: None,
-            message: "password authentication failed for user \"vault-user\"",
+            message: "password authentication failed for user \"openbao-user\"",
         }));
         assert!(should_shutdown_on_db_error(&error));
     }

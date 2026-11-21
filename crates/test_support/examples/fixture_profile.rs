@@ -1,22 +1,22 @@
 //! Measures fresh fixture phases with CI's four-worker concurrency.
 //!
 //! Flow Overview: initialize the local engine, start four independent PostgreSQL/
-//! Vault pairs per round, bootstrap canonical SQL and transit, then explicitly
+//! OpenBao pairs per round, bootstrap canonical SQL and transit, then explicitly
 //! remove every container. Output contains only durations and fixed phase names;
 //! credentials, endpoints and dependency diagnostics never enter the report.
 
 use anyhow::{Result, ensure};
 use serde::Serialize;
 use std::{process::ExitCode, time::Instant};
-use test_support::{postgres::PostgresContainer, vault::VaultContainer};
+use test_support::{openbao::OpenBaoContainer, postgres::PostgresContainer};
 
 #[derive(Serialize)]
 struct Sample {
     postgres_start: u128,
     postgres_ready: u128,
     postgres_bootstrap: u128,
-    vault_start: u128,
-    vault_setup: u128,
+    openbao_start: u128,
+    openbao_setup: u128,
     cleanup: u128,
     total: u128,
 }
@@ -93,27 +93,27 @@ async fn sample() -> Result<Sample> {
     postgres.bootstrap().await?;
     let postgres_bootstrap = phase.elapsed().as_millis();
     let phase = Instant::now();
-    let vault = VaultContainer::start("bridge").await?;
-    let vault_start = phase.elapsed().as_millis();
+    let openbao = OpenBaoContainer::start("bridge").await?;
+    let openbao_start = phase.elapsed().as_millis();
     let phase = Instant::now();
-    vault.enable_auth("approle", "approle").await?;
-    vault.enable_secrets_engine("transit", "transit").await?;
-    vault
+    openbao.enable_auth("approle", "approle").await?;
+    openbao.enable_secrets_engine("transit", "transit").await?;
+    openbao
         .create_transit_key("transit", "fixture-profile", "ed25519")
         .await?;
-    let vault_setup = phase.elapsed().as_millis();
+    let openbao_setup = phase.elapsed().as_millis();
     let phase = Instant::now();
     // Attempt both removals even if the first one fails.
-    let vault_removed = vault.remove().await;
+    let openbao_removed = openbao.remove().await;
     let postgres_removed = postgres.remove().await;
-    vault_removed?;
+    openbao_removed?;
     postgres_removed?;
     Ok(Sample {
         postgres_start,
         postgres_ready,
         postgres_bootstrap,
-        vault_start,
-        vault_setup,
+        openbao_start,
+        openbao_setup,
         cleanup: phase.elapsed().as_millis(),
         total: start.elapsed().as_millis(),
     })

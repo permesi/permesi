@@ -1,6 +1,6 @@
 # Authorization-code token exchange
 
-`POST /token` exchanges an issued authorization code for a Vault-signed RS256 access
+`POST /token` exchanges an issued authorization code for an OpenBao-signed RS256 access
 token and, when `openid` was granted, an OIDC ID token. It also implements
 `grant_type=refresh_token` with [hashed rotating families](oauth-refresh-tokens.md) after
 explicit offline consent. UserInfo and refresh-family revocation are implemented; introspection and the
@@ -71,7 +71,7 @@ snapshot or credential revision fail closed for UserInfo until a new access toke
 still validate signed JWTs independently until expiry. Access and identity
 audiences/types are distinct and must not be substituted for each other.
 
-Each exchange fetches shared Vault metadata afresh, selects an explicit current
+Each exchange fetches shared OpenBao metadata afresh, selects an explicit current
 RSA-2048 version, derives its published thumbprint `kid`, asks transit to sign with
 SHA-256/PKCS#1 v1.5, and locally verifies every returned signature/version. It never
 uses a cached active signing version or exports private keys. Signing reads never write
@@ -80,7 +80,7 @@ retain the bounded public cache. On an unknown kid, clients can request `/jwks.j
 with `Cache-Control: no-cache` or `max-age=0`; that forces a fresh read under a separate
 shared `jwks_refresh` IP budget. Directive names are case-insensitive; repeated header
 fields and quoted zero are accepted. Retained old versions verify already-issued tokens.
-Runtime Vault policy adds signing permission only; rotation/export/retirement remain
+Runtime OpenBao policy adds signing permission only; rotation/export/retirement remain
 operator actions. Apply the repository policy/schema updates before deploying this
 binary, using the existing operator workflow; repository tests change only fresh stacks.
 
@@ -130,7 +130,7 @@ Run `just oauth-scenario-build`, then `target/debug/permesi-oauth-scenario --sui
 for the disposable real-service checks. See [scenario coverage](oauth-scenarios.md)
 for HTTP/SQL/browser distinctions, artifacts and cleanup. Unit/router tests additionally
 exercise deadline/signing rollback, expired codes, inactive membership, wrong bindings,
-claim verification and concurrent single-use issuance with real PostgreSQL/Vault.
+claim verification and concurrent single-use issuance with real PostgreSQL/OpenBao.
 
 Primary validation passed `just test` (534 tests), the all-feature workspace suite
 (564 tests), formatting/Clippy, schema bootstrap and idempotent reapplication with

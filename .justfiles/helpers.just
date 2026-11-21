@@ -8,7 +8,7 @@ genesis-token:
   # The HAProxy frontend uses the generated or laptop-pushed mkcert root without
   # broadening the host trust store. To hit genesis directly, set
   # GENESIS_API_BASE_URL to https://genesis.permesi.localhost:8000 and
-  # GENESIS_CA_PATH to the Vault PKI CA (certs/genesis/ca.pem).
+  # GENESIS_CA_PATH to the OpenBao PKI CA (certs/genesis/ca.pem).
   base="${GENESIS_API_BASE_URL:-https://genesis.permesi.localhost{{https_suffix}}}"
   ca_path="${GENESIS_CA_PATH:-}"
   if [[ -z "$ca_path" && "$base" == https://genesis.permesi.localhost* && "$base" != *:8000* ]]; then
@@ -81,16 +81,16 @@ genesis-it: dev-start-infra
   set -euo pipefail
   needs_env() {
     [[ -z "${GENESIS_TEST_DSN:-}" && -z "${GENESIS_DSN:-}" ]] \
-      || [[ -z "${GENESIS_TEST_VAULT_URL:-}" && -z "${GENESIS_VAULT_URL:-}" ]] \
-      || [[ -z "${GENESIS_TEST_VAULT_ROLE_ID:-}" && -z "${GENESIS_VAULT_ROLE_ID:-}" ]] \
-      || [[ -z "${GENESIS_TEST_VAULT_SECRET_ID:-}" && -z "${GENESIS_VAULT_SECRET_ID:-}" ]]
+      || [[ -z "${GENESIS_TEST_OPENBAO_URL:-}" && -z "${GENESIS_OPENBAO_URL:-}" ]] \
+      || [[ -z "${GENESIS_TEST_OPENBAO_ROLE_ID:-}" && -z "${GENESIS_OPENBAO_ROLE_ID:-}" ]] \
+      || [[ -z "${GENESIS_TEST_OPENBAO_SECRET_ID:-}" && -z "${GENESIS_OPENBAO_SECRET_ID:-}" ]]
   }
-  # Wait for Vault to emit env vars, then source the .envrc for this shell.
+  # Wait for OpenBao to emit env vars, then source the .envrc for this shell.
   for _ in {1..20}; do
     if ! needs_env; then
       break
     fi
-    just --quiet vault-envrc || true
+    just --quiet openbao-envrc || true
     if [[ -f .envrc ]]; then
       source .envrc
     fi
@@ -100,16 +100,16 @@ genesis-it: dev-start-infra
     echo "Set GENESIS_TEST_DSN or GENESIS_DSN to run integration tests." >&2
     exit 1
   fi
-  if [[ -z "${GENESIS_TEST_VAULT_URL:-}" && -z "${GENESIS_VAULT_URL:-}" ]]; then
-    echo "Set GENESIS_TEST_VAULT_URL or GENESIS_VAULT_URL to run integration tests." >&2
+  if [[ -z "${GENESIS_TEST_OPENBAO_URL:-}" && -z "${GENESIS_OPENBAO_URL:-}" ]]; then
+    echo "Set GENESIS_TEST_OPENBAO_URL or GENESIS_OPENBAO_URL to run integration tests." >&2
     exit 1
   fi
-  if [[ -z "${GENESIS_TEST_VAULT_ROLE_ID:-}" && -z "${GENESIS_VAULT_ROLE_ID:-}" ]]; then
-    echo "Set GENESIS_TEST_VAULT_ROLE_ID or GENESIS_VAULT_ROLE_ID to run integration tests." >&2
+  if [[ -z "${GENESIS_TEST_OPENBAO_ROLE_ID:-}" && -z "${GENESIS_OPENBAO_ROLE_ID:-}" ]]; then
+    echo "Set GENESIS_TEST_OPENBAO_ROLE_ID or GENESIS_OPENBAO_ROLE_ID to run integration tests." >&2
     exit 1
   fi
-  if [[ -z "${GENESIS_TEST_VAULT_SECRET_ID:-}" && -z "${GENESIS_VAULT_SECRET_ID:-}" ]]; then
-    echo "Set GENESIS_TEST_VAULT_SECRET_ID or GENESIS_VAULT_SECRET_ID to run integration tests." >&2
+  if [[ -z "${GENESIS_TEST_OPENBAO_SECRET_ID:-}" && -z "${GENESIS_OPENBAO_SECRET_ID:-}" ]]; then
+    echo "Set GENESIS_TEST_OPENBAO_SECRET_ID or GENESIS_OPENBAO_SECRET_ID to run integration tests." >&2
     exit 1
   fi
   cargo test -p genesis --test integration_token -- --ignored

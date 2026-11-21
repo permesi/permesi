@@ -36,7 +36,7 @@ fn legacy_fixture() -> Result<LegacyFixture> {
     ))?)
 }
 
-/// Exercises the production Vault-seed derivation with the fixture's public test seed.
+/// Exercises the production OpenBao-seed derivation with the fixture's public test seed.
 fn opaque_state() -> OpaqueState {
     OpaqueState::from_seed(
         [42; 32],

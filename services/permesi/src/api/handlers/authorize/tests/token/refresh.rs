@@ -1,4 +1,4 @@
-//! Real HTTP/PostgreSQL/Vault refresh rotation, current authority and replay regressions.
+//! Real HTTP/PostgreSQL/OpenBao refresh rotation, current authority and replay regressions.
 #![allow(clippy::too_many_lines, clippy::indexing_slicing)]
 use super::*;
 
@@ -55,18 +55,20 @@ pub(super) async fn refresh(
     exchange(router, &fields, None).await
 }
 
-/// Starts an independent signing/client service and pool, sharing only durable PostgreSQL/Vault authority.
+/// Starts an independent signing/client service and pool, sharing only durable PostgreSQL/OpenBao authority.
 pub(super) async fn replica(t: &TokenFixture) -> Result<Router> {
     let mut state = t.f.state.clone();
     state.pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&t.f.postgres.admin_dsn())
         .await?;
-    let transport =
-        VaultTransport::from_target("refresh-replica", VaultTarget::parse(t.vault.base_url())?)?;
-    let mut globals = crate::cli::globals::GlobalArgs::new(t.vault.base_url().into(), transport);
+    let transport = OpenBaoTransport::from_target(
+        "refresh-replica",
+        OpenBaoTarget::parse(t.openbao.base_url())?,
+    )?;
+    let mut globals = crate::cli::globals::GlobalArgs::new(t.openbao.base_url().into(), transport);
     globals.set_token(SecretString::from("root-token"));
-    globals.vault_transit_mount = "transit/permesi".into();
+    globals.openbao_transit_mount = "transit/permesi".into();
     state.oauth = Arc::new(OAuthState::new(state.oauth.config.clone(), &globals));
     Ok(router(&state))
 }
@@ -410,10 +412,11 @@ async fn refresh_signing_failure_rolls_back_consumption_and_successor() -> Resul
     let first = issue(&t).await?;
     let token = first["refresh_token"].as_str().context("refresh")?;
     let mut denied = t.f.state.clone();
-    let transport = VaultTransport::from_target("denied", VaultTarget::parse(t.vault.base_url())?)?;
-    let mut globals = crate::cli::globals::GlobalArgs::new(t.vault.base_url().into(), transport);
-    globals.set_token(SecretString::from("invalid-vault-credential"));
-    globals.vault_transit_mount = "transit/permesi".into();
+    let transport =
+        OpenBaoTransport::from_target("denied", OpenBaoTarget::parse(t.openbao.base_url())?)?;
+    let mut globals = crate::cli::globals::GlobalArgs::new(t.openbao.base_url().into(), transport);
+    globals.set_token(SecretString::from("invalid-openbao-credential"));
+    globals.openbao_transit_mount = "transit/permesi".into();
     denied.oauth = Arc::new(OAuthState::new(denied.oauth.config.clone(), &globals));
     assert_eq!(
         refresh(&router(&denied), t.f.client, token, None).await?.0,
@@ -440,7 +443,7 @@ async fn refresh_schema_reapplication_preserves_bindings_history_and_runtime_per
     let body = issue(&t).await?;
     let token = body["refresh_token"].as_str().context("refresh")?;
     sqlx::raw_sql(
-        "CREATE ROLE permesi_runtime; CREATE ROLE vault_permesi CREATEROLE; GRANT ALL ON ALL TABLES IN SCHEMA public TO permesi_runtime;",
+        "CREATE ROLE permesi_runtime; CREATE ROLE openbao_permesi CREATEROLE; GRANT ALL ON ALL TABLES IN SCHEMA public TO permesi_runtime;",
     )
     .execute(&t.f.pool)
     .await?;

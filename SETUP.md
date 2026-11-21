@@ -1,12 +1,12 @@
 # Setup & Deployment Guide
 
-This guide describes how to set up the Permesi IAM stack. It remains agnostic of your specific orchestration (systemd, Podman, Kubernetes) and focuses on the core requirements: **Postgres 18** and **HashiCorp Vault**.
+This guide describes how to set up the Permesi IAM stack. It remains agnostic of your specific orchestration (systemd, Podman, Kubernetes) and focuses on the core requirements: **Postgres 18** and **OpenBao**.
 
 ## 1. Prerequisites
 
 - **Postgres 18**: The primary data store.
-- **HashiCorp Vault**: Used for secret storage and cryptographic operations (Transit engine).
-- **Terraform**: Required to provision and configure the Vault instance.
+- **OpenBao**: Used for secret storage and cryptographic operations (Transit engine).
+- **Terraform**: Required to provision and configure the OpenBao instance.
 - **Container Runtime**: Podman, to run the pre-built service images.
 - **Web Server**: (Nginx, HAProxy, or similar) To serve the static frontend assets.
 
@@ -28,7 +28,7 @@ Permesi provides production-ready artifacts for every release. You do not need t
 
 Permesi requires a Postgres 18 instance. You can find the initialization and service schemas in the repository under `db/sql/`.
 
-1.  **Create Vault database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the Vault root DB roles (`vault_permesi`, `vault_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`). It also applies the service schemas and the test seed client.
+1.  **Create OpenBao database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the OpenBao root DB roles (`openbao_permesi`, `openbao_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`). It also applies the service schemas and the test seed client.
 
     This file ships with a `change-me` placeholder password. For production, edit the passwords
     and remove the `seed_test_client.sql` include (or use the file as a template for your own
@@ -63,13 +63,13 @@ Permesi requires a Postgres 18 instance. You can find the initialization and ser
     psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/check.sql
     ```
 
-6.  **Verify Vault DB connectivity** (after Terraform applies):
+6.  **Verify OpenBao DB connectivity** (after Terraform applies):
 
     ```sh
-    export VAULT_ADDR="https://vault.example.com:8200"
-    export VAULT_TOKEN="your-root-token"
-    vault read database/creds/permesi
-    vault read database/creds/genesis
+    export BAO_ADDR="https://openbao.example.com:8200"
+    export BAO_TOKEN="your-root-token"
+    bao read database/creds/permesi
+    bao read database/creds/genesis
     ```
 
     These reads are safe in production; they only request short-lived credentials.
@@ -139,30 +139,31 @@ psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/rese
 ```
 
 This terminates active connections, drops the `genesis` and `permesi` databases, and removes
-the Vault root and runtime roles. It is destructive and cannot be undone.
+the OpenBao root and runtime roles. It is destructive and cannot be undone.
 
 ---
 
-## 4. Vault Configuration (Terraform)
+## 4. OpenBao Configuration (Terraform)
 
-Vault is central to the security of the stack. We provide a **Terraform** configuration in `vault/contrib/terraform` that automates the setup of secret engines, transit keys, policies, cert-auth roles, and the Vault-managed PKI hierarchy for future service certificates.
+OpenBao is central to the security of the stack. We provide a **Terraform** configuration in `openbao/contrib/terraform` that automates the setup of secret engines, transit keys, policies, cert-auth roles, and the OpenBao-managed PKI hierarchy for future service certificates.
 
 Using Terraform is the recommended way to ensure your configuration is consistent, reproducible, and easy to maintain.
 
 ### Running Terraform
 ```bash
-cd vault/contrib/terraform
+cd openbao/contrib/terraform
+# The API-compatible hashicorp/vault provider reads VAULT_ADDR and VAULT_TOKEN.
 terraform init
 terraform apply
 ```
 
-Refer to the `vault/README.md` for details on the specific resources provisioned.
+Refer to the `openbao/README.md` for details on the specific resources provisioned.
 
 ### Terraform tests
 Terraform tests run in the module directory and validate the PKI + cert-auth wiring at plan time:
 
 ```bash
-cd vault/contrib/terraform
+cd openbao/contrib/terraform
 terraform init
 terraform test
 ```
@@ -172,21 +173,21 @@ terraform test
 To verify cert-auth roles and TLS client material, run:
 
 ```sh
-export VAULT_ADDR="https://vault.example.com:8200"
-export VAULT_CACERT="/etc/permesi/bootstrap/ca_cert.pem"
-export VAULT_CLIENT_CERT="/etc/permesi/bootstrap/cert_file.pem"
-export VAULT_CLIENT_KEY="/etc/permesi/bootstrap/key_file.pem"
+export BAO_ADDR="https://openbao.example.com:8200"
+export BAO_CACERT="/etc/permesi/bootstrap/ca_cert.pem"
+export BAO_CLIENT_CERT="/etc/permesi/bootstrap/cert_file.pem"
+export BAO_CLIENT_KEY="/etc/permesi/bootstrap/key_file.pem"
 
-vault login -method=cert -path=auth/cert name=permesi-agent
+bao login -method=cert -path=auth/cert name=permesi-agent
 ```
 
 Repeat with the Genesis bootstrap certificate and the `genesis-agent` role.
 
-### Vault Agent sidecar (cert auth)
+### OpenBao Agent sidecar (cert auth)
 
-Use Vault Agent as a sidecar to authenticate via cert auth and render templates. This removes the
+Use OpenBao Agent as a sidecar to authenticate via cert auth and render templates. This removes the
 need for a local proxy and lets you generate TLS material from a single config. The minimal agent
-configs in `vault/contrib/terraform/README.md` already include cert-auth and TLS templates.
+configs in `openbao/contrib/terraform/README.md` already include cert-auth and TLS templates.
 
 Keep the agent running continuously so it can renew the cert-auth token and re-issue TLS
 certificates before the 24h TTL expires. If the agent stops long enough for the runtime certs or
@@ -196,18 +197,18 @@ restarted with valid bootstrap certificates.
 Run the agent as a long-lived service so it can renew tokens and rotate certificates:
 
 ```sh
-vault agent -config=/etc/vault.d/vault.hcl
+bao agent -config=/etc/openbao/agent.hcl
 ```
 
 ### Quadlet example (systemd)
 
-Below is a tuned Quadlet setup that assumes Vault Agent writes TLS material under `/run/permesi`
+Below is a tuned Quadlet setup that assumes OpenBao Agent writes TLS material under `/run/permesi`
 and `/run/genesis`.
 
 `/root/permesi.env` (static, long-lived values; required values shown first):
 ```
 PERMESI_DSN=postgres://postgres@localhost:5432/permesi
-PERMESI_VAULT_URL=https://vault.example.com:8200
+PERMESI_OPENBAO_URL=https://openbao.example.com:8200
 PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json
 PERMESI_ADMISSION_ISS=https://genesis.permesi.localhost
 PERMESI_ADMISSION_AUD=permesi
@@ -220,16 +221,16 @@ intended recipient of the token.
 `/root/genesis.env` (static, long-lived values; required values shown first):
 ```
 GENESIS_DSN=postgres://postgres@localhost:5432/genesis
-GENESIS_VAULT_URL=https://vault.example.com:8200
+GENESIS_OPENBAO_URL=https://openbao.example.com:8200
 ```
 
-Both services require Vault-issued TLS material and must trust a single Vault PKI CA shared by the services. Defaults are:
+Both services require OpenBao-issued TLS material and must trust a single OpenBao PKI CA shared by the services. Defaults are:
 `/run/permesi/tls.bundle.pem` and `/run/genesis/tls.bundle.pem`.
 Override paths with:
 `PERMESI_TLS_PEM_BUNDLE` and `GENESIS_TLS_PEM_BUNDLE`.
 If your PASERK URL is served by a different CA (for example, HAProxy with mkcert),
 set `PERMESI_ADMISSION_PASERK_CA_PATH` to that CA bundle. For direct Genesis access,
-use the Vault-issued Genesis CA bundle.
+use the OpenBao-issued Genesis CA bundle.
 Permesi also needs `PERMESI_ADMISSION_PASERK_URL` to locate the Genesis `/paserk.json` endpoint
 over HTTPS.
 
@@ -242,8 +243,8 @@ Quadlet unit (`permesi.container`):
 Description=permesi
 After=network.target
 Wants=network.target
-Requires=vault.service
-Requires=vault-agent-permesi.service
+Requires=openbao.service
+Requires=openbao-agent-permesi.service
 
 [Container]
 Image=ghcr.io/permesi/permesi:latest
@@ -264,8 +265,8 @@ Quadlet unit (`genesis.container`):
 Description=genesis
 After=network.target
 Wants=network.target
-Requires=vault.service
-Requires=vault-agent-genesis.service
+Requires=openbao.service
+Requires=openbao-agent-genesis.service
 
 [Container]
 Image=ghcr.io/permesi/genesis:latest
@@ -282,28 +283,28 @@ WantedBy=default.target
 
 Notes:
 - Keep `/root/permesi.env` and `/root/genesis.env` owned by root with `0600` permissions.
-- **Agent Mode**: Set `PERMESI_VAULT_URL` to a socket path (e.g., `/run/vault/proxy.sock`). AppRole credentials (`VAULT_ROLE_ID`, etc.) are not needed. Ensure Vault Agent is configured with `use_auto_auth_token = true` in its `api_proxy` stanza. This is the preferred mode as it avoids writing secrets to disk.
-- **TCP Mode**: If using AppRole without an Agent, ensure `VAULT_ROLE_ID` and `VAULT_SECRET_ID` (or `VAULT_WRAPPED_TOKEN`) are provided in the environment files.
+- **Agent Mode**: Set `PERMESI_OPENBAO_URL` to a socket path (e.g., `/run/openbao/proxy.sock`). AppRole credentials (`OPENBAO_ROLE_ID`, etc.) are not needed. Ensure OpenBao Agent is configured with `use_auto_auth_token = true` in its `api_proxy` stanza. This is the preferred mode as it avoids writing secrets to disk.
+- **TCP Mode**: If using AppRole without an Agent, ensure `OPENBAO_ROLE_ID` and `OPENBAO_SECRET_ID` (or `OPENBAO_WRAPPED_TOKEN`) are provided in the environment files.
 
 
 ### Manual Configuration Recipe (Reference)
 
-If you cannot use Terraform, this section provides the manual steps to configure an equivalent Vault instance.
+If you cannot use Terraform, this section provides the manual steps to configure an equivalent OpenBao instance.
 
 ### A. Enable Secret Engines and Auth Methods
 ```bash
-# Enable cert auth for Vault Agent and bootstrap workflows
-vault auth enable cert
+# Enable cert auth for OpenBao Agent and bootstrap workflows
+bao auth enable cert
 
 # Enable Transit for TOTP secret protection and token signing
-vault secrets enable -path=transit/permesi transit
-vault secrets enable -path=transit/genesis transit
+bao secrets enable -path=transit/permesi transit
+bao secrets enable -path=transit/genesis transit
 
 # Enable KV v2 for OPAQUE server seeds
-vault secrets enable -path=secret/permesi kv-v2
+bao secrets enable -path=secret/permesi kv-v2
 
-# (Optional) Enable Database engine if using Vault-managed DB credentials
-vault secrets enable database
+# (Optional) Enable Database engine if using OpenBao-managed DB credentials
+bao secrets enable database
 ```
 
 ### B. Configure Transit Keys
@@ -311,12 +312,12 @@ Permesi uses ChaCha20-Poly1305 to protect TOTP data-encryption keys, while Genes
 
 ```bash
 # Permesi TOTP protection key
-vault write transit/permesi/keys/totp type=chacha20-poly1305
-vault write transit/permesi/keys/totp/config auto_rotate_period=30d
+bao write transit/permesi/keys/totp type=chacha20-poly1305
+bao write transit/permesi/keys/totp/config auto_rotate_period=30d
 
 # Genesis admission signing key
-vault write transit/genesis/keys/genesis-signing type=ed25519
-vault write transit/genesis/keys/genesis-signing/config auto_rotate_period=30d
+bao write transit/genesis/keys/genesis-signing type=ed25519
+bao write transit/genesis/keys/genesis-signing/config auto_rotate_period=30d
 ```
 
 ### C. Configure OPAQUE Seed
@@ -327,7 +328,7 @@ will need to re-register or reset their credentials.
 ```bash
 $ SEED=$(openssl rand -base64 32)
 $ PEPPER=$(openssl rand -base64 32)
-$ vault kv put secret/permesi/config opaque_server_seed="$SEED" mfa_recovery_pepper="$PEPPER"
+$ bao kv put secret/permesi/config opaque_server_seed="$SEED" mfa_recovery_pepper="$PEPPER"
 ```
 
 ### D. Define Service Policies
@@ -335,7 +336,7 @@ Create the following policies to grant the services the minimum required permiss
 
 **`permesi` policy:**
 ```bash
-vault policy write permesi - <<EOF
+bao policy write permesi - <<EOF
 path "auth/token/lookup-self" { capabilities = ["read"] }
 path "transit/permesi/encrypt/totp" { capabilities = ["update"] }
 path "transit/permesi/decrypt/totp" { capabilities = ["update"] }
@@ -350,7 +351,7 @@ EOF
 
 **`genesis` policy:**
 ```bash
-vault policy write genesis - <<EOF
+bao policy write genesis - <<EOF
 path "transit/genesis/sign/genesis-signing" { capabilities = ["update"] }
 path "transit/genesis/keys/genesis-signing" { capabilities = ["read"] }
 path "database/creds/genesis"               { capabilities = ["read"] }
@@ -361,29 +362,29 @@ EOF
 
 **`permesi-operators` policy:**
 ```bash
-vault policy write permesi-operators - <<EOF
+bao policy write permesi-operators - <<EOF
 path "auth/token/lookup-self" { capabilities = ["read"] }
 EOF
 ```
 
 ### E. Cert Auth Setup
-Create cert-auth roles for the Vault Agent bootstrap certificates so the agent can authenticate
+Create cert-auth roles for the OpenBao Agent bootstrap certificates so the agent can authenticate
 and render templates (TLS material, wrapped tokens, or other secrets as needed). The roles should
 use `permesi-pki-issue-only` and `genesis-pki-issue-only` policies with `allowed_dns_sans` that
-match the bootstrap certificates. Mirror the configuration in `vault/contrib/terraform/auth_cert.tf`.
+match the bootstrap certificates. Mirror the configuration in `openbao/contrib/terraform/auth_cert.tf`.
 
 At minimum, enable cert auth and add two roles bound to the intermediate CA chain and DNS SANs:
 
 ```bash
-vault auth enable cert
+bao auth enable cert
 
-vault write auth/cert/certs/permesi-agent \
+bao write auth/cert/certs/permesi-agent \
   display_name="permesi-agent" \
   policies="permesi-pki-issue-only" \
   certificate=@/path/to/pki-int.pem \
   allowed_dns_sans="api.permesi.localhost"
 
-vault write auth/cert/certs/genesis-agent \
+bao write auth/cert/certs/genesis-agent \
   display_name="genesis-agent" \
   policies="genesis-pki-issue-only" \
   certificate=@/path/to/pki-int.pem \
@@ -396,13 +397,13 @@ vault write auth/cert/certs/genesis-agent \
 
 Both services are configured via environment variables.
 
-### Common Vault Variables
-- `VAULT_URL`: The Vault API endpoint. Supports two modes:
-  - **TCP**: `https://vault.internal:8200` (Requires `role-id` and `secret-id`).
-  - **Agent**: `/run/vault/proxy.sock` or `unix:///run/vault/proxy.sock` (Recommended; requires Vault Agent with `api_proxy`).
-- `VAULT_WRAPPED_TOKEN`: A short-lived wrapped token provided by Vault Agent (TCP mode only).
-- `VAULT_ROLE_ID`: AppRole RoleID (TCP mode only).
-- `VAULT_SECRET_ID`: AppRole SecretID (TCP mode only).
+### Common OpenBao Variables
+- `OPENBAO_URL`: The OpenBao API endpoint. Supports two modes:
+  - **TCP**: `https://openbao.internal:8200` (Requires `role-id` and `secret-id`).
+  - **Agent**: `/run/openbao/proxy.sock` or `unix:///run/openbao/proxy.sock` (Recommended; requires OpenBao Agent with `api_proxy`).
+- `OPENBAO_WRAPPED_TOKEN`: A short-lived wrapped token provided by OpenBao Agent (TCP mode only).
+- `OPENBAO_ROLE_ID`: AppRole RoleID (TCP mode only).
+- `OPENBAO_SECRET_ID`: AppRole SecretID (TCP mode only).
 
 ### Service Specifics
 - **Genesis**: Requires `GENESIS_DSN`.
@@ -436,12 +437,12 @@ The frontend is a static bundle that runs entirely in the browser. You can deplo
 
 Once the services are running:
 
-1.  **Generate Operator Token**: Create a short-lived Vault token with the `permesi-operators` policy:
+1.  **Generate Operator Token**: Create a short-lived OpenBao token with the `permesi-operators` policy:
     ```bash
-    vault token create -policy=permesi-operators -period=24h
+    bao token create -policy=permesi-operators -period=24h
     ```
 2.  **Claim Admin**:
     - Visit `https://your-domain.com/console/admin/claim`.
-    - Provide the Vault token.
+    - Provide the OpenBao token.
     - This process will promote your user account to a **Platform Operator**.
-3.  **Elevate**: Whenever you need to perform sensitive tasks, use the "Elevate" feature with a fresh Vault token to gain temporary admin privileges.
+3.  **Elevate**: Whenever you need to perform sensitive tasks, use the "Elevate" feature with a fresh OpenBao token to gain temporary admin privileges.

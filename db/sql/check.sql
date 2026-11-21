@@ -21,11 +21,11 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'permesi') THEN
         RAISE EXCEPTION 'Missing database: permesi';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_genesis') THEN
-        RAISE EXCEPTION 'Missing role: vault_genesis';
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_genesis') THEN
+        RAISE EXCEPTION 'Missing role: openbao_genesis';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_permesi') THEN
-        RAISE EXCEPTION 'Missing role: vault_permesi';
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_permesi') THEN
+        RAISE EXCEPTION 'Missing role: openbao_permesi';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'genesis_runtime') THEN
         RAISE EXCEPTION 'Missing role: genesis_runtime';
@@ -33,11 +33,11 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime') THEN
         RAISE EXCEPTION 'Missing role: permesi_runtime';
     END IF;
-    IF NOT pg_has_role('vault_genesis', 'genesis_runtime', 'MEMBER') THEN
-        RAISE EXCEPTION 'Missing role membership: vault_genesis -> genesis_runtime';
+    IF NOT pg_has_role('openbao_genesis', 'genesis_runtime', 'MEMBER') THEN
+        RAISE EXCEPTION 'Missing role membership: openbao_genesis -> genesis_runtime';
     END IF;
-    IF NOT pg_has_role('vault_permesi', 'permesi_runtime', 'MEMBER') THEN
-        RAISE EXCEPTION 'Missing role membership: vault_permesi -> permesi_runtime';
+    IF NOT pg_has_role('openbao_permesi', 'permesi_runtime', 'MEMBER') THEN
+        RAISE EXCEPTION 'Missing role membership: openbao_permesi -> permesi_runtime';
     END IF;
     IF NOT has_database_privilege('genesis_runtime', 'genesis', 'CONNECT') THEN
         RAISE EXCEPTION 'Missing grant: genesis_runtime CONNECT on genesis';
@@ -75,7 +75,7 @@ BEGIN
           AND schedule = '5 0 * * *'
           AND command = 'SELECT genesis_tokens_rollover(7, 2);'
           AND "database" = 'genesis'
-          AND username = 'vault_genesis'
+          AND username = 'openbao_genesis'
     ) THEN
         RAISE EXCEPTION 'Missing/misconfigured cron job: genesis_tokens_rollover';
     END IF;
@@ -86,7 +86,7 @@ BEGIN
           AND schedule = '15 0 * * *'
           AND command = 'SELECT cleanup_expired_tokens();'
           AND "database" = 'permesi'
-          AND username = 'vault_permesi'
+          AND username = 'openbao_permesi'
     ) THEN
         RAISE EXCEPTION 'Missing/misconfigured cron job: permesi_cleanup_expired_tokens';
     END IF;

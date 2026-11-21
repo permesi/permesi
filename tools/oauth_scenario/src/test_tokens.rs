@@ -3,7 +3,7 @@
 //! Flow Overview: generate one private unit-test key, expose its public JWKS and
 //! sign controlled JSON, including duplicate-member negatives. Valid signatures
 //! isolate parser/claim failures from cryptographic failures. Live scenarios use
-//! real Vault issuance; these helpers compile only into unit-test binaries.
+//! real OpenBao issuance; these helpers compile only into unit-test binaries.
 
 use crate::error::{Result, Safe};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};

@@ -125,7 +125,7 @@ unchanged. A regression verifies that a substituted credential ID is rejected,
 consumes the challenge and cannot produce a session or change the credential.
 
 Public, deterministic fixtures generated with `opaque-ke 4.0.1` verify that the
-prerelease preserves the Vault-seed setup derivation, stored registration bytes,
+prerelease preserves the OpenBao-seed setup derivation, stored registration bytes,
 pending client/server login states, handshake bytes and session keys. An altered
 legacy finalization MAC is rejected. Isolated compile probes confirm that replacing
 the aliases with Argon2 0.6, rand_chacha/rand_core 0.10 and SHA-2 0.11 fails on the
@@ -169,7 +169,7 @@ four older OPAQUE aliases. RSA 0.9 verification separately retains SHA-2 0.10 un
 `rsa_sha2`; older transitive crypto versions still required by WebAuthn/RSA are not
 forced outside their upstream constraints. Ephemeral ceremony CSPRNGs are seeded
 from OS/browser entropy and reject entropy failure. The existing deterministic
-Vault-seed setup derivation, cipher suite, identifiers and KSF parameters remain
+OpenBao-seed setup derivation, cipher suite, identifiers and KSF parameters remain
 unchanged; the optional KEM feature stays disabled.
 
 `cargo update` removes `crypto-bigint 0.5.5`, `elliptic-curve 0.13.8` and the old
@@ -184,7 +184,7 @@ existing policy: Leptos' `paste` and `astral-tokio-tar 0.6.4` through
 `testcontainers 0.28.0`
 ([`RUSTSEC-2026-0440`](https://rustsec.org/advisories/RUSTSEC-2026-0440.html)).
 
-Four public fixture regressions preserve the production Vault-seed setup bytes,
+Four public fixture regressions preserve the production OpenBao-seed setup bytes,
 legacy registration records, pending client/server states, replayed handshake bytes
 and session keys, reject a tampered legacy finalization, and complete a fresh
 current-client login against the legacy record. voprf changed its random scalar
@@ -225,5 +225,5 @@ pass. All four component/default-or-all-feature command selections compile and
 list the expected targets, including all-feature integration targets and doctests.
 The scenario runner's 45 unit tests pass, including its local HTTPS server and
 client checks against the updated server library. These checks do not execute the
-full database/Vault test suites; exact-commit CI qualification remains required
+full database/OpenBao test suites; exact-commit CI qualification remains required
 before the updated lockfile is release-ready.

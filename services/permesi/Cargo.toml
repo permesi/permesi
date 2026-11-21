@@ -67,7 +67,7 @@ telemetry = [
 [dependencies]
 lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 admission_token = { workspace = true }
-vault_client = { workspace = true }
+openbao_client = { workspace = true }
 argon2 = { workspace = true }
 anyhow = { workspace = true }
 axum = { version = "0.8", features = ["macros", "tracing"] }

@@ -1,7 +1,7 @@
 //! Verification of issued access JWTs before issuer-side claim disclosure.
 //!
 //! Flow Overview: after a hash-only issuance receipt matches the exact Bearer value,
-//! parse only the bounded header to select a retained Vault public key, verify the
+//! parse only the bounded header to select a retained OpenBao public key, verify the
 //! RS256 signature, then parse and validate fixed issuer, audience, type and lifetime.
 //! Callers must also compare every authority claim to the immutable receipt; neither
 //! an unverified payload nor a database-only fabricated receipt is sufficient.
@@ -51,7 +51,7 @@ struct Header {
 }
 
 impl OAuthState {
-    /// Verifies a compact RS256 access JWT with a shared retained Vault public key.
+    /// Verifies a compact RS256 access JWT with a shared retained OpenBao public key.
     pub(crate) async fn verify_access_token(
         &self,
         token: &str,

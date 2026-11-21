@@ -1,4 +1,4 @@
-//! Real router/PostgreSQL/Vault exchange tests, including rollback and replica concurrency.
+//! Real router/PostgreSQL/OpenBao exchange tests, including rollback and replica concurrency.
 
 #![allow(clippy::indexing_slicing, clippy::too_many_lines)]
 
@@ -7,11 +7,11 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
+use openbao_client::{OpenBaoTarget, OpenBaoTransport};
 use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
 use secrecy::{ExposeSecret as _, SecretString};
 use sha2::{Digest as _, Sha256};
-use test_support::vault::VaultContainer;
-use vault_client::{VaultTarget, VaultTransport};
+use test_support::openbao::OpenBaoContainer;
 
 /// Combines a production-router fixture with real nonexportable transit signing.
 mod containment;
@@ -21,16 +21,18 @@ mod userinfo;
 
 struct TokenFixture {
     f: Fixture,
-    vault: VaultContainer,
+    openbao: OpenBaoContainer,
 }
 
-/// Case-insensitive, repeated and quoted cache directives refresh actual rotated Vault keys.
+/// Case-insensitive, repeated and quoted cache directives refresh actual rotated OpenBao keys.
 #[tokio::test]
 async fn jwks_review_regression_refresh_accepts_http_cache_directives() -> Result<()> {
     let fixture = TokenFixture::new().await?;
     let f = &fixture.f;
-    let transport =
-        VaultTransport::from_target("jwks-test", VaultTarget::parse(fixture.vault.base_url())?)?;
+    let transport = OpenBaoTransport::from_target(
+        "jwks-test",
+        OpenBaoTarget::parse(fixture.openbao.base_url())?,
+    )?;
     let initial = f.state.oauth.jwks().await?;
     assert_eq!(initial.keys.len(), 1);
     for (index, directives) in [
@@ -71,21 +73,22 @@ impl TokenFixture {
     /// Starts isolated storage and a real nonexportable RSA key for the production router.
     async fn new() -> Result<Self> {
         let mut f = Fixture::new().await?;
-        let vault = VaultContainer::start("bridge").await?;
-        vault
+        let openbao = OpenBaoContainer::start("bridge").await?;
+        openbao
             .enable_secrets_engine("transit/permesi", "transit")
             .await?;
-        vault
+        openbao
             .create_transit_key("transit/permesi", "oidc-signing", "rsa-2048")
             .await?;
         let transport =
-            VaultTransport::from_target("token-test", VaultTarget::parse(vault.base_url())?)?;
-        let mut globals = crate::cli::globals::GlobalArgs::new(vault.base_url().into(), transport);
+            OpenBaoTransport::from_target("token-test", OpenBaoTarget::parse(openbao.base_url())?)?;
+        let mut globals =
+            crate::cli::globals::GlobalArgs::new(openbao.base_url().into(), transport);
         globals.set_token(SecretString::from("root-token"));
-        globals.vault_transit_mount = "transit/permesi".into();
+        globals.openbao_transit_mount = "transit/permesi".into();
         f.state.oauth = Arc::new(OAuthState::new(f.state.oauth.config.clone(), &globals));
         f.router = router(&f.state);
-        Ok(Self { f, vault })
+        Ok(Self { f, openbao })
     }
 }
 
@@ -916,9 +919,9 @@ async fn token_exchange_identity_signing_failure_rolls_back_already_signed_acces
         .respond_with(FailIdentity(key))
         .mount(&server)
         .await;
-    let transport = VaultTransport::from_target("test", VaultTarget::parse(&server.uri())?)?;
+    let transport = OpenBaoTransport::from_target("test", OpenBaoTarget::parse(&server.uri())?)?;
     let mut globals = crate::cli::globals::GlobalArgs::new(server.uri(), transport);
-    globals.vault_transit_mount = "transit/permesi".into();
+    globals.openbao_transit_mount = "transit/permesi".into();
     let mut state = f.state.clone();
     state.oauth = Arc::new(OAuthState::new(f.state.oauth.config.clone(), &globals));
     let (status, _) = exchange(

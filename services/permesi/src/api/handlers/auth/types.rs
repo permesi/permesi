@@ -155,7 +155,7 @@ pub struct AdminStatusResponse {
 #[derive(ToSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminBootstrapRequest {
-    pub vault_token: String,
+    pub openbao_token: String,
     pub note: Option<String>,
 }
 
@@ -168,7 +168,7 @@ pub struct AdminBootstrapResponse {
 #[derive(ToSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminElevateRequest {
-    pub vault_token: String,
+    pub openbao_token: String,
 }
 
 #[derive(ToSchema, Serialize, Deserialize)]
@@ -180,7 +180,7 @@ pub struct AdminElevateResponse {
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct AdminInfraResponse {
     pub database: DatabaseStats,
-    pub vault: VaultStatus,
+    pub openbao: OpenBaoStatus,
     pub platform: PlatformStats,
 }
 
@@ -194,7 +194,7 @@ pub struct DatabaseStats {
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
-pub struct VaultStatus {
+pub struct OpenBaoStatus {
     pub status: String,
     pub version: String,
     pub sealed: bool,

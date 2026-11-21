@@ -1,7 +1,7 @@
 //! Real runtime-role HTTP exchanges and independent JWT verification on disposable replicas.
 //!
 //! Flow Overview: real browser consent issues codes on A; cookie-free native exchanges
-//! on B authenticate current clients, commit one receipt and sign through real Vault.
+//! on B authenticate current clients, commit one receipt and sign through real OpenBao.
 //! Negative controls prove failed attempts do not consume codes; signature/claim checks
 //! never reuse production validators. Bearer material is retained only in private memory.
 
@@ -722,7 +722,7 @@ pub(super) async fn signing(context: &mut Context<'_>, fixture: &Fixture) -> Res
     )
     .await?;
     let untouched:bool=sqlx::query_scalar("SELECT consumed_at IS NULL AND expires_at>clock_timestamp() FROM oauth_authorization_codes WHERE code_hash=$1").bind(Sha256::digest(code.as_bytes()).to_vec()).fetch_one(context.pool).await.safe("Cannot inspect failed exchange.")?;
-    check(untouched, "Vault failure consumed/expired the code.")?;
+    check(untouched, "OpenBao failure consumed/expired the code.")?;
     let original = response(
         context
             .api

@@ -8,7 +8,7 @@ use tokio::process::{Child, Command};
 pub struct Process(pub Child);
 
 impl Process {
-    /// Starts a product binary with no inherited product, proxy, Vault or deployment configuration.
+    /// Starts a product binary with no inherited product, proxy, OpenBao or deployment configuration.
     pub fn service(binary: &Path, arguments: &[String], secrets: &[(&str, &str)]) -> Result<Self> {
         let mut command = Command::new(binary);
         command

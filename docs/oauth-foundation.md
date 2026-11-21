@@ -356,11 +356,11 @@ previous statement policy afterwards so bulk consent revocation can finish. Thei
 individual lock waits retain the configured limit.
 
 `PERMESI_OIDC_SIGNING_KEY` / `--oidc-signing-key` selects a single transit key name,
-default `oidc-signing`, under the existing configured Vault transit mount. Terraform
+default `oidc-signing`, under the existing configured OpenBao transit mount. Terraform
 provisions a distinct nonexportable, nondeletable RSA-2048 key with 30-day automatic
 rotation. Runtime reads public key metadata and signs through transit, but cannot rotate, retire or export.
-Private key material stays in Vault. Startup fails if enabled OAuth cannot load a usable
-key. `/jwks.json` converts all retained shared Vault public versions to RS256 JWKs and
+Private key material stays in OpenBao. Startup fails if enabled OAuth cannot load a usable
+key. `/jwks.json` converts all retained shared OpenBao public versions to RS256 JWKs and
 uses RFC 7638 thumbprints as stable `kid` values. A per-replica single-flight cache absorbs
 concurrent reads; it contains only public response data, never authoritative signing or
 authorization state. `PERMESI_OIDC_JWKS_CACHE_TTL_SECONDS` / `--oidc-jwks-cache-ttl-seconds`
@@ -368,16 +368,16 @@ defaults to 30 seconds, bounded to 1–300. Refresh failures are briefly cached 
 closed after expiry, never returning stale keys. Positive discovery/JWKS HTTP responses
 use the same public max-age; failures remain no-store. Ordinary public metadata does not consume
 login or database rate-limit budgets: discovery is static, and the single-flight cache
-bounds Vault reads to at most one per cache interval on each replica, including failures.
+bounds OpenBao reads to at most one per cache interval on each replica, including failures.
 There are no local
 signing keys or local authoritative active-version caches. Selecting a different
 key/mount requires the corresponding operator-provisioned read policy.
 
-Operators can rotate the transit key using the existing Vault management workflow;
+Operators can rotate the transit key using the existing OpenBao management workflow;
 old public versions remain published for verification. Do not trim/retire previous
 versions until all signed-token lifetimes and downstream cache windows expire,
 including rollback requirements. Runtime cannot perform these operations. Each exchange resolves a fresh shared signing
-version and derives its matching published kid, then verifies Vault's signature locally.
+version and derives its matching published kid, then verifies OpenBao's signature locally.
 Unknown-kid clients can force a rate-limited fresh JWKS read using `Cache-Control: no-cache`.
 See [token exchange](oauth-token-exchange.md) for cache/rotation policy and bounded lifetimes.
 Admission-token PASERK keys and internal admin signing keys remain separate trust domains.
@@ -570,7 +570,7 @@ brief membership locks for reads, and plaintext destruction on disclosure dismis
 
 
 Independent Claude review through Herdr reproduced the cross-origin consent CSP defect
-and identified client-lock/throttling and uncached Vault-read availability issues. The
+and identified client-lock/throttling and uncached OpenBao-read availability issues. The
 corrected design uses script-free consent navigation, bounded shared transactions,
 race-safe grants, shared quotas and a single-flight public JWKS cache. Regression tests
 exercise both IPv4/IPv6 cross-origin browser callbacks, concurrent grants/redemption,
@@ -598,7 +598,7 @@ before its existing HMAC subject transform, so a leaked locator cannot exhaust a
 browser's counter. Authorization IP quotas still count each start/resume/consent step;
 NAT-heavy deployments should size the existing configured budgets accordingly. Public
 metadata is served without those quotas or PostgreSQL access, while the public-key cache
-coalesces upstream refreshes and bounds a Vault outage using its existing 30-second
+coalesces upstream refreshes and bounds an OpenBao outage using its existing 30-second
 transport timeout and negative cache. Shared client/ancestor locks need load testing for
 PostgreSQL MultiXact churn at higher concurrency. This phase does not claim load testing.
 The browser expiry is only a cleanup hint compared with its wall clock; severe clock skew

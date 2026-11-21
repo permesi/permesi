@@ -267,7 +267,7 @@ sequenceDiagram
   
   ## Admin Elevation Flow
   
-  Platform operators must elevate their session to access administrative routes. This flow ensures that powerful actions require a short-lived step-up token backed by Vault.
+  Platform operators must elevate their session to access administrative routes. This flow ensures that powerful actions require a short-lived step-up token backed by OpenBao.
   
   ```mermaid
   sequenceDiagram
@@ -275,13 +275,13 @@ sequenceDiagram
     participant User
     participant Web as permesi.dev (CSR)
     participant API as api.permesi.dev
-    participant Vault
+    participant OpenBao
   
-    User->>Web: Enter Vault token at /admin/claim
-    Web->>API: POST /v1/auth/admin/elevate (vault_token)
-    Note over API,Vault: Session elevation check
-    API->>Vault: GET /v1/auth/token/lookup-self (X-Vault-Token)
-    Vault-->>API: Valid + operator policy
+    User->>Web: Enter OpenBao token at /admin/claim
+    Web->>API: POST /v1/auth/admin/elevate (openbao_token)
+    Note over API,OpenBao: Session elevation check
+    API->>OpenBao: GET /v1/auth/token/lookup-self (X-Vault-Token)
+    OpenBao-->>API: Valid + operator policy
     API->>API: Mint short-lived Admin PASETO (v4.public)
     API-->>Web: admin_token + expires_at
   
@@ -291,14 +291,14 @@ sequenceDiagram
     API-->>Web: Infrastructure status
   ```
   
-  1. **Vault Step-up**: The operator provides a Vault token which is exchanged for a short-lived, signed PASETO admin token. The Vault token is never persisted or stored in the browser; it is only used once to mint the admin token.
+  1. **OpenBao Step-up**: The operator provides an OpenBao token which is exchanged for a short-lived, signed PASETO admin token. The OpenBao token is never persisted or stored in the browser; it is only used once to mint the admin token.
   2. **PASETO Admin Token**: Subsequent administrative requests use this token in the `Authorization: Bearer` header. The backend verifies the signature offline using its internal signing key.
-  3. **In-Memory Only**: The admin token is kept strictly in-memory. Reloading the page or closing the tab clears the elevation state, requiring re-entry of a Vault token for security.
-  4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the Vault token once creates the first operator and immediately issues an elevated admin token.
+  3. **In-Memory Only**: The admin token is kept strictly in-memory. Reloading the page or closing the tab clears the elevation state, requiring re-entry of an OpenBao token for security.
+  4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the OpenBao token once creates the first operator and immediately issues an elevated admin token.
 
   Endpoint auth split for admin:
   - `/v1/auth/admin/status`, `/v1/auth/admin/bootstrap`, and `/v1/auth/admin/elevate` use the session cookie (`credentials: include`).
-  - Vault token is sent in JSON payload for bootstrap/elevate (`{ "vault_token": "..." }`).
+  - OpenBao token is sent in JSON payload for bootstrap/elevate (`{ "openbao_token": "..." }`).
   - `/v1/auth/admin/infra` uses `Authorization: Bearer <admin_token>` (admin token only).
   
   ## Password Change Flow (OPAQUE)

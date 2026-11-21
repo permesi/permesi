@@ -50,9 +50,9 @@ impl BootstrapPolicyViolation {
     fn message(self) -> &'static str {
         match self {
             Self::OwnerAttributes => {
-                "Vault database roles require non-superuser login and CREATEROLE attributes"
+                "OpenBao database roles require non-superuser login and CREATEROLE attributes"
             }
-            Self::OwnerMemberships => "Vault database owner has unexpected role memberships",
+            Self::OwnerMemberships => "OpenBao database owner has unexpected role memberships",
             Self::RuntimeRole => "Runtime role has unexpected attributes or role memberships",
         }
     }
@@ -348,7 +348,7 @@ impl PostgresContainer {
     }
 
     #[must_use]
-    pub fn vault_connection_url(&self) -> String {
+    pub fn openbao_connection_url(&self) -> String {
         format!(
             "postgresql://{{{{username}}}}:{{{{password}}}}@{}:{}/{}?sslmode=disable",
             self.container_name, POSTGRES_PORT, self.config.db_name
@@ -356,7 +356,7 @@ impl PostgresContainer {
     }
 
     #[must_use]
-    pub fn vault_connection_url_for_db(&self, db_name: &str) -> String {
+    pub fn openbao_connection_url_for_db(&self, db_name: &str) -> String {
         format!(
             "postgresql://{{{{username}}}}:{{{{password}}}}@{}:{}/{}?sslmode=disable",
             self.container_name, POSTGRES_PORT, db_name
@@ -481,7 +481,7 @@ mod tests {
         Ok(())
     }
 
-    const POLICY_ERROR: &str = "psql:/tmp/permesi-bootstrap/bootstrap_ownership.sql:21: ERROR:  P0001: Vault database owner has unexpected role memberships\nprivate diagnostic context\n";
+    const POLICY_ERROR: &str = "psql:/tmp/permesi-bootstrap/bootstrap_ownership.sql:21: ERROR:  P0001: OpenBao database owner has unexpected role memberships\nprivate diagnostic context\n";
 
     #[test]
     fn bootstrap_failure_location_never_exposes_diagnostic_values() {

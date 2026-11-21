@@ -226,7 +226,7 @@ schemathesis-permesi-auth-env email="schemathesis.local@example.com" role="owner
           FROM target_user
           ON CONFLICT (user_id) DO UPDATE SET enabled = TRUE;" >/dev/null
 
-    vault_token="$(just --quiet operator-token)"
+    openbao_token="$(just --quiet operator-token)"
     api_base="${PERMESI_API_BASE_URL:-https://api.permesi.localhost{{https_suffix}}}"
     admin_response="$(
       curl -fsS -k \
@@ -234,7 +234,7 @@ schemathesis-permesi-auth-env email="schemathesis.local@example.com" role="owner
         -H "Cookie: permesi_session=${session_token}" \
         -X POST \
         "${api_base%/}/v1/auth/admin/elevate" \
-        -d "{\"vault_token\":\"${vault_token}\"}"
+        -d "{\"openbao_token\":\"${openbao_token}\"}"
     )"
     admin_token="$(printf '%s' "$admin_response" | jq -er '.admin_token')"
     printf 'export PERMESI_ADMIN_TOKEN="%s"\n' "$admin_token"

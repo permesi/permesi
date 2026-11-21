@@ -88,7 +88,7 @@ fn construct_aad(tenant_id: Option<Uuid>, user_id: Uuid, credential_id: Uuid) ->
 mod tests {
     use super::*;
 
-    /// A fresh random DEK per test, as production DEKs are Vault-generated keys.
+    /// A fresh random DEK per test, as production DEKs are OpenBao-generated keys.
     fn random_dek() -> [u8; 32] {
         rand::random()
     }

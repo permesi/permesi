@@ -1,4 +1,4 @@
-//! Signing metadata tests reject malformed keys and exercise shared Vault rotation.
+//! Signing metadata tests reject malformed keys and exercise shared OpenBao rotation.
 
 #![allow(clippy::indexing_slicing)]
 
@@ -57,9 +57,10 @@ async fn oidc_review_regression_signing_read_cannot_downgrade_refreshed_jwks() -
     let mut server = tokio::task::JoinSet::new();
     server.spawn(async move { axum::serve(listener, router).await });
     let uri = format!("http://{address}");
-    let transport = VaultTransport::from_target("test", vault_client::VaultTarget::parse(&uri)?)?;
+    let transport =
+        OpenBaoTransport::from_target("test", openbao_client::OpenBaoTarget::parse(&uri)?)?;
     let mut globals = crate::cli::globals::GlobalArgs::new(uri, transport);
-    globals.vault_transit_mount = "transit/permesi".into();
+    globals.openbao_transit_mount = "transit/permesi".into();
     let state = OAuthState::new(OAuthConfig::disabled(), &globals);
     let reader = state.clone();
     let mut readers = tokio::task::JoinSet::new();
@@ -91,10 +92,12 @@ async fn oidc_signer_rejects_wrong_version_missing_and_invalid_signatures() -> R
         ))
         .mount(&server)
         .await;
-    let transport =
-        VaultTransport::from_target("test", vault_client::VaultTarget::parse(&server.uri())?)?;
+    let transport = OpenBaoTransport::from_target(
+        "test",
+        openbao_client::OpenBaoTarget::parse(&server.uri())?,
+    )?;
     let mut globals = crate::cli::globals::GlobalArgs::new(server.uri(), transport);
-    globals.vault_transit_mount = "transit/permesi".into();
+    globals.openbao_transit_mount = "transit/permesi".into();
     let state = OAuthState::new(OAuthConfig::disabled(), &globals);
     let key = state.signing_key().await?;
     server.reset().await;
@@ -150,20 +153,22 @@ fn oidc_jwks_retains_prior_versions_and_never_exports_private_material() -> Resu
 #[tokio::test]
 async fn oidc_jwks_rotation_is_shared_across_replicas() -> Result<()> {
     use crate::cli::globals::GlobalArgs;
-    use test_support::{runtime, vault::VaultContainer};
+    use test_support::{openbao::OpenBaoContainer, runtime};
     runtime::ensure_container_runtime()?;
-    let vault = VaultContainer::start("bridge").await?;
-    vault
+    let openbao = OpenBaoContainer::start("bridge").await?;
+    openbao
         .enable_secrets_engine("transit/permesi", "transit")
         .await?;
-    vault
+    openbao
         .create_transit_key("transit/permesi", "oidc-signing", "rsa-2048")
         .await?;
-    let transport =
-        VaultTransport::from_target("test", vault_client::VaultTarget::parse(vault.base_url())?)?;
-    let mut globals = GlobalArgs::new(vault.base_url().into(), transport.clone());
+    let transport = OpenBaoTransport::from_target(
+        "test",
+        openbao_client::OpenBaoTarget::parse(openbao.base_url())?,
+    )?;
+    let mut globals = GlobalArgs::new(openbao.base_url().into(), transport.clone());
     globals.set_token(SecretString::from("root-token"));
-    globals.vault_transit_mount = "transit/permesi".into();
+    globals.openbao_transit_mount = "transit/permesi".into();
     let mut config = OAuthConfig::disabled();
     config.issuer = Some("https://issuer.test".into());
     config.audience = Some("jobs-api".into());
@@ -190,7 +195,7 @@ async fn oidc_jwks_rotation_is_shared_across_replicas() -> Result<()> {
 }
 
 #[tokio::test]
-async fn oidc_review_regression_concurrent_jwks_requests_coalesce_vault_reads() -> Result<()> {
+async fn oidc_review_regression_concurrent_jwks_requests_coalesce_openbao_reads() -> Result<()> {
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -205,10 +210,12 @@ async fn oidc_review_regression_concurrent_jwks_requests_coalesce_vault_reads() 
         ))
         .mount(&server)
         .await;
-    let transport =
-        VaultTransport::from_target("test", vault_client::VaultTarget::parse(&server.uri())?)?;
+    let transport = OpenBaoTransport::from_target(
+        "test",
+        openbao_client::OpenBaoTarget::parse(&server.uri())?,
+    )?;
     let mut globals = crate::cli::globals::GlobalArgs::new(server.uri(), transport);
-    globals.vault_transit_mount = "transit/permesi".into();
+    globals.openbao_transit_mount = "transit/permesi".into();
     let mut config = OAuthConfig::disabled();
     config.jwks_cache_ttl = 1;
     let state = OAuthState::new(config, &globals);

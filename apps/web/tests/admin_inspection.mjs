@@ -1,5 +1,5 @@
-// Compiled WASM against the production router and PostgreSQL. Only Vault step-up is a fixture.
-// Profiles, cookies, Vault tokens and captured request/response bodies are never reported.
+// Compiled WASM against the production router and PostgreSQL. Only OpenBao step-up is a fixture.
+// Profiles, cookies, OpenBao tokens and captured request/response bodies are never reported.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';

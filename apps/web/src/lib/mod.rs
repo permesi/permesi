@@ -11,8 +11,8 @@
 //! ### Admin Elevation (Step-up)
 //!
 //! Platform operators must elevate their session to access administrative routes.
-//! 1. **Claim:** The operator provides a Vault token at `/admin/claim`.
-//! 2. **Exchange:** The API validates the Vault token and returns a short-lived **Admin `PASETO`** (`v4.public`).
+//! 1. **Claim:** The operator provides an OpenBao token at `/admin/claim`.
+//! 2. **Exchange:** The API validates the OpenBao token and returns a short-lived **Admin `PASETO`** (`v4.public`).
 //! 3. **Usage:** The frontend stores this token in memory and includes it in the
 //!    `Authorization: Bearer` header for elevated admin routes such as
 //!    `/v1/auth/admin/infra`.

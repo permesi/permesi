@@ -1,9 +1,9 @@
 mod container;
 pub mod genesis;
+pub mod openbao;
 pub mod postgres;
 pub mod runtime;
 pub mod sql;
-pub mod vault;
 
 use uuid::Uuid;
 

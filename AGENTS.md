@@ -17,14 +17,14 @@ These guidelines are mandatory for contributors and for any AI coding agent oper
   - `services/permesi`: core IAM/OIDC
   - `services/genesis`: edge admission mint
   - `crates/admission_token`: shared contract + helpers
-  - `crates/vault_client`: shared Vault connectivity
+  - `crates/openbao_client`: shared OpenBao connectivity
   - `crates/service_utils`: shared service utilities
   - `crates/test_support`: local integration fixtures
   - `apps/web`: Leptos CSR frontend
   - `tools/oauth_scenario`: isolated OAuth integration runner
 - Workspace releases use a single shared version via `[workspace.package]`; tags apply to the full workspace state.
 - API artifacts live in `docs/openapi/*.json`; diagrams sit in `docs/architecture.mmd`.
-- Each service keeps code under `src/` with `bin/` entrypoints, `cli/` utilities, and `vault/` helpers.
+- Each service keeps code under `src/` with `bin/` entrypoints, `cli/` utilities, and `openbao/` helpers.
 - SQL/schema assets live in `db/sql/`.
 - Frontend assets live under `apps/web` with `Trunk.toml` and `public/`; build output is static `dist/` (Cloudflare Pages).
 
@@ -106,15 +106,15 @@ Container builds (local):
 - Add regression tests with every bug fix.
 - For security-sensitive changes, cover relevant malformed, missing, expired, replayed, mismatched, unauthorized and cross-tenant inputs. Assert the actual rejection and unchanged protected state; a skipped dependency, empty test filter or setup failure does not establish security coverage.
 
-## Vault Bootstrap (Terraform)
-- Vault bootstrap (policies, AppRole roles, transit keys, database engine) lives in `vault/contrib/terraform` (see `vault/contrib/terraform/README.md`).
+## OpenBao Bootstrap (Terraform)
+- OpenBao bootstrap (policies, AppRole roles, transit keys, database engine) lives in `openbao/contrib/terraform` (see `openbao/contrib/terraform/README.md`).
 - Terraform state (`.terraform/`, `terraform.tfstate*`, `terraform.tfvars`) is local-only and should remain untracked.
 
-## Vault Connectivity & AppRole Usage
-- `--vault-url` (or `PERMESI_VAULT_URL` / `GENESIS_VAULT_URL`) supports two modes:
-  - **TCP Mode**: Starts with `http://` or `https://`. Requires `--vault-role-id` and either `--vault-secret-id` or `--vault-wrapped-token`. The app performs AppRole login and manages token/lease renewals.
-  - **Agent Mode**: Starts with `/` or `unix://`. Points to a Vault Agent `api_proxy` socket. No role/secret IDs required; the app delegates authentication and renewals to the Agent (which must be configured with `use_auto_auth_token = true`).
-- Wrapped tokens provided via `--vault-wrapped-token` are unwrapped into a `secret_id` before login (TCP mode only).
+## OpenBao Connectivity & AppRole Usage
+- `--openbao-url` (or `PERMESI_OPENBAO_URL` / `GENESIS_OPENBAO_URL`) supports two modes:
+  - **TCP Mode**: Starts with `http://` or `https://`. Requires `--openbao-role-id` and either `--openbao-secret-id` or `--openbao-wrapped-token`. The app performs AppRole login and manages token/lease renewals.
+  - **Agent Mode**: Starts with `/` or `unix://`. Points to an OpenBao Agent `api_proxy` socket. No role/secret IDs required; the app delegates authentication and renewals to the Agent (which must be configured with `use_auto_auth_token = true`).
+- Wrapped tokens provided via `--openbao-wrapped-token` are unwrapped into a `secret_id` before login (TCP mode only).
 
 ## Commit & Pull Request Guidelines
 - Use short, plain imperative commit subjects. Never use conventional prefixes such as `feat:`, `chore:`, `fix:`, `docs:` or scoped variants.

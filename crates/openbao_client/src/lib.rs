@@ -1,0 +1,794 @@
+//! OpenBao client library for Permesi and Genesis.
+//!
+//! This crate provides low-level connectivity to OpenBao, supporting
+//! both direct TCP (HTTP/S) and OpenBao Agent Sidecar (Unix Socket) modes.
+//! It handles `AppRole` and opt-in Kubernetes authentication, secret unwrapping,
+//! and dynamic database credential retrieval.
+//!
+//! OpenBao kept the wire protocol of the project it forked from, so two names
+//! on the wire still say "vault": the `X-Vault-Token` request header and the
+//! `vault:v<N>:` prefix on Transit signatures and ciphertexts. They are protocol
+//! constants of the OpenBao HTTP API, not leftovers, and must not be renamed.
+
+use anyhow::{Result, anyhow};
+use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
+use serde_json::{Value, json};
+use tracing::{Instrument, debug, info_span};
+use url::Url;
+
+pub mod kubernetes;
+pub mod transport;
+pub use transport::{OpenBaoMode, OpenBaoTarget, OpenBaoTransport};
+
+/// Database credentials and lease information returned from OpenBao.
+pub struct DatabaseCreds {
+    /// Unique identifier for the credential lease.
+    pub lease_id: String,
+    /// Validity period of the lease in seconds.
+    pub lease_duration: u64,
+    /// Generated database username.
+    pub username: String,
+    /// Generated database password.
+    pub password: SecretString,
+}
+
+fn openbao_error_message(json_response: &Value) -> &str {
+    json_response
+        .get("errors")
+        .and_then(|v| v.get(0))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+/// Bounded like the transport so a stalled OpenBao cannot hang startup login.
+fn client(user_agent: &str) -> Result<Client> {
+    Ok(Client::builder()
+        .user_agent(user_agent)
+        .connect_timeout(transport::OPENBAO_CONNECT_TIMEOUT)
+        .timeout(transport::OPENBAO_REQUEST_TIMEOUT)
+        .build()?)
+}
+
+/// Construct a full OpenBao endpoint URL from a base URL and path.
+///
+/// # Errors
+/// Returns an error if `url` cannot be parsed, has no host, or uses an unsupported scheme.
+pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
+    let url = Url::parse(url)?;
+
+    let scheme = url.scheme();
+
+    let host = url
+        .host()
+        .ok_or_else(|| anyhow!("Error parsing URL: no host specified"))?
+        .to_owned();
+
+    let port = match url.port() {
+        Some(p) => p,
+        None => match scheme {
+            "http" => 80,
+            "https" => 443,
+            _ => return Err(anyhow!("Error parsing URL: unsupported scheme {scheme}")),
+        },
+    };
+
+    let endpoint_url = format!("{scheme}://{host}:{port}{path}");
+
+    debug!("endpoint URL: {}", endpoint_url);
+
+    Ok(endpoint_url)
+}
+
+/// Resolve the `AppRole` login URL from an OpenBao origin or an explicit login URL.
+///
+/// An origin (an HTTP(S) URL whose path is empty or `/` and which carries no
+/// query) is completed to the standard `AppRole` login path
+/// (`/v1/auth/approle/login`). Every other HTTP(S) URL is used verbatim, with its
+/// path and query preserved, so reverse-proxy-prefixed or custom-auth-mount login
+/// URLs are never rewritten.
+///
+/// # Errors
+/// Returns an error if the URL cannot be parsed, has no host, or uses an unsupported scheme.
+pub fn approle_login_url(url: &str) -> Result<String> {
+    let parsed = Url::parse(url)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!(
+            "Error parsing URL: unsupported scheme {}",
+            parsed.scheme()
+        ));
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(anyhow!("Error parsing URL: no host specified"));
+    }
+    let path = parsed.path();
+    let is_origin = (path.is_empty() || path == "/") && parsed.query().is_none();
+    if is_origin {
+        return endpoint_url(url, "/v1/auth/approle/login");
+    }
+    Ok(url.to_string())
+}
+
+/// Unwrap a wrapped OpenBao response (typically containing a secret-id).
+///
+/// # Errors
+/// Returns an error if the OpenBao request fails or the response is missing expected fields.
+pub async fn unwrap(user_agent: &str, url: &str, token: &str) -> Result<String> {
+    let client = client(user_agent)?;
+
+    let unwrap_url = endpoint_url(url, "/v1/sys/wrapping/unwrap")?;
+
+    let span = info_span!(
+        "openbao.unwrap",
+        http.method = "POST",
+        url = %unwrap_url
+    );
+    let response = client
+        .post(&unwrap_url)
+        .header("X-Vault-Token", token)
+        .send()
+        .instrument(span)
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let json_response: Value = response.json().await?;
+
+        return Err(anyhow!(
+            "{} - {}, {}",
+            unwrap_url,
+            status,
+            openbao_error_message(&json_response)
+        ));
+    }
+
+    let json_response: Value = response.json().await?;
+    let sid = json_response
+        .get("data")
+        .and_then(|v| v.get("secret_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no secret_id found"))?;
+
+    Ok(sid.to_string())
+}
+
+/// Login to OpenBao using the `AppRole` auth method.
+///
+/// # Errors
+/// Returns an error if login fails or the response is invalid.
+pub async fn approle_login(
+    user_agent: &str,
+    url: &str,
+    sid: &str,
+    rid: &str,
+) -> Result<(String, u64)> {
+    let client = client(user_agent)?;
+
+    let login_payload = json!({
+        "role_id": rid,
+        "secret_id": sid
+    });
+
+    debug!("login URL: {}, role ID: {}", url, rid);
+
+    let span = info_span!(
+        "openbao.approle_login",
+        http.method = "POST",
+        url = %url
+    );
+    let response = client
+        .post(url)
+        .json(&login_payload)
+        .send()
+        .instrument(span)
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let json_response: Value = response.json().await?;
+
+        return Err(anyhow!(
+            "{} - {}, {}",
+            url,
+            status,
+            openbao_error_message(&json_response)
+        ));
+    }
+
+    let json_response: Value = response.json().await?;
+    let token = json_response
+        .get("auth")
+        .and_then(|v| v.get("client_token"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no client_token found"))?;
+    let lease_duration = json_response
+        .get("auth")
+        .and_then(|v| v.get("lease_duration"))
+        .and_then(Value::as_u64)
+        .unwrap_or(1800);
+
+    Ok((token.to_string(), lease_duration))
+}
+
+/// Renew the validity of an OpenBao authentication token.
+///
+/// # Errors
+/// Returns an error if renewal fails or the response is invalid.
+pub async fn renew_token(
+    user_agent: &str,
+    url: &str,
+    token: &SecretString,
+    increment: Option<u64>,
+) -> Result<u64> {
+    let client = client(user_agent)?;
+
+    let payload = json!({
+        "increment": increment.unwrap_or(0)
+    });
+
+    let renew_url = endpoint_url(url, "/v1/auth/token/renew-self")?;
+
+    let span = info_span!(
+        "openbao.renew_token",
+        http.method = "POST",
+        url = %renew_url
+    );
+    let response = client
+        .post(&renew_url)
+        .json(&payload)
+        .header("X-Vault-Token", token.expose_secret())
+        .send()
+        .instrument(span)
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let json_response: Value = response.json().await?;
+
+        return Err(anyhow!(
+            "{} - {}, {}",
+            renew_url,
+            status,
+            openbao_error_message(&json_response)
+        ));
+    }
+
+    let json_response: Value = response.json().await?;
+
+    json_response
+        .get("auth")
+        .and_then(|v| v.get("lease_duration"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
+}
+
+/// Renew a dynamic database credential lease.
+///
+/// # Errors
+/// Returns an error if renewal fails or the response is invalid.
+pub async fn renew_db_token(
+    user_agent: &str,
+    url: &str,
+    token: &SecretString,
+    lease_id: &str,
+    increment: u64,
+) -> Result<u64> {
+    let client = client(user_agent)?;
+
+    let payload = json!({
+        "increment": increment,
+        "lease_id": lease_id
+    });
+
+    let renew_url = endpoint_url(url, "/v1/sys/leases/renew")?;
+
+    let span = info_span!(
+        "openbao.renew_db_token",
+        http.method = "POST",
+        url = %renew_url
+    );
+    let response = client
+        .post(&renew_url)
+        .json(&payload)
+        .header("X-Vault-Token", token.expose_secret())
+        .send()
+        .instrument(span)
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let json_response: Value = response.json().await?;
+
+        return Err(anyhow!(
+            "{} - {}, {}",
+            renew_url,
+            status,
+            openbao_error_message(&json_response)
+        ));
+    }
+
+    let json_response: Value = response.json().await?;
+
+    json_response
+        .get("lease_duration")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))
+}
+
+/// Fetch new dynamic database credentials from OpenBao.
+///
+/// # Errors
+/// Returns an error if the request fails or the response is missing required fields.
+pub async fn database_creds(
+    user_agent: &str,
+    openbao_url: &str,
+    openbao_token: &SecretString,
+    db_path: &str,
+) -> Result<DatabaseCreds> {
+    let client = client(user_agent)?;
+
+    let db_creds = endpoint_url(openbao_url, db_path)?;
+
+    let span = info_span!(
+        "openbao.database_creds",
+        http.method = "GET",
+        url = %db_creds
+    );
+    let response = client
+        .get(&db_creds)
+        .header("X-Vault-Token", openbao_token.expose_secret())
+        .send()
+        .instrument(span)
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let json_response: Value = response.json().await?;
+
+        return Err(anyhow!(
+            "{} - {}, {}",
+            db_creds,
+            status,
+            openbao_error_message(&json_response)
+        ));
+    }
+
+    let json_response: Value = response.json().await?;
+
+    let lease_id = json_response
+        .get("lease_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_id found"))?;
+    let lease_duration = json_response
+        .get("lease_duration")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no lease_duration found"))?;
+    let username = json_response
+        .get("data")
+        .and_then(|v| v.get("username"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no username found"))?;
+    let password = json_response
+        .get("data")
+        .and_then(|v| v.get("password"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Error parsing JSON response: no password found"))?;
+
+    Ok(DatabaseCreds {
+        lease_id: lease_id.to_string(),
+        lease_duration,
+        username: username.to_string(),
+        password: SecretString::from(password.to_string()),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::{Result, anyhow};
+    use secrecy::ExposeSecret;
+    use serde_json::json;
+    use std::net::TcpListener;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const USER_AGENT: &str = "openbao-client-test/0.1";
+
+    fn can_bind_localhost() -> bool {
+        TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    #[test]
+    fn endpoint_url_defaults_http_port() -> Result<()> {
+        let url = endpoint_url("http://example.com", "/v1/test")?;
+        assert_eq!(url, "http://example.com:80/v1/test");
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_url_defaults_https_port() -> Result<()> {
+        let url = endpoint_url("https://example.com", "/v1/test")?;
+        assert_eq!(url, "https://example.com:443/v1/test");
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_url_rejects_unsupported_scheme() -> Result<()> {
+        let err = endpoint_url("ftp://example.com", "/v1/test")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unsupported scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_base_url() -> Result<()> {
+        assert_eq!(
+            approle_login_url("https://openbao.example")?,
+            "https://openbao.example:443/v1/auth/approle/login"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_base_url_with_trailing_slash() -> Result<()> {
+        assert_eq!(
+            approle_login_url("https://openbao.example/")?,
+            "https://openbao.example:443/v1/auth/approle/login"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_defaults_http_port() -> Result<()> {
+        assert_eq!(
+            approle_login_url("http://openbao.example")?,
+            "http://openbao.example:80/v1/auth/approle/login"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_full_login_url() -> Result<()> {
+        let url = "https://openbao.example:8200/v1/auth/approle/login";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_accepts_custom_mount_login_url() -> Result<()> {
+        let url = "https://openbao.example:8200/v1/auth/custom/login";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_query_for_login_url() -> Result<()> {
+        let url = "https://openbao.example:8200/v1/auth/approle/login?redirect=yes";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_reverse_proxy_prefix() -> Result<()> {
+        let url = "https://h/openbao";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_custom_login_with_query() -> Result<()> {
+        let url = "https://h/v1/auth/custom/login?namespace=dev";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_trailing_slash_login_path() -> Result<()> {
+        let url = "https://h/v1/auth/approle/login/";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_ftp_login_url() -> Result<()> {
+        let err = approle_login_url("ftp://h/v1/auth/x/login")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unsupported scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_file_login_url() -> Result<()> {
+        let err = approle_login_url("file:///v1/auth/x/login")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unsupported scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_origin_query() -> Result<()> {
+        assert_eq!(approle_login_url("https://h?x=1")?, "https://h?x=1");
+        assert_eq!(approle_login_url("https://h/?x=1")?, "https://h/?x=1");
+        assert_eq!(approle_login_url("https://h/?")?, "https://h/?");
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_preserves_login_path_suffix() -> Result<()> {
+        let url = "https://h/v1/auth/approle/login/extra";
+        assert_eq!(approle_login_url(url)?, url);
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_hostless_url() -> Result<()> {
+        let err = approle_login_url("https://")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("host"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_unsupported_scheme() -> Result<()> {
+        let err = approle_login_url("ftp://openbao.example")
+            .err()
+            .ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("unsupported scheme"));
+        Ok(())
+    }
+
+    #[test]
+    fn approle_login_url_rejects_malformed_url() {
+        assert!(approle_login_url("http://").is_err());
+    }
+
+    #[tokio::test]
+    async fn unwrap_returns_secret_id() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/wrapping/unwrap"))
+            .and(header("X-Vault-Token", "wrapped-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"secret_id": "secret-123"}
+            })))
+            .mount(&server)
+            .await;
+
+        let secret_id = unwrap(USER_AGENT, &server.uri(), "wrapped-token").await?;
+        assert_eq!(secret_id, "secret-123");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unwrap_errors_on_failure_status() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/wrapping/unwrap"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errors": ["nope"]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = unwrap(USER_AGENT, &server.uri(), "wrapped-token").await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("nope"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn approle_login_defaults_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .and(body_json(json!({
+                "role_id": "role-id",
+                "secret_id": "secret-id"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": {"client_token": "token-abc"}
+            })))
+            .mount(&server)
+            .await;
+
+        let url = format!("{}/v1/auth/approle/login", server.uri());
+        let (token, lease_duration) =
+            approle_login(USER_AGENT, &url, "secret-id", "role-id").await?;
+        assert_eq!(token, "token-abc");
+        assert_eq!(lease_duration, 1800);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_token_returns_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/token/renew-self"))
+            .and(header("X-Vault-Token", "openbao-token"))
+            .and(body_json(json!({
+                "increment": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": {"lease_duration": 42}
+            })))
+            .mount(&server)
+            .await;
+
+        let lease_duration = renew_token(USER_AGENT, &server.uri(), &token, None).await?;
+        assert_eq!(lease_duration, 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_token_errors_on_failure_status() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/token/renew-self"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errors": ["nope"]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = renew_token(USER_AGENT, &server.uri(), &token, None).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("nope"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_token_errors_on_missing_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/token/renew-self"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let result = renew_token(USER_AGENT, &server.uri(), &token, None).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("no lease_duration"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_db_token_returns_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/leases/renew"))
+            .and(header("X-Vault-Token", "openbao-token"))
+            .and(body_json(json!({
+                "increment": 120,
+                "lease_id": "lease-1"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "lease_duration": 120
+            })))
+            .mount(&server)
+            .await;
+
+        let lease_duration =
+            renew_db_token(USER_AGENT, &server.uri(), &token, "lease-1", 120).await?;
+        assert_eq!(lease_duration, 120);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_db_token_errors_on_failure_status() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/leases/renew"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errors": ["nope"]
+            })))
+            .mount(&server)
+            .await;
+
+        let result = renew_db_token(USER_AGENT, &server.uri(), &token, "lease-1", 120).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("nope"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renew_db_token_errors_on_missing_lease_duration() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/leases/renew"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        let result = renew_db_token(USER_AGENT, &server.uri(), &token, "lease-1", 120).await;
+        let err = result.err().ok_or_else(|| anyhow!("expected error"))?;
+        assert!(err.to_string().contains("no lease_duration"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn database_creds_parses_fields() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        let token = SecretString::from("openbao-token".to_string());
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/creds/test"))
+            .and(header("X-Vault-Token", "openbao-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "lease_id": "lease-123",
+                "lease_duration": 55,
+                "data": {"username": "user", "password": "pass"}
+            })))
+            .mount(&server)
+            .await;
+
+        let creds =
+            database_creds(USER_AGENT, &server.uri(), &token, "/v1/database/creds/test").await?;
+
+        assert_eq!(creds.lease_id, "lease-123");
+        assert_eq!(creds.lease_duration, 55);
+        assert_eq!(creds.username, "user");
+        assert_eq!(creds.password.expose_secret(), "pass");
+        Ok(())
+    }
+}

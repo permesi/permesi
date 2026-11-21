@@ -3,12 +3,12 @@
 //! Flow Overview:
 //! 1) Authenticate via session cookie.
 //! 2) Apply bootstrap gating + recent-auth checks + rate limits.
-//! 3) Validate Vault step-up tokens on every elevation.
+//! 3) Validate OpenBao step-up tokens on every elevation.
 //! 4) Issue short-lived admin PASETOs scoped to platform actions.
 //!
 //! Security boundaries:
-//! - Vault tokens are never persisted or logged.
-//! - Operator membership is a UI gate only; Vault policy is authoritative.
+//! - OpenBao tokens are never persisted or logged.
+//! - Operator membership is a UI gate only; OpenBao policy is authoritative.
 //! - Admin tokens are short-lived and require step-up for each issuance.
 
 use axum::{
@@ -36,36 +36,36 @@ use super::{
     },
     utils::{extract_client_ip, extract_country_code},
 };
-use crate::vault::step_up::{LookupSelfError, StepUpClient};
-use vault_client::VaultTransport;
+use crate::openbao::step_up::{LookupSelfError, StepUpClient};
+use openbao_client::OpenBaoTransport;
 
 const DEFAULT_ADMIN_TTL_SECONDS: i64 = 12 * 60 * 60; // 12 hours
 const DEFAULT_RECENT_AUTH_SECONDS: i64 = 3600; // 1 hour
-const DEFAULT_VAULT_POLICY: &str = "permesi-operators";
+const DEFAULT_OPENBAO_POLICY: &str = "permesi-operators";
 const MAX_BODY_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct AdminConfig {
-    vault_addr: String,
-    vault_policy: String,
+    openbao_addr: String,
+    openbao_policy: String,
     admin_ttl_seconds: i64,
     recent_auth_seconds: i64,
 }
 
 impl AdminConfig {
     #[must_use]
-    pub fn new(vault_addr: String) -> Self {
+    pub fn new(openbao_addr: String) -> Self {
         Self {
-            vault_addr,
-            vault_policy: DEFAULT_VAULT_POLICY.to_string(),
+            openbao_addr,
+            openbao_policy: DEFAULT_OPENBAO_POLICY.to_string(),
             admin_ttl_seconds: DEFAULT_ADMIN_TTL_SECONDS,
             recent_auth_seconds: DEFAULT_RECENT_AUTH_SECONDS,
         }
     }
 
     #[must_use]
-    pub fn with_vault_policy(mut self, policy: String) -> Self {
-        self.vault_policy = policy;
+    pub fn with_openbao_policy(mut self, policy: String) -> Self {
+        self.openbao_policy = policy;
         self
     }
 
@@ -82,13 +82,13 @@ impl AdminConfig {
     }
 
     #[must_use]
-    pub fn vault_addr(&self) -> &str {
-        &self.vault_addr
+    pub fn openbao_addr(&self) -> &str {
+        &self.openbao_addr
     }
 
     #[must_use]
-    pub fn vault_policy(&self) -> &str {
-        &self.vault_policy
+    pub fn openbao_policy(&self) -> &str {
+        &self.openbao_policy
     }
 
     #[must_use]
@@ -107,24 +107,24 @@ pub struct AdminState {
     config: AdminConfig,
     rate_limiter: AdminRateLimiter,
     token_signer: AdminTokenSigner,
-    vault_client: StepUpClient,
+    openbao_client: StepUpClient,
 }
 
 impl AdminState {
     /// # Errors
-    /// Returns an error if the Vault client or token signer cannot be initialized.
+    /// Returns an error if the OpenBao client or token signer cannot be initialized.
     pub fn new(
         config: AdminConfig,
         pool: sqlx::PgPool,
-        transport: VaultTransport,
+        transport: OpenBaoTransport,
     ) -> anyhow::Result<Self> {
-        let vault_client = StepUpClient::new(transport)?;
+        let openbao_client = StepUpClient::new(transport)?;
         let token_signer = AdminTokenSigner::new()?;
         Ok(Self {
             config,
             rate_limiter: AdminRateLimiter::new(pool),
             token_signer,
-            vault_client,
+            openbao_client,
         })
     }
 
@@ -144,8 +144,8 @@ impl AdminState {
     }
 
     #[must_use]
-    pub fn vault_client(&self) -> &StepUpClient {
-        &self.vault_client
+    pub fn openbao_client(&self) -> &StepUpClient {
+        &self.openbao_client
     }
 }
 
@@ -240,11 +240,11 @@ pub async fn admin_infra(
         permesi_size_bytes,
     };
 
-    let vault = match admin_state.vault_client().health().await {
+    let openbao = match admin_state.openbao_client().health().await {
         Ok(status) => status,
         Err(err) => {
-            error!("Failed to get Vault health: {err}");
-            crate::api::handlers::auth::types::VaultStatus {
+            error!("Failed to get OpenBao health: {err}");
+            crate::api::handlers::auth::types::OpenBaoStatus {
                 status: "error".to_string(),
                 version: "unknown".to_string(),
                 sealed: true,
@@ -267,7 +267,7 @@ pub async fn admin_infra(
 
     let response = AdminInfraResponse {
         database,
-        vault,
+        openbao,
         platform,
     };
     (StatusCode::OK, Json(response)).into_response()
@@ -320,7 +320,7 @@ pub fn verify_admin_token(
         (status = 401, description = "Missing or invalid session."),
         (status = 404, description = "Bootstrap closed."),
         (status = 429, description = "Rate limited."),
-        (status = 503, description = "Vault unavailable."),
+        (status = 503, description = "OpenBao unavailable."),
     ),
     tag = "auth"
 )]
@@ -376,13 +376,13 @@ pub async fn admin_bootstrap(
         Err(err) => return rate_limit_response(err),
     };
 
-    let token = match normalize_vault_token(&request.vault_token) {
+    let token = match normalize_openbao_token(&request.openbao_token) {
         Ok(token) => token,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
 
-    let _vault_info =
-        match validate_vault_token(admin_state.as_ref(), principal.user_id, token).await {
+    let _openbao_info =
+        match validate_openbao_token(admin_state.as_ref(), principal.user_id, token).await {
             Ok(info) => info,
             Err(response) => return *response,
         };
@@ -420,7 +420,7 @@ pub async fn admin_bootstrap(
         (status = 401, description = "Missing or invalid session."),
         (status = 403, description = "Not an operator."),
         (status = 429, description = "Rate limited."),
-        (status = 503, description = "Vault unavailable."),
+        (status = 503, description = "OpenBao unavailable."),
     ),
     tag = "auth"
 )]
@@ -466,20 +466,23 @@ pub async fn admin_elevate(
         Err(err) => return rate_limit_response(err),
     };
 
-    let token = match normalize_vault_token(&request.vault_token) {
+    let token = match normalize_openbao_token(&request.openbao_token) {
         Ok(token) => token,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
 
-    let vault_info =
-        match validate_vault_token(admin_state.as_ref(), principal.user_id, token).await {
+    let openbao_info =
+        match validate_openbao_token(admin_state.as_ref(), principal.user_id, token).await {
             Ok(info) => info,
             Err(response) => return *response,
         };
 
-    // Cap the admin token TTL to the vault token's remaining life if it is shorter
+    // Cap the admin token TTL to the bao token's remaining life if it is shorter
     // than our configured maximum.
-    let ttl_seconds = admin_state.config().admin_ttl_seconds().min(vault_info.ttl);
+    let ttl_seconds = admin_state
+        .config()
+        .admin_ttl_seconds()
+        .min(openbao_info.ttl);
 
     let revision = match enabled_operator_revision(&pool, principal.user_id).await {
         Ok(Some(revision)) => revision,
@@ -517,13 +520,13 @@ fn reject_large_body(headers: &HeaderMap) -> Option<StatusCode> {
     (length > MAX_BODY_BYTES).then_some(StatusCode::PAYLOAD_TOO_LARGE)
 }
 
-fn normalize_vault_token(token: &str) -> Result<&str, String> {
+fn normalize_openbao_token(token: &str) -> Result<&str, String> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
-        return Err("Missing vault token".to_string());
+        return Err("Missing bao token".to_string());
     }
     if trimmed.len() > MAX_BODY_BYTES {
-        return Err("Invalid vault token".to_string());
+        return Err("Invalid bao token".to_string());
     }
     Ok(trimmed)
 }
@@ -536,34 +539,34 @@ fn rate_limit_response(err: AdminRateLimitError) -> axum::response::Response {
     }
 }
 
-/// Verifies the submitted Vault token and requires the configured elevation policy.
+/// Verifies the submitted OpenBao token and requires the configured elevation policy.
 ///
-/// Validation is performed through Vault with the authenticated user's server-side
+/// Validation is performed through OpenBao with the authenticated user's server-side
 /// identity. Unauthorized or under-scoped attempts are recorded by the rate limiter;
 /// the token itself is never returned or logged. Error responses are boxed only to
 /// keep the async result small and do not change the response sent to the client.
-async fn validate_vault_token(
+async fn validate_openbao_token(
     admin_state: &AdminState,
     user_id: Uuid,
     token: &str,
-) -> Result<crate::vault::step_up::VaultTokenInfo, Box<axum::response::Response>> {
-    let lookup = admin_state.vault_client().lookup_self(token).await;
+) -> Result<crate::openbao::step_up::OpenBaoTokenInfo, Box<axum::response::Response>> {
+    let lookup = admin_state.openbao_client().lookup_self(token).await;
     let info = match lookup {
         Ok(info) => info,
         Err(err) => {
             return Err(Box::new(match err {
                 LookupSelfError::Unauthorized => {
                     admin_state.rate_limiter().record_failure(user_id);
-                    (StatusCode::UNAUTHORIZED, "Invalid vault token".to_string()).into_response()
+                    (StatusCode::UNAUTHORIZED, "Invalid bao token".to_string()).into_response()
                 }
                 LookupSelfError::Unavailable => (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "Vault unavailable".to_string(),
+                    "OpenBao unavailable".to_string(),
                 )
                     .into_response(),
                 LookupSelfError::InvalidResponse => (
                     StatusCode::BAD_GATEWAY,
-                    "Vault response invalid".to_string(),
+                    "OpenBao response invalid".to_string(),
                 )
                     .into_response(),
             }));
@@ -573,13 +576,13 @@ async fn validate_vault_token(
     if info
         .policies
         .iter()
-        .any(|policy| policy == admin_state.config().vault_policy())
+        .any(|policy| policy == admin_state.config().openbao_policy())
     {
         Ok(info)
     } else {
         admin_state.rate_limiter().record_failure(user_id);
         Err(Box::new(
-            (StatusCode::FORBIDDEN, "Vault policy missing".to_string()).into_response(),
+            (StatusCode::FORBIDDEN, "OpenBao policy missing".to_string()).into_response(),
         ))
     }
 }
@@ -609,14 +612,14 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{AdminConfig, AdminState, validate_vault_token};
+    use super::{AdminConfig, AdminState, validate_openbao_token};
     use anyhow::{Context, Result};
+    use openbao_client::{OpenBaoTarget, OpenBaoTransport};
     use serde_json::json;
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use std::net::TcpListener;
     use test_support::{postgres::PostgresContainer, runtime};
     use uuid::Uuid;
-    use vault_client::{VaultTarget, VaultTransport};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -629,9 +632,9 @@ mod tests {
         TcpListener::bind("127.0.0.1:0").is_ok()
     }
 
-    fn create_transport(url: &str) -> VaultTransport {
-        let target = VaultTarget::parse(url).unwrap();
-        VaultTransport::from_target("test", target).unwrap()
+    fn create_transport(url: &str) -> OpenBaoTransport {
+        let target = OpenBaoTarget::parse(url).unwrap();
+        OpenBaoTransport::from_target("test", target).unwrap()
     }
 
     async fn get_test_pool() -> Result<(PgPool, PostgresContainer)> {
@@ -651,7 +654,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_vault_token_requires_policy() -> Result<()> {
+    async fn validate_openbao_token_requires_policy() -> Result<()> {
         if !can_bind_localhost() {
             eprintln!("Skipping test: cannot bind localhost");
             return Ok(());
@@ -682,13 +685,13 @@ mod tests {
 
         let config = AdminConfig::new(server.uri());
         let state = AdminState::new(config, pool, create_transport(&server.uri()))?;
-        let response = validate_vault_token(&state, Uuid::new_v4(), "token").await;
+        let response = validate_openbao_token(&state, Uuid::new_v4(), "token").await;
         assert!(response.is_err());
         Ok(())
     }
 
     #[tokio::test]
-    async fn validate_vault_token_calls_vault_each_time() -> Result<()> {
+    async fn validate_openbao_token_calls_openbao_each_time() -> Result<()> {
         if !can_bind_localhost() {
             eprintln!("Skipping test: cannot bind localhost");
             return Ok(());
@@ -719,8 +722,8 @@ mod tests {
 
         let config = AdminConfig::new(server.uri());
         let state = AdminState::new(config, pool, create_transport(&server.uri()))?;
-        let _ = validate_vault_token(&state, Uuid::new_v4(), "token").await;
-        let _ = validate_vault_token(&state, Uuid::new_v4(), "token").await;
+        let _ = validate_openbao_token(&state, Uuid::new_v4(), "token").await;
+        let _ = validate_openbao_token(&state, Uuid::new_v4(), "token").await;
         Ok(())
     }
 
@@ -765,7 +768,7 @@ mod tests {
             .execute(&pool)
             .await?;
 
-        // 2. Setup Mock Vault
+        // 2. Setup Mock OpenBao
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/auth/token/lookup-self"))
@@ -790,7 +793,7 @@ mod tests {
         headers.insert(COOKIE, format!("permesi_session={token}").parse()?);
 
         let payload = AdminBootstrapRequest {
-            vault_token: "s.validtoken".to_string(),
+            openbao_token: "s.validtoken".to_string(),
             note: Some("Initial bootstrap".to_string()),
         };
 

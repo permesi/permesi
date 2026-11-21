@@ -1,13 +1,13 @@
 //! Admission token signing and PASERK management.
 //!
 //! Genesis mints short-lived "admission" PASETOs for Permesi. This module
-//! handles signing via Vault Transit (keeping private keys out of process)
+//! handles signing via OpenBao Transit (keeping private keys out of process)
 //! and maintains a local cache of PASERK public keys.
 //!
 //! ## Flow Overview
-//! 1. `AdmissionSigner` is initialized with Vault Transit details.
+//! 1. `AdmissionSigner` is initialized with OpenBao Transit details.
 //! 2. `sign` fetches the latest signing key version from the local PASERK cache.
-//! 3. Claims are signed via Vault's Transit API.
+//! 3. Claims are signed via OpenBao's Transit API.
 //! 4. A v4.public PASETO is constructed with the resulting signature.
 //! 5. `paserk_snapshot` provides the keyset for offline verification by Permesi.
 
@@ -25,7 +25,7 @@ use std::{
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::{cli::globals::GlobalArgs, vault};
+use crate::{cli::globals::GlobalArgs, openbao};
 
 const PASERK_CACHE_TTL_SECONDS: u64 = 300;
 const TRANSIT_KEY_NAME: &str = "genesis-signing";
@@ -36,8 +36,8 @@ const ADMISSION_ACTION: &str = "admission";
 pub const MIN_TOKEN_TTL_SECONDS: i64 = 60;
 pub const MAX_TOKEN_TTL_SECONDS: i64 = 180;
 
-/// `AdmissionSigner` encapsulates Vault-backed signing and PASERK refresh for admission tokens.
-/// It keeps the vault details + PASERK cache together so handlers stay simple and stateless.
+/// `AdmissionSigner` encapsulates OpenBao-backed signing and PASERK refresh for admission tokens.
+/// It keeps the openbao details + PASERK cache together so handlers stay simple and stateless.
 #[derive(Debug, Clone)]
 pub struct AdmissionSigner {
     issuer: String,
@@ -45,8 +45,8 @@ pub struct AdmissionSigner {
     action: String,
     key_name: String,
     transit_mount: String,
-    vault_token: Option<SecretString>,
-    vault_transport: vault::VaultTransport,
+    openbao_token: Option<SecretString>,
+    openbao_transport: openbao::OpenBaoTransport,
     cache: Arc<RwLock<Option<CachedKeySet>>>,
 }
 
@@ -72,7 +72,7 @@ pub struct PaserkSnapshot {
 }
 
 impl AdmissionSigner {
-    /// Initialize the admission signer using Vault transit and environment defaults.
+    /// Initialize the admission signer using OpenBao transit and environment defaults.
     ///
     /// # Errors
     /// Returns an error if PASERK refresh fails.
@@ -82,11 +82,11 @@ impl AdmissionSigner {
         let audience =
             std::env::var("GENESIS_ADMISSION_AUD").unwrap_or_else(|_| "permesi".to_string());
 
-        let transit_mount = globals.vault_transit_mount.clone();
+        let transit_mount = globals.openbao_transit_mount.clone();
 
-        let vault_transport = globals.vault_transport.clone();
-        let vault_token = if vault_transport.is_tcp() {
-            Some(globals.vault_token.clone())
+        let openbao_transport = globals.openbao_transport.clone();
+        let openbao_token = if openbao_transport.is_tcp() {
+            Some(globals.openbao_token.clone())
         } else {
             None
         };
@@ -97,8 +97,8 @@ impl AdmissionSigner {
             action: ADMISSION_ACTION.to_string(),
             key_name: TRANSIT_KEY_NAME.to_string(),
             transit_mount,
-            vault_token,
-            vault_transport,
+            openbao_token,
+            openbao_transport,
             cache: Arc::new(RwLock::new(None)),
         };
 
@@ -142,11 +142,11 @@ impl AdmissionSigner {
         })
     }
 
-    /// Sign the provided claims using Vault transit.
+    /// Sign the provided claims using OpenBao transit.
     /// The `kid` is the PASERK public-key ID for the active key version.
     ///
     /// # Errors
-    /// Returns an error if the PASERK cache cannot be refreshed or Vault signing fails.
+    /// Returns an error if the PASERK cache cannot be refreshed or OpenBao signing fails.
     pub async fn sign(&self, claims: &AdmissionTokenClaims) -> Result<String> {
         let snapshot = self.paserk_snapshot().await?;
         let key_version = snapshot.latest_version;
@@ -156,37 +156,37 @@ impl AdmissionSigner {
         let signing_input = encode_signing_input(claims, &footer)?;
 
         let start = Instant::now();
-        let signature = vault::transit::sign_ed25519(
-            &self.vault_transport,
-            self.vault_token.as_ref(),
+        let signature = openbao::transit::sign_ed25519(
+            &self.openbao_transport,
+            self.openbao_token.as_ref(),
             &self.transit_mount,
             &self.key_name,
             key_version,
             signing_input.pre_auth.as_slice(),
         )
         .await
-        .context("Vault transit sign failed")?;
+        .context("OpenBao transit sign failed")?;
 
         let latency_ms = start.elapsed().as_millis();
         info!(
             key_version = signature.key_version,
-            latency_ms, "vault transit sign completed"
+            latency_ms, "openbao transit sign completed"
         );
 
         if signature.key_version != key_version {
             return Err(anyhow!(
-                "vault returned key version {} but expected {key_version}",
+                "openbao returned key version {} but expected {key_version}",
                 signature.key_version
             ));
         }
 
         let signature_bytes = BASE64_STANDARD
             .decode(signature.signature_base64.as_bytes())
-            .context("failed to decode vault signature")?;
+            .context("failed to decode openbao signature")?;
         let signature_bytes: [u8; 64] = signature_bytes
             .as_slice()
             .try_into()
-            .map_err(|_| anyhow!("invalid vault signature length"))?;
+            .map_err(|_| anyhow!("invalid transit signature length"))?;
         Ok(build_token(
             signing_input.payload.as_slice(),
             signing_input.footer.as_slice(),
@@ -195,10 +195,10 @@ impl AdmissionSigner {
     }
 
     /// Return the cached PASERK keyset (refreshing if stale) for offline verification.
-    /// We publish the current and previous Vault key versions to support safe rotations.
+    /// We publish the current and previous OpenBao key versions to support safe rotations.
     ///
     /// # Errors
-    /// Returns an error if Vault keyset refresh fails and no cached keys exist.
+    /// Returns an error if OpenBao keyset refresh fails and no cached keys exist.
     pub async fn paserk_snapshot(&self) -> Result<PaserkSnapshot> {
         let cached = { self.cache.read().await.clone() };
         if let Some(cache) = cached.clone()
@@ -232,11 +232,11 @@ impl AdmissionSigner {
         }
     }
 
-    /// Refresh PASERK keyset from Vault transit and update the in-memory cache.
+    /// Refresh PASERK keyset from OpenBao transit and update the in-memory cache.
     async fn refresh_paserk(&self) -> Result<PaserkSnapshot> {
-        let transit = vault::transit::fetch_ed25519_keys(
-            &self.vault_transport,
-            self.vault_token.as_ref(),
+        let transit = openbao::transit::fetch_ed25519_keys(
+            &self.openbao_transport,
+            self.openbao_token.as_ref(),
             &self.transit_mount,
             &self.key_name,
         )
@@ -263,7 +263,7 @@ impl AdmissionSigner {
     }
 }
 
-fn build_paserk_snapshot(transit: &vault::transit::TransitKeySet) -> Result<PaserkSnapshot> {
+fn build_paserk_snapshot(transit: &openbao::transit::TransitKeySet) -> Result<PaserkSnapshot> {
     let latest = transit.latest_version;
     let previous = latest.checked_sub(1).filter(|v| *v >= 1);
 
@@ -286,7 +286,7 @@ fn build_paserk_snapshot(transit: &vault::transit::TransitKeySet) -> Result<Pase
     }
 
     if keys.is_empty() {
-        return Err(anyhow!("no public keys available from vault transit"));
+        return Err(anyhow!("no public keys available from openbao transit"));
     }
 
     let active_kid = active_kid.ok_or_else(|| anyhow!("missing active key id"))?;
@@ -317,16 +317,17 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn test_signer() -> Result<AdmissionSigner> {
-        let target = crate::vault::VaultTarget::parse("http://vault.test")?;
-        let vault_transport = crate::vault::VaultTransport::from_target("test-agent", target)?;
+        let target = crate::openbao::OpenBaoTarget::parse("http://openbao.test")?;
+        let openbao_transport =
+            crate::openbao::OpenBaoTransport::from_target("test-agent", target)?;
         Ok(AdmissionSigner {
             issuer: "https://issuer.test".to_string(),
             audience: "permesi".to_string(),
             action: ADMISSION_ACTION.to_string(),
             key_name: TRANSIT_KEY_NAME.to_string(),
             transit_mount: TRANSIT_MOUNT_DEFAULT.to_string(),
-            vault_token: Some(SecretString::from("token".to_string())),
-            vault_transport,
+            openbao_token: Some(SecretString::from("token".to_string())),
+            openbao_transport,
             cache: Arc::new(RwLock::new(None)),
         })
     }
@@ -392,7 +393,7 @@ mod tests {
         keys.insert(1, public_key_previous);
         keys.insert(2, public_key_latest);
 
-        let transit = vault::transit::TransitKeySet {
+        let transit = openbao::transit::TransitKeySet {
             latest_version: 2,
             keys,
         };
@@ -419,7 +420,7 @@ mod tests {
         keys.insert(1, public_key_previous);
         keys.insert(2, public_key_latest.clone());
 
-        let transit = vault::transit::TransitKeySet {
+        let transit = openbao::transit::TransitKeySet {
             latest_version: 2,
             keys,
         };
@@ -436,7 +437,7 @@ mod tests {
         let mut keys = BTreeMap::new();
         keys.insert(2, public_key_latest.clone());
 
-        let transit = vault::transit::TransitKeySet {
+        let transit = openbao::transit::TransitKeySet {
             latest_version: 2,
             keys,
         };
@@ -450,7 +451,7 @@ mod tests {
 
     #[test]
     fn build_paserk_snapshot_rejects_empty_keys() {
-        let transit = vault::transit::TransitKeySet {
+        let transit = openbao::transit::TransitKeySet {
             latest_version: 1,
             keys: BTreeMap::new(),
         };

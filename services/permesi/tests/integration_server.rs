@@ -2,9 +2,9 @@
 //!
 //! This suite verifies the full startup and dependency integration of the
 //! `permesi` binary by:
-//! 1. Orchestrating transient infrastructure (Postgres and Vault containers).
+//! 1. Orchestrating transient infrastructure (Postgres and OpenBao containers).
 //! 2. Providing a static PASERK keyset to the service.
-//! 3. Provisioning Vault with required OPAQUE seeds and database engine.
+//! 3. Provisioning OpenBao with required OPAQUE seeds and database engine.
 //! 4. Spawning the actual `permesi` binary as a supervised child process.
 //! 5. Executing real HTTPS requests against the running service.
 
@@ -21,7 +21,7 @@ use std::{
     process::{Child, Command, Stdio},
     time::Duration,
 };
-use test_support::{TestNetwork, postgres::PostgresContainer, runtime, vault::VaultContainer};
+use test_support::{TestNetwork, openbao::OpenBaoContainer, postgres::PostgresContainer, runtime};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -58,10 +58,10 @@ struct TestTlsPaths {
 
 struct TestContext {
     postgres: PostgresContainer,
-    vault: VaultContainer,
+    openbao: OpenBaoContainer,
     tls: TestTlsPaths,
     port: u16,
-    vault_url: String,
+    openbao_url: String,
     role_id: String,
     secret_id: String,
     dsn: String,
@@ -74,12 +74,12 @@ impl TestContext {
         // 1. Setup Postgres
         let postgres = PostgresContainer::start(network.name()).await?;
         postgres.wait_until_ready().await?;
-        // Per-run password for Vault's root connection role; never a fixed literal.
-        let vault_db_password = Uuid::new_v4().simple().to_string();
-        setup_permesi_database(&postgres, &vault_db_password).await?;
+        // Per-run password for OpenBao's root connection role; never a fixed literal.
+        let openbao_db_password = Uuid::new_v4().simple().to_string();
+        setup_permesi_database(&postgres, &openbao_db_password).await?;
 
-        let (vault, vault_url, role_id, secret_id) =
-            setup_permesi_vault(network.name(), &postgres, &vault_db_password).await?;
+        let (openbao, openbao_url, role_id, secret_id) =
+            setup_permesi_openbao(network.name(), &postgres, &openbao_db_password).await?;
         let dsn = format!(
             "postgres://127.0.0.1:{}/permesi?sslmode=disable",
             postgres.host_port()
@@ -87,10 +87,10 @@ impl TestContext {
 
         Ok(Self {
             postgres,
-            vault,
+            openbao,
             tls,
             port: pick_port()?,
-            vault_url,
+            openbao_url,
             role_id,
             secret_id,
             dsn,
@@ -98,21 +98,24 @@ impl TestContext {
     }
 }
 
-async fn setup_permesi_database(postgres: &PostgresContainer, vault_password: &str) -> Result<()> {
+async fn setup_permesi_database(
+    postgres: &PostgresContainer,
+    openbao_password: &str,
+) -> Result<()> {
     let mut admin = PgConnection::connect(&postgres.admin_dsn())
         .await
         .context("Failed to connect to Postgres admin DB")?;
 
-    // `vault_password` is a hex UUID, so it cannot break out of the SQL literal.
+    // `openbao_password` is a hex UUID, so it cannot break out of the SQL literal.
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE ROLE vault_permesi WITH LOGIN PASSWORD '{vault_password}' CREATEROLE"
+        "CREATE ROLE openbao_permesi WITH LOGIN PASSWORD '{openbao_password}' CREATEROLE"
     )))
     .execute(&mut admin)
     .await?;
-    sqlx::query("GRANT pg_signal_backend TO vault_permesi")
+    sqlx::query("GRANT pg_signal_backend TO openbao_permesi")
         .execute(&mut admin)
         .await?;
-    sqlx::query("CREATE DATABASE permesi OWNER vault_permesi")
+    sqlx::query("CREATE DATABASE permesi OWNER openbao_permesi")
         .execute(&mut admin)
         .await?;
 
@@ -124,22 +127,24 @@ async fn setup_permesi_database(postgres: &PostgresContainer, vault_password: &s
     Ok(())
 }
 
-async fn setup_permesi_vault(
+async fn setup_permesi_openbao(
     network_name: &str,
     postgres: &PostgresContainer,
-    vault_db_password: &str,
-) -> Result<(VaultContainer, String, String, String)> {
-    let vault = VaultContainer::start(network_name).await?;
-    vault.enable_secrets_engine("database", "database").await?;
+    openbao_db_password: &str,
+) -> Result<(OpenBaoContainer, String, String, String)> {
+    let openbao = OpenBaoContainer::start(network_name).await?;
+    openbao
+        .enable_secrets_engine("database", "database")
+        .await?;
 
-    vault
+    openbao
         .enable_secrets_engine("transit/permesi", "transit")
         .await?;
-    vault
+    openbao
         .create_transit_key("transit/permesi", "totp", "chacha20-poly1305")
         .await?;
 
-    vault
+    openbao
         .write_kv_v2(
             "secret",
             "permesi/config",
@@ -150,13 +155,13 @@ async fn setup_permesi_vault(
         )
         .await?;
 
-    let db_config = test_support::vault::DatabaseConfig::new(
-        postgres.vault_connection_url_for_db("permesi"),
-        "vault_permesi",
-        vault_db_password,
+    let db_config = test_support::openbao::DatabaseConfig::new(
+        postgres.openbao_connection_url_for_db("permesi"),
+        "openbao_permesi",
+        openbao_db_password,
         vec!["permesi".to_string()],
     );
-    vault
+    openbao
         .configure_database_connection("permesi", &db_config)
         .await?;
 
@@ -169,7 +174,7 @@ async fn setup_permesi_vault(
         r#"REVOKE permesi_runtime FROM "{{name}}";"#.to_string(),
         r#"DROP ROLE IF EXISTS "{{name}}";"#.to_string(),
     ];
-    vault
+    openbao
         .create_database_role_with_revocation(
             "permesi",
             "permesi",
@@ -180,7 +185,7 @@ async fn setup_permesi_vault(
         )
         .await?;
 
-    vault.enable_auth("approle", "approle").await?;
+    openbao.enable_auth("approle", "approle").await?;
     let policy = r#" 
 path "database/creds/permesi" {
   capabilities = ["read"]
@@ -201,22 +206,22 @@ path "transit/permesi/decrypt/totp" {
   capabilities = ["update"]
 }
 "#;
-    vault.write_policy("permesi-runtime", policy).await?;
+    openbao.write_policy("permesi-runtime", policy).await?;
 
-    vault
+    openbao
         .create_approle("approle", "permesi", &["permesi-runtime"])
         .await?;
-    let role_id = vault.read_role_id("approle", "permesi").await?;
-    let secret_id = vault.create_secret_id("approle", "permesi").await?;
-    let vault_url = vault.login_url("approle");
-    Ok((vault, vault_url, role_id, secret_id))
+    let role_id = openbao.read_role_id("approle", "permesi").await?;
+    let secret_id = openbao.create_secret_id("approle", "permesi").await?;
+    let openbao_url = openbao.login_url("approle");
+    Ok((openbao, openbao_url, role_id, secret_id))
 }
 
 async fn bootstrap_runtime_role(conn: &mut PgConnection) -> Result<()> {
     sqlx::query("CREATE ROLE permesi_runtime NOLOGIN")
         .execute(&mut *conn)
         .await?;
-    sqlx::query("GRANT permesi_runtime TO vault_permesi WITH ADMIN OPTION")
+    sqlx::query("GRANT permesi_runtime TO openbao_permesi WITH ADMIN OPTION")
         .execute(&mut *conn)
         .await?;
     sqlx::query("GRANT CONNECT, TEMPORARY ON DATABASE permesi TO permesi_runtime")
@@ -344,8 +349,8 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_permesi"));
     command.env("PERMESI_LOG_LEVEL", "debug");
     // Clear conflicting env vars that might leak from the host
-    command.env_remove("PERMESI_VAULT_SECRET_ID");
-    command.env_remove("PERMESI_VAULT_WRAPPED_TOKEN");
+    command.env_remove("PERMESI_OPENBAO_SECRET_ID");
+    command.env_remove("PERMESI_OPENBAO_WRAPPED_TOKEN");
 
     let mut child = ChildGuard(
         command
@@ -354,19 +359,19 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
                 &ctx.port.to_string(),
                 "--dsn",
                 &ctx.dsn,
-                "--vault-url",
-                &ctx.vault_url,
-                "--vault-role-id",
+                "--openbao-url",
+                &ctx.openbao_url,
+                "--openbao-role-id",
                 &ctx.role_id,
-                "--vault-secret-id",
+                "--openbao-secret-id",
                 &ctx.secret_id,
                 "--tls-pem-bundle",
                 &ctx.tls.bundle,
                 "--admission-paserk-url",
                 &keyset_json,
-                "--vault-kv-mount",
+                "--openbao-kv-mount",
                 "secret",
-                "--vault-kv-path",
+                "--openbao-kv-path",
                 "permesi/config",
             ])
             .stdout(Stdio::inherit())
@@ -448,8 +453,8 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_permesi"));
     command.env("PERMESI_LOG_LEVEL", "error");
-    command.env_remove("PERMESI_VAULT_SECRET_ID");
-    command.env_remove("PERMESI_VAULT_WRAPPED_TOKEN");
+    command.env_remove("PERMESI_OPENBAO_SECRET_ID");
+    command.env_remove("PERMESI_OPENBAO_WRAPPED_TOKEN");
 
     let mut child = ChildGuard(
         command
@@ -458,19 +463,19 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
                 &ctx.port.to_string(),
                 "--dsn",
                 &ctx.dsn,
-                "--vault-url",
-                &ctx.vault_url,
-                "--vault-role-id",
+                "--openbao-url",
+                &ctx.openbao_url,
+                "--openbao-role-id",
                 &ctx.role_id,
-                "--vault-secret-id",
+                "--openbao-secret-id",
                 &ctx.secret_id,
                 "--tls-pem-bundle",
                 &ctx.tls.bundle,
                 "--admission-paserk-url",
                 &keyset_json,
-                "--vault-kv-mount",
+                "--openbao-kv-mount",
                 "secret",
-                "--vault-kv-path",
+                "--openbao-kv-path",
                 "permesi/config",
             ])
             .stdout(Stdio::null())
@@ -482,7 +487,7 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
     let client = test_https_client(&ctx.tls.ca, "api.permesi.localhost", ctx.port)?;
     wait_for_ready(&client, &base).await?;
 
-    ctx.vault
+    ctx.openbao
         .revoke_lease_prefix("database/creds/permesi")
         .await
         .context("Failed to revoke permesi DB lease prefix")?;

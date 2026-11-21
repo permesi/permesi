@@ -4,7 +4,7 @@
 //! Basic inputs, apply distinct shared PostgreSQL budgets, and call the transaction-owned
 //! exchange or refresh-family revocation. Only committed issuance reaches JSON.
 //! Every response prevents caching and contains no
-//! redirects, SQL/Vault diagnostics, submitted secrets or internal authorization details.
+//! redirects, SQL/OpenBao diagnostics, submitted secrets or internal authorization details.
 
 use super::auth::{AuthState, RateLimitAction, RateLimitConfig, extract_client_ip};
 use crate::oauth::{

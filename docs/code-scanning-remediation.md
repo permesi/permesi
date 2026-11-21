@@ -9,7 +9,7 @@ boundary. GitHub records an individual explanation on each dismissed alert.
 | --- | ---: | --- |
 | `rust/hard-coded-cryptographic-value` | 75 | Dismissed as used in tests. Every reported key/password is behind `#[cfg(test)]`, including inherited test modules and `AppState::for_tests`. Deterministic keys exercise wrong-key, replay and persistence rejection; they are not production credentials. |
 | `rust/cleartext-logging` | 5 | Four test-only clap validation reports were dismissed as used in tests; one CORS-vector insertion report was dismissed as a false positive. SARIF treats clap argument definitions and numeric attempt limits as sensitive values. The reported operations do not log credentials. |
-| `rust/cleartext-transmission` | 5 | Three disposable integration-fixture reports were dismissed as used in tests. Health requests use HTTPS with the test CA; the dev-only Vault fixture publishes synthetic credentials on IPv4 loopback. Two production reports were dismissed as false positives: SARIF incorrectly propagates numeric account/MFA attempt budgets through `Args` into the Vault URL. Those budgets are not secrets and are not inserted into the URL. |
+| `rust/cleartext-transmission` | 5 | Three disposable integration-fixture reports were dismissed as used in tests. Health requests use HTTPS with the test CA; the dev-only OpenBao fixture publishes synthetic credentials on IPv4 loopback. Two production reports were dismissed as false positives: SARIF incorrectly propagates numeric account/MFA attempt budgets through `Args` into the OpenBao URL. Those budgets are not secrets and are not inserted into the URL. |
 | `js/bad-code-sanitization` | 13 | Dismissed as false positives. These browser helpers embed `JSON.stringify(string)` as JavaScript literals for local CDP evaluation, without an HTML parsing boundary. Fifteen executions of the actual control/fill/wait/callback/replay helpers preserved quote, backslash, newline, Unicode separator, template and script-tag payloads without executing them. |
 | `js/file-access-to-http` | 3 | Dismissed as used in tests. Chromium writes its debugging port to `DevToolsActivePort`; the harness queries the local CDP endpoint. Shared discovery now validates decimal port syntax/range and constructs a fixed IPv4-loopback URL. All four browser suites use private random profile directories. |
 | `actions/unpinned-tag` | 19 | Fixed in workflow sources. All 87 remote action references, including composite-action steps and first-party actions, now use full commit hashes resolved from their existing tags. Version comments and Dependabot retain update visibility. The required format job rejects mutable references. |
@@ -20,7 +20,7 @@ This closes 101 verified fixture/false-positive alerts and prepares source fixes
 for the remaining 29. GitHub's default CodeQL setup scans released `main`; those
 29 remain open until the fixed sources reach that branch and are scanned. An
 open dashboard entry during promotion does not establish that the sandbox fix
-was rescanned. Production Vault HTTP/HTTPS/Agent connectivity policy is preserved;
+was rescanned. Production OpenBao HTTP/HTTPS/Agent connectivity policy is preserved;
 the dismissed numerical-budget flows do not certify arbitrary HTTP deployments.
 
 The browser file regressions assert private directory/file permissions, distinct

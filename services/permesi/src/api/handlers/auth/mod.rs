@@ -14,14 +14,14 @@
 //! ## Admin Rate Limiting
 //!
 //! Administrative endpoints (`/v1/auth/admin/*`) are strictly rate-limited to
-//! prevent brute-force attacks on Vault tokens used for bootstrapping and elevation.
+//! prevent brute-force attacks on OpenBao tokens used for bootstrapping and elevation.
 //!
 //! - **Attempt Limit:** 3 attempts per user and 10 attempts per IP within 10 minutes.
 //! - **Failure Cooldown:** 3 consecutive failures trigger a 15-minute cooldown.
 //!
-//! ## `OPAQUE` Seed (Vault KV v2)
+//! ## `OPAQUE` Seed (OpenBao KV v2)
 //!
-//! The server's `OPAQUE` state is derived from a 32-byte seed stored in Vault.
+//! The server's `OPAQUE` state is derived from a 32-byte seed stored in OpenBao.
 //! All instances of `permesi` must share this seed to ensure that user
 //! registration records remain valid across the cluster.
 //!

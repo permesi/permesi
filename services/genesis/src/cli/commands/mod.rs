@@ -1,7 +1,7 @@
 pub mod database;
 mod logging;
+mod openbao;
 mod tls;
-mod vault;
 
 use clap::{
     Arg, ColorChoice, Command,
@@ -13,28 +13,28 @@ use clap::{
 /// # Errors
 /// Rejects incompatible transport/credential settings and missing mode requirements.
 pub fn validate(matches: &clap::ArgMatches) -> Result<(), String> {
-    crate::cli::dispatch::vault_auth(matches)
+    crate::cli::dispatch::openbao_auth(matches)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
 /// Define opt-in native login settings; auto preserves the existing auth selection.
-fn with_native_vault_args(command: Command) -> Command {
+fn with_native_openbao_args(command: Command) -> Command {
     command
-        .arg(Arg::new("vault-auth-method").long("vault-auth-method")
-            .env("GENESIS_VAULT_AUTH_METHOD").default_value("auto")
+        .arg(Arg::new("openbao-auth-method").long("openbao-auth-method")
+            .env("GENESIS_OPENBAO_AUTH_METHOD").default_value("auto")
             .value_parser(["auto", "approle", "kubernetes"])
-            .help("Vault auth: auto selects Agent for sockets and AppRole for TCP; explicit methods require TCP"))
-        .arg(Arg::new("vault-kubernetes-auth-mount").long("vault-kubernetes-auth-mount")
-            .env("GENESIS_VAULT_KUBERNETES_AUTH_MOUNT").default_value("kubernetes")
-            .value_parser(vault_client::kubernetes::validate_auth_mount)
+            .help("OpenBao auth: auto selects Agent for sockets and AppRole for TCP; explicit methods require TCP"))
+        .arg(Arg::new("openbao-kubernetes-auth-mount").long("openbao-kubernetes-auth-mount")
+            .env("GENESIS_OPENBAO_KUBERNETES_AUTH_MOUNT").default_value("kubernetes")
+            .value_parser(openbao_client::kubernetes::validate_auth_mount)
             .help("Relative Kubernetes auth mount, without /v1/auth/ (Kubernetes mode only)"))
-        .arg(Arg::new("vault-kubernetes-role").long("vault-kubernetes-role")
-            .env("GENESIS_VAULT_KUBERNETES_ROLE")
+        .arg(Arg::new("openbao-kubernetes-role").long("openbao-kubernetes-role")
+            .env("GENESIS_OPENBAO_KUBERNETES_ROLE")
             .value_parser(clap::builder::NonEmptyStringValueParser::new())
-            .help("Vault Kubernetes role (required only for Kubernetes mode)"))
-        .arg(Arg::new("vault-kubernetes-token-path").long("vault-kubernetes-token-path")
-            .env("GENESIS_VAULT_KUBERNETES_TOKEN_PATH")
+            .help("OpenBao Kubernetes role (required only for Kubernetes mode)"))
+        .arg(Arg::new("openbao-kubernetes-token-path").long("openbao-kubernetes-token-path")
+            .env("GENESIS_OPENBAO_KUBERNETES_TOKEN_PATH")
             .default_value("/var/run/secrets/kubernetes.io/serviceaccount/token")
             .value_parser(clap::builder::NonEmptyStringValueParser::new())
             .help("JWT file read at login; prefer an audience-scoped projected token"))
@@ -80,14 +80,14 @@ pub fn new() -> Command {
                 .long("dsn")
                 .help("Database connection string")
                 .long_help(
-                    "Database connection string. Username/password are injected from Vault DB creds, so they are not required in the DSN.",
+                    "Database connection string. Username/password are injected from OpenBao DB creds, so they are not required in the DSN.",
                 )
                 .env("GENESIS_DSN")
                 .required(true),
         );
 
-    let command = vault::with_args(command);
-    let command = with_native_vault_args(command);
+    let command = openbao::with_args(command);
+    let command = with_native_openbao_args(command);
     let command = tls::with_args(command);
     let command = database::with_args(command);
     logging::with_args(command)
@@ -123,11 +123,11 @@ mod tests {
             "postgres://user:password@localhost:5432/genesis",
             "--tls-pem-bundle",
             "/tmp/genesis-bundle.pem",
-            "--vault-url",
-            "https://vault.tld:8200",
-            "--vault-role-id",
+            "--openbao-url",
+            "https://openbao.tld:8200",
+            "--openbao-role-id",
             "role-id",
-            "--vault-secret-id",
+            "--openbao-secret-id",
             "secret-id",
         ]);
 
@@ -137,15 +137,15 @@ mod tests {
             Some("postgres://user:password@localhost:5432/genesis".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>("vault-url").cloned(),
-            Some("https://vault.tld:8200".to_string())
+            matches.get_one::<String>("openbao-url").cloned(),
+            Some("https://openbao.tld:8200".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>("vault-role-id").cloned(),
+            matches.get_one::<String>("openbao-role-id").cloned(),
             Some("role-id".to_string())
         );
         assert_eq!(
-            matches.get_one::<String>("vault-secret-id").cloned(),
+            matches.get_one::<String>("openbao-secret-id").cloned(),
             Some("secret-id".to_string())
         );
     }
@@ -155,9 +155,9 @@ mod tests {
         temp_env::with_vars(
             [
                 ("GENESIS_TLS_PEM_BUNDLE", Some("/tmp/genesis-bundle.pem")),
-                ("GENESIS_VAULT_URL", Some("https://vault.tld:8200")),
-                ("GENESIS_VAULT_ROLE_ID", Some("role_id")),
-                ("GENESIS_VAULT_SECRET_ID", Some("secret_id")),
+                ("GENESIS_OPENBAO_URL", Some("https://openbao.tld:8200")),
+                ("GENESIS_OPENBAO_ROLE_ID", Some("role_id")),
+                ("GENESIS_OPENBAO_SECRET_ID", Some("secret_id")),
                 ("GENESIS_TRANSIT_MOUNT", Some("transit/custom")),
                 ("GENESIS_PORT", Some("443")),
                 (
@@ -175,12 +175,12 @@ mod tests {
                     Some("postgres://user:password@localhost:5432/genesis".to_string())
                 );
                 assert_eq!(
-                    matches.get_one::<String>("vault-url").cloned(),
-                    Some("https://vault.tld:8200".to_string())
+                    matches.get_one::<String>("openbao-url").cloned(),
+                    Some("https://openbao.tld:8200".to_string())
                 );
                 assert_eq!(
                     matches
-                        .get_one::<String>("vault-transit-mount")
+                        .get_one::<String>("openbao-transit-mount")
                         .map(String::as_str),
                     Some("transit/custom")
                 );
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vault_transit_mount_default() {
+    fn test_openbao_transit_mount_default() {
         temp_env::with_vars([("GENESIS_TRANSIT_MOUNT", None::<&str>)], || {
             let command = new();
             let matches = command.get_matches_from(vec![
@@ -201,17 +201,17 @@ mod tests {
                 "postgres://user:password@localhost:5432/genesis",
                 "--tls-pem-bundle",
                 "/tmp/genesis-bundle.pem",
-                "--vault-url",
-                "https://vault.tld:8200",
-                "--vault-role-id",
+                "--openbao-url",
+                "https://openbao.tld:8200",
+                "--openbao-role-id",
                 "role-id",
-                "--vault-secret-id",
+                "--openbao-secret-id",
                 "secret-id",
             ]);
 
             assert_eq!(
                 matches
-                    .get_one::<String>("vault-transit-mount")
+                    .get_one::<String>("openbao-transit-mount")
                     .map(String::as_str),
                 Some("transit/genesis")
             );
@@ -227,9 +227,9 @@ mod tests {
                 [
                     ("GENESIS_LOG_LEVEL", Some(level)),
                     ("GENESIS_TLS_PEM_BUNDLE", Some("/tmp/genesis-bundle.pem")),
-                    ("GENESIS_VAULT_URL", Some("http://vault.tld:8200")),
-                    ("GENESIS_VAULT_ROLE_ID", Some("role_id")),
-                    ("GENESIS_VAULT_SECRET_ID", Some("secret_id")),
+                    ("GENESIS_OPENBAO_URL", Some("http://openbao.tld:8200")),
+                    ("GENESIS_OPENBAO_ROLE_ID", Some("role_id")),
+                    ("GENESIS_OPENBAO_SECRET_ID", Some("secret_id")),
                     (
                         "GENESIS_DSN",
                         Some("postgres://user:password@localhost:5432/genesis"),
@@ -259,11 +259,11 @@ mod tests {
                     "postgres://user:password@localhost:5432/genesis".to_string(),
                     "--tls-pem-bundle".to_string(),
                     "/tmp/genesis-bundle.pem".to_string(),
-                    "--vault-url".to_string(),
-                    "https://vault.tld:8200".to_string(),
-                    "--vault-role-id".to_string(),
+                    "--openbao-url".to_string(),
+                    "https://openbao.tld:8200".to_string(),
+                    "--openbao-role-id".to_string(),
                     "role_id".to_string(),
-                    "--vault-secret-id".to_string(),
+                    "--openbao-secret-id".to_string(),
                     "secret_id".to_string(),
                 ];
 

@@ -1,8 +1,8 @@
 [Unit]
 Description=Genesis admission token service
-Wants=network-online.target vault-agent-genesis.service
-After=network-online.target vault-agent-genesis.service
-Requires=vault-agent-genesis.service
+Wants=network-online.target openbao-agent-genesis.service
+After=network-online.target openbao-agent-genesis.service
+Requires=openbao-agent-genesis.service
 
 [Service]
 Type=simple
@@ -19,10 +19,10 @@ EnvironmentFile=/etc/genesis/genesis.env
 # Default configuration for Agent Mode (Sidecar)
 # Agent socket must be accessible. If Agent writes to /run/genesis/agent.sock,
 # ensure the socket path matches what is configured in the Agent.
-Environment=GENESIS_VAULT_URL=unix:///run/genesis/agent.sock
+Environment=GENESIS_OPENBAO_URL=unix:///run/genesis/agent.sock
 Environment=GENESIS_TLS_PEM_BUNDLE=/run/genesis/tls.bundle.pem
 
-# Wait for Vault Agent to render TLS bundle and listen on the socket
+# Wait for OpenBao Agent to render TLS bundle and listen on the socket
 ExecStartPre=/usr/bin/test -s /run/genesis/tls.bundle.pem
 ExecStartPre=/usr/bin/test -S /run/genesis/agent.sock
 

@@ -2,19 +2,19 @@
 
 ## Overview
 The Genesis integration test (`integration_token.rs`) is self-contained and spins up
-Postgres 18 + Vault dev-mode containers using the `test_support` crate. It configures
-Vault AppRole + transit + database secrets, runs the Genesis binary, then exercises
+Postgres 18 + OpenBao dev-mode containers using the `test_support` crate. It configures
+OpenBao AppRole + transit + database secrets, runs the Genesis binary, then exercises
 `/token` and `/paserk.json` and verifies the token is persisted.
 
 ## Why This Harness Exists
-- We need real Vault + Postgres interactions (token minting, DB role creation, transit signing).
+- We need real OpenBao + Postgres interactions (token minting, DB role creation, transit signing).
 - The same pattern can be reused for Permesi tests later.
 - The test logs are intentionally enabled by default so failures in CI show context.
 
 ## What The Test Does
 - Creates a shared container network (via testcontainers).
 - Starts Postgres 18 and applies `db/sql/01_genesis.sql` plus `db/sql/seed_test_client.sql`, which seeds the default client UUID.
-- Starts Vault in dev mode and configures:
+- Starts OpenBao in dev mode and configures:
   - AppRole auth and a policy for transit + database + renew endpoints.
   - Transit mount/key (defaults to `transit/genesis` + `genesis-signing`).
   - Database engine and a role for Genesis.
@@ -30,19 +30,19 @@ Test defaults (unless overridden by env vars):
 - Database engine mount: `database`.
 - Database config name and role name: `genesis`.
 - Postgres user/password/db: `postgres` / `postgres` / `postgres`.
-- Vault root token: `root-token` (dev mode only).
+- OpenBao root token: `root-token` (dev mode only).
 
 The test process launches `genesis` roughly as:
 ```
 genesis --port <random_port> \
   --dsn <postgres_dsn> \
-  --vault-url <vault_login_url> \
-  --vault-role-id <role_id> \
-  --vault-wrapped-token <wrapped_secret_id>
+  --openbao-url <openbao_login_url> \
+  --openbao-role-id <role_id> \
+  --openbao-wrapped-token <wrapped_secret_id>
 ```
 
-## Vault API Calls (Setup)
-The test configures Vault using HTTP calls (no CLI needed). Endpoints:
+## OpenBao API Calls (Setup)
+The test configures OpenBao using HTTP calls (no CLI needed). Endpoints:
 - `POST /v1/sys/auth/approle` to enable AppRole.
 - `PUT /v1/sys/policies/acl/genesis` to write the policy.
 - `POST /v1/auth/approle/role/genesis` to create the AppRole.
@@ -61,7 +61,7 @@ The policy allows:
 - `auth/token/renew-self` (update)
 - `sys/leases/renew` (update)
 
-### Vault Payload Examples
+### OpenBao Payload Examples
 All requests include `X-Vault-Token: root-token`. Wrapped `secret_id` creation
 adds `X-Vault-Wrap-TTL: 300s`.
 
@@ -133,7 +133,7 @@ Key items in the schema:
 
 ## Token Verification And DB Assertions
 The test verifies:
-- `/token` returns a valid admission PASETO signed by Vault transit.
+- `/token` returns a valid admission PASETO signed by OpenBao transit.
 - `/paserk.json` returns a valid PASERK keyset; the token verifies with:
   - `expected_issuer`: `GENESIS_ADMISSION_ISS` or `https://genesis.permesi.dev`
   - `expected_audience`: `GENESIS_ADMISSION_AUD` or `permesi`
@@ -147,7 +147,7 @@ From the repo root:
 ```
 cargo test -p genesis --test integration_token
 ```
-No `just dev-start` needed; the test spins up its own Postgres + Vault containers.
+No `just dev-start` needed; the test spins up its own Postgres + OpenBao containers.
 
 ### Podman Notes
 We prefer Podman. testcontainers talks to the Docker API, so point it at the Podman
@@ -167,5 +167,5 @@ running the tests. If Docker is not present, start a Podman service and set
 ## Debugging Tips
 - Keep containers around by setting `TESTCONTAINERS_COMMAND=keep` and rerun the test.
   You can then inspect them with `podman ps` and `podman logs`.
-- If you set `GENESIS_TRANSIT_MOUNT`, the test will configure Vault using that mount.
-- Use `RUST_LOG=debug` to see more of Genesis and Vault client logs.
+- If you set `GENESIS_TRANSIT_MOUNT`, the test will configure OpenBao using that mount.
+- Use `RUST_LOG=debug` to see more of Genesis and OpenBao client logs.

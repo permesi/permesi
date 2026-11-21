@@ -7,7 +7,7 @@ members = [
   "services/genesis",
   "apps/web",
   "crates/admission_token",
-  "crates/vault_client",
+  "crates/openbao_client",
   "crates/test_support", "crates/service_utils",
   "tools/oauth_scenario",
 ]
@@ -20,7 +20,7 @@ authors = ["Team Permesi <team@permesi.dev>"]
 
 [workspace.dependencies]
 admission_token = { path = "crates/admission_token" }
-vault_client = { path = "crates/vault_client" }
+openbao_client = { path = "crates/openbao_client" }
 test_support = { path = "crates/test_support" }
 service_utils = { path = "crates/service_utils" }
 argon2 = "0.6"

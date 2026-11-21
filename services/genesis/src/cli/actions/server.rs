@@ -1,4 +1,4 @@
-use crate::{api, cli::globals::GlobalArgs, vault};
+use crate::{api, cli::globals::GlobalArgs, openbao};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
 use service_utils::database::PoolConfig;
@@ -11,13 +11,13 @@ pub struct Args {
     pub socket_path: Option<String>,
     pub dsn: String,
     pub db_pool: PoolConfig,
-    pub vault_url: String,
-    pub vault_target: vault::VaultTarget,
-    pub vault_kubernetes: Option<vault_client::kubernetes::KubernetesAuth>,
-    pub vault_role_id: Option<String>,
-    pub vault_secret_id: Option<String>,
-    pub vault_wrapped_token: Option<String>,
-    pub vault_transit_mount: String,
+    pub openbao_url: String,
+    pub openbao_target: openbao::OpenBaoTarget,
+    pub openbao_kubernetes: Option<openbao_client::kubernetes::KubernetesAuth>,
+    pub openbao_role_id: Option<String>,
+    pub openbao_secret_id: Option<String>,
+    pub openbao_wrapped_token: Option<String>,
+    pub openbao_transit_mount: String,
     pub tls_pem_bundle: Option<String>,
 }
 
@@ -25,7 +25,7 @@ pub struct Args {
 /// Kubernetes token renewal uses the existing fail-closed shutdown; a supervisor
 /// restart reads the current JWT and reacquires all credentials, without hot replacement.
 /// # Errors
-/// Returns an error if Vault login fails, DB credentials cannot be fetched, or the server fails to start.
+/// Returns an error if OpenBao login fails, DB credentials cannot be fetched, or the server fails to start.
 pub async fn execute(args: Args) -> Result<()> {
     if let Some(bundle_path) = &args.tls_pem_bundle {
         crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
@@ -34,46 +34,46 @@ pub async fn execute(args: Args) -> Result<()> {
         ));
     }
     log_startup_args(&args);
-    let vault_transport =
-        vault::VaultTransport::from_target(crate::APP_USER_AGENT, args.vault_target.clone())?;
-    let mut globals = GlobalArgs::new(args.vault_url, vault_transport);
-    globals.vault_transit_mount = args.vault_transit_mount;
+    let openbao_transport =
+        openbao::OpenBaoTransport::from_target(crate::APP_USER_AGENT, args.openbao_target.clone())?;
+    let mut globals = GlobalArgs::new(args.openbao_url, openbao_transport);
+    globals.openbao_transit_mount = args.openbao_transit_mount;
 
-    if let Some(config) = &args.vault_kubernetes {
-        let (token, _) = vault_client::kubernetes::kubernetes_login(
+    if let Some(config) = &args.openbao_kubernetes {
+        let (token, _) = openbao_client::kubernetes::kubernetes_login(
             crate::APP_USER_AGENT,
-            &globals.vault_url,
+            &globals.openbao_url,
             config,
         )
         .await?;
         globals.set_token(token);
-    } else if matches!(args.vault_target, vault::VaultTarget::Tcp { .. }) {
-        let vault_role_id = args
-            .vault_role_id
+    } else if matches!(args.openbao_target, openbao::OpenBaoTarget::Tcp { .. }) {
+        let openbao_role_id = args
+            .openbao_role_id
             .as_deref()
-            .ok_or_else(|| anyhow!("Vault role-id is required"))?;
-        let login_url = vault::approle_login_url(&globals.vault_url)?;
+            .ok_or_else(|| anyhow!("OpenBao role-id is required"))?;
+        let login_url = openbao::approle_login_url(&globals.openbao_url)?;
 
-        // If vault wrapped token try to unwrap, otherwise use secret-id.
-        let vault_token: String = if let Some(wrapped) = &args.vault_wrapped_token {
-            let vault_session_id = vault::unwrap(&globals.vault_url, wrapped).await?;
+        // If openbao wrapped token try to unwrap, otherwise use secret-id.
+        let openbao_token: String = if let Some(wrapped) = &args.openbao_wrapped_token {
+            let openbao_session_id = openbao::unwrap(&globals.openbao_url, wrapped).await?;
             let (token, _) =
-                vault::approle_login(&login_url, &vault_session_id, vault_role_id).await?;
+                openbao::approle_login(&login_url, &openbao_session_id, openbao_role_id).await?;
             token
         } else {
             let secret_id = args
-                .vault_secret_id
+                .openbao_secret_id
                 .as_deref()
-                .ok_or_else(|| anyhow!("Vault secret-id is required"))?;
-            let (token, _) = vault::approle_login(&login_url, secret_id, vault_role_id).await?;
+                .ok_or_else(|| anyhow!("OpenBao secret-id is required"))?;
+            let (token, _) = openbao::approle_login(&login_url, secret_id, openbao_role_id).await?;
             token
         };
 
-        globals.set_token(SecretString::from(vault_token));
+        globals.set_token(SecretString::from(openbao_token));
     }
 
-    // Get database username and password from Vault
-    vault::database::database_creds(&mut globals)
+    // Get database username and password from OpenBao
+    openbao::database::database_creds(&mut globals)
         .await
         .context("Could not get database username and password")?;
 
@@ -82,10 +82,10 @@ pub async fn execute(args: Args) -> Result<()> {
     let mut dsn = Url::parse(&args.dsn)?;
 
     // Set username & password from GlobalArgs
-    dsn.set_username(&globals.vault_db_username)
+    dsn.set_username(&globals.openbao_db_username)
         .map_err(|()| anyhow!("Error setting username"))?;
 
-    dsn.set_password(Some(globals.vault_db_password.expose_secret()))
+    dsn.set_password(Some(globals.openbao_db_password.expose_secret()))
         .map_err(|()| anyhow!("Error setting password"))?;
 
     api::new(
@@ -99,9 +99,9 @@ pub async fn execute(args: Args) -> Result<()> {
 }
 
 fn log_startup_args(args: &Args) {
-    let mode = match args.vault_target {
-        vault::VaultTarget::Tcp { .. } => "Direct Access (TCP)",
-        vault::VaultTarget::AgentProxy { .. } => "Agent (Sidecar)",
+    let mode = match args.openbao_target {
+        openbao::OpenBaoTarget::Tcp { .. } => "Direct Access (TCP)",
+        openbao::OpenBaoTarget::AgentProxy { .. } => "Agent (Sidecar)",
     };
     let listen_addr = if let Some(sock) = &args.socket_path {
         format!("unix:{sock}")
@@ -112,13 +112,13 @@ fn log_startup_args(args: &Args) {
         ("listen", listen_addr),
         ("dsn", redact_dsn(&args.dsn)),
         ("db_pool", args.db_pool.to_string()),
-        ("vault_url", args.vault_url.clone()),
-        ("vault_mode", mode.to_string()),
+        ("openbao_url", args.openbao_url.clone()),
+        ("openbao_mode", mode.to_string()),
         (
-            "vault_auth_method",
-            if args.vault_kubernetes.is_some() {
+            "openbao_auth_method",
+            if args.openbao_kubernetes.is_some() {
                 "kubernetes"
-            } else if args.vault_target.is_tcp() {
+            } else if args.openbao_target.is_tcp() {
                 "approle"
             } else {
                 "agent"
@@ -126,18 +126,18 @@ fn log_startup_args(args: &Args) {
             .to_string(),
         ),
         (
-            "vault_role_id",
-            args.vault_role_id
+            "openbao_role_id",
+            args.openbao_role_id
                 .clone()
                 .unwrap_or_else(|| "n/a".to_string()),
         ),
         (
-            "vault_secret_id_set",
-            args.vault_secret_id.is_some().to_string(),
+            "openbao_secret_id_set",
+            args.openbao_secret_id.is_some().to_string(),
         ),
         (
-            "vault_wrapped_token_set",
-            args.vault_wrapped_token.is_some().to_string(),
+            "openbao_wrapped_token_set",
+            args.openbao_wrapped_token.is_some().to_string(),
         ),
         (
             "tls_pem_bundle",

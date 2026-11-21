@@ -9,7 +9,7 @@
 -- This will:
 --   - Terminate active connections to the `genesis` and `permesi` databases.
 --   - Drop the `genesis` and `permesi` databases.
---   - Drop the Vault root roles and runtime roles.
+--   - Drop the OpenBao root roles and runtime roles.
 
 \set ON_ERROR_STOP 1
 
@@ -32,10 +32,10 @@ WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'genesis_runtime')\gexec
 SELECT format('DROP ROLE %I', 'permesi_runtime')
 WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permesi_runtime')\gexec
 
-SELECT format('DROP ROLE %I', 'vault_genesis')
-WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_genesis')\gexec
+SELECT format('DROP ROLE %I', 'openbao_genesis')
+WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_genesis')\gexec
 
-SELECT format('DROP ROLE %I', 'vault_permesi')
-WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_permesi')\gexec
+SELECT format('DROP ROLE %I', 'openbao_permesi')
+WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbao_permesi')\gexec
 
 \echo 'Reset complete.'

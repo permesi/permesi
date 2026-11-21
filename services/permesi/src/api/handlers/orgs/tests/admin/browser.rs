@@ -13,7 +13,7 @@ use wiremock::{
 #[ignore = "requires Chromium, Node and built WASM; run just web-test-browser"]
 async fn admin_inspection_browser_real_postgres() -> Result<()> {
     let mut f = Fixture::new().await?;
-    let vault = MockServer::start().await;
+    let openbao = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/auth/token/lookup-self"))
         .respond_with(
@@ -21,17 +21,17 @@ async fn admin_inspection_browser_real_postgres() -> Result<()> {
                 .set_body_json(json!({"data":{"policies":["permesi-operators"],"ttl":3600}})),
         )
         .expect(1)
-        .mount(&vault)
+        .mount(&openbao)
         .await;
-    let transport = vault_client::VaultTransport::from_target(
+    let transport = openbao_client::OpenBaoTransport::from_target(
         crate::APP_USER_AGENT,
-        vault_client::VaultTarget::Tcp {
-            base_url: vault.uri(),
+        openbao_client::OpenBaoTarget::Tcp {
+            base_url: openbao.uri(),
         },
     )?;
     let mut state = crate::api::AppState::for_tests(f.db.pool.clone())?;
     state.admin = Arc::new(AdminState::new(
-        AdminConfig::new(vault.uri()),
+        AdminConfig::new(openbao.uri()),
         f.db.pool.clone(),
         transport,
     )?);

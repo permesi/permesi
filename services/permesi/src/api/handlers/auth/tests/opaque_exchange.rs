@@ -1,5 +1,5 @@
 //! Real OPAQUE transcripts across independent service instances sharing PostgreSQL.
-//! No fixture copies pending protocol state between replicas; only the Vault seed
+//! No fixture copies pending protocol state between replicas; only the OpenBao seed
 //! and server identifier are shared. Replay never creates an additional session.
 
 use super::super::{

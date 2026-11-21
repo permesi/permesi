@@ -92,7 +92,7 @@ struct IdClaims<'a> {
     at_hash: String,
 }
 
-/// Uses a fresh shared Vault key and DB clock, signing both tokens before receipt/commit.
+/// Uses a fresh shared OpenBao key and DB clock, signing both tokens before receipt/commit.
 pub(super) async fn issue(
     oauth: &OAuthState,
     tx: &mut Transaction<'_, Postgres>,

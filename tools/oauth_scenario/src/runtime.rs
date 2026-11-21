@@ -163,7 +163,7 @@ impl Runtime {
     ) -> Result<Owned> {
         let options = inputs.options;
         self.engine.create_network().await?;
-        println!("Starting disposable PostgreSQL and Vault.");
+        println!("Starting disposable PostgreSQL and OpenBao.");
         self.infra = Some(
             Infrastructure::start(&mut self.engine, &self.private, options.readiness_seconds)
                 .await?,
@@ -353,8 +353,8 @@ async fn start_browser(
     report.components.postgres_image = engine
         .image_identity(crate::infrastructure::POSTGRES_IMAGE)
         .await?;
-    report.components.vault_image = engine
-        .image_identity(crate::infrastructure::VAULT_IMAGE)
+    report.components.openbao_image = engine
+        .image_identity(crate::infrastructure::OPENBAO_IMAGE)
         .await?;
     *browser = Some(Browser::spawn(
         engine,
