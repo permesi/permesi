@@ -40,6 +40,7 @@ pub struct Args {
     pub email_outbox_backoff_max_seconds: u64,
     pub passkeys: crate::webauthn::PasskeyConfig,
     pub mfa_challenge_max_attempts: i32,
+    pub mfa_required: bool,
     pub opaque_server_id: String,
     pub opaque_login_ttl_seconds: u64,
     pub opaque_exchange_timeout_ms: i64,
@@ -165,6 +166,7 @@ fn build_app_config(args: &Args, openbao_addr: String) -> api::AppConfig {
         .with_session_ttl_seconds(args.session_ttl_seconds)
         .with_passkeys(args.passkeys.clone())
         .with_mfa_challenge_max_attempts(args.mfa_challenge_max_attempts)
+        .with_mfa_required(args.mfa_required)
         .with_opaque_server_id(args.opaque_server_id.clone())
         .with_opaque_login_ttl_seconds(args.opaque_login_ttl_seconds)
         .with_opaque_exchange_timeout_ms(args.opaque_exchange_timeout_ms)
@@ -488,6 +490,7 @@ mod tests {
                 false,
             )?,
             mfa_challenge_max_attempts: crate::cli::commands::DEFAULT_MFA_CHALLENGE_MAX_ATTEMPTS,
+            mfa_required: false,
             opaque_server_id: "server-id".to_string(),
             opaque_login_ttl_seconds: 60,
             opaque_exchange_timeout_ms: 1000,

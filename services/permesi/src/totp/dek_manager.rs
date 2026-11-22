@@ -1,4 +1,7 @@
-use crate::{cli::globals::GlobalArgs, totp::models::TotpDek};
+use crate::{
+    cli::globals::GlobalArgs,
+    totp::models::{TotpDek, TotpDekStatus},
+};
 use anyhow::{Context, Result, anyhow};
 use base64ct::{Base64, Encoding};
 use http::Method;
@@ -82,6 +85,13 @@ impl DekManager {
             match self.unwrap_dek(&dek.wrapped_dek).await {
                 Ok(plaintext) => {
                     unwrapped.insert(dek.dek_id, plaintext);
+                }
+                // New enrolments encrypt under the active DEK, and the cache is
+                // never reloaded: starting without it would leave this replica
+                // unable to enrol TOTP until restarted. Retired keys only affect
+                // the credentials still wrapped by them, so those are skipped.
+                Err(e) if dek.status == TotpDekStatus::Active => {
+                    return Err(e.context("Failed to unwrap the active TOTP DEK"));
                 }
                 Err(e) => {
                     error!(dek_id = ?dek.dek_id, error = ?e, "Failed to unwrap DEK. Ignoring.");

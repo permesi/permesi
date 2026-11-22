@@ -156,7 +156,12 @@ impl TotpService {
 
         let totp = build_totp(secret_bytes, &self.issuer, "user")?;
 
-        let valid = check_current_totp(&totp, code)?;
+        // The enrolment code's step is burned too, so it cannot double as the
+        // first login code.
+        let valid = match check_current_totp(&totp, code)? {
+            Some(step) => TotpRepo::accept_step(&mut *connection, credential_id, step).await?,
+            None => false,
+        };
 
         if valid {
             TotpRepo::confirm_credential_on(&mut *connection, user_id, credential_id).await?;
@@ -235,10 +240,14 @@ impl TotpService {
 
         let totp = build_totp(secret_bytes, &self.issuer, "user")?;
 
-        let valid = check_current_totp(&totp, code)?;
+        // A correct code for a step that was already accepted is a replay and
+        // is refused like a wrong one.
+        let valid = match check_current_totp(&totp, code)? {
+            Some(step) => TotpRepo::accept_step(&mut *connection, cred.credential_id, step).await?,
+            None => false,
+        };
 
         if valid {
-            TotpRepo::touch_last_used(&mut *connection, cred.credential_id).await?;
             TotpRepo::log_audit(
                 &mut *connection,
                 user_id,
@@ -281,11 +290,12 @@ fn build_totp(secret: Vec<u8>, issuer: &str, account_name: &str) -> Result<Totp>
 }
 
 /// Checks a TOTP code against the current Unix time without relying on the
-/// library's panicking system-clock convenience method.
-fn check_current_totp(totp: &Totp, code: &str) -> Result<bool> {
+/// library's panicking system-clock convenience method. Returns the matched
+/// time step, which the caller must record so the code is accepted only once.
+fn check_current_totp(totp: &Totp, code: &str) -> Result<Option<u64>> {
     let unix_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?
         .as_secs();
-    Ok(totp.check(code, unix_time).is_some())
+    Ok(totp.check(code, unix_time))
 }

@@ -150,20 +150,31 @@ impl TotpRepo {
         Ok(())
     }
 
-    /// Updates last used timestamp.
+    /// Records `step` as used and reports whether it was new.
+    ///
+    /// RFC 6238 section 5.2 requires a code to be accepted once. The guarded
+    /// update only advances the stored step, so a code for the same or an earlier
+    /// time step is refused, and two concurrent submissions of one code cannot
+    /// both win. `last_used_at` moves with it.
     ///
     /// # Errors
-    /// Returns an error if database update fails.
-    pub async fn touch_last_used<'a>(
+    /// Returns an error if the step does not fit the column or the update fails.
+    pub async fn accept_step<'a>(
         executor: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
         credential_id: Uuid,
-    ) -> Result<()> {
-        sqlx::query("UPDATE totp_credentials SET last_used_at = NOW() WHERE credential_id = $1")
-            .bind(credential_id)
-            .execute(executor)
-            .await
-            .context("Failed to touch last_used_at")?;
-        Ok(())
+        step: u64,
+    ) -> Result<bool> {
+        let step = i64::try_from(step).context("TOTP time step out of range")?;
+        let updated = sqlx::query(
+            "UPDATE totp_credentials SET last_step = $2, last_used_at = NOW()
+             WHERE credential_id = $1 AND (last_step IS NULL OR last_step < $2)",
+        )
+        .bind(credential_id)
+        .bind(step)
+        .execute(executor)
+        .await
+        .context("Failed to record TOTP step")?;
+        Ok(updated.rows_affected() == 1)
     }
 
     /// Hard deletes all TOTP credentials for a user.

@@ -52,7 +52,6 @@ use crate::{
 
 const DEFAULT_MFA_BOOTSTRAP_TTL_SECONDS: i64 = 10 * 60;
 const DEFAULT_MFA_CHALLENGE_TTL_SECONDS: i64 = 5 * 60;
-const ENV_MFA_REQUIRED: &str = "PERMESI_MFA_REQUIRED";
 
 /// Logical MFA state for a user.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -133,12 +132,30 @@ pub(crate) async fn resolve_login_mfa_state_on(
 }
 
 /// MFA configuration loaded at startup.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MfaConfig {
     required: bool,
     bootstrap_session_ttl_seconds: i64,
     challenge_session_ttl_seconds: i64,
     recovery_pepper: Option<Arc<[u8]>>,
+}
+
+/// Never prints the recovery pepper, only whether one is configured.
+impl std::fmt::Debug for MfaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MfaConfig")
+            .field("required", &self.required)
+            .field(
+                "bootstrap_session_ttl_seconds",
+                &self.bootstrap_session_ttl_seconds,
+            )
+            .field(
+                "challenge_session_ttl_seconds",
+                &self.challenge_session_ttl_seconds,
+            )
+            .field("recovery_pepper_set", &self.recovery_pepper.is_some())
+            .finish()
+    }
 }
 
 impl MfaConfig {
@@ -182,23 +199,6 @@ impl MfaConfig {
     pub(crate) fn recovery_pepper(&self) -> Option<&[u8]> {
         self.recovery_pepper.as_deref()
     }
-
-    /// Load MFA configuration from environment variables.
-    #[must_use]
-    pub fn from_env() -> Self {
-        let required = parse_bool_env(ENV_MFA_REQUIRED).unwrap_or(false);
-        Self::new().with_required(required)
-    }
-}
-
-fn parse_bool_env(key: &str) -> Option<bool> {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| match value.trim() {
-            "1" | "true" | "TRUE" | "yes" | "YES" => Some(true),
-            "0" | "false" | "FALSE" | "no" | "NO" => Some(false),
-            _ => None,
-        })
 }
 
 /// Start TOTP enrollment. Requires bootstrap or full session.
@@ -364,7 +364,7 @@ pub async fn totp_enroll_finish(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
-    let batch = match recovery::RecoveryCodeBatch::generate(pepper) {
+    let batch = match recovery::generate_batch(pepper).await {
         Ok(batch) => batch,
         Err(err) => {
             error!("Failed to generate recovery codes: {err}");
@@ -681,7 +681,7 @@ pub async fn mfa_recovery(
         }
     };
 
-    let matched_hash = match find_matching_hash(&request.code, &hashes, pepper) {
+    let matched_hash = match recovery::find_matching_hash(&request.code, &hashes, pepper).await {
         Ok(hash) => hash,
         Err(err) => {
             warn!(user_id = %principal.user_id, "MFA recovery attempt failed: {err}");
@@ -836,20 +836,11 @@ pub async fn mfa_recovery(
     }
 }
 
-fn find_matching_hash(code: &str, hashes: &[String], pepper: &[u8]) -> Result<Option<String>> {
-    for hash in hashes {
-        if recovery::verify_recovery_code(code, hash, pepper)? {
-            return Ok(Some(hash.clone()));
-        }
-    }
-    Ok(None)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::recovery::{RecoveryCodeBatch, verify_recovery_code};
-    use super::{MfaState, enforce_required_state, parse_bool_env};
+    use super::{MfaState, enforce_required_state};
     use crate::api::handlers::auth::session_kind::SessionKind;
     use std::collections::{HashMap, HashSet};
     use uuid::Uuid;
@@ -871,8 +862,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_bool_env_handles_known_values() {
-        assert_eq!(parse_bool_env("PERMESI_MFA_REQUIRED_NOT_SET"), None);
+    fn mfa_config_debug_never_prints_the_recovery_pepper() {
+        let config = super::MfaConfig::new()
+            .with_recovery_pepper(std::sync::Arc::from(b"pepper-sentinel".to_vec()));
+        let printed = format!("{config:?}");
+        assert!(printed.contains("recovery_pepper_set: true"));
+        // Neither the text nor its byte-list rendering may appear.
+        assert!(!printed.contains("pepper-sentinel"));
+        assert!(!printed.contains("112, 101, 112"));
     }
 
     #[test]

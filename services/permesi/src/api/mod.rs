@@ -143,7 +143,7 @@ pub async fn new(
         config.auth.auth_max_pending_states(),
     );
 
-    let mut mfa_config = auth::mfa::MfaConfig::from_env();
+    let mut mfa_config = auth::mfa::MfaConfig::new().with_required(config.auth.mfa_required());
     // Set pepper from OpenBao
     mfa_config = mfa_config.with_recovery_pepper(Arc::from(secrets.mfa_recovery_pepper));
 
@@ -176,10 +176,14 @@ pub async fn new(
     );
 
     // Initialize TOTP
+    // The key cache is filled once here and never reloaded, so a replica that
+    // started without it could not enrol or verify TOTP until restarted while
+    // still reporting healthy. Fail startup and let the supervisor retry.
     let dek_manager = DekManager::new(globals.clone());
-    if let Err(e) = dek_manager.init(&pool).await {
-        tracing::error!("Failed to initialize TOTP DEK manager: {e}");
-    }
+    dek_manager
+        .init(&pool)
+        .await
+        .context("Failed to initialize TOTP DEK manager")?;
     let totp_service = TotpService::new(dek_manager, pool.clone(), "Permesi".to_string());
 
     // Initialize Security Keys (WebAuthn)

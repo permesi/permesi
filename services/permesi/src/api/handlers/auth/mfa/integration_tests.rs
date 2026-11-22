@@ -1090,6 +1090,85 @@ fn current_totp(secret: &str, email: &str) -> Result<String> {
         .to_string())
 }
 
+/// Real proof for an explicit Unix time, to reach a time step other than the current one.
+fn totp_at(secret: &str, email: &str, unix_time: u64) -> Result<String> {
+    let secret = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, secret)
+        .ok_or_else(|| anyhow!("invalid TOTP secret"))?;
+    Ok(totp_rs::Builder::new()
+        .with_algorithm(totp_rs::Algorithm::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .with_issuer(Some("Permesi"))
+        .with_account_name(email)
+        .build()
+        .map_err(|_| anyhow!("invalid test TOTP"))?
+        .generate(unix_time)
+        .to_string())
+}
+
+/// RFC 6238 section 5.2: a code is accepted once. That covers the enrolment code,
+/// an immediate replay, and an older step presented after a newer one.
+#[tokio::test]
+async fn totp_code_is_accepted_only_once() -> Result<()> {
+    let Some(ctx) = TestContext::with_capacity(1).await? else {
+        return Ok(());
+    };
+    let email = "totp-replay@example.com";
+    let user = insert_active_user(&ctx.pool, email).await?;
+    let (secret, _, credential) = ctx.totp_service.enroll_begin(user, email, None).await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+
+    let enrolment_code = totp_at(&secret, email, now)?;
+    assert!(
+        ctx.totp_service
+            .enroll_confirm(user, credential, &enrolment_code, None, None)
+            .await?
+    );
+    assert!(
+        !ctx.totp_service
+            .verify(user, &enrolment_code, None, None)
+            .await?,
+        "the enrolment code must not double as a login code"
+    );
+
+    // The next step's code is inside the accepted skew and has not been used.
+    let next_code = totp_at(&secret, email, now + 30)?;
+    assert!(
+        ctx.totp_service
+            .verify(user, &next_code, None, None)
+            .await?
+    );
+    assert!(
+        !ctx.totp_service
+            .verify(user, &next_code, None, None)
+            .await?,
+        "a code must not be accepted twice"
+    );
+    assert!(
+        !ctx.totp_service
+            .verify(user, &enrolment_code, None, None)
+            .await?,
+        "an earlier step must stay refused after a later one"
+    );
+
+    let (last_step, successes): (i64, i64) = sqlx::query_as(
+        "SELECT c.last_step,
+                (SELECT count(*) FROM totp_audit_log a
+                  WHERE a.user_id = c.user_id AND a.action = 'verify_success')
+           FROM totp_credentials c WHERE c.user_id = $1",
+    )
+    .bind(user)
+    .fetch_one(&ctx.pool)
+    .await?;
+    assert_eq!(u64::try_from(last_step)?, (now + 30) / 30);
+    assert_eq!(successes, 1);
+    Ok(())
+}
+
 /// Completing one enrollment revokes every earlier bootstrap and its in-flight factor authority.
 #[tokio::test]
 async fn mfa_totp_completion_revokes_other_bootstraps_and_pending_enrollment() -> Result<()> {

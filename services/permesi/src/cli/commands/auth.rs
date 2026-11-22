@@ -181,7 +181,22 @@ pub fn with_args(command: Command) -> Command {
     let command = with_auth_outbox_args(command);
     let command = with_auth_opaque_args(command);
     let command = with_auth_rate_limit_args(command);
+    let command = with_mfa_args(command);
     with_admin_args(command)
+}
+
+/// MFA policy. Only the literal `true` or `false` is accepted, so a typo fails
+/// startup instead of silently leaving MFA optional.
+fn with_mfa_args(command: Command) -> Command {
+    command.arg(
+        Arg::new("mfa-required")
+            .long("mfa-required")
+            .env("PERMESI_MFA_REQUIRED")
+            .help("Require every new session to enroll or pass MFA")
+            .default_value("false")
+            .action(clap::ArgAction::Set)
+            .value_parser(clap::value_parser!(bool)),
+    )
 }
 
 fn with_auth_email_args(command: Command) -> Command {
@@ -355,6 +370,37 @@ fn with_admin_args(command: Command) -> Command {
 #[cfg(test)]
 mod tests {
     /// Lock/statement waits have positive bounded defaults and cannot be disabled by configuration.
+    #[test]
+    fn mfa_required_accepts_only_literal_booleans() {
+        let parse = |value: &str| {
+            super::with_mfa_args(Command::new("test")).try_get_matches_from([
+                "test",
+                "--mfa-required",
+                value,
+            ])
+        };
+        for (value, expected) in [("true", true), ("false", false)] {
+            let matches = parse(value);
+            assert_eq!(
+                matches
+                    .ok()
+                    .and_then(|matches| matches.get_one::<bool>("mfa-required").copied()),
+                Some(expected)
+            );
+        }
+        // Values the old environment parser silently read as "not required".
+        for value in ["True", "on", "enabled", "1", "yes", ""] {
+            assert!(parse(value).is_err(), "{value:?} must be rejected");
+        }
+        let defaulted = super::with_mfa_args(Command::new("test")).try_get_matches_from(["test"]);
+        assert_eq!(
+            defaulted
+                .ok()
+                .and_then(|matches| matches.get_one::<bool>("mfa-required").copied()),
+            Some(false)
+        );
+    }
+
     #[test]
     fn opaque_exchange_deadline_parser_enforces_bounds_and_default() -> anyhow::Result<()> {
         temp_env::with_var(

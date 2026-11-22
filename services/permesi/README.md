@@ -383,7 +383,7 @@ Maintenance:
 
 ### MFA config flags
 
-- `PERMESI_MFA_REQUIRED` (set to `true` to require MFA bootstrap for new sessions)
+- `--mfa-required` / `PERMESI_MFA_REQUIRED` (`true` or `false`, default `false`; `true` requires MFA bootstrap for new sessions, and any other value fails startup)
 
 ### Email outbox worker flags
 

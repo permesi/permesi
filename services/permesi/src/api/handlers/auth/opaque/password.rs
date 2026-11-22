@@ -30,6 +30,7 @@ use crate::api::handlers::{
     auth::{
         authority_guard::{AuthorityGuard, Policy},
         principal::{Principal, require_auth},
+        rate_limit::RateLimitAction,
         session::clear_session_cookie,
         state::{AuthState, OpaqueSuite},
         storage::rotate_password_and_clear_sessions_on,
@@ -65,7 +66,8 @@ const PASSWORD_RECENT_AUTH_SECONDS: i64 = 10 * 60;
     responses(
         (status = 200, description = "OPAQUE password change started", body = OpaquePasswordStartResponse),
         (status = 400, description = "Validation error", body = String),
-        (status = 401, description = "Missing or invalid session cookie.")
+        (status = 401, description = "Missing or invalid session cookie."),
+        (status = 429, description = "Rate limited", body = String)
     ),
     tag = "auth"
 )]
@@ -85,6 +87,18 @@ pub async fn opaque_password_start(
         Some(Json(payload)) => payload,
         None => return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response(),
     };
+
+    // Each start evaluates the account's OPRF key, which is worth one guess at
+    // the current password to whoever holds the session cookie. Count it
+    // against the same per-account budget as login.
+    if let Some(status) = auth_state
+        .rate_limiter()
+        .check_email(&principal.email, RateLimitAction::Login)
+        .await
+        .denial_status()
+    {
+        return (status, "Rate limited".to_string()).into_response();
+    }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);

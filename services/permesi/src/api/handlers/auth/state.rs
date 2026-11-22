@@ -42,6 +42,7 @@ pub struct AuthConfig {
     rate_limit_account_attempts: i64,
     passkeys: Option<crate::webauthn::PasskeyConfig>,
     mfa_challenge_max_attempts: i32,
+    mfa_required: bool,
     webauthn_rp_id: String,
     webauthn_rp_origin: String,
 }
@@ -75,6 +76,7 @@ impl AuthConfig {
             rate_limit_account_attempts: DEFAULT_RATE_LIMIT_ACCOUNT_ATTEMPTS,
             passkeys: None,
             mfa_challenge_max_attempts: crate::cli::commands::DEFAULT_MFA_CHALLENGE_MAX_ATTEMPTS,
+            mfa_required: false,
             webauthn_rp_id: rp_id,
             webauthn_rp_origin: rp_origin,
         }
@@ -108,6 +110,20 @@ impl AuthConfig {
     pub fn with_passkeys(mut self, config: crate::webauthn::PasskeyConfig) -> Self {
         self.passkeys = Some(config);
         self
+    }
+
+    /// Sets whether every new session must enroll or pass MFA. The value comes from
+    /// clap, so an unparseable setting fails startup instead of disabling the policy.
+    #[must_use]
+    pub fn with_mfa_required(mut self, required: bool) -> Self {
+        self.mfa_required = required;
+        self
+    }
+
+    /// Whether MFA is mandatory for new sessions.
+    #[must_use]
+    pub fn mfa_required(&self) -> bool {
+        self.mfa_required
     }
 
     /// Sets the dispatch-validated terminal failure limit stored with each new MFA challenge.

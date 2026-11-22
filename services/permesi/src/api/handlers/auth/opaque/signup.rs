@@ -91,6 +91,19 @@ pub async fn opaque_signup_start(
         return (status, "Rate limited".to_string()).into_response();
     }
 
+    // Registration start evaluates the same per-account OPRF key as login, so
+    // each evaluation is worth one password guess against an existing account.
+    // Charge it to that account's login budget; the signup budget alone would
+    // hand out extra guesses.
+    if let Some(status) = auth_state
+        .rate_limiter()
+        .check_email(&email, RateLimitAction::Login)
+        .await
+        .denial_status()
+    {
+        return (status, "Rate limited".to_string()).into_response();
+    }
+
     if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);
         return (status, message).into_response();

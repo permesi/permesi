@@ -119,8 +119,16 @@ impl AuthorizationInput {
         {
             return Err(Error::protocol(ProtocolError::AccessDenied));
         }
+        // Discovery advertises only the default `query` mode; naming it explicitly
+        // is valid, any other mode is not.
+        if self
+            .response_mode
+            .as_deref()
+            .is_some_and(|mode| mode != "query")
+        {
+            return Err(Error::protocol(ProtocolError::InvalidRequest));
+        }
         if [
-            self.response_mode.as_ref(),
             self.request.as_ref(),
             self.request_uri.as_ref(),
             self.claims.as_ref(),

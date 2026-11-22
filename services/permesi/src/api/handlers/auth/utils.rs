@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose};
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use std::net::IpAddr;
+use std::{net::IpAddr, sync::LazyLock};
 
 /// Normalize an email for lookup/uniqueness checks.
 pub(super) fn normalize_email(email: &str) -> String {
@@ -16,7 +16,12 @@ pub(super) fn normalize_email(email: &str) -> String {
 
 /// Basic email format check on already-normalized input.
 pub(super) fn valid_email(email_normalized: &str) -> bool {
-    Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").is_ok_and(|regex| regex.is_match(email_normalized))
+    // Compiled once: this runs on every signup, login and resend request.
+    static PATTERN: LazyLock<Option<Regex>> =
+        LazyLock::new(|| Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").ok());
+    PATTERN
+        .as_ref()
+        .is_some_and(|regex| regex.is_match(email_normalized))
 }
 
 /// Create a new verification token for email links.

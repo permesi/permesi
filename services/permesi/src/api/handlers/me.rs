@@ -329,7 +329,7 @@ pub async fn regenerate_recovery_codes(
         return (StatusCode::CONFLICT, "MFA not enabled.".to_string()).into_response();
     }
 
-    let batch = match mfa::recovery::RecoveryCodeBatch::generate(pepper) {
+    let batch = match mfa::recovery::generate_batch(pepper).await {
         Ok(batch) => batch,
         Err(err) => {
             error!("Failed to generate recovery codes: {err}");

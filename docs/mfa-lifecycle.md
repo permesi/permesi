@@ -25,7 +25,9 @@ all bootstrap rows; a second
 old bootstrap cannot replace or add a factor after that transition.
 
 TOTP enrollment/verification, hardware-key enrollment/verification and recovery use
-this guard. Successful factor completion consumes the exact original cookie and commits
+this guard. A TOTP code is accepted once (RFC 6238 section 5.2): each credential stores
+the highest time step it has accepted, enrollment included, and a correct code for that
+step or an earlier one is refused like a wrong one. Successful factor completion consumes the exact original cookie and commits
 replacement authority before returning `Set-Cookie`. Recovery consumes its code, changes
 MFA to required enrollment, revokes full/challenge/older bootstrap sessions and issues only a limited
 bootstrap session in the same transaction. Recovery likewise revokes refresh families

@@ -71,6 +71,14 @@ fn passkey_config(
     )
 }
 
+/// Reads the clap-validated MFA requirement; an unparseable value never reaches here.
+fn mfa_required(matches: &clap::ArgMatches) -> Result<bool> {
+    matches
+        .get_one::<bool>("mfa-required")
+        .copied()
+        .context("missing MFA requirement policy")
+}
+
 /// Revalidates tenant budgets, slug attempts and deadline ordering after clap parsing.
 fn tenant_mutation_policy(
     matches: &clap::ArgMatches,
@@ -293,6 +301,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         email_outbox_backoff_max_seconds: auth_opts.email_outbox.backoff_max_seconds,
         passkeys,
         mfa_challenge_max_attempts,
+        mfa_required: mfa_required(matches)?,
         opaque_server_id: auth_opts.opaque.server_id,
         opaque_login_ttl_seconds: auth_opts.opaque.login_ttl_seconds,
         opaque_exchange_timeout_ms: auth_opts.opaque.exchange_timeout_ms,

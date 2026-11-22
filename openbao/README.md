@@ -206,8 +206,12 @@ with its cluster API/trust/reviewer identity, separately from application roles.
 
 Startup reads the JWT afresh and refuses missing, unreadable or empty files and
 tokens without a usable renewable lease. The existing application worker renews
-the resulting OpenBao token. At max TTL, revocation or repeated renewal failure,
-the service shuts down fail-closed after its bounded retries and normal drain.
+the resulting OpenBao token and the database lease. OpenBao caps both at their
+max TTL: when a renewal stops extending a lease, the service requests its
+restart one minute before the final expiry, so it drains with working
+credentials. A failed renewal is retried with backoff for as long as the lease
+still covers that drain, which rides out an OpenBao restart or leader change;
+after revocation or when time runs out the service shuts down fail-closed.
 Configure Kubernetes/supervisor restart so the next process reads the latest
 projection, logs in again and fetches new dynamic database credentials. This is
 **restart-based reauthentication**, not seamless hot token replacement: a live

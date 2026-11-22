@@ -38,6 +38,44 @@ impl RecoveryCodeBatch {
     }
 }
 
+/// Generates a batch on the blocking pool.
+///
+/// A batch is ten Argon2id hashes (19 MiB, two passes each); run inline they
+/// would hold an async worker for hundreds of milliseconds and stall every
+/// request sharing it.
+///
+/// # Errors
+/// Returns generation errors, or an error if the blocking task fails.
+pub async fn generate_batch(pepper: &[u8]) -> Result<RecoveryCodeBatch> {
+    let pepper = pepper.to_vec();
+    tokio::task::spawn_blocking(move || RecoveryCodeBatch::generate(&pepper))
+        .await
+        .map_err(|_| anyhow::anyhow!("recovery-code hashing task failed"))?
+}
+
+/// Finds the stored hash a submitted code matches, on the blocking pool for
+/// the same reason as [`generate_batch`]: up to ten Argon2id verifications.
+///
+/// # Errors
+/// Returns verification errors, or an error if the blocking task fails.
+pub async fn find_matching_hash(
+    code: &str,
+    hashes: &[String],
+    pepper: &[u8],
+) -> Result<Option<String>> {
+    let (code, hashes, pepper) = (code.to_owned(), hashes.to_vec(), pepper.to_vec());
+    tokio::task::spawn_blocking(move || {
+        for hash in hashes {
+            if verify_recovery_code(&code, &hash, &pepper)? {
+                return Ok(Some(hash));
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("recovery-code verification task failed"))?
+}
+
 /// Normalize a recovery code for verification.
 pub fn normalize_recovery_code(input: &str) -> Result<String> {
     let normalized: String = input

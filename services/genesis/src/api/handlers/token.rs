@@ -13,12 +13,13 @@ use axum::{
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgDatabaseError};
-use std::{env, future::Future, net::IpAddr, pin::Pin, process, sync::Arc};
+use std::{env, future::Future, net::IpAddr, pin::Pin, sync::Arc};
 use tracing::{Instrument, debug, error, info_span, instrument};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::api::admission::AdmissionSigner;
+use crate::{api::admission::AdmissionSigner, openbao::renew::ShutdownSignal};
+use tokio::sync::mpsc;
 
 pub const TOKEN_EXPIRATION: i64 = 120; // 2 minutes
 
@@ -87,10 +88,11 @@ impl AdmissionSignerLike for AdmissionSigner {
     ),
     tag = "token",
 )]
-#[instrument(skip(pool, admission, headers, query))]
+#[instrument(skip(pool, admission, shutdown, headers, query))]
 pub async fn token(
     State(pool): State<PgPool>,
     State(admission): State<Arc<AdmissionSigner>>,
+    State(shutdown): State<mpsc::UnboundedSender<ShutdownSignal>>,
     headers: HeaderMap,
     query: Result<Query<ClientArgs>, QueryRejection>,
 ) -> TokenResponse {
@@ -102,7 +104,7 @@ pub async fn token(
     let metadata = extract_metadata(&headers);
 
     // get client id from the payload
-    let client_id = fetch_client_id(&pool, client_uuid).await?;
+    let client_id = fetch_client_id(&pool, &shutdown, client_uuid).await?;
     let client_id = client_id.ok_or_else(|| {
         debug!("Unknown client UUID: {}", client_uuid);
         (StatusCode::BAD_REQUEST, "Invalid Client ID".to_string())
@@ -170,6 +172,7 @@ fn ip_from_headers(header: &str, headers: &HeaderMap) -> Option<IpAddr> {
 
 async fn fetch_client_id(
     pool: &PgPool,
+    shutdown: &mpsc::UnboundedSender<ShutdownSignal>,
     client_uuid: Uuid,
 ) -> Result<Option<i16>, (StatusCode, String)> {
     let query = "SELECT id, is_reserved FROM clients WHERE uuid = $1";
@@ -194,11 +197,18 @@ async fn fetch_client_id(
                     .map(PgDatabaseError::code)
                     == Some("42501") =>
             {
+                // The leased role lost its grants (revoked or dropped lease). Ask
+                // for the normal fail-closed shutdown so in-flight requests drain
+                // and the pool closes, instead of killing the process mid-request.
                 error!(
                     "DB Error 42501 - Insufficient privilege: {}",
                     db_err.message()
                 );
-                process::exit(1);
+                let _ = shutdown.send(ShutdownSignal::DatabaseHealthcheckFailed);
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service unavailable".to_string(),
+                ));
             }
             _ => {
                 error!("Failed to retrieve client ID from database: {}", err);
@@ -482,7 +492,8 @@ mod tests {
     #[tokio::test]
     async fn fetch_client_id_returns_error_on_db_failure() {
         let pool = unreachable_pool();
-        let result = fetch_client_id(&pool, Uuid::new_v4()).await;
+        let (shutdown, _shutdown_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = fetch_client_id(&pool, &shutdown, Uuid::new_v4()).await;
         assert!(matches!(
             result,
             Err((StatusCode::INTERNAL_SERVER_ERROR, _))

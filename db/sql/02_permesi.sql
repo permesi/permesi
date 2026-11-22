@@ -740,6 +740,9 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_refresh_tokens_active_idx ON oauth_refresh_tokens(family_id) WHERE consumed_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_refresh_tokens_root_idx ON oauth_refresh_tokens(family_id) WHERE previous_hash IS NULL;
+-- The two partial indexes above cannot serve the ON DELETE CASCADE from families,
+-- which would otherwise scan this table once per expired family during cleanup.
+CREATE INDEX IF NOT EXISTS oauth_refresh_tokens_family_idx ON oauth_refresh_tokens(family_id);
 
 CREATE OR REPLACE FUNCTION validate_oauth_refresh_token() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -1075,6 +1078,8 @@ BEGIN
     DELETE FROM webauthn_exchanges WHERE expires_at <= NOW();
     DELETE FROM opaque_exchanges WHERE expires_at <= NOW();
     DELETE FROM user_sessions WHERE expires_at < NOW() - INTERVAL '7 days';
+    DELETE FROM user_mfa_bootstrap_sessions WHERE expires_at < NOW();
+    DELETE FROM user_mfa_challenge_sessions WHERE expires_at < NOW();
     DELETE FROM email_verification_tokens WHERE expires_at < NOW() - INTERVAL '7 days';
     DELETE FROM admin_attempts WHERE created_at < NOW() - INTERVAL '24 hours';
     DELETE FROM auth_rate_limits WHERE expires_at < NOW();
@@ -1118,6 +1123,8 @@ CREATE TABLE IF NOT EXISTS user_mfa_bootstrap_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS user_mfa_bootstrap_sessions_expires_at_idx ON user_mfa_bootstrap_sessions (expires_at);
+-- Session issuance and lifecycle changes delete a user's rows by user_id.
+CREATE INDEX IF NOT EXISTS user_mfa_bootstrap_sessions_user_id_idx ON user_mfa_bootstrap_sessions (user_id);
 
 CREATE TABLE IF NOT EXISTS user_mfa_challenge_sessions (
     id UUID PRIMARY KEY DEFAULT uuidv4(),
@@ -1135,6 +1142,7 @@ ALTER TABLE user_mfa_challenge_sessions
     ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 5 CHECK (max_attempts BETWEEN 1 AND 20);
 
 CREATE INDEX IF NOT EXISTS user_mfa_challenge_sessions_expires_at_idx ON user_mfa_challenge_sessions (expires_at);
+CREATE INDEX IF NOT EXISTS user_mfa_challenge_sessions_user_id_idx ON user_mfa_challenge_sessions (user_id);
 
 -- -----------------------------------------------------------------------------
 -- TOTP MFA
@@ -1164,8 +1172,14 @@ CREATE TABLE IF NOT EXISTS totp_credentials (
     seed_ciphertext BYTEA NOT NULL, -- nonce (12 bytes) + ciphertext
     confirmed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_used_at TIMESTAMPTZ
+    last_used_at TIMESTAMPTZ,
+    -- Highest RFC 6238 time step already accepted; a code is valid only for a
+    -- later step, so an observed code cannot be replayed within its window.
+    last_step BIGINT CHECK (last_step >= 0)
 );
+
+ALTER TABLE totp_credentials
+    ADD COLUMN IF NOT EXISTS last_step BIGINT CHECK (last_step >= 0);
 
 CREATE INDEX IF NOT EXISTS idx_totp_credentials_user ON totp_credentials (user_id);
 

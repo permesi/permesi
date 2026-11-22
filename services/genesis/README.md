@@ -27,7 +27,7 @@ TL;DR:
 - Use auto-unseal or keep a documented unseal runbook.
 - Alert on health, sealed state, and token/lease renew failures.
 
-When OpenBao token renewal or the DB lease renewal fails repeatedly, `genesis` shuts down with an error so your supervisor can restart it and force a fresh OpenBao login (especially important during standby/active transitions). `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
+When OpenBao token renewal or the DB lease renewal keeps failing until the lease can no longer cover a drain, `genesis` shuts down with an error so your supervisor can restart it and force a fresh OpenBao login; shorter OpenBao outages (a restart, a standby/active transition) are retried with backoff instead. Leases also end at their max TTL (4 hours with the shipped Terraform): one minute before that, `genesis` requests the same restart while its credentials still work. `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
 On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `genesis` stops accepting connections and lets in-flight requests finish for up to 30 seconds, then flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process.
 
@@ -256,8 +256,9 @@ Why this approach:
 
 - Dropping whole partitions avoids table/index bloat that comes from large `DELETE` operations.
 - A small retention window keeps the token store lightweight while still supporting audit/forensics.
-- `tokens_default` is a bootstrap safety net for missing partitions; remove it once rollover is in place
-  so missing partitions fail fast and retention works as intended.
+- `tokens_default` catches receipts for days whose partition does not exist yet. The rollover moves
+  them into dated partitions and deletes what is past retention, so it works with or without the
+  default partition; remove it once rollover is in place if you prefer missing partitions to fail fast.
 
 pg_cron setup (one-time):
 

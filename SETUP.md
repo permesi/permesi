@@ -28,6 +28,8 @@ Permesi provides production-ready artifacts for every release. You do not need t
 
 Permesi requires a Postgres 19 instance. You can find the initialization and service schemas in the repository under `db/sql/`.
 
+PostgreSQL 19 warns at login when a role's password expires within `password_expiration_warning_threshold` (7 days by default). OpenBao creates the services' database users with a `VALID UNTIL` only hours ahead, so every new pooled connection would log that warning. Set `password_expiration_warning_threshold = 0` in `postgresql.conf` on servers the services connect to with password authentication.
+
 1.  **Create OpenBao database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the OpenBao root DB roles (`openbao_permesi`, `openbao_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`). It also applies the service schemas and the test seed client.
 
     This file ships with a `change-me` placeholder password. For production, edit the passwords

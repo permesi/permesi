@@ -49,7 +49,12 @@ impl AdminRateLimiter {
         ip: Option<&str>,
         country_code: Option<&str>,
     ) -> Result<Uuid, AdminRateLimitError> {
-        let cooldown = self.cooldown_seconds(user_id).await;
+        // A cooldown that cannot be read is treated as active: an unavailable
+        // database must not reopen operator-token guessing.
+        let cooldown = self
+            .cooldown(user_id)
+            .await
+            .map_err(|_| AdminRateLimitError::Limited)?;
         if cooldown > 0 {
             return Err(AdminRateLimitError::Cooldown {
                 remaining_seconds: cooldown,
@@ -123,8 +128,14 @@ impl AdminRateLimiter {
         let _ = self;
     }
 
-    /// Returns the remaining cooldown time in seconds.
+    /// Returns the remaining cooldown time in seconds for display. A failed lookup
+    /// shows no cooldown; enforcement in `register_attempt` fails closed instead.
     pub async fn cooldown_seconds(&self, user_id: Uuid) -> u64 {
+        self.cooldown(user_id).await.unwrap_or(0)
+    }
+
+    /// Remaining cooldown in seconds, or the database error that prevented reading it.
+    async fn cooldown(&self, user_id: Uuid) -> Result<u64, sqlx::Error> {
         let query = r"
             WITH last_attempts AS (
                 SELECT is_failure, created_at
@@ -149,8 +160,8 @@ impl AdminRateLimiter {
             .instrument(span)
             .await;
 
-        match row {
-            Ok(Some(row)) => {
+        Ok(match row? {
+            Some(row) => {
                 let last_failure_at: jiff_sqlx::Timestamp = row.get("last_failure_at");
                 let now = jiff::Timestamp::now();
                 let elapsed = now.duration_since(last_failure_at.to_jiff()).as_secs();
@@ -161,8 +172,8 @@ impl AdminRateLimiter {
                     0
                 }
             }
-            _ => 0,
-        }
+            None => 0,
+        })
     }
 
     async fn count_user_attempts(&self, user_id: Uuid) -> Result<i64> {

@@ -35,6 +35,12 @@ use url::Url;
 // If refresh fails, keep the last known keyset so verification keeps working.
 const KEYSET_CACHE_TTL_SECONDS: u64 = 300;
 const KEYSET_REFRESH_COOLDOWN_SECONDS: u64 = 30;
+/// Minimum spacing between refresh attempts while the cache is stale, so a slow
+/// or unreachable genesis costs one request the fetch, not every request.
+const KEYSET_STALE_RETRY_SECONDS: u64 = 5;
+/// Bounds for the keyset fetch; verification must never wait on genesis for long.
+const KEYSET_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const KEYSET_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const MIN_TOKEN_TTL_SECONDS: i64 = 60;
 const MAX_TOKEN_TTL_SECONDS: i64 = 180;
 const ADMISSION_ACTION: &str = "admission";
@@ -106,6 +112,8 @@ pub struct AdmissionVerifier {
     action: String,
     /// Timestamp to throttle refresh attempts on unknown kid.
     last_refresh_unix: AtomicU64,
+    /// Unix seconds of the last refresh attempted because the cache was stale.
+    last_stale_attempt_unix: AtomicU64,
 }
 
 impl AdmissionVerifier {
@@ -123,6 +131,7 @@ impl AdmissionVerifier {
             audience,
             action: ADMISSION_ACTION.to_string(),
             last_refresh_unix: AtomicU64::new(0),
+            last_stale_attempt_unix: AtomicU64::new(0),
         }
     }
 
@@ -139,6 +148,8 @@ impl AdmissionVerifier {
         let ca_certs = crate::tls::load_reqwest_ca()?;
         let mut builder = Client::builder()
             .use_rustls_tls()
+            .connect_timeout(KEYSET_CONNECT_TIMEOUT)
+            .timeout(KEYSET_FETCH_TIMEOUT)
             .user_agent(crate::APP_USER_AGENT);
 
         for cert in ca_certs {
@@ -182,6 +193,7 @@ impl AdmissionVerifier {
             audience,
             action: ADMISSION_ACTION.to_string(),
             last_refresh_unix: AtomicU64::new(last_refresh_unix),
+            last_stale_attempt_unix: AtomicU64::new(0),
         })
     }
 
@@ -213,6 +225,19 @@ impl AdmissionVerifier {
         };
 
         if fresh {
+            return Ok(cached);
+        }
+
+        // Only one request per retry interval pays for a refresh of a stale cache;
+        // the others verify against the cached keyset straight away.
+        let now = now_unix_seconds_u64();
+        let last = self.last_stale_attempt_unix.load(Ordering::Relaxed);
+        if now.saturating_sub(last) < KEYSET_STALE_RETRY_SECONDS
+            || self
+                .last_stale_attempt_unix
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+        {
             return Ok(cached);
         }
 
@@ -574,6 +599,7 @@ mod tests {
             audience: AUDIENCE.to_string(),
             action: ADMISSION_ACTION.to_string(),
             last_refresh_unix: AtomicU64::new(now_unix_seconds_u64()),
+            last_stale_attempt_unix: AtomicU64::new(0),
         };
         let refreshed = verifier.refresh_on_unknown_kid().await?;
         assert!(!refreshed);
