@@ -264,12 +264,11 @@ jobs:
             ${CONTAINER_TOOL} rm -f "${CONTAINER_NAME}" || true
             
             ${CONTAINER_TOOL} run -d --name "${CONTAINER_NAME}" \
-              -e PGDATA=/var/lib/postgresql/data \
               -e POSTGRES_USER=postgres \
               -e POSTGRES_HOST_AUTH_METHOD=trust \
               -v "${GITHUB_WORKSPACE}/db/sql:/db/sql:ro" \
               -v "${VOLUME_NAME}:/var/lib/postgresql" \
-              docker.io/library/postgres:18 \
+              docker.io/library/postgres:19.0 \
               postgres
 
             if ! ${CONTAINER_TOOL} ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -281,7 +280,9 @@ jobs:
 
           ready=0
           for _ in {1..150}; do
-            if ${CONTAINER_TOOL} exec "${CONTAINER_NAME}" pg_isready -U postgres > /dev/null 2>&1; then
+            # TCP only: the image's init-time server listens on its Unix socket alone,
+            # so this cannot report ready before the final server is up.
+            if ${CONTAINER_TOOL} exec "${CONTAINER_NAME}" pg_isready -h 127.0.0.1 -U postgres > /dev/null 2>&1; then
               ready=1
               break
             fi
@@ -295,9 +296,11 @@ jobs:
             exit 1
           fi
 
-          # Give it a moment to fully stabilize
-          sleep 2
-
+          server_version="$(${CONTAINER_TOOL} exec "${CONTAINER_NAME}" psql -h 127.0.0.1 -U postgres -Atc 'SHOW server_version_num')"
+          if [[ "${server_version}" != 19* ]]; then
+            echo "::error::Expected PostgreSQL 19, got server_version_num=${server_version}"
+            exit 1
+          fi
           ${CONTAINER_TOOL} exec -i "${CONTAINER_NAME}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/sql/00_init.sql
           ${CONTAINER_TOOL} exec -i "${CONTAINER_NAME}" psql -U openbao_permesi -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql
 

@@ -1,4 +1,7 @@
-postgres version="18": setup-network
+# The data directory is keyed by major version (db/data/19), so a major upgrade
+# starts from a fresh cluster instead of failing on an incompatible one.
+[doc("Start the dev PostgreSQL container and wait until its bootstrap finished")]
+postgres: setup-network
   #!/usr/bin/env zsh
   set -euo pipefail
   if [[ -n "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
@@ -11,16 +14,40 @@ postgres version="18": setup-network
       --label {{stack_label}} \
       -e POSTGRES_USER=postgres \
       -e POSTGRES_HOST_AUTH_METHOD=trust \
-      -e PGDATA=/db/data/{{ version }} \
+      -e PGDATA=/db/data/{{postgres_major}} \
       -p {{publish_ip}}5432:5432 \
       -v {{root}}/db:/db \
       -v {{root}}/db/config/postgres:/etc/postgresql/config \
       -v {{root}}/db/sql/container-entrypoint.sql:/docker-entrypoint-initdb.d/00_init.sql:ro \
       --userns keep-id:uid={{ uid }},gid={{ gid }} \
       --user {{ uid }}:{{ gid }} \
-      docker.io/library/postgres:{{ version }} \
+      {{postgres_image}} \
       postgres -c config_file=/etc/postgresql/config/postgresql.conf
-  until podman exec postgres-permesi pg_isready -U postgres > /dev/null 2>&1; do sleep 0.2; done
+  just postgres-wait
+
+# Ready means the final server answers on TCP and the bootstrap created both
+# databases. The image's init-time server listens only on its Unix socket, so a
+# socket pg_isready would report ready while 00_init.sql is still running.
+[doc("Wait (bounded) until PostgreSQL accepts TCP connections and both databases exist")]
+postgres-wait:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  for _ in {1..300}; do
+    if [[ -z "$(podman ps -q --filter 'name=^postgres-permesi$')" ]]; then
+      echo "postgres-permesi exited during startup:" >&2
+      podman logs --tail 40 postgres-permesi >&2 2>/dev/null || true
+      exit 1
+    fi
+    if podman exec postgres-permesi pg_isready -q -h 127.0.0.1 -U postgres 2>/dev/null \
+      && [[ "$(podman exec postgres-permesi psql -h 127.0.0.1 -U postgres -d postgres -Atc \
+        "SELECT count(*) FROM pg_database WHERE datname IN ('permesi','genesis')" 2>/dev/null)" == "2" ]]; then
+      exit 0
+    fi
+    sleep 0.2
+  done
+  echo "postgres-permesi did not become ready within 60s:" >&2
+  podman logs --tail 40 postgres-permesi >&2 || true
+  exit 1
 
 k8s-logs target="permesi" since="10m":
   #!/usr/bin/env zsh
@@ -874,12 +901,66 @@ mux-stop:
 
 alias tmux-stop := mux-stop
 
+# Only this checkout's disposable state: the current major's cluster, its logs,
+# the OpenBao volume/keys/Terraform state and the generated certificates. Data
+# directories of other PostgreSQL majors under db/data are left alone.
+[doc("Stop everything and delete the disposable dev state (asks before deleting OpenBao data)")]
 reset: stop
   #!/usr/bin/env zsh
   set -euo pipefail
   just openbao-reset
-  rm -rf {{root}}/db/data {{root}}/db/log
-  rm -rf {{root}}/config/haproxy/certs
+  rm -rf "{{root}}/db/data/{{postgres_major}}" "{{root}}/db/log"
+  rm -rf "{{root}}/config/haproxy/certs"
+
+# Read-only health summary of the dev stack; exits non-zero when something is down.
+[doc("Show container, PostgreSQL, OpenBao and service health for the dev stack")]
+status:
+  #!/usr/bin/env zsh
+  set -uo pipefail
+  failed=0
+  ok()   { print -r -- "  ✓ $1"; }
+  fail() { print -r -- "  ✗ $1"; failed=1; }
+  running() { [[ -n "$(podman ps -q --filter "name=^$1$" 2>/dev/null)" ]]; }
+
+  print "Containers"
+  for ctr in postgres-permesi {{openbao_ctr}} {{jaeger_ctr}} permesi-haproxy; do
+    if running "$ctr"; then ok "$ctr"; else fail "$ctr is not running (just infra)"; fi
+  done
+
+  print "PostgreSQL"
+  if running postgres-permesi; then
+    version="$(podman exec postgres-permesi psql -h 127.0.0.1 -U postgres -Atc 'SHOW server_version' 2>/dev/null)"
+    if [[ "$version" == {{postgres_major}}.* ]]; then ok "server ${version}"; else fail "expected {{postgres_major}}.x, got '${version:-no answer}'"; fi
+    if podman exec -i postgres-permesi psql -q -h 127.0.0.1 -U openbao_permesi -d permesi -v ON_ERROR_STOP=1 -f /db/sql/verify_permesi.sql >/dev/null 2>&1; then
+      ok "permesi schema verified"
+    else
+      fail "permesi schema verification failed (just db-verify)"
+    fi
+  else
+    fail "not running"
+  fi
+
+  print "OpenBao"
+  health="$(curl -s --max-time 3 'http://127.0.0.1:8200/v1/sys/health' 2>/dev/null)"
+  if [[ -z "$health" ]]; then
+    fail "no answer on http://127.0.0.1:8200"
+  elif [[ "$(jq -r '.sealed' <<<"$health")" == "false" ]]; then
+    ok "unsealed, version $(jq -r '.version' <<<"$health")"
+  else
+    fail "initialized=$(jq -r '.initialized' <<<"$health") sealed=$(jq -r '.sealed' <<<"$health") (just openbao-unseal)"
+  fi
+
+  print "Services"
+  for spec in "genesis https://genesis.permesi.localhost:8000/health" "permesi https://api.permesi.localhost:8001/health"; do
+    name="${spec%% *}"; url="${spec#* }"
+    body="$(curl -s --max-time 3 --cacert "{{root}}/certs/${name}/ca.pem" "$url" 2>/dev/null)"
+    if [[ -n "$body" ]] && [[ "$(jq -r '.database // empty' <<<"$body" 2>/dev/null)" == "ok" ]]; then
+      ok "${name} $(jq -r '.version' <<<"$body") database=ok"
+    else
+      fail "${name} is not healthy at ${url} (just ${name}, or just logs ${name})"
+    fi
+  done
+  exit $failed
 
 # Generate a fresh platform operator token for admin claim/elevation.
 operator-token:

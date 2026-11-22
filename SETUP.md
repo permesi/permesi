@@ -1,10 +1,10 @@
 # Setup & Deployment Guide
 
-This guide describes how to set up the Permesi IAM stack. It remains agnostic of your specific orchestration (systemd, Podman, Kubernetes) and focuses on the core requirements: **Postgres 18** and **OpenBao**.
+This guide describes how to set up the Permesi IAM stack. It remains agnostic of your specific orchestration (systemd, Podman, Kubernetes) and focuses on the core requirements: **Postgres 19** and **OpenBao**.
 
 ## 1. Prerequisites
 
-- **Postgres 18**: The primary data store.
+- **Postgres 19**: The primary data store.
 - **OpenBao**: Used for secret storage and cryptographic operations (Transit engine).
 - **Terraform**: Required to provision and configure the OpenBao instance.
 - **Container Runtime**: Podman, to run the pre-built service images.
@@ -24,9 +24,9 @@ Permesi provides production-ready artifacts for every release. You do not need t
 
 ---
 
-## 3. Database Configuration (Postgres 18)
+## 3. Database Configuration (Postgres 19)
 
-Permesi requires a Postgres 18 instance. You can find the initialization and service schemas in the repository under `db/sql/`.
+Permesi requires a Postgres 19 instance. You can find the initialization and service schemas in the repository under `db/sql/`.
 
 1.  **Create OpenBao database roles**: `db/sql/00_init.sql` creates the databases (`permesi`, `genesis`), the OpenBao root DB roles (`openbao_permesi`, `openbao_genesis`), and the runtime roles used for dynamic creds (`permesi_runtime`, `genesis_runtime`). It also applies the service schemas and the test seed client.
 
@@ -89,13 +89,13 @@ To enable `pg_cron` (copy/paste recipe):
 ```sh
 # Debian/Ubuntu
 sudo apt-get update
-sudo apt-get install postgresql-18-cron
+sudo apt-get install postgresql-19-cron
 
 # RHEL/Fedora
-sudo dnf install postgresql18-contrib
+sudo dnf install postgresql19-contrib
 
 # macOS (Homebrew)
-brew install postgresql@18
+brew install postgresql@19
 ```
 
 2. Enable `pg_cron` in `postgresql.conf` and restart Postgres (cron is centralized in the

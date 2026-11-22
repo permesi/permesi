@@ -2,7 +2,7 @@
 
 ## Overview
 The Genesis integration test (`integration_token.rs`) is self-contained and spins up
-Postgres 18 + OpenBao dev-mode containers using the `test_support` crate. It configures
+Postgres 19 + OpenBao dev-mode containers using the `test_support` crate. It configures
 OpenBao AppRole + transit + database secrets, runs the Genesis binary, then exercises
 `/token` and `/paserk.json` and verifies the token is persisted.
 
@@ -13,7 +13,7 @@ OpenBao AppRole + transit + database secrets, runs the Genesis binary, then exer
 
 ## What The Test Does
 - Creates a shared container network (via testcontainers).
-- Starts Postgres 18 and applies `db/sql/01_genesis.sql` plus `db/sql/seed_test_client.sql`, which seeds the default client UUID.
+- Starts Postgres 19 and applies `db/sql/01_genesis.sql` plus `db/sql/seed_test_client.sql`, which seeds the default client UUID.
 - Starts OpenBao in dev mode and configures:
   - AppRole auth and a policy for transit + database + renew endpoints.
   - Transit mount/key (defaults to `transit/genesis` + `genesis-signing`).

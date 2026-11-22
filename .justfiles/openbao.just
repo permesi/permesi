@@ -172,8 +172,16 @@ openbao-tf-apply:
     echo "Resource initialization (terraform init)..."
     terraform init >/dev/null
 
+    # The plan for ~40 resources drowns the startup output; keep it for failures.
     echo "Applying Terraform configuration..."
-    terraform apply -auto-approve
+    tf_log="$(mktemp)"
+    trap 'rm -f "$tf_log"' EXIT
+    if ! terraform apply -auto-approve -input=false -no-color >"$tf_log" 2>&1; then
+      cat "$tf_log" >&2
+      echo "❌ terraform apply failed." >&2
+      exit 1
+    fi
+    rg -N '^Apply complete' "$tf_log" || true
 
     echo "✅ OpenBao configured via Terraform."
     echo "🔑 Operator token: in .envrc as PERMESI_OPERATOR_TOKEN, or mint one with: just operator-token"
@@ -394,6 +402,8 @@ dev-env:
     "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_PASSKEYS_ALLOWED_ORIGINS=\"https://permesi.localhost{{https_suffix}}\"" \
+    "export PERMESI_OIDC_ISSUER=\"https://api.permesi.localhost{{https_suffix}}\"" \
+    "export PERMESI_OAUTH_AUDIENCE=\"https://api.permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_EMAIL_OUTBOX_POLL_SECONDS=\"10\""
 
 openbao-envrc:

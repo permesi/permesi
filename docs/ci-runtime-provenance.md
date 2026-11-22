@@ -7,7 +7,7 @@ default/all-feature suites and both three/five-replica gates remain unchanged.
 
 ## Fixture measurement
 
-Run `just test-fixture-profile` for three rounds of four independent PostgreSQL 18
+Run `just test-fixture-profile` for three rounds of four independent PostgreSQL 19
 and OpenBao 1.17.3 pairs, matching CI's four concurrent-test limit. An optional round
 count from one to ten changes the sample count: `just test-fixture-profile 5`.
 Each pair measures container start/port discovery, PostgreSQL TCP readiness,

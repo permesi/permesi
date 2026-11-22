@@ -15,7 +15,7 @@ use sqlx::{Connection, PgConnection, PgPool};
 use std::time::Duration;
 use uuid::Uuid;
 
-pub const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18";
+pub const POSTGRES_IMAGE: &str = "docker.io/library/postgres:19.0";
 pub const OPENBAO_IMAGE: &str = "docker.io/openbao/openbao:2.7.3";
 const GENESIS_SQL: &str = include_str!("../../../db/sql/01_genesis.sql");
 const GENESIS_CLIENT_SQL: &str = include_str!("../../../db/sql/seed_test_client.sql");

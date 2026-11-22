@@ -106,7 +106,7 @@ Formatting, strict native and WASM Clippy, native checks/builds, the Web release
 build, exact CI `--no-run --timings` commands, OpenAPI drift and Actionlint with
 ShellCheck pass. The named development database was stopped, so the canonical
 bootstrap and schema verifier were run successfully against an owned disposable
-PostgreSQL 18 instance instead. Seven recovery unit tests, 15 container-runtime
+PostgreSQL 19 instance instead. Seven recovery unit tests, 15 container-runtime
 tests and ten browser-runtime tests pass.
 The four moved passkey-handler regressions also pass a focused `--nocapture`
 run, explicitly rejecting dependency skips and an empty filter. Mechanical body

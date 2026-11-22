@@ -11,7 +11,7 @@ if [[ "${PERMESI_TEST_REQUIRE_PODMAN:-0}" != 1 && "${RUNNER_ENVIRONMENT:-}" == g
         echo "DOCKER_HOST=unix:///var/run/docker.sock"
         echo "CONTAINER_TOOL=docker"
     } >> "${GITHUB_ENV}"
-    docker --host unix:///var/run/docker.sock pull docker.io/library/postgres:18 || true
+    docker --host unix:///var/run/docker.sock pull docker.io/library/postgres:19.0 || true
     docker --host unix:///var/run/docker.sock pull docker.io/openbao/openbao:2.7.3 || true
     exit 0
 fi
@@ -92,7 +92,7 @@ fi
 
 # A fresh store needs these images; retry transient registry failures and fail
 # setup if they remain unavailable instead of exporting an unusable test runtime.
-for image in docker.io/library/postgres:18 docker.io/openbao/openbao:2.7.3; do
+for image in docker.io/library/postgres:19.0 docker.io/openbao/openbao:2.7.3; do
     pulled=0
     for attempt in {1..3}; do
         if podman --url "${endpoint}" pull "${image}"; then

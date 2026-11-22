@@ -42,6 +42,8 @@ _knobs_ok := if net !~ '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$' { error("PERMESI_NET 
 
 # Local infra images: pinned and fully qualified, so rootless podman never has to
 # resolve a short name and every developer runs the same versions.
+postgres_major := "19"
+postgres_image := "docker.io/library/postgres:19.0"
 openbao_image := "docker.io/openbao/openbao:2.7.3"
 jaeger_image := "docker.io/jaegertracing/jaeger:2.19.0"
 haproxy_image := "docker.io/library/haproxy:3.4"

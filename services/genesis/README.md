@@ -227,7 +227,7 @@ Production bootstrap:
 
 ### Why UUIDv7?
 
-UUIDv7 is time-ordered like ULID but native in PostgreSQL 18 (`uuidv7()`), so we avoid a custom extension.
+UUIDv7 is time-ordered like ULID but native since PostgreSQL 18 (`uuidv7()`), so we avoid a custom extension.
 
 Tokens include a `created_at` column and are range-partitioned by time. For long-term retention,
 drop whole partitions instead of deleting rows to avoid bloat.

@@ -133,7 +133,7 @@ impl PostgresConfig {
     pub fn new() -> Self {
         Self {
             image: "postgres".to_string(),
-            tag: "18".to_string(),
+            tag: "19.0".to_string(),
             user: "postgres".to_string(),
             password: "postgres".to_string(),
             db_name: "postgres".to_string(),
@@ -528,7 +528,7 @@ mod tests {
     fn postgres_config_defaults_are_expected() {
         let config = PostgresConfig::new();
         assert_eq!(config.image, "postgres");
-        assert_eq!(config.tag, "18");
+        assert_eq!(config.tag, "19.0");
         assert_eq!(config.user, "postgres");
         assert_eq!(config.password, "postgres");
         assert_eq!(config.db_name, "postgres");

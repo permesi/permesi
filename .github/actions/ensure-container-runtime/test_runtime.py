@@ -153,7 +153,7 @@ exit 1
         calls = (self.root / "calls").read_text()
         self.assertNotIn("system migrate", calls)
         self.assertIn(f"--url {endpoint} info", calls)
-        self.assertIn(f"--url {endpoint} pull docker.io/library/postgres:18", calls)
+        self.assertIn(f"--url {endpoint} pull docker.io/library/postgres:19.0", calls)
         self.assertIn(f"--url {endpoint} pull docker.io/openbao/openbao:2.7.3", calls)
 
     def test_shared_pause_process_failure_does_not_affect_job_engine(self):
@@ -278,7 +278,7 @@ exit 1
         result, exports = self.run_setup({"TEST_FAIL_PULL": "transient"})
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = (self.root / "calls").read_text()
-        self.assertEqual(calls.count("pull docker.io/library/postgres:18"), 2)
+        self.assertEqual(calls.count("pull docker.io/library/postgres:19.0"), 2)
         self.assertIn("DOCKER_HOST", exports)
 
     def test_unavailable_required_image_fails_without_exporting_runtime(self):
@@ -286,7 +286,7 @@ exit 1
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("DOCKER_HOST", exports)
         self.assertEqual(
-            (self.root / "calls").read_text().count("pull docker.io/library/postgres:18"),
+            (self.root / "calls").read_text().count("pull docker.io/library/postgres:19.0"),
             3,
         )
         cleanup = self.run_cleanup(self.saved_state())
