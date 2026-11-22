@@ -381,7 +381,7 @@ application digest is eligible for rollback only after it enforces withdrawal.
 Drain legacy replicas and check every serving replica with the same unexpired
 token before declaring eviction complete.
 
-The signing, credential, PKI and AppRole quotas apply per reachable OpenBao node
+The signing, credential, runtime and bootstrap PKI, certificate-login and AppRole quotas apply per reachable OpenBao node
 and source IP. Restrict edge egress and size the rate times both counts against
 the shared service budget. Keep management and core reads on a separately
 budgeted path. Existing isolated endpoints require equivalent constraints.
