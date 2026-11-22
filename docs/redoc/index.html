@@ -1,28 +1,80 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <title>Permesi API Documentation</title>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="logo.svg" type="image/svg+xml">
     <link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700" rel="stylesheet">
+    <!--
+      Redoc 3 ships as an ES module with named exports; there is no `Redoc`
+      global. The version is pinned and its bytes are checked, because a floating
+      `latest` URL is what broke this page when 3.x replaced 2.x behind it.
+      To upgrade, change the version in both URLs and replace the hash with
+        curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "redoc": "https://cdn.redoc.ly/redoc/v3.2.0/bundles/redoc.standalone.js"
+        },
+        "integrity": {
+          "https://cdn.redoc.ly/redoc/v3.2.0/bundles/redoc.standalone.js": "sha384-soePwl0x1c2YjeKh+y64SAmVdaWUku+jlcELfXN/40dlTLEP+0/c3Bn+NrkOjL19"
+        }
+      }
+    </script>
     <style>
+      /* Redoc 3 is themed with CSS custom properties instead of a `theme` option. */
+      :root {
+        --permesi-header-height: 60px;
+        --font-family-base: 'Roboto', sans-serif;
+        --heading-font-family: 'Montserrat', sans-serif;
+        /* Redoc keeps its sticky panels and anchor scrolling below this height. */
+        --navbar-height: var(--permesi-header-height);
+      }
+      /* The brand colour, set on the tokens Redoc derives its accents from. */
+      :root {
+        --color-primary-base: #32329f;
+        --color-primary-hover: #27277c;
+        --color-primary-active: #27277c;
+        --color-primary-text: #32329f;
+        --link-color-primary: #32329f;
+        --link-color-primary-hover: #27277c;
+      }
+      /* Redoc marks its own root element for dark mode (the reader's toggle or
+         the system setting), so the lighter tint keys off that element. */
+      :root:has(.redoc.dark) {
+        --color-primary-base: #8f8fe6;
+        --color-primary-hover: #a9a9ee;
+        --color-primary-active: #a9a9ee;
+        --color-primary-text: #a9a9ee;
+        --link-color-primary: #a9a9ee;
+        --link-color-primary-hover: #c3c3f4;
+      }
       body {
         margin: 0;
         padding: 0;
-        font-family: 'Roboto', sans-serif;
+        font-family: var(--font-family-base);
       }
       #header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
         display: flex;
         align-items: center;
         padding: 10px 20px;
-        background-color: #ffffff;
-        border-bottom: 1px solid #e1e1e1;
-        height: 60px;
+        background-color: var(--bg-color, #ffffff);
+        border-bottom: 1px solid var(--border-color-primary, #e1e1e1);
+        height: var(--permesi-header-height);
         box-sizing: border-box;
       }
       #logo {
         height: 40px;
         margin-right: 20px;
+      }
+      /* The mark is a single dark colour; flip it on the dark header. */
+      :root:has(.redoc.dark) #logo {
+        filter: invert(1);
       }
       .controls {
         display: flex;
@@ -31,17 +83,19 @@
       label {
         margin-right: 10px;
         font-weight: bold;
-        color: #333;
+        color: var(--text-color-primary, #333);
       }
       select {
         padding: 8px;
         font-size: 14px;
         border-radius: 4px;
-        border: 1px solid #ccc;
+        border: 1px solid var(--border-color-primary, #ccc);
+        background-color: var(--bg-color, #ffffff);
+        color: var(--text-color-primary, #333);
       }
-      #redoc-container {
-        height: calc(100vh - 60px);
-        overflow-y: auto;
+      #load-error {
+        margin: 40px 20px;
+        color: #b00020;
       }
     </style>
   </head>
@@ -51,54 +105,77 @@
       <div class="controls">
         <label for="api-selector">Select API:</label>
         <select id="api-selector">
-          <option value="./permesi.json">Permesi API</option>
-          <option value="./genesis.json">Genesis API</option>
+          <option value="permesi.json">Permesi API</option>
+          <option value="genesis.json">Genesis API</option>
         </select>
       </div>
     </div>
-    
-    <div id="redoc-container"></div>
 
-    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"> </script>
-    <script>
+    <div id="redoc-container"></div>
+    <noscript>The API documentation needs JavaScript.</noscript>
+
+    <script type="module">
       const selector = document.getElementById('api-selector');
       const container = document.getElementById('redoc-container');
-      
-      function loadSpec(url) {
-          Redoc.init(url, {
-              scrollYOffset: 0,
-              hideDownloadButton: true,
-              theme: {
-                  colors: {
-                      primary: {
-                          main: '#32329f'
-                      }
-                  }
-              }
-          }, container);
+      const specs = [...selector.options].map((option) => option.value);
+      const defaultSpec = specs[0];
+
+      // The spec lives in the query string and the section in the fragment, so a
+      // link such as `?spec=genesis.json#/...` names both and survives a reload
+      // on static hosting, which cannot answer path-based routes.
+      function specFromLocation() {
+        const requested = new URLSearchParams(window.location.search).get('spec');
+        return specs.includes(requested) ? requested : defaultSpec;
       }
 
-      // Initial load based on URL or default
-      let initialSpec = './permesi.json';
-      const urlParams = new URLSearchParams(window.location.search);
-      const specParam = urlParams.get('spec');
-      
-      if (specParam && specParam.includes('genesis')) {
-          initialSpec = './genesis.json';
+      function showError(error) {
+        const message = document.createElement('p');
+        message.id = 'load-error';
+        message.textContent = `The API documentation could not be loaded: ${error.message}`;
+        container.replaceChildren(message);
       }
-      
-      selector.value = initialSpec;
-      loadSpec(initialSpec);
 
-      selector.addEventListener('change', (e) => {
-        const newUrl = e.target.value;
-        loadSpec(newUrl);
-        
-        // Update URL param
-        const url = new URL(window.location);
-        const specName = newUrl.includes('genesis') ? 'genesis.json' : 'permesi.json';
-        url.searchParams.set('spec', specName);
+      let init;
+      try {
+        ({ init } = await import('redoc'));
+      } catch (error) {
+        showError(error);
+        throw error;
+      }
+
+      let root = null;
+      let current = null;
+
+      function render(spec) {
+        // Each spec gets its own React root; leaving the old one mounted would
+        // keep its router listening and render two documents into one element.
+        root?.unmount();
+        current = spec;
+        selector.value = spec;
+        root = init(`./${spec}`, {
+          router: 'hash',
+          hideDownloadButtons: true,
+          disableTelemetry: true,
+        }, container);
+      }
+
+      render(specFromLocation());
+
+      selector.addEventListener('change', () => {
+        // The fragment names a section of the spec being left, so it is dropped.
+        const url = new URL(window.location.href);
+        url.searchParams.set('spec', selector.value);
+        url.hash = '';
         window.history.pushState({}, '', url);
+        render(selector.value);
+      });
+
+      // Back and forward across a spec change must show that entry's spec.
+      window.addEventListener('popstate', () => {
+        const spec = specFromLocation();
+        if (spec !== current) {
+          render(spec);
+        }
       });
     </script>
   </body>
