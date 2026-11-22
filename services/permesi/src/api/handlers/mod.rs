@@ -580,6 +580,61 @@ mod tests {
         Ok(())
     }
 
+    /// A stale cache with genesis failing: verification keeps the cached keyset and
+    /// only one request per retry interval pays for a refresh attempt.
+    #[tokio::test]
+    async fn stale_keyset_refresh_is_spaced_out_and_keeps_the_cached_keys() -> anyhow::Result<()> {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let keyset = keyset_for_signing_key(&signing_key)?;
+        let verifier = AdmissionVerifier {
+            keyset_source: KeysetSource::Remote {
+                url: server.uri(),
+                client: Client::builder()
+                    .connect_timeout(KEYSET_CONNECT_TIMEOUT)
+                    .timeout(KEYSET_FETCH_TIMEOUT)
+                    .build()?,
+            },
+            keyset_cache: RwLock::new(KeysetCache {
+                keyset: keyset.clone(),
+                fetched_at: stale_instant(),
+                etag: None,
+            }),
+            issuer: ISSUER.to_string(),
+            audience: AUDIENCE.to_string(),
+            action: ADMISSION_ACTION.to_string(),
+            last_refresh_unix: AtomicU64::new(0),
+            last_stale_attempt_unix: AtomicU64::new(0),
+        };
+        let fetches = || async {
+            server
+                .received_requests()
+                .await
+                .map_or(0, |requests| requests.len())
+        };
+
+        for _ in 0..5 {
+            let snapshot = verifier.keyset_snapshot().await?;
+            assert_eq!(snapshot.active_kid, keyset.active_kid);
+        }
+        assert_eq!(fetches().await, 1, "one stale attempt per retry interval");
+
+        // Once the retry interval has passed, the next request tries again.
+        verifier.last_stale_attempt_unix.store(
+            now_unix_seconds_u64() - KEYSET_STALE_RETRY_SECONDS,
+            Ordering::Relaxed,
+        );
+        verifier.keyset_snapshot().await?;
+        verifier.keyset_snapshot().await?;
+        assert_eq!(fetches().await, 2);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn refresh_on_unknown_kid_suppresses_within_cooldown() -> anyhow::Result<()> {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);

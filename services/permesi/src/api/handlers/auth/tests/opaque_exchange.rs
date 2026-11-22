@@ -1891,3 +1891,139 @@ async fn opaque_login_containment_cutoff_rejects_consumed_and_pending_old_proofs
     );
     Ok(())
 }
+
+/// All four OPAQUE start routes behind a PostgreSQL limiter with the given per-account budget.
+fn guess_budget_router(f: &Fixture, account_attempts: i64) -> Result<Router> {
+    let auth = Arc::new(AuthState::new(
+        auth_config(),
+        OpaqueState::from_seed(
+            [0; 32],
+            "api.permesi.dev".into(),
+            Duration::from_secs(300),
+            100,
+        ),
+        Arc::new(RateLimiter::postgres(
+            f.db.pool.clone(),
+            RateLimitConfig::new(600, 100, account_attempts),
+            super::super::SubjectKey::derive(&[3u8; 32])?,
+        )),
+        MfaConfig::new(),
+    ));
+    Ok(
+        opaque_router(auth.clone(), f.admission.clone(), f.db.pool.clone()).merge(
+            Router::new()
+                .route(
+                    "/v1/auth/opaque/password/start",
+                    axum::routing::post(super::super::opaque::password::opaque_password_start),
+                )
+                .with_state(OpaqueTestState {
+                    auth,
+                    admission: f.admission.clone(),
+                    pool: f.db.pool.clone(),
+                }),
+        ),
+    )
+}
+
+/// Every OPAQUE start endpoint evaluates the account's OPRF key, which is worth one
+/// password guess. All four draw on one per-account budget, so they cannot be combined
+/// into extra guesses, and a stale session never reaches the evaluation at all.
+#[tokio::test]
+async fn opaque_start_endpoints_share_the_account_guess_budget() -> Result<()> {
+    let Some(f) = Fixture::new(Duration::from_secs(300), 100).await? else {
+        return Ok(());
+    };
+    let router = guess_budget_router(&f, 3)?;
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)?;
+    let registration = STANDARD.encode(
+        ClientRegistration::<OpaqueSuite>::start(&mut rng, b"guess")?
+            .message
+            .serialize(),
+    );
+    let credential = STANDARD.encode(
+        ClientLogin::<OpaqueSuite>::start(&mut rng, b"guess")?
+            .message
+            .serialize(),
+    );
+    let signup = json!({"email": EMAIL, "registration_request": registration});
+    let password = json!({"registration_request": registration});
+    let reauth = json!({"credential_request": credential});
+    let login = |email: &str| json!({"email": email, "credential_request": credential});
+    let status = |path: &'static str, body: Value, cookie: Option<&'static str>| {
+        let (router, zero) = (router.clone(), f.zero.clone());
+        async move {
+            let cookie = cookie.map(str::to_owned);
+            Ok::<_, anyhow::Error>(
+                post(&router, path, body, &zero, cookie.as_deref())
+                    .await?
+                    .status(),
+            )
+        }
+    };
+    let first: &'static str = Box::leak(f.first.clone().into_boxed_str());
+    let spent = || async {
+        Ok::<i64, anyhow::Error>(
+            sqlx::query_scalar(
+                "SELECT COALESCE(SUM(attempts),0)::BIGINT FROM auth_rate_limits \
+                 WHERE dimension='account' AND action='login'",
+            )
+            .fetch_one(&f.db.pool)
+            .await?,
+        )
+    };
+
+    // The fixture session authenticated 20 minutes ago: refused before any evaluation.
+    assert_eq!(
+        status(
+            "/v1/auth/opaque/password/start",
+            password.clone(),
+            Some(first)
+        )
+        .await?,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(spent().await?, 0);
+    sqlx::query("UPDATE user_sessions SET auth_time=NOW() WHERE session_hash=$1")
+        .bind(hash_session_token(&f.first))
+        .execute(&f.db.pool)
+        .await?;
+
+    // Three different endpoints spend the account's three guesses.
+    for (path, body, cookie) in [
+        ("/v1/auth/opaque/signup/start", signup.clone(), None),
+        ("/v1/auth/opaque/reauth/start", reauth.clone(), Some(first)),
+        (
+            "/v1/auth/opaque/password/start",
+            password.clone(),
+            Some(first),
+        ),
+    ] {
+        assert_eq!(status(path, body, cookie).await?, StatusCode::OK, "{path}");
+    }
+    assert_eq!(spent().await?, 3);
+
+    // None of the four hands out a fourth.
+    for (path, body, cookie) in [
+        ("/v1/auth/opaque/login/start", login(EMAIL), None),
+        ("/v1/auth/opaque/signup/start", signup, None),
+        ("/v1/auth/opaque/reauth/start", reauth, Some(first)),
+        ("/v1/auth/opaque/password/start", password, Some(first)),
+    ] {
+        assert_eq!(
+            status(path, body, cookie).await?,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{path}"
+        );
+    }
+    // Another account's budget is untouched.
+    assert_eq!(
+        status(
+            "/v1/auth/opaque/login/start",
+            login("other@test.example"),
+            None
+        )
+        .await?,
+        StatusCode::OK
+    );
+    Ok(())
+}

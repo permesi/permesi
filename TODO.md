@@ -22,6 +22,24 @@ commits, GitHub results and compatibility limits. Publication remains paused.
 - [ ] Activate the prepared weekly Cargo Dependabot watch when its configuration can reach the default branch. Until then, check upstream manually; the existing weekly audit does not update dependencies.
 - [ ] After the dependency blocker clears, rerun the security audit, full application CI and exact-image/SQL Helm upgrade qualification. Promote/publish only when authorized; Helm `main` CI can trigger chart publication.
 
+## Open findings from the 2026-11 stabilization review
+
+Confirmed by code review during the OpenBao and PostgreSQL 19 stabilization and left open
+because each changes a trust boundary, a default or a user-visible flow.
+
+- [ ] Signup pre-registration: an unverified signup stores the caller's OPAQUE record for any email, later signups for it keep that record, and the victim's click on a (resendable) verification link activates the attacker's password. Bind activation to proof of the stored credential, or let a fresh signup replace a pending record and retire its tokens. Pending accounts also never expire.
+- [ ] OpenBao HTTP clients (AppRole login, unwrap, the TCP transport, operator step-up) follow redirects and reqwest keeps `X-Vault-Token` across origins. Refuse redirects as the Kubernetes login already does, or restrict them to trusted HTTPS peers, and require HTTPS for non-loopback OpenBao URLs.
+- [ ] Diagnostics: the configurable AppRole login URL, the RoleID and upstream OpenBao error bodies (KV, TOTP, Transit) reach logs and spans; startup argument structs derive `Debug` over the SecretID, wrapped token and DSN.
+- [ ] Service DSN TLS: sqlx defaults to `sslmode=prefer` (plaintext fallback, no verification) and no documented DSN sets it. Require `verify-full`/`verify-ca` off loopback, as the Terraform module now does for the OpenBao-to-PostgreSQL leg.
+- [ ] JWKS on signing-key rotation: a warmed replica can serve the old set for one cache lifetime while new tokens carry the new `kid`, and the HTTP max-age is not capped by the remaining cache life.
+- [ ] `/token` holds its transaction and a pool connection across OpenBao signing calls, bounded only by the handler timeout; a slow OpenBao can pin the pool. Fetch the signing key first and gate exchanges below `max_connections`.
+- [ ] Pool connections have no session default for `statement_timeout`/`lock_timeout`; only code paths that set a deadline are bounded.
+- [ ] Neither server sets a header-read or whole-request timeout (only the OAuth token endpoints have a deadline), and a second SIGTERM cannot force exit during the drain; the drain plus worker stop plus pool close can exceed a 30 s grace period.
+- [ ] Both service policies may renew any lease id through `sys/leases/renew`; scope it per role.
+- [ ] Admin elevation tokens are not bound to the session and outlive logout and password rotation (see also Admin elevation HA above).
+- [ ] Smaller items: no `iat` leeway between Genesis and Permesi clocks; the unauthenticated admission `kid` is logged before signature verification; `GET /v1/users` is unbounded; session authentication costs three pool checkouts and a write per request; delivered outbox rows keep their verification link; the OPAQUE seed, pepper and TOTP keys are not zeroized; `reqwest` (genesis), `hyper` (openbao_client) and `tower` (permesi) are only used by tests; the two Genesis `tokens` indexes serve no query.
+- [ ] Deployment follow-ups: the Helm chart still uses the pre-OpenBao environment and role names; OpenBao is moving `api_proxy` from `bao agent` to `bao proxy`; Kubernetes auth has not been exercised against a live cluster.
+
 ## Other milestones
 
 - [x] Read-only platform tenant inspection: separate operator-authorized global organization/project/environment/application views, active-ancestry filtering and bounded pagination; retain existing tenant membership and mutation rules. See [design and regression protection](docs/admin-tenant-inspection.md).

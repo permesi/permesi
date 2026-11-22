@@ -68,9 +68,7 @@ impl DekManager {
                     .context("Failed to fetch DEKs from database (retry)")?;
 
                     if deks.is_empty() {
-                        // Still empty? Then we really failed.
-                        // We return error here so startup might fail or just log error.
-                        // api::new logs error.
+                        // Still empty: no replica bootstrapped a key. Startup fails.
                         return Err(anyhow!(
                             "Failed to bootstrap TOTP DEK and none found in DB: {e}"
                         ));
@@ -351,6 +349,98 @@ mod tests {
         assert_eq!(plaintext, "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=");
 
         server_handle.abort();
+        Ok(())
+    }
+
+    /// Runs `init` against a real schema with one stored key per given status. The
+    /// mock transit unwraps only ciphertexts ending in `good`.
+    async fn init_with_keys(keys: &[(&str, &str)]) -> Result<Option<Result<usize>>> {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{body_json, method, path},
+        };
+        if test_support::runtime::ensure_container_runtime().is_err() {
+            eprintln!("Skipping integration test: no container runtime");
+            return Ok(None);
+        }
+        let postgres = test_support::postgres::PostgresContainer::start("bridge").await?;
+        postgres.wait_until_ready().await?;
+        let pool = sqlx::PgPool::connect(&postgres.admin_dsn()).await?;
+        sqlx::Executor::execute(
+            &pool,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../db/sql/02_permesi.sql"
+            )),
+        )
+        .await?;
+        for (status, wrapped) in keys {
+            sqlx::query("INSERT INTO totp_deks (dek_id, status, wrapped_dek) VALUES ($1, $2, $3)")
+                .bind(uuid::Uuid::new_v4())
+                .bind(status)
+                .bind(wrapped)
+                .execute(&pool)
+                .await?;
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transit/permesi/decrypt/totp"))
+            .and(body_json(json!({ "ciphertext": "vault:v1:good" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "plaintext": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transit/permesi/decrypt/totp"))
+            .respond_with(ResponseTemplate::new(503).set_body_json(json!({ "errors": ["sealed"] })))
+            .mount(&server)
+            .await;
+
+        let transport =
+            OpenBaoTransport::from_target("test-suite", OpenBaoTarget::parse(&server.uri())?)?;
+        let mut globals = GlobalArgs::new(server.uri(), transport);
+        globals.openbao_transit_mount = "transit/permesi".to_string();
+        let manager = DekManager::new(globals);
+        let outcome = manager.init(&pool).await;
+        let loaded = manager.cache.read().unwrap().len();
+        Ok(Some(outcome.map(|()| loaded)))
+    }
+
+    /// The cache is filled once: starting without the active key would leave the
+    /// replica unable to enrol TOTP while reporting healthy, so startup must fail.
+    #[tokio::test]
+    async fn init_fails_when_the_active_key_cannot_be_unwrapped() -> Result<()> {
+        let Some(outcome) = init_with_keys(&[
+            ("active", "vault:v1:bad"),
+            ("decrypt_only", "vault:v1:good"),
+        ])
+        .await?
+        else {
+            return Ok(());
+        };
+        let error = outcome.expect_err("startup must not continue without the active key");
+        assert!(
+            format!("{error:#}").contains("active TOTP DEK"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    /// A retired key that cannot be unwrapped only affects credentials still
+    /// wrapped by it; it must not keep the service from starting.
+    #[tokio::test]
+    async fn init_tolerates_an_unreadable_retired_key() -> Result<()> {
+        let Some(outcome) = init_with_keys(&[
+            ("active", "vault:v1:good"),
+            ("decrypt_only", "vault:v1:bad"),
+        ])
+        .await?
+        else {
+            return Ok(());
+        };
+        assert_eq!(outcome?, 1);
         Ok(())
     }
 }

@@ -161,6 +161,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Database credentials lost their privileges; the service is restarting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }

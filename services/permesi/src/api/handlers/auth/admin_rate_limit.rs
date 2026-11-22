@@ -51,10 +51,10 @@ impl AdminRateLimiter {
     ) -> Result<Uuid, AdminRateLimitError> {
         // A cooldown that cannot be read is treated as active: an unavailable
         // database must not reopen operator-token guessing.
-        let cooldown = self
-            .cooldown(user_id)
-            .await
-            .map_err(|_| AdminRateLimitError::Limited)?;
+        let cooldown = self.cooldown(user_id).await.map_err(|err| {
+            error!("Failed to read admin cooldown: {err}");
+            AdminRateLimitError::Limited
+        })?;
         if cooldown > 0 {
             return Err(AdminRateLimitError::Cooldown {
                 remaining_seconds: cooldown,
@@ -248,6 +248,27 @@ mod tests {
         .await
         .context("failed to insert user")?;
         Ok(row.get("id"))
+    }
+
+    /// With the database unreachable the cooldown cannot be read. Enforcement must
+    /// refuse the attempt; only the display helper may fall back to "no cooldown".
+    #[tokio::test]
+    async fn register_attempt_fails_closed_when_the_cooldown_cannot_be_read() -> Result<()> {
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(200))
+            .connect_lazy("postgres://invalid@127.0.0.1:1/invalid?sslmode=disable")?;
+        let limiter = AdminRateLimiter::new(pool);
+        let user = Uuid::new_v4();
+
+        let attempt = limiter
+            .register_attempt(user, Some("192.0.2.1"), None)
+            .await;
+        assert!(
+            matches!(attempt, Err(AdminRateLimitError::Limited)),
+            "an unreadable cooldown must not admit the attempt"
+        );
+        assert_eq!(limiter.cooldown_seconds(user).await, 0);
+        Ok(())
     }
 
     #[tokio::test]

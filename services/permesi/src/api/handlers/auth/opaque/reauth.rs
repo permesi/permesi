@@ -96,6 +96,18 @@ pub async fn opaque_reauth_start(
     {
         return (status, "Rate limited".to_string()).into_response();
     }
+    // The credential response is one evaluation of the account's OPRF key, worth
+    // one password guess to whoever holds the session cookie. It draws on the
+    // same per-account budget as login, signup start and password-change start,
+    // so the endpoints cannot be combined into extra guesses.
+    if let Some(status) = auth_state
+        .rate_limiter()
+        .check_email(&principal.email, RateLimitAction::Login)
+        .await
+        .denial_status()
+    {
+        return (status, "Rate limited".to_string()).into_response();
+    }
 
     if let Err(err) = require_zero_token(&headers, &admission).await {
         let (status, message) = zero_token_error_response(&err);

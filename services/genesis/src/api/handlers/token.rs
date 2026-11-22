@@ -84,7 +84,8 @@ impl AdmissionSignerLike for AdmissionSigner {
     responses (
         (status = 200, description = "Return token", body = Token),
         (status = 400, description = "Missing or invalid client ID", body = String),
-        (status = 500, description = "Error creating the token", body = String)
+        (status = 500, description = "Error creating the token", body = String),
+        (status = 503, description = "Database credentials lost their privileges; the service is restarting", body = String)
     ),
     tag = "token",
 )]
@@ -487,6 +488,43 @@ mod tests {
         PgPoolOptions::new()
             .acquire_timeout(Duration::from_millis(200))
             .connect_lazy_with(options)
+    }
+
+    /// A leased role that lost its grants answers 42501. The handler must ask for
+    /// the draining shutdown and report 503 instead of exiting the process.
+    #[tokio::test]
+    async fn fetch_client_id_requests_shutdown_when_privileges_are_gone() -> anyhow::Result<()> {
+        if let Err(err) = test_support::runtime::ensure_container_runtime() {
+            eprintln!("Skipping integration test: {err}");
+            return Ok(());
+        }
+        let postgres = test_support::postgres::PostgresContainer::start("bridge").await?;
+        postgres.wait_until_ready().await?;
+        let admin = PgPool::connect(&postgres.admin_dsn()).await?;
+        sqlx::raw_sql(
+            "CREATE TABLE clients (id SMALLINT PRIMARY KEY, uuid UUID NOT NULL, is_reserved BOOLEAN NOT NULL);
+             CREATE ROLE revoked_runtime LOGIN PASSWORD 'revoked-runtime';",
+        )
+        .execute(&admin)
+        .await?;
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(postgres.host_port())
+            .database("postgres")
+            .username("revoked_runtime")
+            .password("revoked-runtime")
+            .ssl_mode(PgSslMode::Disable);
+        let pool = PgPoolOptions::new().connect_with(options).await?;
+        let (shutdown, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = fetch_client_id(&pool, &shutdown, Uuid::new_v4()).await;
+
+        assert!(matches!(result, Err((StatusCode::SERVICE_UNAVAILABLE, _))));
+        assert_eq!(
+            shutdown_rx.try_recv().ok(),
+            Some(ShutdownSignal::DatabaseHealthcheckFailed)
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -387,6 +387,24 @@ fn protocol_error(reply: &Reply, error: &str) -> Result<()> {
     Ok(())
 }
 
+/// Discovery advertises `response_modes_supported: ["query"]`, so naming the default
+/// explicitly must behave exactly like omitting it; any other mode stays rejected.
+#[tokio::test]
+async fn authorize_accepts_the_advertised_query_response_mode() -> Result<()> {
+    let f = Fixture::new().await?;
+    let implicit = f.start(&[]).await?;
+    assert_eq!(implicit.status, StatusCode::OK);
+    let explicit = f.start(&[("response_mode", Some("query".into()))]).await?;
+    assert_eq!(explicit.status, implicit.status);
+    for mode in ["fragment", "form_post", "Query", ""] {
+        protocol_error(
+            &f.start(&[("response_mode", Some(mode.into()))]).await?,
+            "invalid_request",
+        )?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn authorize_rejects_unknown_disabled_deleted_clients_and_inactive_ancestors() -> Result<()> {
     let f = Fixture::new().await?;

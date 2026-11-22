@@ -37,7 +37,7 @@ use crate::api::handlers::{
         types::{
             OpaquePasswordFinishRequest, OpaquePasswordStartRequest, OpaquePasswordStartResponse,
         },
-        utils::decode_base64_field,
+        utils::{decode_base64_field, extract_client_ip},
         zero_token::{require_zero_token, zero_token_error_response},
     },
 };
@@ -66,8 +66,9 @@ const PASSWORD_RECENT_AUTH_SECONDS: i64 = 10 * 60;
     responses(
         (status = 200, description = "OPAQUE password change started", body = OpaquePasswordStartResponse),
         (status = 400, description = "Validation error", body = String),
-        (status = 401, description = "Missing or invalid session cookie."),
-        (status = 429, description = "Rate limited", body = String)
+        (status = 401, description = "Missing or invalid session cookie, or recent authentication required."),
+        (status = 429, description = "Rate limited", body = String),
+        (status = 503, description = "Rate-limit storage unavailable", body = String)
     ),
     tag = "auth"
 )]
@@ -83,11 +84,31 @@ pub async fn opaque_password_start(
         Err(status) => return status.into_response(),
     };
 
+    // The client reauthenticates before changing the password; finish enforces
+    // it on the locked session row, and requiring it here keeps a stale stolen
+    // session from reaching the OPRF evaluation below at all.
+    if !recent_auth_ok(&principal) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "Recent authentication required".to_string(),
+        )
+            .into_response();
+    }
+
     let request: OpaquePasswordStartRequest = match payload {
         Some(Json(payload)) => payload,
         None => return (StatusCode::BAD_REQUEST, "Missing payload".to_string()).into_response(),
     };
 
+    let client_ip = extract_client_ip(&headers);
+    if let Some(status) = auth_state
+        .rate_limiter()
+        .check_ip(client_ip.as_deref(), RateLimitAction::Login)
+        .await
+        .denial_status()
+    {
+        return (status, "Rate limited".to_string()).into_response();
+    }
     // Each start evaluates the account's OPRF key, which is worth one guess at
     // the current password to whoever holds the session cookie. Count it
     // against the same per-account budget as login.
