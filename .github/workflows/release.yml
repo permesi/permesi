@@ -574,7 +574,8 @@ jobs:
           subject-path: dist/*
 
       # The notes are the commit subjects since the previous release (version bumps left
-      # out), so no changelog is kept by hand and every re-run writes the same text.
+      # out), so every re-run writes the same text. CHANGELOG.md is the curated record of
+      # what a release means for its users; it is written with the work, not here.
       - name: Write the release notes
         shell: bash
         run: |

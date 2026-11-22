@@ -121,6 +121,7 @@ Container builds (local):
 - PRs should state problem, approach, and impact; link issues when available.
 - Include evidence of validation (commands run, screenshots/logs for CLI output if relevant) and note OpenAPI or SQL updates.
 - Keep diffs minimal; update docs when behavior or endpoints change.
+- Record changes an operator, integrator or contributor has to know about in `CHANGELOG.md`, in the section of the version being prepared: anything breaking under **Breaking**, then Added, Changed, Fixed or Security. Describe the effect, not the commit; internal refactors and test-only changes do not need an entry.
 
 ## Security & Configuration Tips
 - Never commit secrets or tokens; keep PASERK/telemetry credentials in env vars or your secret manager.

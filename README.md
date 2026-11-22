@@ -610,7 +610,9 @@ exactly the commit CI tested, and the workflow changes nothing in the repository
    choice (`cargo set-version --workspace --bump patch`, or `gbump`) in `Cargo.toml` and
    `Cargo.lock`, and sets `info.version` in `docs/openapi/permesi.json` and
    `docs/openapi/genesis.json` to the same value (`just openapi` regenerates them). The
-   reviewer checks that the bump is present and complete.
+   same commit gives the release its section in `CHANGELOG.md`: the version heading with
+   the release date and the compare link at the foot of the file. The reviewer checks that
+   the bump is present and complete.
 2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check on the
    commit, so the CI run that passed on `sandbox` already counts for the release guard
    once `develop` points at the same commit, and you can run `just release` at once.
