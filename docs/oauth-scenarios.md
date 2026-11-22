@@ -7,6 +7,8 @@ small owned callback client, rather than mocking an OAuth application. Accounts 
 registered and verified through real admission-protected OPAQUE APIs; browser login
 creates actual full sessions. No user, membership, session or grant is seeded directly.
 
+The protocol fixture configures the Genesis and Permesi request buckets at 1,024 requests per second with a burst of 1,024. A single runner drives all simulated clients through one gateway. These fixture budgets allow the suite to observe the persistent account and OAuth rate-limit decisions it asserts. Production defaults and per-process concurrency limits still apply outside the fixture.
+
 ## Running
 
 On Linux with working local Podman (and Node 24 for the `full` and `interop` suites,

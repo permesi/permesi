@@ -184,14 +184,9 @@ impl Runtime {
             "Starting real Genesis and {} Permesi replicas.",
             options.replicas
         );
-        let policy = self.services.start(
-            inputs.binaries,
-            &topology,
-            infra,
-            &gateway.origin,
-            &tls.ca,
-            options,
-        )?;
+        let policy =
+            self.services
+                .start(inputs.binaries, &topology, infra, &gateway.origin, options)?;
         report.record_rate_budgets(&policy);
         self.resource =
             Some(start_resource(&tls, gateway, &policy.oauth, options.request_seconds).await?);

@@ -177,7 +177,6 @@ impl Services {
         topology: &Topology,
         infra: &Infrastructure,
         origin: &str,
-        ca: &Path,
         options: &Options,
     ) -> Result<Policy> {
         check(
@@ -225,8 +224,14 @@ impl Services {
                     "example.test".into(),
                     "--frontend-base-url".into(),
                     origin.into(),
-                    "--admission-paserk-ca-path".into(),
-                    ca.display().to_string(),
+                    "--public-requests-per-second".into(),
+                    "1024".into(),
+                    "--public-burst".into(),
+                    "1024".into(),
+                    "--protocol-requests-per-second".into(),
+                    "1024".into(),
+                    "--protocol-burst".into(),
+                    "1024".into(),
                 ],
             })
             .collect();
@@ -237,6 +242,10 @@ impl Services {
                 topology.genesis.display().to_string(),
                 "--dsn".into(),
                 infra.genesis_dsn.clone(),
+                "--public-requests-per-second".into(),
+                "1024".into(),
+                "--public-burst".into(),
+                "1024".into(),
                 "--openbao-url".into(),
                 infra.openbao_url.clone(),
             ],
