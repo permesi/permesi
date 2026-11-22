@@ -749,6 +749,10 @@ mod tests {
         state.public_budget = std::sync::Arc::new(service_utils::work_limit::Budget::new(
             service_utils::work_limit::Limits::new(1, 1, 1)?,
         ));
+        state.management_budget = std::sync::Arc::new(service_utils::work_limit::Budget::new(
+            service_utils::work_limit::Limits::new(1024, 1024, 1)?,
+        ));
+        let management = state.management_budget.clone();
         let budget = state.public_budget.clone();
         let _busy = budget
             .enter()
@@ -768,6 +772,16 @@ mod tests {
                         .uri(uri)
                         .body(Body::empty())?,
                 )
+                .await?;
+            assert_eq!(response.status().as_u16(), expected, "{uri}");
+        }
+        let _management_busy = management
+            .enter()
+            .ok_or_else(|| anyhow::anyhow!("missing management fixture permit"))?;
+        for (uri, expected) in [("/v1/orgs", 429), ("/v1/auth/session", 204), ("/live", 200)] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(uri).body(Body::empty())?)
                 .await?;
             assert_eq!(response.status().as_u16(), expected, "{uri}");
         }

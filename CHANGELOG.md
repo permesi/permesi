@@ -19,7 +19,7 @@ The first release on OpenBao and PostgreSQL 19.
 
 - Admission verification reads approved Ed25519 keys and the minimum accepted
   version from core OpenBao. Initialize the operator-owned authority before
-  rollout. Genesis signs with the explicitly activated Transit version.
+  rollout. Remove the previous `--admission-paserk-url` and `--admission-paserk-ca-path` options. Genesis signs with the explicitly activated Transit version.
 - Public health responses contain `status` and `commit`. Genesis has removed
   the request-header echo endpoint.
 
@@ -52,7 +52,7 @@ The first release on OpenBao and PostgreSQL 19.
 ### Changed
 
 - Genesis and Permesi reject excess public work before database and cryptographic
-  operations. Session and OAuth traffic have a separate Permesi budget. Management routes use an independent bucket with the protocol limits.
+  operations. Session and OAuth traffic have a separate Permesi budget. Management paths use an independent bucket with the protocol limits, including requests that subsequently fail authentication.
 - Genesis database leases receive column-level privileges and connection limits.
   The manager uses the maintenance database during service database saturation.
 
