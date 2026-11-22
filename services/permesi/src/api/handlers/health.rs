@@ -59,7 +59,12 @@ pub async fn health(
         code,
         [(
             "X-App",
-            concat!(env!("CARGO_PKG_NAME"), ":", env!("CARGO_PKG_VERSION")),
+            format!(
+                "{}:{}:{}",
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+                crate::GIT_COMMIT_HASH.get(..7).unwrap_or("")
+            ),
         )],
         body,
     )

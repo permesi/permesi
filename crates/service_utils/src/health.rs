@@ -51,18 +51,14 @@ impl Observation {
                 let started = Instant::now();
                 let observed = tokio::time::timeout(Duration::from_secs(4), async {
                     let db = async {
-                        let mut conn = pool.acquire().await?;
-                        debug!(
-                            pool_wait_ms = started.elapsed().as_millis(),
-                            "health database acquire"
-                        );
-                        conn.ping().await
+                        let result = ping(&pool, started).await;
+                        if result.as_ref().is_err_and(should_shutdown_on_db_error) {
+                            let _ = shutdown.send(ShutdownSignal::DatabaseHealthcheckFailed);
+                        }
+                        result.is_ok()
                     };
-                    let (result, extra) = tokio::join!(db, check());
-                    if result.as_ref().is_err_and(should_shutdown_on_db_error) {
-                        let _ = shutdown.send(ShutdownSignal::DatabaseHealthcheckFailed);
-                    }
-                    result.is_ok() && extra
+                    let (connected, extra) = tokio::join!(db, check());
+                    connected && extra
                 })
                 .await
                 .unwrap_or(false);
@@ -74,6 +70,16 @@ impl Observation {
         Self(rx)
     }
 }
+/// Measure the pool wait independently of the service-specific probe.
+async fn ping(pool: &PgPool, started: Instant) -> Result<(), sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    debug!(
+        pool_wait_ms = started.elapsed().as_millis(),
+        "health database acquire"
+    );
+    conn.ping().await
+}
+
 /// Returns true when a database error indicates expired/revoked credentials.
 ///
 /// This intentionally targets authentication class failures so transient

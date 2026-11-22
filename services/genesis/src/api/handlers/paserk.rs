@@ -14,6 +14,7 @@ use tracing::error;
     get,
     path= "/paserk.json",
     responses (
+        (status = 429, description = "Public work capacity exceeded"),
         (status = 200, description = "PASERK public keys", body = serde_json::Value, content_type = "application/json"),
     ),
     tag= "paserk"

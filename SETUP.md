@@ -230,7 +230,7 @@ Both services require OpenBao-issued TLS material and must trust a single OpenBa
 Override paths with:
 `PERMESI_TLS_PEM_BUNDLE` and `GENESIS_TLS_PEM_BUNDLE`.
 Before enabling admission, initialize its authority in the core KV mount using
-`scripts/admission-authority initialize 1` with the bootstrap operator identity.
+`scripts/admission-authority initialize 1` with the bootstrap operator identity for a fresh key. For an existing install, initialize with its active Transit version and set the same `GENESIS_ADMISSION_SIGNING_VERSION`.
 The local OpenBao recipe performs the initial create with compare-and-set.
 
 Genesis serves public zero-token endpoints used by the frontend, and it is expected to sit

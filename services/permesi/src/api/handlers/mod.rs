@@ -49,6 +49,7 @@ struct Snapshot {
     keyset: PaserkKeySet,
     deadline: Option<Instant>,
     floor: u32,
+    revision: u64,
 }
 
 /// The operator publishes at most two approved Ed25519 versions in the core KV.
@@ -61,9 +62,9 @@ struct Authority {
 }
 
 impl Authority {
-    fn into_snapshot(self, deadline: Instant) -> Result<Snapshot> {
+    fn into_snapshot(self, deadline: Instant, revision: u64) -> Result<Snapshot> {
         ensure!(
-            self.minimum_version > 0 && self.keys.len() <= 2,
+            revision > 0 && self.minimum_version > 0 && self.keys.len() <= 2,
             "invalid admission authority"
         );
         let mut keys = Vec::new();
@@ -91,6 +92,7 @@ impl Authority {
             keyset,
             deadline: Some(deadline),
             floor: self.minimum_version,
+            revision,
         })
     }
 }
@@ -103,6 +105,7 @@ impl AdmissionVerifier {
                 keyset,
                 deadline: None,
                 floor: 1,
+                revision: 1,
             })),
             issuer,
             audience,
@@ -146,6 +149,11 @@ impl AdmissionVerifier {
                         response.status.is_success(),
                         "admission authority read failed"
                     );
+                    let revision = response
+                        .body
+                        .pointer("/data/metadata/version")
+                        .and_then(serde_json::Value::as_u64)
+                        .context("missing KV revision")?;
                     let authority: Authority = serde_json::from_value(
                         response
                             .body
@@ -154,7 +162,7 @@ impl AdmissionVerifier {
                             .clone(),
                     )?;
                     verifier
-                        .install(authority.into_snapshot(started + max_age)?)
+                        .install(authority.into_snapshot(started + max_age, revision)?)
                         .await
                 };
                 if !matches!(tokio::time::timeout(refresh, observation).await, Ok(Ok(()))) {
@@ -169,7 +177,9 @@ impl AdmissionVerifier {
     async fn install(&self, next: Snapshot) -> Result<()> {
         let mut stored = self.snapshot.write().await;
         ensure!(
-            stored.as_ref().is_none_or(|old| next.floor >= old.floor),
+            stored
+                .as_ref()
+                .is_none_or(|old| next.floor >= old.floor && next.revision >= old.revision),
             "admission floor regressed"
         );
         *stored = Some(next);
@@ -340,21 +350,22 @@ mod tests {
             issuer: ISSUER.into(),
             audience: AUDIENCE.into(),
         };
-        let observation = |minimum_version, deadline| {
+        let observation = |minimum_version, deadline, revision| {
             Authority {
                 minimum_version,
                 keys: [(1, STANDARD.encode(signer.verifying_key().as_bytes()))].into(),
             }
-            .into_snapshot(deadline)
+            .into_snapshot(deadline, revision)
         };
         let future = Instant::now() + Duration::from_secs(60);
         assert!(!verify_token(&verifier, &token).await);
-        verifier.install(observation(1, future)?).await?;
+        verifier.install(observation(1, future, 1)?).await?;
         assert!(verify_token(&verifier, &token).await);
-        verifier.install(observation(1, Instant::now())?).await?;
+        verifier.install(observation(1, Instant::now(), 2)?).await?;
         assert!(!verify_token(&verifier, &token).await);
-        verifier.install(observation(2, future)?).await?;
-        assert!(verifier.install(observation(1, future)?).await.is_err());
+        assert!(verifier.install(observation(1, future, 1)?).await.is_err());
+        verifier.install(observation(2, future, 3)?).await?;
+        assert!(verifier.install(observation(1, future, 1)?).await.is_err());
         assert!(!verify_token(&verifier, &token).await);
         Ok(())
     }

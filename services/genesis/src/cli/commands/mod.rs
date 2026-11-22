@@ -102,9 +102,9 @@ pub fn new() -> Command {
         (
             "public-requests-per-second",
             "GENESIS_PUBLIC_REQUESTS_PER_SECOND",
-            "32",
+            "8",
         ),
-        ("public-burst", "GENESIS_PUBLIC_BURST", "32"),
+        ("public-burst", "GENESIS_PUBLIC_BURST", "8"),
         ("public-max-in-flight", "GENESIS_PUBLIC_MAX_IN_FLIGHT", "8"),
     ] {
         command = command.arg(

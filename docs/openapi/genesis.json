@@ -73,6 +73,16 @@
                 "schema": {}
               }
             }
+          },
+          "429": {
+            "description": "Public work capacity exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -130,6 +140,16 @@
           },
           "400": {
             "description": "Missing or invalid client ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Public work capacity exceeded",
             "content": {
               "application/json": {
                 "schema": {

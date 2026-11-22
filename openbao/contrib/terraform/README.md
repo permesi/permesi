@@ -350,7 +350,11 @@ administration to the core operator boundary. Route the reader to authoritative
 core storage. Restoring an older OpenBao backup requires restoring the current
 withdrawal floor before exposing admission.
 
-Initialize a fresh authority with `scripts/admission-authority initialize 1`.
+For an existing Transit key, inspect its current signer version and initialize with
+that version before upgrading the first core replica. Configure Genesis to use the
+same version during rollout. Confirm admission on every replica, including a
+signup or login, since core readiness deliberately survives an admission outage.
+For a new key at version one, initialize with `scripts/admission-authority initialize 1`.
 For isolated installations, pass `--reader-socket /absolute/path/to/agent.sock`
 to initialization and publication. The core-side Agent needs only read access to
 `transit/genesis/keys/genesis-signing` on the edge OpenBao. It sends no core

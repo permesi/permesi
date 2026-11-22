@@ -144,9 +144,8 @@ async fn limit_public_work(
     let Some(_permit) = budget.enter() else {
         tracing::debug!(route = path, "public work rejected");
         return (
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            [("Cache-Control", "no-store")],
-            axum::Json(serde_json::json!({"error":"too_many_requests"})),
+            [("Cache-Control", "no-store"), ("Retry-After", "1")],
+            api_error::ApiError::from_status(axum::http::StatusCode::TOO_MANY_REQUESTS),
         )
             .into_response();
     };

@@ -84,6 +84,7 @@ impl AdmissionSignerLike for AdmissionSigner {
     responses (
         (status = 200, description = "Return token", body = Token),
         (status = 400, description = "Missing or invalid client ID", body = String),
+        (status = 429, description = "Public work capacity exceeded"),
         (status = 500, description = "Error creating the token", body = String),
         (status = 503, description = "Database credentials lost their privileges; the service is restarting", body = String)
     ),

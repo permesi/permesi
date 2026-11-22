@@ -427,13 +427,16 @@ jobs:
       - scenario-build
       - oauth-scenarios
       - browser-tests
+      - sandbox-images
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded
         shell: bash
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RESULTS: ${{ format('{0} {1} {2} {3} {4} {5}', needs.test.result, needs.build.result, needs.frontend-build.result, needs.scenario-build.result, needs.oauth-scenarios.result, needs.browser-tests.result) }}
+          CANDIDATES: ${{ needs.sandbox-images.result }}
         run: |
+          if [[ "$GITHUB_REF" == refs/heads/sandbox && "$CANDIDATES" != success ]]; then exit 1; fi
           echo "Job results: ${RESULTS}"
           for result in ${RESULTS}; do
             if [[ "${result}" != "success" ]]; then

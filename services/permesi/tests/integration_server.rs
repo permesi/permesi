@@ -294,7 +294,18 @@ fn prepare_tls_assets() -> Result<Option<TestTlsPaths>> {
 async fn wait_for_ready(client: &reqwest::Client, base: &str) -> Result<()> {
     for _ in 0..40 {
         match client.get(format!("{base}/health")).send().await {
-            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) if resp.status().is_success() => {
+                if resp
+                    .json::<serde_json::Value>()
+                    .await?
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("ok")
+                {
+                    return Ok(());
+                }
+                sleep(Duration::from_millis(250)).await;
+            }
             _ => sleep(Duration::from_millis(250)).await,
         }
     }

@@ -430,6 +430,10 @@ mod tests {
             keys,
         };
 
+        let staged = build_paserk_snapshot(&transit, 1)?;
+        assert_eq!(staged.latest_version, 1);
+        assert_eq!(staged.keyset.keys.len(), 1);
+        assert!(build_paserk_snapshot(&transit, 3).is_err());
         let snapshot = build_paserk_snapshot(&transit, transit.latest_version)?;
         assert_eq!(snapshot.latest_version, 2);
         assert_eq!(snapshot.previous_version, Some(1));

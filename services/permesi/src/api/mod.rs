@@ -355,9 +355,8 @@ async fn limit_public_work(
             return handlers::token::limited_response();
         }
         return (
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            [("Cache-Control", "no-store")],
-            axum::Json(serde_json::json!({"error":"too_many_requests"})),
+            [("Cache-Control", "no-store"), ("Retry-After", "1")],
+            api_error::ApiError::from_status(axum::http::StatusCode::TOO_MANY_REQUESTS),
         )
             .into_response();
     };
