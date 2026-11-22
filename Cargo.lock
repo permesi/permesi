@@ -5238,6 +5238,7 @@ dependencies = [
  "serde_json",
  "socket2",
  "sqlx",
+ "test_support",
  "tokio",
  "tower",
  "tower-http 0.7.1",

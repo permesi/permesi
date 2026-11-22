@@ -540,6 +540,36 @@ impl OpenBaoContainer {
             .context("Missing client_token in token response")
     }
 
+    /// Create an orphan service token that cannot live past `max_ttl`, however
+    /// often it is renewed. Renewals close to that limit return what is left.
+    ///
+    /// # Errors
+    /// Returns an error if the OpenBao API request fails or the response has no token.
+    pub async fn create_token_with_max_ttl(
+        &self,
+        policies: &[&str],
+        ttl: &str,
+        max_ttl: &str,
+    ) -> Result<String> {
+        let response = self
+            .request(
+                Method::POST,
+                "/v1/auth/token/create-orphan",
+                Some(json!({
+                    "policies": policies,
+                    "no_default_policy": true,
+                    "ttl": ttl,
+                    "explicit_max_ttl": max_ttl,
+                    "renewable": true
+                })),
+                None,
+            )
+            .await
+            .context("Failed to create token")?;
+        read_response_str(&response, &["auth", "client_token"])
+            .context("Missing client_token in token response")
+    }
+
     /// Revoke a token and every lease it owns.
     ///
     /// # Errors
