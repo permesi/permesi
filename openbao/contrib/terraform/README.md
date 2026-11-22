@@ -385,3 +385,9 @@ The signing, credential, runtime and bootstrap PKI, certificate-login and AppRol
 and source IP. Restrict edge egress and size the rate times both counts against
 the shared service budget. Keep management and core reads on a separately
 budgeted path. Existing isolated endpoints require equivalent constraints.
+
+The fresh-bootstrap regression applies the six Genesis quotas and their
+prerequisites to an empty disposable OpenBao. It verifies the stored paths,
+auth roles, rate and interval. Run `python3 tests/live_quotas.py IMAGE@sha256:DIGEST`
+from this directory with Podman and Terraform. Intermediate signing depends on
+the generated root issuer, including during a targeted quota apply.

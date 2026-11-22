@@ -45,6 +45,8 @@ resource "vault_pki_secret_backend_intermediate_cert_request" "permesi_int" {
 }
 
 resource "vault_pki_secret_backend_root_sign_intermediate" "permesi_int" {
+  # The PKI mount alone has no issuer on a new OpenBao installation.
+  depends_on  = [vault_pki_secret_backend_root_cert.permesi_root]
   backend     = vault_mount.pki_root.path
   csr         = vault_pki_secret_backend_intermediate_cert_request.permesi_int.csr
   common_name = var.pki_intermediate_common_name

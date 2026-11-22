@@ -68,6 +68,8 @@ The first release on OpenBao and PostgreSQL 19.
 
 ### Fixed
 
+- On a fresh OpenBao installation, Terraform creates the root issuer before signing the intermediate used by Genesis certificate login and its quota.
+
 - `genesis_tokens_rollover` failed once a token had been issued before that day's
   partition existed, so no partition was created and nothing was expired.
 - A stalled admission keyset fetch from Genesis blocked every request that
