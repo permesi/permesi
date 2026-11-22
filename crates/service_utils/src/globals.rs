@@ -23,6 +23,8 @@ pub struct GlobalArgs {
     pub openbao_transport: OpenBaoTransport,
     /// The current OpenBao authentication token (if using TCP mode).
     pub openbao_token: SecretString,
+    /// Lease (in seconds) the token was issued with at login; zero when unknown.
+    pub openbao_token_lease_duration: u64,
     /// The OpenBao Transit secrets engine mount path.
     pub openbao_transit_mount: String,
     /// The lease ID for the current database credentials.
@@ -47,6 +49,7 @@ impl GlobalArgs {
             openbao_url: vurl,
             openbao_transport: transport,
             openbao_token: SecretString::default(),
+            openbao_token_lease_duration: 0,
             openbao_transit_mount: String::new(),
             openbao_db_lease_id: String::new(),
             openbao_db_lease_duration: 0,
@@ -59,6 +62,12 @@ impl GlobalArgs {
     pub fn set_token(&mut self, token: SecretString) {
         self.openbao_token = token;
     }
+
+    /// Record the lease a login issued the token with, so the renewal task knows
+    /// how long it may keep retrying if OpenBao is unreachable right after startup.
+    pub fn set_token_lease(&mut self, seconds: u64) {
+        self.openbao_token_lease_duration = seconds;
+    }
 }
 
 impl std::fmt::Debug for GlobalArgs {
@@ -67,6 +76,10 @@ impl std::fmt::Debug for GlobalArgs {
             .field("openbao_url", &self.openbao_url)
             .field("openbao_transport", &self.openbao_transport)
             .field("openbao_token", &"***")
+            .field(
+                "openbao_token_lease_duration",
+                &self.openbao_token_lease_duration,
+            )
             .field("openbao_transit_mount", &self.openbao_transit_mount)
             .field("openbao_db_lease_id", &self.openbao_db_lease_id)
             .field("openbao_db_lease_duration", &self.openbao_db_lease_duration)

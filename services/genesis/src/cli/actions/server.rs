@@ -40,13 +40,14 @@ pub async fn execute(args: Args) -> Result<()> {
     globals.openbao_transit_mount = args.openbao_transit_mount;
 
     if let Some(config) = &args.openbao_kubernetes {
-        let (token, _) = openbao_client::kubernetes::kubernetes_login(
+        let (token, lease) = openbao_client::kubernetes::kubernetes_login(
             crate::APP_USER_AGENT,
             &globals.openbao_url,
             config,
         )
         .await?;
         globals.set_token(token);
+        globals.set_token_lease(lease);
     } else if matches!(args.openbao_target, openbao::OpenBaoTarget::Tcp { .. }) {
         let openbao_role_id = args
             .openbao_role_id
@@ -55,21 +56,19 @@ pub async fn execute(args: Args) -> Result<()> {
         let login_url = openbao::approle_login_url(&globals.openbao_url)?;
 
         // If openbao wrapped token try to unwrap, otherwise use secret-id.
-        let openbao_token: String = if let Some(wrapped) = &args.openbao_wrapped_token {
+        let (openbao_token, lease) = if let Some(wrapped) = &args.openbao_wrapped_token {
             let openbao_session_id = openbao::unwrap(&globals.openbao_url, wrapped).await?;
-            let (token, _) =
-                openbao::approle_login(&login_url, &openbao_session_id, openbao_role_id).await?;
-            token
+            openbao::approle_login(&login_url, &openbao_session_id, openbao_role_id).await?
         } else {
             let secret_id = args
                 .openbao_secret_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("OpenBao secret-id is required"))?;
-            let (token, _) = openbao::approle_login(&login_url, secret_id, openbao_role_id).await?;
-            token
+            openbao::approle_login(&login_url, secret_id, openbao_role_id).await?
         };
 
         globals.set_token(SecretString::from(openbao_token));
+        globals.set_token_lease(lease);
     }
 
     // Get database username and password from OpenBao

@@ -15,22 +15,24 @@
 //!    in the renewal window is therefore survived instead of stopping every
 //!    replica that happened to renew then. When time runs out, a `*RenewalFailed`
 //!    signal requests a fail-closed shutdown.
-//! 6. OpenBao caps every lease at its max TTL: renewals then stop extending it and
-//!    return only what is left. The task recognises that, waits until a drain
-//!    margin before the final expiry and sends a `*Exhausted` signal, so the
-//!    process restarts (and logs in again) with working credentials instead of
-//!    polling a dying lease and draining with revoked ones.
+//! 6. OpenBao caps every lease at its max TTL: a renewal then returns less than
+//!    a full lease, and that shorter duration is all that is left. The task
+//!    recognises the first such renewal, waits until one drain margin before the
+//!    final expiry and sends a `*Exhausted` signal, so the process restarts (and
+//!    logs in again) with working credentials instead of polling a dying lease
+//!    and draining with revoked ones. The margin is fixed by the full lease, not
+//!    by what is left, and no renewal is scheduled inside it.
 //! 7. Services may also reuse `ShutdownSignal` for fail-closed runtime probes
 //!    (for example database liveness checks).
 
 use crate::globals::GlobalArgs;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use openbao_client::OpenBaoTransport;
 use rand::{RngExt, rngs::StdRng};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::{
     sync::mpsc,
-    time::{Duration, Instant, sleep},
+    time::{Duration, Instant, sleep, sleep_until, timeout},
 };
 use tracing::{debug, error, info, instrument, warn};
 
@@ -43,8 +45,8 @@ const MIN_ATTEMPTS: u32 = 3;
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// Floor for the wait between renewals, so a near-zero lease cannot spin.
 const MIN_RENEW_INTERVAL: Duration = Duration::from_secs(1);
-/// OpenBao reports leases in whole seconds; allow that much rounding when
-/// deciding whether a renewal extended the expiry.
+/// OpenBao reports leases in whole seconds; a renewal within this much of the
+/// longest lease seen still counts as a full one.
 const EXTENSION_TOLERANCE: Duration = Duration::from_secs(1);
 
 /// Reason for triggering a process shutdown from a renewal task or runtime probe.
@@ -98,7 +100,9 @@ pub async fn try_renew(
             globals.openbao_transport.clone(),
             globals.openbao_token.clone(),
             Lease::Token,
-            None,
+            Some(globals.openbao_token_lease_duration)
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs),
             tx.clone(),
         ));
     }
@@ -156,10 +160,10 @@ impl Lease {
     }
 }
 
-/// What to do after a successful renewal.
+/// What to do after a successful renewal, measured from when it was requested.
 #[derive(Debug, PartialEq, Eq)]
 enum Plan {
-    /// The lease was extended: renew again after this long.
+    /// A full lease was granted: renew again after this long.
     RenewAfter(Duration),
     /// The lease is at its max TTL: request shutdown after this long.
     ShutdownAfter(Duration),
@@ -167,43 +171,48 @@ enum Plan {
 
 /// Decide the next step from the lease a renewal returned.
 ///
-/// `remaining_before` is what the previous lease still had when the renewal was
-/// sent and `peak` the longest lease seen so far. A renewal that returns less
-/// than the peak without moving the expiry forward means OpenBao has capped the
-/// lease at its max TTL, so the returned duration is all that is left. A full
-/// lease that was simply renewed early (as at startup) is not mistaken for that.
-fn plan(
-    lease: Duration,
-    remaining_before: Option<Duration>,
-    peak: Duration,
-    jitter_percent: u64,
-) -> Plan {
-    let capped = lease < peak
-        && remaining_before.is_some_and(|remaining| lease <= remaining + EXTENSION_TOLERANCE);
-    if capped {
-        return Plan::ShutdownAfter(lease.saturating_sub(drain_margin(lease)));
+/// `full` is the longest lease this task has held. OpenBao grants the role's
+/// TTL on every renewal until the max TTL is closer than that, and from then on
+/// only what remains. So the first renewal shorter than `full` already fixes the
+/// final expiry, and waiting for a later, even shorter one could only wake inside
+/// the drain margin. Shutdown is requested one margin before that expiry, at once
+/// if less than a margin is left.
+///
+/// A full lease is renewed after `jitter_percent` of its duration, but never so
+/// late that less than the margin would remain if that renewal turned out capped.
+fn plan(lease: Duration, full: Duration, jitter_percent: u64) -> Plan {
+    let margin = drain_margin(full.max(lease));
+    if lease + EXTENSION_TOLERANCE < full {
+        return Plan::ShutdownAfter(lease.saturating_sub(margin));
     }
-    let wait = Duration::from_secs(lease.as_secs() * jitter_percent / 100);
+    let wait = Duration::from_secs(lease.as_secs() * jitter_percent / 100)
+        .min(lease.saturating_sub(margin));
     Plan::RenewAfter(wait.max(MIN_RENEW_INTERVAL))
 }
 
-/// Margin kept before expiry: the full drain margin, or half of a lease too
-/// short to afford it.
-fn drain_margin(lease: Duration) -> Duration {
-    DRAIN_MARGIN.min(lease / 2)
+/// Validity to keep in hand before expiry for a lease whose full duration is
+/// `full`: the drain margin, or half of a lease too short to afford it. It is
+/// derived from the full lease so it does not shrink as the lease runs down.
+fn drain_margin(full: Duration) -> Duration {
+    DRAIN_MARGIN.min(full / 2)
 }
 
 /// Whether a failed renewal may be retried after `backoff`.
 ///
 /// The first `MIN_ATTEMPTS` are always made. Beyond that a retry is worthwhile
-/// only while the lease would still have its drain margin when the retry runs;
-/// without a known expiry (the first token renewal) there is nothing to wait for.
+/// only while `time_left`, the lease's remaining validity outside its drain
+/// margin, outlasts the backoff; without a known expiry there is nothing to
+/// wait for.
 fn may_retry(attempt: u32, backoff: Duration, time_left: Option<Duration>) -> bool {
     attempt < MIN_ATTEMPTS || time_left.is_some_and(|left| backoff < left)
 }
 
 /// Keep one lease renewed until it fails for good or reaches its max TTL, then
 /// send the matching shutdown signal and stop.
+///
+/// `initial` is the lease the credential was issued with, when known. Every
+/// deadline is measured from the moment a renewal was requested, so a slow
+/// response never makes the lease look longer than it is.
 async fn renew_until_shutdown(
     transport: OpenBaoTransport,
     token: SecretString,
@@ -215,21 +224,38 @@ async fn renew_until_shutdown(
     // An empty token means Agent mode: the Agent injects its own.
     let token = Some(token.expose_secret()).filter(|token| !token.is_empty());
     let name = lease.name();
-    let mut peak = initial.unwrap_or_default();
+    // Longest lease held so far; the issued lease only sizes the margin until
+    // the first renewal reports what a full one is.
+    let mut full = Duration::ZERO;
+    let issued = initial.unwrap_or_default();
     // When the current lease runs out, once that is known.
     let mut expiry = initial.map(|lease| Instant::now() + lease);
 
     loop {
         let mut attempt = 1;
         let mut backoff = Duration::from_secs(1);
-        let granted = loop {
-            match lease.renew(&transport, token).await {
-                Ok(seconds) => break Duration::from_secs(seconds),
+        let (requested, granted) = loop {
+            let requested = Instant::now();
+            // What the lease can still spend on renewal before its drain margin.
+            let budget = expiry.map(|expiry| {
+                expiry
+                    .saturating_duration_since(requested)
+                    .saturating_sub(drain_margin(full.max(issued)))
+            });
+            // Past the guaranteed attempts, a stalled request must not eat the margin.
+            let result = match budget {
+                Some(budget) if attempt > MIN_ATTEMPTS => {
+                    match timeout(budget, lease.renew(&transport, token)).await {
+                        Ok(result) => result,
+                        Err(_) => Err(anyhow!("no answer before the drain margin")),
+                    }
+                }
+                _ => lease.renew(&transport, token).await,
+            };
+            match result {
+                Ok(seconds) => break (requested, Duration::from_secs(seconds)),
                 Err(e) => {
-                    let time_left = expiry.map(|expiry| {
-                        let left = expiry.saturating_duration_since(Instant::now());
-                        left.saturating_sub(drain_margin(left))
-                    });
+                    let time_left = budget.map(|budget| budget.saturating_sub(requested.elapsed()));
                     if !may_retry(attempt, backoff, time_left) {
                         error!(attempts = attempt, "Failed to renew {name}: {e}");
                         let _ = tx.send(lease.failed());
@@ -247,12 +273,10 @@ async fn renew_until_shutdown(
             }
         };
 
-        let now = Instant::now();
-        let remaining_before = expiry.map(|expiry| expiry.saturating_duration_since(now));
-        peak = peak.max(granted);
-        expiry = Some(now + granted);
+        full = full.max(granted);
+        expiry = Some(requested + granted);
 
-        match plan(granted, remaining_before, peak, rng.random_range(70..90)) {
+        match plan(granted, full, rng.random_range(70..90)) {
             Plan::RenewAfter(wait) => {
                 info!(
                     lease_duration = granted.as_secs(),
@@ -260,7 +284,7 @@ async fn renew_until_shutdown(
                     "OpenBao {name} renewed"
                 );
                 debug!("Will renew {name} in {} seconds", wait.as_secs());
-                sleep(wait).await;
+                sleep_until(requested + wait).await;
             }
             Plan::ShutdownAfter(wait) => {
                 warn!(
@@ -268,7 +292,7 @@ async fn renew_until_shutdown(
                     shutdown_in_seconds = wait.as_secs(),
                     "OpenBao {name} reached its max TTL; restarting before it expires"
                 );
-                sleep(wait).await;
+                sleep_until(requested + wait).await;
                 let _ = tx.send(lease.exhausted());
                 return;
             }
@@ -280,7 +304,8 @@ async fn renew_until_shutdown(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        MAX_BACKOFF, MIN_RENEW_INTERVAL, Plan, ShutdownSignal, may_retry, plan, try_renew,
+        DRAIN_MARGIN, MAX_BACKOFF, MIN_RENEW_INTERVAL, Plan, ShutdownSignal, drain_margin,
+        may_retry, plan, try_renew,
     };
     use crate::globals::GlobalArgs;
     use anyhow::{Result, bail};
@@ -439,60 +464,84 @@ mod tests {
     const HOUR: Duration = Duration::from_hours(1);
 
     #[test]
-    fn plan_renews_an_extended_lease_at_the_jittered_fraction() {
-        // Renewed with 12 minutes left and a full hour granted again.
-        let next = plan(HOUR, Some(Duration::from_mins(12)), HOUR, 80);
-        assert_eq!(next, Plan::RenewAfter(Duration::from_mins(48)));
-    }
-
-    #[test]
-    fn plan_does_not_mistake_an_early_full_renewal_for_the_cap() {
-        // Startup renews a fresh lease at once: nothing is extended, but the
-        // lease is as long as it has ever been.
-        let next = plan(HOUR, Some(HOUR), HOUR, 70);
-        assert_eq!(next, Plan::RenewAfter(Duration::from_mins(42)));
-        // The first token renewal has no previous expiry to compare with.
-        let next = plan(HOUR, None, HOUR, 70);
-        assert_eq!(next, Plan::RenewAfter(Duration::from_mins(42)));
-    }
-
-    #[test]
-    fn plan_keeps_renewing_while_a_shortened_lease_still_moves_the_expiry() {
-        // Close to max TTL: 15 minutes granted with 12 left is still an extension.
-        let next = plan(
-            Duration::from_mins(15),
-            Some(Duration::from_mins(12)),
-            HOUR,
-            80,
+    fn plan_renews_a_full_lease_at_the_jittered_fraction() {
+        assert_eq!(
+            plan(HOUR, HOUR, 80),
+            Plan::RenewAfter(Duration::from_mins(48))
         );
-        assert_eq!(next, Plan::RenewAfter(Duration::from_mins(12)));
+        // The first renewal defines what a full lease is.
+        assert_eq!(
+            plan(HOUR, Duration::ZERO, 70),
+            Plan::RenewAfter(Duration::from_mins(42))
+        );
+        // Whole-second rounding is not a shortened lease.
+        assert_eq!(
+            plan(Duration::from_secs(3599), HOUR, 80),
+            Plan::RenewAfter(Duration::from_secs(2879))
+        );
     }
 
     #[test]
-    fn plan_requests_shutdown_one_drain_margin_before_a_capped_lease_expires() {
-        // The renewal returned only what was left: the lease is at its max TTL.
-        let left = Duration::from_mins(3);
-        let next = plan(left, Some(left), HOUR, 80);
-        assert_eq!(next, Plan::ShutdownAfter(Duration::from_mins(2)));
-        // Whole-second rounding must not hide the cap.
-        let next = plan(left, Some(Duration::from_millis(179_400)), HOUR, 80);
-        assert_eq!(next, Plan::ShutdownAfter(Duration::from_mins(2)));
+    fn plan_treats_the_first_shortened_lease_as_the_final_one() {
+        // Review trace: an hour-long lease renewed 406 s before max TTL. Renewing
+        // again at 89% would have woken 45 s before expiry, inside the margin.
+        assert_eq!(
+            plan(Duration::from_secs(406), HOUR, 89),
+            Plan::ShutdownAfter(Duration::from_secs(346))
+        );
+        assert_eq!(
+            plan(Duration::from_mins(15), HOUR, 80),
+            Plan::ShutdownAfter(Duration::from_mins(14))
+        );
     }
 
     #[test]
-    fn plan_keeps_half_of_a_capped_lease_shorter_than_the_drain_margin() {
-        let left = Duration::from_secs(20);
-        let next = plan(left, Some(left), HOUR, 80);
-        assert_eq!(next, Plan::ShutdownAfter(Duration::from_secs(10)));
-        let next = plan(Duration::ZERO, Some(Duration::ZERO), HOUR, 80);
-        assert_eq!(next, Plan::ShutdownAfter(Duration::ZERO));
+    fn plan_requests_shutdown_at_once_inside_the_drain_margin() {
+        // The margin comes from the full lease; it does not halve with what is left.
+        assert_eq!(
+            plan(Duration::from_secs(45), HOUR, 80),
+            Plan::ShutdownAfter(Duration::ZERO)
+        );
+        assert_eq!(
+            plan(Duration::ZERO, HOUR, 80),
+            Plan::ShutdownAfter(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn plan_never_schedules_a_renewal_inside_the_drain_margin() {
+        // 89% of five minutes would leave 33 s; the margin keeps a full minute.
+        let five_minutes = Duration::from_mins(5);
+        assert_eq!(
+            plan(five_minutes, five_minutes, 89),
+            Plan::RenewAfter(Duration::from_mins(4))
+        );
+        // A lease too short for the margin keeps half of itself.
+        let short = Duration::from_secs(20);
+        assert_eq!(
+            plan(short, short, 89),
+            Plan::RenewAfter(Duration::from_secs(10))
+        );
     }
 
     #[test]
     fn plan_never_schedules_a_renewal_sooner_than_the_floor() {
         // A one-second lease used to compute a zero wait and spin.
-        let next = plan(Duration::from_secs(1), None, Duration::from_secs(1), 70);
-        assert_eq!(next, Plan::RenewAfter(MIN_RENEW_INTERVAL));
+        let second = Duration::from_secs(1);
+        assert_eq!(
+            plan(second, second, 70),
+            Plan::RenewAfter(MIN_RENEW_INTERVAL)
+        );
+    }
+
+    #[test]
+    fn drain_margin_follows_the_full_lease_not_what_is_left() {
+        assert_eq!(drain_margin(HOUR), DRAIN_MARGIN);
+        assert_eq!(drain_margin(Duration::from_mins(2)), DRAIN_MARGIN);
+        assert_eq!(
+            drain_margin(Duration::from_secs(20)),
+            Duration::from_secs(10)
+        );
     }
 
     #[test]
