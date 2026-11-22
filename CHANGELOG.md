@@ -25,6 +25,9 @@ The first release on OpenBao and PostgreSQL 19.
 
 ### Added
 
+- Sandbox CI qualifies its immutable application images against shared and isolated
+  Helm OpenBao profiles and records the successful application and chart revisions.
+
 - Secrets, Transit signing and encryption, PKI and dynamic database credentials
   come from OpenBao 2.7, through AppRole, OpenBao Agent or Kubernetes
   authentication. Terraform provisioning lives in `openbao/contrib/terraform`.

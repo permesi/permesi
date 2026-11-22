@@ -322,6 +322,10 @@ jobs:
     name: Build local OCI candidates
     needs: [build, frontend-build]
     if: github.ref_name == 'sandbox'
+    outputs:
+      helm_sha: ${{ steps.charts.outputs.sha }}
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+      artifact_digest: ${{ steps.archive.outputs.artifact-digest }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -335,6 +339,14 @@ jobs:
         with:
           name: frontend-dist
           path: apps/web/dist
+      - id: charts
+        name: Resolve the sandbox chart revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(gh api repos/permesi/permesi-helm/git/ref/heads/sandbox --jq .object.sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - name: Archive candidate images
         run: |
           set -euo pipefail
@@ -348,11 +360,12 @@ jobs:
             podman save --format oci-archive -o "candidates/$service.tar" "$image"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: archive
         with:
-          name: sandbox-oci-${{ github.sha }}
+          name: sandbox-oci-${{ github.sha }}-${{ github.run_attempt }}
           path: candidates/*.tar
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 90
 
   package:
     name: Package GHCR
@@ -444,3 +457,16 @@ jobs:
               exit 1
             fi
           done
+
+  containment:
+    if: github.repository == 'permesi/permesi' && github.ref == 'refs/heads/sandbox'
+    needs: [ci-ok, coverage, sandbox-images]
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+    uses: ./.github/workflows/containment.yml
+    with:
+      helm_sha: ${{ needs.sandbox-images.outputs.helm_sha }}
+      artifact_id: ${{ needs.sandbox-images.outputs.artifact_id }}
+      artifact_digest: ${{ needs.sandbox-images.outputs.artifact_digest }}

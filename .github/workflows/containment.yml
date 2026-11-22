@@ -1,0 +1,88 @@
+name: Qualify sandbox images
+
+on:
+  workflow_call:
+    inputs:
+      helm_sha:
+        required: true
+        type: string
+      artifact_id:
+        required: true
+        type: string
+      artifact_digest:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    outputs:
+      app_sha: ${{ steps.source.outputs.app_sha }}
+      helm_sha: ${{ steps.source.outputs.helm_sha }}
+      artifact_id: ${{ steps.source.outputs.artifact_id }}
+      artifact_digest: ${{ steps.source.outputs.artifact_digest }}
+      rollback_id: ${{ steps.source.outputs.rollback_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: permesi/permesi-helm
+          ref: ${{ inputs.helm_sha }}
+          persist-credentials: false
+      - id: source
+        uses: ./.github/actions/containment-source
+        with:
+          artifact-id: ${{ inputs.artifact_id }}
+          artifact-digest: ${{ inputs.artifact_digest }}
+
+  qualify:
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [shared, isolated]
+    env:
+      APP_SHA: ${{ needs.images.outputs.app_sha }}
+      ARTIFACT_ID: ${{ needs.images.outputs.artifact_id }}
+      ARTIFACT_DIGEST: ${{ needs.images.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: permesi/permesi-helm
+          ref: ${{ needs.images.outputs.helm_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/containment-profile
+        with:
+          rollback-id: ${{ needs.images.outputs.rollback_id }}
+          profile: ${{ matrix.profile }}
+
+  record:
+    needs: [images, qualify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Record the successful pair on the triggering commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SHA: ${{ needs.images.outputs.app_sha }}
+          HELM_SHA: ${{ needs.images.outputs.helm_sha }}
+          ARTIFACT_ID: ${{ needs.images.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$(gh api repos/permesi/permesi/git/ref/heads/sandbox --jq .object.sha)" == "$APP_SHA" ]]
+          [[ "$(gh api repos/permesi/permesi-helm/git/ref/heads/sandbox --jq .object.sha)" == "$HELM_SHA" ]]
+          counterpart="Helm $HELM_SHA"
+          if [[ "$GITHUB_REPOSITORY" == permesi/permesi-helm ]]; then counterpart="App $APP_SHA"; fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context="containment/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            -f description="$counterpart, OCI artifact $ARTIFACT_ID" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" >/dev/null

@@ -292,3 +292,11 @@ Run the local sender/receiver regression matrix with
 (Bash, jq and PyYAML required). It executes the action's real validation and JSON
 generation blocks, captures curl locally without any dispatch, then runs the
 supplied Helm receiver against valid and malformed payloads, including injection inputs.
+
+Sandbox CI also qualifies the exact application OCI artifact against the selected
+Helm sandbox commit. Both containment profiles use its immutable artifact ID,
+archive checksum and manifest digests. A repository-scoped success status links
+to the tested pair after both profiles pass. The release dispatch uses its
+existing event. Sandbox runs use disposable clusters and GitHub Actions artifact
+storage. The application checks out that exact Helm commit and uses its source and
+profile actions for every qualification step.
