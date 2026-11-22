@@ -46,6 +46,30 @@ async fn genesis_runtime_appends_partitioned_receipts_without_maintenance_author
 {
     let (postgres, _) = database().await?;
     let mut admin = PgConnection::connect(&postgres.admin_dsn_for_db("genesis")).await?;
+    // Receipts minted before the first rollover sit in the default partition:
+    // one from today, one past retention. The rollover used to abort on the
+    // first, so no partition was ever created and nothing was ever expired.
+    sqlx::raw_sql(
+        "INSERT INTO public.tokens(client_id) VALUES(0);
+         INSERT INTO public.tokens(client_id, created_at) VALUES(0, now() - interval '30 days');",
+    )
+    .execute(&mut admin)
+    .await?;
+    sqlx::raw_sql("SET ROLE openbao_genesis; SELECT public.genesis_tokens_rollover(7,2)")
+        .execute(&mut admin)
+        .await?;
+    sqlx::query("RESET ROLE").execute(&mut admin).await?;
+    let (in_default, kept): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM public.tokens_default), (SELECT count(*) FROM public.tokens)",
+    )
+    .fetch_one(&mut admin)
+    .await?;
+    ensure!(
+        in_default == 0 && kept == 1,
+        "Rollover must move today's receipt into its partition and expire the old one \
+         (default={in_default}, total={kept})"
+    );
+    // A second run finds every partition in place and changes nothing.
     sqlx::raw_sql("SET ROLE openbao_genesis; SELECT public.genesis_tokens_rollover(7,2)")
         .execute(&mut admin)
         .await?;

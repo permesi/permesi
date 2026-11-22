@@ -20,8 +20,9 @@ CREATE TABLE IF NOT EXISTS tokens (
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
--- Bootstrap partition; remove once partition maintenance is active.
--- Keeping this long-term will accumulate rows outside retention.
+-- Catches receipts for days whose partition does not exist yet.
+-- genesis_tokens_rollover moves them into dated partitions and applies
+-- retention to whatever remains here.
 CREATE TABLE IF NOT EXISTS tokens_default PARTITION OF tokens DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_tokens_country ON tokens(country);
