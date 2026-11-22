@@ -87,7 +87,7 @@ head. There are no configured local pre-commit or pre-push hooks to run.
 
 ## Independent review and corrections
 
-Claude reviewed the earlier milestones independently through Herdr. Confirmed issues
+The earlier milestones were reviewed independently. Confirmed issues
 were fixed in Podman 4.x/5.x fixture publication, nested connection acquisition under an
 identity guard, MFA transition/audit ordering, proof versus dependency error handling,
 IPv4-mapped proxy trust and bootstrap grants that reopened refresh-history privileges.
@@ -95,12 +95,9 @@ Regression checks use real HTTP/database/cryptographic paths. Strict scratch rev
 must run a nonzero matching test and fail at its intended assertion; compilation errors
 and unmatched filters do not count as security regression evidence.
 
-After Claude's quota prevented completion of the final review, the authorized fallback
-used Herdr/OMP with `xai-oauth/grok-4.7`. Grok independently reviewed the full corrected
-batch, database constraints/permissions, code and refresh replay, tenant/scope boundaries,
-proxy trust, error handling, OpenAPI and documentation. Optional helper starts selected
-the wrong provider and failed with 403 before returning review content; no helper review
-was used. The final review is Grok's own review with the requested provider/model.
+A further independent review covered the full corrected batch, database
+constraints/permissions, code and refresh replay, tenant/scope boundaries, proxy trust,
+error handling, OpenAPI and documentation.
 
 The review confirmed a high-severity temporary-object resolution defect in privileged
 Permesi cleanup. A sibling Genesis catalog-lookup path had the same defect. Both now
@@ -120,7 +117,7 @@ offered IDs and library state from the same stored credential list, and unknown 
 rejected before that defensive branch. This does not claim every dependency-failure
 branch has an individual mutation test.
 
-After Grok finished, a fresh native Claude review through a separate Herdr pane examined
+A subsequent fresh review examined
 the batch before reading earlier conclusions. It agreed that the corrected protocol,
 tenant, replay, exchange-encryption and SQL search-path boundaries hold, and found four
 additional low-severity issues. Password rotation now rechecks its exact session and
@@ -147,24 +144,18 @@ main tree retains strict warnings and unchanged checks; only scratch dead-code w
 were relaxed to keep mutations executable. Compilation failures and unmatched filters
 were excluded from the evidence.
 
-Claude's corrected review found no new confirmed defects. It reran both complete workspace
+The corrected review found no new confirmed defects. It reran both complete workspace
 configurations (642/672 passing), all 32 isolated scenarios, seven harness checks and all
 three Chromium browser stages with real dependencies and zero scenario cleanup errors.
 Password rotation now shares the configured authentication lock deadline (one second by
 default), so contention can return a generic 503 rather than wait indefinitely. The
 missing-pepper configuration branch was inspected but has no separate regression test.
 
-An additional Codex/Daybreak Blue review was attempted after Claude completed. The local
-model catalog lists Blue eligibility for GPT-6 Sol, but the documented API Blue alias was
-rejected as unsupported on the ChatGPT-authenticated Codex surface. That attempt returned
-no review content and is not counted as a Blue review or verified active Blue treatment.
-The independent review evidence above is from Grok and Claude.
-
 ## Remaining release and policy work
 
 The subsequent [database hardening phase](database-hardening.md) implements
 non-superuser ownership, explicit runtime grants and parent-delete history restrictions.
-Independent Claude/Herdr source-review corrections are applied. The refreshed graph
+Independent source-review corrections are applied. The refreshed graph
 passes 655 default/685 all-feature workspace tests, database/OpenBao and browser checks,
 all 32 three-replica scenarios and seven harness checks in
 [run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785).
@@ -203,8 +194,8 @@ exact policy and failure behavior.
 `just test`, all-feature workspace tests, `just db-verify`, `just openapi-check`,
 strict native/WASM Clippy, Web release build, both PostgreSQL browser stages and the
 console browser smoke test passed. The final browser reload correction was checked
-again with native Web tests, Clippy, build and all browser stages. Herdr/OMP
-`xai-oauth/grok-4.7` independently reviewed the full diff and found no confirmed
+again with native Web tests, Clippy, build and all browser stages. An independent
+review of the full diff found no confirmed
 critical, high, medium or low defect. It identified additional HTTP and restart-specific
 negative-test opportunities. A subsequent direct HTTP test rejects stale TOTP enrollment
 without writing a credential, then accepts the same session after its authentication

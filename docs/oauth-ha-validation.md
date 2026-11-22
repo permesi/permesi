@@ -109,7 +109,7 @@ retirement, refresh client binding and browser-controller journaling. Scratch Py
 mutations also fail for an omitted journal child and numeric-PID signalling, then
 pass with the guards restored. All source mutations were restored byte for byte.
 
-Claude's independent Herdr review found no critical, high or medium issues and five
+The reviewer's independent review found no critical, high or medium issues and five
 low findings in test recovery or coverage. All were independently verified and
 addressed: failed-transition retirement/readiness, journal-only recovery, exact refresh
 claims/lineage, revocation-before-replay assertions and pinned recovery signalling.
@@ -120,7 +120,7 @@ coverage failure: the strict process oracle also observes the host browser contr
 It is now journaled before readiness and covered by two owned-child lifecycle tests.
 A third focused review accepted the correction, with no remaining critical, high,
 medium or low findings. All 41 runner tests and six Python tests were independently
-rerun by Claude. The subsequent live matrix and oracle correction are recorded below. Expected refresh
+rerun by the reviewer. The subsequent live matrix and oracle correction are recorded below. Expected refresh
 scope is deliberately rebuilt from the fixture independently of the response; drift
 fails closed and is a maintenance coupling rather than delegated authority widening.
 Rootless Podman may manage helper descendants beyond the direct host controller;
@@ -163,9 +163,9 @@ ownership or cleanup invariant, but reports its source line and exception class
 without disclosing captured process output.
 
 The combined follow-up also bounds hierarchy mutation waits and corrects cancelled
-transaction startup. AGY/Gemini 4 Argon completed static Herdr review; Claude's independent
+transaction startup. A static review and an independent
 review found additional transaction-cancellation and organization-update issues. Confirmed
-findings now have fixes and PostgreSQL regression evidence. The corrected Claude review
+findings now have fixes and PostgreSQL regression evidence. The corrected review
 reports no remaining actionable findings; 688 default/718 all-feature workspace tests
 and both PostgreSQL browser tests pass. The signed correction was published as `2be597f`.
 Hosted builds, browser checks, both workspace suites and both three/five scenario suites

@@ -122,7 +122,7 @@ the archive falls from 236,825,209 to 40,531,248 bytes (82.9% smaller). Eight re
 cleanup/isolation/restart harness checks pass on each topology, in addition to the
 recovery unit tests.
 
-Independent Herdr/OMP `xai-oauth/grok-4.7` review found no confirmed critical,
+Independent review found no confirmed critical,
 high, medium or low defect. It compared the existing and extracted session/proof/
 gesture paths, moved assertions, CI gate, cache opt-in and artifact provenance.
 Its suggestions are follow-ups rather than confirmed defects. Consumers
@@ -136,7 +136,7 @@ The reviewer did not rerun long suites or claim browser-specific gesture coverag
 Its OpenAPI-evidence reservation was resolved by rerunning `just openapi-check`
 with an explicitly recorded zero exit status; successful byte comparisons are
 normally silent. Final Clippy checks use incremental compilation; fresh release
-artifact builds remain separate. The final targeted Grok review approved the
+artifact builds remain separate. The final targeted review approved the
 documentation clarifications and restored pointer affordance on the passkey
 sign-in button, independently ran `just openapi-check` successfully and reported
 no new confirmed defects. The owned review pane was closed after completion.

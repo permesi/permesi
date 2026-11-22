@@ -149,7 +149,7 @@ status and remaining WebAuthn, multi-host/load/fault and operational work.
 The local implementation passes 29 real PostgreSQL exchange regressions, 581 default
 and 611 all-feature workspace tests, formatting and strict all-target/all-feature Clippy.
 OpenAPI generation/comparisons and the native/release WASM builds pass. The two ignored
-real PostgreSQL browser tests were exercised separately. Claude independently passed
+real PostgreSQL browser tests were exercised separately. The reviewer independently passed
 the console browser stage, both PostgreSQL browser stages and all seven harness checks
 again against the final rebuilt native binaries and CSR assets, verified
 fresh bootstrap and schema reapplication/privilege verification, and passed all 29 isolated
@@ -157,7 +157,7 @@ scenarios twice against the corrected routing. The primary session's restriction
 direct Node loopback binding and Podman runtime access prevented its combined browser
 and isolated-stack commands; the independent reviewer ran those normal workflows.
 
-Four independent Claude reviews through Herdr identified the scenario's A-only routing,
+Four independent reviews identified the scenario's A-only routing,
 unbounded database waits, nonindexable pruning, bootstrap/reapplication privilege drift,
 the missing schema-check guard and overbroad documentation; fixes were independently
 reverified. Targeted code reversions in

@@ -185,7 +185,7 @@ during SMTP failed the concurrent `NOWAIT` probe. Both mutations were restored a
 the corrected tests passed. All capabilities used for these tests are synthetic
 and stay in owned local fixtures, not real recipients or production infrastructure.
 
-Two independent Herdr/OMP reviews used `xai-oauth/grok-4.7`, not GitHub Copilot.
+Two independent reviews were made.
 The first review confirmed an existing verification availability defect: an open
 transaction waited for a rate-limit query on the same pool, requiring a second
 connection. A real one-connection regression reproduced HTTP 503 instead of 204.

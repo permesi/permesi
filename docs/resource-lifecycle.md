@@ -145,7 +145,7 @@ keyboard/focus, dark/mobile scope actions, typed confirmation, pending-dialog pr
 409 child-list refresh and parent navigation. Additional real OPAQUE/PostgreSQL browser
 coverage exercises password rejection, throttle/unavailable responses, explicit post-proof
 confirmation, new children, role loss, account changes and committed slug reuse.
-The earlier lifecycle implementation received three independent Claude/Herdr reviews.
+The earlier lifecycle implementation received three independent reviews.
 The capability/reauthentication extension's first review found no critical, high or
 medium defects, and identified missing permission-loss feedback and stale failure-flow
 documentation. Both were corrected. An informational held-Enter concern was independently

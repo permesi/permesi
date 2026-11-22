@@ -99,17 +99,6 @@ Then open `https://permesi.localhost:8443`. Without `--start`, SSH in your own w
 
 The laptop's mkcert CA issues the HAProxy certificate, limited to the `permesi.localhost` names, and only that leaf plus the CA's public certificate are copied to the VM. The CA private key never leaves the laptop, and the laptop never trusts a CA that lives on a server. Remote helpers such as `just genesis-token` pin the copied public CA directly instead of adding it to the VM's system trust store. If `just start` on the VM stops at a missing TLS certificate, run `scripts/dev-remote` from the laptop first. CORS and passkeys compare origins including the port, so `PERMESI_HTTPS_PORT` must be the same on both ends, and the script refuses to forward when the remote HAProxy listens on another port. Editors that forward ports automatically (VS Code Remote-SSH, JetBrains Gateway) switch to a different local port when the one they want is busy, which breaks those origins: turn automatic forwarding off (`"remote.autoForwardPorts": false` in VS Code) and let `scripts/dev-remote` own the tunnel. On the VM, keep the firewall closed to everything but SSH, because the backend ports listen on all interfaces (see Local Development below). If the stack runs for days, refresh the 24-hour backend certificates with `just dev-tls-certs`; the services pick them up without a restart.
 
-### Keeping Rust aligned with CI
-
-`stable` selects a release channel; it does not automatically update an already installed
-compiler. Run `rustup update stable` periodically. `just rust-check` checks online without
-installing anything and refuses an outdated or missing stable toolchain, an active compiler
-that differs from installed stable, or a failed update check. It runs before `just build`,
-`build-permesi`, `build-genesis` and `clippy`, including the `test`, `verify-release` and default
-validation flows. Formatting remains offline. Check `PATH`, `RUSTUP_TOOLCHAIN` and rustup
-overrides if an updated stable toolchain is installed but another compiler is active.
-This checks today's stable, not the compiler recorded by a past CI run.
-
 ## Workspace Layout
 
 This repository is a Rust workspace (monorepo) containing:
@@ -204,7 +193,7 @@ schedule pg_cron jobs directly.
 
 The [database hardening phase](docs/database-hardening.md) adds verified non-superuser
 schema ownership, explicit runtime grants and retained-history parent-deletion restrictions.
-Independent Claude/Herdr source review has identified and corrected bootstrap and test
+Independent source review has identified and corrected bootstrap and test
 issues. The refreshed dependency graph passes database/OpenBao regressions, both
 workspace test variants, browser checks, all 32 three-replica scenarios and seven
 harness checks on CI. See the linked validation evidence and rollout instructions.
@@ -598,87 +587,6 @@ The dev stack keeps to itself so it can share a host with other projects. Every 
 
 Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE=true|false`. Startup now rejects formerly accepted empty values, invalid TTL fallbacks, trailing empty origins and boolean aliases; see the [upgrade notes](docs/webauthn-exchanges.md#policy-and-operation).
 
-#### Releasing
-
-Work lands on `sandbox`; when its CI run is green it is fast-forwarded into `develop`, and
-`just release` releases from `develop`. The release rule is that the commit released is
-exactly the commit CI tested, and the workflow changes nothing in the repository:
-
-1. As the last commit of the work, the operator bumps the version with a tool of their
-   choice (`cargo set-version --workspace --bump patch`, or `gbump`) in `Cargo.toml` and
-   `Cargo.lock`, and sets `info.version` in `docs/openapi/permesi.json` and
-   `docs/openapi/genesis.json` to the same value (`just openapi` regenerates them). The
-   same commit gives the release its section in `CHANGELOG.md`: the version heading with
-   the release date and the link at the foot of the file. The reviewer checks that
-   the bump is present and complete.
-2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check on the
-   commit, so the CI run that passed on `sandbox` already counts for the release guard
-   once `develop` points at the same commit, and you can run `just release` at once.
-3. Run `just release`. It starts `.github/workflows/release.yml` on `develop`, follows the
-   run and, once it has succeeded and `develop`'s own Test & Build has finished, fast-forwards
-   `main` to the released commit. `main` only allows the operator to push (the workflow's
-   token cannot), and a protected branch refuses an update while a `CI OK` check of that
-   commit is still pending, so this push waits for `develop`'s run and runs from the
-   operator's machine.
-
-```
-Release workflow (workflow_dispatch on develop)
- guard         develop only; the version is X.Y.Z, above the latest tag and untagged; both
-               OpenAPI specs carry it; main is an ancestor; `CI OK` passed on this commit
- build         musl archives, Debian and RPM packages for x86_64 (amd64) and aarch64 (arm64),
-               each on a native hosted runner, nothing from a cache
- frontend      the production web build, signed (checksums, cosign, build provenance)
- images        permesi, genesis and web, pushed only as `:sha-<commit>`, keylessly signed
-               and OCI-attested
- release       exact file set checked, SHA256SUMS, build-provenance attestation, the GitHub
-               release (this creates the tag at the tested commit) and a final check that
-               the tag and the assets are right
- then          image digests get the version (and `latest`) tags, the web build goes to
-               Cloudflare Pages, Helm is dispatched with the digests, and the API docs go
-               to GitHub Pages
-```
-
-The Rust toolchain is `stable`, resolved once by the guard: every Rust job of the run
-installs exactly that version, a re-run of failed jobs keeps it (the guard's output is
-kept), and the release notes end with "Built with Rust X.Y.Z". Nothing has to be bumped
-when Rust releases a new stable.
-
-Nothing is published before every build job has succeeded. If a job fails, fix the cause
-and use "Re-run failed jobs" on the run: a draft release left by a failed run is replaced,
-an already published release is kept, and images are retagged to the same digests. A
-failure after the tag exists (the release is public) cannot be repaired by changing code
-under the same version: bump to the next version and release that. The production steps
-(the `latest` image tag, Cloudflare Pages, Helm and the docs) run only while the version is
-the highest release tag, checked right before each acts, so a re-run of an older release
-never rolls production back. The tag is created by GitHub and is not signed. Releases
-need `just` and `gh` (logged in). Dependency updates (`cargo update`) are ordinary changes
-made on `sandbox`, so CI tests them before a release.
-
-The workflows reference actions by full commit SHA (checked by
-`scripts/check-action-pins.py`), Dependabot proposes updates, the Rust toolchain comes from
-`rustup` through `.github/actions/rust-toolchain`, no checkout keeps the token, and every
-Cargo command uses `--locked`. To check a downloaded release file:
-
-```sh
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify <file> --repo permesi/permesi --signer-workflow permesi/permesi/.github/workflows/release.yml
-```
-
-Every image digest is also keylessly signed by the Release workflow and carries an OCI
-build-provenance attestation. Verify a published image against its digest (constraining
-the OIDC issuer and the exact workflow identity, never a permissive certificate-identity
-regex):
-
-```sh
-cosign verify \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  --certificate-identity "https://github.com/permesi/permesi/.github/workflows/release.yml@refs/heads/develop" \
-  "ghcr.io/permesi/permesi@sha256:<digest>"
-```
-
-Real OIDC signing and publication require an authorized workflow run; they cannot be
-produced locally.
-
 ### Local HTTPS for Passkeys (mkcert + HAProxy)
 
 Passkeys require HTTPS. The repo includes a local HAProxy config at `config/haproxy/haproxy.cfg` that terminates TLS and routes `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` to the usual local ports. Generate a local certificate with mkcert, combine it for HAProxy, then run the container:
@@ -760,39 +668,11 @@ Jaeger UI at http://localhost:16686 to inspect traces. With remote development, 
 services and collector run on the VM while `scripts/dev-remote` forwards the UI to
 the laptop.
 
-## 🤝 Contributing
+## Contributing
 
-We welcome contributions of all kinds!
-
-1.  **Read the [Agent & Contributor Contract](AGENTS.md)**: It contains mandatory guidelines on code style, security invariants, and module organization.
-2.  **Pick an issue**: Check the [TODO.md](TODO.md) or open issues.
-3.  **Run tests**: `just test` runs rustfmt, clippy, the release web build and every workspace test (the same suite a release runs locally).
-4.  **Linting**: We use strict Clippy rules. Run `just web-setup` once to install the browser target, then `just clippy` to check both native Rust and WebAssembly before submitting.
-
-*Note: This project uses a "Reference Quality" approach. We prefer small, well-documented, and secure diffs over large refactors.*
-
-## CI Commands
-
-See [focused modules and CI measurement](docs/maintainability-ci.md) for the current
-module boundaries, compilation/execution timing reports and remaining performance work.
-The [fixture runtime and provenance guide](docs/ci-runtime-provenance.md) documents
-`just test-fixture-profile`, `just test-build-identity` and scenario commit checks.
-
-Container jobs verify the API endpoint used by tests before proceeding. Each
-self-hosted job starts a Podman service with its own runtime and Unix socket under
-the user runtime directory, plus private image storage under `RUNNER_TEMP`.
-`DOCKER_HOST` and `CONTAINER_HOST` route tests and CLI commands to that job's engine,
-including when shared host Podman state is stale. Same-user systemd socket hard
-links keep container DNS available, and an action post hook removes the job's
-resources and subordinate-UID files through its own namespace. Job setup
-does not migrate shared container state or remove another job's socket or service.
-Runner maintenance handles Podman migrations while jobs are stopped, plus orphaned
-resources after runner crashes when post hooks cannot execute.
-GitHub-hosted jobs use the existing system Docker API. The runtime action runs
-its isolation and readiness regressions before setup; run those locally with
-`python3 .github/actions/ensure-container-runtime/test_runtime.py`.
-
-- `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --all-features`
-- `cargo clippy --locked -p permesi_web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings`
-- `cargo test --workspace`
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers how to
+work on Permesi, the checks to run before submitting and how a release is made;
+[AGENTS.md](AGENTS.md) holds the mandatory code and security guidelines, and
+[AI_POLICY.md](AI_POLICY.md) says how AI-assisted work is treated. Changes are
+listed in [CHANGELOG.md](CHANGELOG.md), and security issues are reported as
+described in the [security policy](.github/SECURITY.md).

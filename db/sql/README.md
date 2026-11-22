@@ -75,7 +75,7 @@ Catalog-only administrator passes pin trusted lookup paths; separate authenticat
 owner connections apply schemas, seeds and transactional verification. `SET ROLE`
 inside an administrator connection is not an owner security boundary. Catalogs and extension-managed members retain their
 own ownership. Future tables/sequences require explicit runtime grants; broad legacy
-default grants are removed. Independent Claude/Herdr source-review corrections are
+default grants are removed. Independent source-review corrections are
 applied. PostgreSQL/OpenBao regressions, refreshed dependency checks and all 32
 three-replica scenarios pass on CI; the completed milestone is recorded in
 [TODO.md](../../TODO.md).

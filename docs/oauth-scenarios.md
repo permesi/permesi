@@ -347,7 +347,7 @@ The A/B/C extension passed all 32 cases with zero cleanup errors and all seven
 harness checks in
 [run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785),
 alongside the browser, database, dependency and default/all-feature workspace gates.
-Its Claude/Herdr source reviews and rollout boundary are recorded in
+Its source reviews and rollout boundary are recorded in
 [database hardening](database-hardening.md). Three same-host processes do not
 establish multi-host load or network-failure behavior.
 The records below preserve the earlier A/B milestones and their suite sizes.
@@ -371,11 +371,10 @@ Podman requirement enabled and disabled. Each fixture selects its own policy, an
 explicit hosted-runner case verifies that required Podman bypasses system Docker.
 The first CI attempt exposed inherited runtime-policy inputs in these fixtures before
 scenarios could run. Isolating each fixture's policy fixed the failure without changing
-the runtime or weakening Docker-policy assertions. A focused Herdr/OMP review with the
-same exact Grok provider/model independently passed both suites and found no defects.
+the runtime or weakening Docker-policy assertions. A focused independent review
+passed both suites and found no defects.
 
-The first independent Herdr/OMP review used `xai-oauth/grok-4.7` with xhigh thinking.
-Three medium findings were accepted: host-visible CDP was replaced by inherited pipes,
+The first independent review's three medium findings were accepted: host-visible CDP was replaced by inherited pipes,
 container logging was disabled and verified, and saved-consent codes gained fresh
 state/nonce and full persistence assertions. Four low findings were also fixed:
 canonical environment slugs, complete immutable protocol registry checks, measured
@@ -386,15 +385,14 @@ redemption and all standard private RSA JWK components.
 
 The second-signal finding was rejected: Tokio keeps its installed Unix signal handler
 when a receiver is dropped, and the real repeated-SIGTERM test completes cleanup.
-The second independent review used the same exact provider/model and verified all seven
+The second independent review verified all seven
 fixes and the signal finding's rejection, with no remaining confirmed defects. The
 reviewer inspected the code and protocol contracts; the execution results above come
 from the primary implementation run. Runtime-role token exchange was deferred in that
 initial foundation and is implemented by the token milestone below. MFA variants, network
 sandboxing/multi-host tests and pinned browser interoperability remain explicit follow-ups.
 
-A separate independent Herdr/OMP review of the lifecycle extension used
-`xai-oauth/grok-4.7` with xhigh thinking and found no confirmed actionable defects.
+A separate independent review of the lifecycle extension found no confirmed actionable defects.
 It checked real A/B routing, committed mutations/read-back, current consent and grant
 validation, redirect cascades, pre-expiry negative controls, fresh exact-bound code
 recovery and replay, browser response receipts, private IPC and the documented token
@@ -402,8 +400,7 @@ deferrals. The reviewer traced the mounted error middleware to verify the JSON d
 error contract. The execution evidence above comes from the primary run; this review
 required no code corrections or second review.
 
-The token milestone received two further independent Herdr/OMP reviews using
-`xai-oauth/grok-4.7`. All four confirmed findings were fixed with regressions proven
+The token milestone received two further independent reviews. All four confirmed findings were fixed with regressions proven
 to fail on the original implementation: callback parameter collisions, unknown token
 extensions/empty optional identifiers, delayed signing-cache overwrites and case-sensitive
 JWKS refresh. The corrected verifier refreshes the fixed issuer JWKS once on an unknown
@@ -422,7 +419,7 @@ Cargo audit passed the existing policy with three maintenance warnings; its RSA 
 comment now accurately describes public-key verification and test-only private keys,
 without changing the ignore list or enforcement.
 
-Independent Claude reviews through Herdr applied the deep-code-review skill to the full
+Independent reviews covered the full
 implementation and corrected diff. The first review confirmed a low-severity test defect:
 unreachable destinations could make the transport-pinning test pass after removing its
 guard. Reachable, counted HTTPS controls now prove rejection before I/O, including a
@@ -442,7 +439,7 @@ default 300-second token TTL may need a larger total deadline. Use the documente
 ten-second TTL for expiration scenarios. These reviews do not claim formal OIDC
 certification, broader browser/client coverage or production immediate revocation.
 
-Two final focused Claude follow-ups independently verified the documentation evidence
+Two final focused follow-ups independently verified the documentation evidence
 and closed the remaining informational downgrade coverage gap. GET discovery/JWKS and
 POST token requests now each fail the test when only that method's scheme guard is
 weakened. The final review reported no confirmed findings at any severity; restored
@@ -451,12 +448,12 @@ default/all-feature runner tests, formatting and runner Clippy passed independen
 The browser-CI extension passes 549 default workspace tests, workspace formatting and
 all-target/all-feature Clippy, the release WASM build, all three browser stages, the
 container action's fifteen fixtures, Actionlint/ShellCheck, JavaScript syntax and
-unchanged OpenAPI comparisons. Three independent Claude/Herdr review rounds resolved
+unchanged OpenAPI comparisons. Three independent review rounds resolved
 three low findings: a renamed test could silently run zero cases, browser selection
 documentation was inaccurate, and background-network suppression was overstated.
 Exact ignored-test discovery, accurate browser documentation and explicit DNS rules
 address these findings. Missing-test and admission-origin mutations fail as expected;
-Claude's final review found no remaining actionable findings and independently passed
+The reviewer's final review found no remaining actionable findings and independently passed
 the browser helper against the downloaded GitHub frontend artifact. The prior
 [baseline CI run](https://github.com/permesi/permesi/actions/runs/37353233392) passed
 after retrying a transient PostgreSQL startup failure.
@@ -474,24 +471,24 @@ configuration. Reinstating
 the original selector makes the readiness regression fail. The subsequent corrected hosted run
 37426417421 passes; the TODO now records that completed gate. Live checks cannot be repeated
 inside the primary session's current loopback-binding restriction; earlier full browser
-validation remains valid for the unchanged test scripts. Claude independently ran the
+validation remains valid for the unchanged test scripts. The reviewer independently ran the
 live probe and console suite through the selected alias. Its startup review found four
 low issues: an unterminated file could abort fallback, process cleanup and numeric port
 validation lacked decisive assertions, and the startup comment suggested an unproven
 cause. The fallback regression failed before the fix; the code, assertions and comment
 have been corrected. The probe also explicitly bypasses proxies for its loopback check.
-Claude's second startup review verified all fixes, repeated the live probe and console
+The reviewer's second startup review verified all fixes, repeated the live probe and console
 suite, and found no remaining actionable findings. Removing the read guard, kill/wait,
 port regex/bounds, or proxy bypass makes the affected regression fail. Delayed shutdown
 verifies waiting for process retirement; it does not assert the precise kill-after duration.
 
 The shared-OPAQUE phase adds `authentication.shared_exchanges` and passes all 29 full-suite
-cases on the corrected gateway, with zero cleanup errors. Four independent Claude/Herdr
+cases on the corrected gateway, with zero cleanup errors. Four independent
 reviews verified real A/B routing, replay/session binding, PostgreSQL constraints and
 transaction ordering. The initial gateway pinned OPAQUE requests to A; a real Unix-backend
 routing regression now prevents that false cross-replica result. With corrected routing,
 the old in-memory binary fails the native finish step and the shared-store binary passes.
-Claude independently passed all seven process/harness checks and all three browser stages
+The reviewer independently passed all seven process/harness checks and all three browser stages
 against the final rebuilt native binaries and CSR assets.
 
 Final workspace runs pass 581 default and 611 all-feature tests, including 29 real PostgreSQL
@@ -509,13 +506,13 @@ OPAQUE implementation were subsequently committed and pushed as `5453167`. Its
 [hosted run](https://github.com/permesi/permesi/actions/runs/37421297944) passes Chrome
 readiness, the console browser stage and all other required jobs, including the 29 real
 OAuth scenarios and seven harness checks, but both attempts fail during PostgreSQL
-fixture port resolution. Claude reproduced the failure against Podman 4.9.3: implicit
+fixture port resolution. The reviewer reproduced the failure against Podman 4.9.3: implicit
 publish-all bindings report an empty `HostIp`, which testcontainers 0.28 cannot parse.
 Podman 5.x supplies `0.0.0.0`, explaining the passing local tests. Fixtures now explicitly
 request a random `127.0.0.1` port for PostgreSQL and OpenBao; this is discoverable on both
 versions and avoids exposing test services to the LAN. A regression checks the requested
 binding and its discoverability on the actual PostgreSQL/OpenBao builders and both network modes.
-Claude independently ran all three browser stages on Podman 4.9.3 and 5.4.2; removing either
+The reviewer independently ran all three browser stages on Podman 4.9.3 and 5.4.2; removing either
 explicit binding makes the regression fail. The [corrected hosted run](https://github.com/permesi/permesi/actions/runs/37426417421)
 on e78ae6f passes every required job, including browser and isolated OAuth scenarios.
 

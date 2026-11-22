@@ -123,7 +123,7 @@ harness checks passed, with zero cleanup errors in the full protocol report.
 Seven database privilege tests and the actual OpenBao credential test cover hostile
 owners, failed bootstrap, legacy repair, three independent runtime identities,
 immutable consent and live-lease reapplication. Two runtime-login HTTP regressions
-also pass in both workspace variants. Claude/Herdr review corrections are applied,
+also pass in both workspace variants. independent review corrections are applied,
 and the final source review reported no remaining actionable findings. Source review
 and execution evidence are distinct; the reviewer did not independently run the
 live dependency tests.
@@ -218,8 +218,8 @@ Leptos' transitive `paste` warning remains tracked in TODO.
 
 ## Independent review
 
-Claude reviewed the surrounding SQL, bootstrap callers, runtime operations, tests,
-three-replica runner and documentation in a separate Herdr pane. No CRITICAL or HIGH
+The surrounding SQL, bootstrap callers, runtime operations, tests,
+three-replica runner and documentation were reviewed independently. No CRITICAL or HIGH
 finding was reported. The confirmed findings and corrections are:
 
 | Severity | Finding | Correction |
@@ -241,13 +241,13 @@ stderr was replaced with typed, allow-listed diagnostics to preserve logging hyg
 Follow-up reviews also strengthened the global-preflight test: a rejected bootstrap
 must not grant `pg_signal_backend` before the per-database check. Those direct-grant
 assertions passed against PostgreSQL, including the mutation that deliberately skipped
-preflight. The latest Claude review confirmed the two runtime-router tests, exact
+preflight. The latest review confirmed the two runtime-router tests, exact
 trigger metadata, UPSERT/MERGE negatives, integration continuation and catalog helper
 qualification. Its sole remaining finding was stale documentation, corrected here.
-The reviewer reran formatting/diff checks but did not independently execute the live
+That review reran formatting/diff checks but did not independently execute the live
 database tests. A final review verified the documentation corrections and approved
 the source, regressions, CI wiring and documentation, conditional on completing the
-hosted validation, which subsequently passed. Its owned Herdr pane was closed.
+hosted validation, which subsequently passed.
 No review finding was rejected
 as a false positive.
 

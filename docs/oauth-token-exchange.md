@@ -139,7 +139,7 @@ Chromium console and both real PostgreSQL browser tests, all 22 isolated scenari
 and seven process-harness checks. Terraform formatting passed without applying
 infrastructure changes.
 
-Two independent reviews used Herdr/OMP with `xai-oauth/grok-4.7`. The first reported
+Two independent reviews were made. The first reported
 one high finding in callback response-key collisions, two medium findings in unknown
 token parameters/empty optional IDs and delayed signing reads overwriting newer JWKS,
 and one low finding in case-sensitive refresh directives. All four were independently

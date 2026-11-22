@@ -62,6 +62,6 @@ The runtime-role PostgreSQL/HTTP tests exercise distinct approvals, the one-time
 bootstrap exception, expiry, replay, concurrent approval, cross-replica state,
 rollback, exact recent sessions, audit reasons and suspension token retirement.
 `just test`, all-feature workspace tests, schema/bootstrap verification, OpenAPI
-drift checks and browser tests pass. An independent Herdr/OMP Grok review found
+drift checks and browser tests pass. An independent review found
 audit-reason and approver-context gaps and questioned designation lock ordering;
 the corrected diff received a second review with no remaining confirmed defects.

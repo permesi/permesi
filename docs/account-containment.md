@@ -130,6 +130,6 @@ Permesi processes sharing PostgreSQL, not a production multi-host or load benchm
 The default and all-feature workspace suites, browser tests, schema/runtime-role
 verification, strict native/WASM Clippy, Web build and OpenAPI drift check pass.
 Both full isolated topologies pass 38/38 cases, and the five-replica harness passes
-its eight recovery/isolation checks. Independent Herdr/OMP Grok review identified
+its eight recovery/isolation checks. Independent review identified
 one stale HA-guide count, corrected in [HA validation](oauth-ha-validation.md);
 the corrected-diff review found no confirmed defects.

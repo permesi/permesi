@@ -3,8 +3,8 @@
 This batch closes the remaining replica-local authentication exchanges and adds
 rotating OAuth refresh tokens. It uses the existing session, tenant, consent, OpenBao,
 PostgreSQL and isolated scenario architecture. Each milestone receives a separate
-imperative-subject commit, applicable regression checks and independent Claude review
-through Herdr. Final GitHub CI must pass before the batch is called release-ready.
+imperative-subject commit, applicable regression checks and independent review.
+Final GitHub CI must pass before the batch is called release-ready.
 
 ## Milestones
 

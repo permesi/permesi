@@ -32,15 +32,15 @@ budget, so handler cancellation alone cannot satisfy its server-deadline asserti
 
 ## Independent review
 
-AGY completed static Herdr review using `gemini-4-argon-high`. Its valid medium finding
+A static review's valid medium finding
 was the duplicate-name retry defect, fixed with the observed regression above. Its second
 source review found no remaining security/correctness defects in that revision. Claims
 about authentication error mapping and broader lifecycle behavior were checked against
-surrounding code and withdrawn. AGY ran no tests; its review preceded the subsequent
-Claude corrections and does not certify them.
+surrounding code and withdrawn. That review ran no tests and preceded the subsequent
+corrections, which it does not certify.
 
-Claude independently inspected the combined diff, surrounding authority/locking paths,
-schema, pool configuration and SQLx 0.9 source through a separate Herdr pane. It found one
+The reviewer independently inspected the combined diff, surrounding authority/locking paths,
+schema, pool configuration and SQLx 0.9 source. It found one
 medium and four low findings, with no critical/high findings:
 
 - M1: cancellation during BEGIN could contaminate later requests' transactions. Confirmed
@@ -69,13 +69,13 @@ SIGKILL window are operational follow-ups, not newly confirmed bypasses. Cancell
 hold its pool permit until bounded server cleanup completes; no immediate cleanup guarantee
 is made. No unrelated authorization policy, schema privilege or token semantics changed.
 
-Claude's second static review verified the shared helper and all production callers,
+The reviewer's second static review verified the shared helper and all production callers,
 closed M1/L1/L2/L3/L4, and reported no remaining critical/high/medium/low findings. A stale
 OpenAPI artifact observed during that review was regenerated and rechecked. Its additional
 configuration-test isolation suggestion was verified red/green with an invalid ambient
 `PERMESI_TENANT_SLUG_ATTEMPTS=0`; the test now clears all three tenant variables using the
-existing `temp_env` convention. Claude separately checked that test-only correction and
-reported no remaining actionable findings. Both owned reviewer panes are closed.
+existing `temp_env` convention. The reviewer separately checked that test-only correction and
+reported no remaining actionable findings.
 
 The helper intentionally uses SQLx 0.9's doc-hidden owned-connection constructor; its
 source comment and real BEGIN regression explain the upgrade dependency. A hung database

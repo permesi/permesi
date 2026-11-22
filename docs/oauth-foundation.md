@@ -544,8 +544,8 @@ service-role ownership/privilege policy and its validation record are described 
 
 ## Review boundaries and deferred policy
 
-The confidential-credential milestone passed four independent Claude security reviews
-through Herdr. Confirmed medium findings in reader/writer starvation, foreign-tenant
+The confidential-credential milestone passed four independent security reviews.
+Confirmed medium findings in reader/writer starvation, foreign-tenant
 coordination and bulk revocation deadlines were fixed with PostgreSQL regressions.
 Lower-severity findings in CPU-permit ordering, revocation quotas, lifecycle constraints
 and missing negative coverage were also resolved. No critical or high findings remain.
@@ -557,7 +557,7 @@ Final primary validation passed `just test` (484 tests), all-feature workspace t
 release WASM builds, Chromium console tests, the separately exercised real-PostgreSQL
 browser consent test, schema bootstrap/verification and OpenAPI byte consistency.
 There are 21 PostgreSQL credential test groups plus crypto/config/native Web coverage.
-Claude independently reran 60 OAuth tests, 24 authorization tests, formatting, Clippy
+The reviewer independently reran 60 OAuth tests, 24 authorization tests, formatting, Clippy
 and OpenAPI consistency. The existing browser-target Clippy backlog is reproduced at
 HEAD and tracked separately; Chromium coverage does not imply Firefox/Safari or load coverage.
 
@@ -569,7 +569,7 @@ trade-offs retained deliberately include early rejection of random credential lo
 brief membership locks for reads, and plaintext destruction on disclosure dismissal.
 
 
-Independent Claude review through Herdr reproduced the cross-origin consent CSP defect
+Independent review reproduced the cross-origin consent CSP defect
 and identified client-lock/throttling and uncached OpenBao-read availability issues. The
 corrected design uses script-free consent navigation, bounded shared transactions,
 race-safe grants, shared quotas and a single-flight public JWKS cache. Regression tests
@@ -578,7 +578,7 @@ expired/abandoned login handles, recovery-code acknowledgement before OAuth resu
 browser-bound per-request budgets, database-independent metadata, cache coalescing/expiry
 and value-free SQL diagnostics. Three review rounds independently verified every accepted
 fix; the final review reports no remaining critical, high, medium or low findings. The
-primary default/all-feature workspace suites and Claude's targeted Rust/browser suites
+primary default/all-feature workspace suites and the reviewer's targeted Rust/browser suites
 pass. No confirmed finding was rejected as a false positive.
 
 The code phase deliberately requires an OIDC nonce even though Core makes it optional

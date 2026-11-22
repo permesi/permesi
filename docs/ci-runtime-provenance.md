@@ -107,7 +107,7 @@ the expected commit. All eight real cleanup/isolation/restart harness checks pas
 on each topology with the same expected-commit environment, including the harness's
 intentional startup-failure substitutes.
 
-Independent Herdr/OMP `xai-oauth/grok-4.7` review found a medium-severity isolation
+Independent review found a medium-severity isolation
 defect in the new regression script: Git subprocesses could inherit caller
 repository redirection. The shared sanitized environment fixes both build/Git
 paths, and the protected foreign-state regression was observed failing before the
