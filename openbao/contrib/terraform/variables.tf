@@ -34,10 +34,17 @@ variable "genesis_database_password" {
   sensitive = true
 }
 
-# SSL mode for DB connections (disable for local dev)
+# SSL mode for OpenBao's privileged DB connections. Verified TLS is the default so
+# an omitted value cannot silently send credential-management SQL in the clear;
+# local dev sets "disable" explicitly.
 variable "database_sslmode" {
   type    = string
-  default = "disable"
+  default = "verify-full"
+
+  validation {
+    condition     = contains(["disable", "require", "verify-ca", "verify-full"], var.database_sslmode)
+    error_message = "database_sslmode must be disable, require, verify-ca or verify-full."
+  }
 }
 
 # PKI: Root CA

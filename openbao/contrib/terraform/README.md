@@ -38,6 +38,7 @@ Terraform state is sensitive in this module. It can contain values such as the P
    Prefix any variable name with `TF_VAR_`:
    ```bash
    export TF_VAR_database_host="db.internal"
+   # database_sslmode defaults to verify-full; OpenBao must trust the database CA.
    export TF_VAR_permesi_database_username="openbao_permesi"
    export TF_VAR_permesi_database_password="change-me"
    export TF_VAR_genesis_database_username="openbao_genesis"
@@ -183,10 +184,12 @@ api_proxy {
 
 listener "unix" {
   address      = "/run/permesi/agent.sock"
-  # Note: set to 0666 to allow container users to connect to the socket.
-  # Restrict access at the directory level (/run/permesi) on the host.
-  socket_mode  = "0666"
-  socket_user  = "permesi"
+  # The Agent keeps ownership and shares the socket with the service's group.
+  # OpenBao applies socket_mode only when both socket_user and socket_group are
+  # set, and an unprivileged Agent can only assign its own user and a group it
+  # belongs to (the unit below runs it with Group=permesi).
+  socket_mode  = "0660"
+  socket_user  = "openbao"
   socket_group = "permesi"
 
   tls_disable = true
@@ -245,10 +248,12 @@ api_proxy {
 
 listener "unix" {
   address      = "/run/genesis/agent.sock"
-  # Note: set to 0666 to allow container users to connect to the socket.
-  # Restrict access at the directory level (/run/genesis) on the host.
-  socket_mode  = "0666"
-  socket_user  = "genesis"
+  # The Agent keeps ownership and shares the socket with the service's group.
+  # OpenBao applies socket_mode only when both socket_user and socket_group are
+  # set, and an unprivileged Agent can only assign its own user and a group it
+  # belongs to (the unit below runs it with Group=genesis).
+  socket_mode  = "0660"
+  socket_user  = "openbao"
   socket_group = "genesis"
 
   tls_disable = true
@@ -273,6 +278,8 @@ EOH
 
 Example systemd units (one per service; adjust paths and domains as needed):
 
+Each Agent unit owns its service's runtime directory and runs as the `openbao` user with the service's group, so the socket (`0660`) and the rendered TLS bundle (`0640`) are readable by the service and by nobody else. The service units in `contrib/systemd` therefore do not declare `RuntimeDirectory` themselves.
+
 ```ini
 [Unit]
 Description=OpenBao Agent (Permesi)
@@ -281,7 +288,7 @@ Wants=network.target
 
 [Service]
 User=openbao
-Group=openbao
+Group=permesi
 ExecStart=/usr/bin/bao agent -config=/etc/openbao/permesi.hcl
 Restart=always
 RestartSec=2s
@@ -300,7 +307,7 @@ Wants=network.target
 
 [Service]
 User=openbao
-Group=openbao
+Group=genesis
 ExecStart=/usr/bin/bao agent -config=/etc/openbao/genesis.hcl
 Restart=always
 RestartSec=2s

@@ -9,9 +9,8 @@ Type=simple
 User=permesi
 Group=permesi
 
-# Runtime directory for TLS certs and agent socket
-RuntimeDirectory=permesi
-RuntimeDirectoryMode=0750
+# /run/permesi (TLS bundle and Agent socket) is created and owned by
+# openbao-agent-permesi.service, which shares it with this unit's group.
 
 # Load static config (DSN, port, URLs)
 EnvironmentFile=/etc/permesi/permesi.env

@@ -9,9 +9,8 @@ Type=simple
 User=genesis
 Group=genesis
 
-# Runtime directory for TLS certs (if agent writes there) and other ephemeral data
-RuntimeDirectory=genesis
-RuntimeDirectoryMode=0750
+# /run/genesis (TLS bundle and Agent socket) is created and owned by
+# openbao-agent-genesis.service, which shares it with this unit's group.
 
 # Load static config (DSN, port, log level)
 EnvironmentFile=/etc/genesis/genesis.env

@@ -118,7 +118,7 @@ openbao-init:
     echo "Restore the keys file or reset the openbao data volume." >&2
     exit 1
   fi
-  podman exec {{openbao_ctr}} sh -c 'BAO_ADDR=http://127.0.0.1:8200 bao operator init -key-shares=1 -key-threshold=1 -format=json' > "$keys"
+  (umask 077; podman exec {{openbao_ctr}} sh -c 'BAO_ADDR=http://127.0.0.1:8200 bao operator init -key-shares=1 -key-threshold=1 -format=json' > "$keys")
   chmod 600 "$keys"
   echo "Wrote ${keys}"
 
@@ -164,6 +164,8 @@ openbao-tf-apply:
     export VAULT_ADDR="http://127.0.0.1:8200"
     export VAULT_TOKEN="$token"
     export TF_VAR_database_host="${TF_VAR_database_host:-postgres-permesi}"
+    # The local Postgres container has no TLS; the module default is verify-full.
+    export TF_VAR_database_sslmode="${TF_VAR_database_sslmode:-disable}"
     export TF_VAR_permesi_database_password="${TF_VAR_permesi_database_password:-openbao_permesi}"
     export TF_VAR_genesis_database_password="${TF_VAR_genesis_database_password:-openbao_genesis}"
 

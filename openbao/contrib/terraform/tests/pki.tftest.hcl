@@ -7,6 +7,11 @@ run "pki_roles_and_cert_auth" {
   command = plan
 
   assert {
+    condition     = var.database_sslmode == "verify-full" && strcontains(vault_database_secret_backend_connection.permesi.postgresql[0].connection_url, "sslmode=verify-full") && strcontains(vault_database_secret_backend_connection.genesis.postgresql[0].connection_url, "sslmode=verify-full")
+    error_message = "Database connections must default to verified TLS."
+  }
+
+  assert {
     condition     = vault_mount.pki_root.path == "pki-root"
     error_message = "Expected pki_root mount at pki-root."
   }
