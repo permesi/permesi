@@ -164,12 +164,11 @@ async fn agent_socket_request_times_out_when_the_body_stalls() -> anyhow::Result
         };
         let mut request = [0_u8; 1024];
         let _ = stream.read(&mut request).await;
-        let _ = stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n",
-            )
-            .await;
-        let _ = headers_sent.send(());
+        let headers =
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n";
+        if stream.write_all(headers).await.is_ok() {
+            let _ = headers_sent.send(());
+        }
         // Keep the connection open without ever sending the promised body.
         std::future::pending::<()>().await;
     });
@@ -183,9 +182,16 @@ async fn agent_socket_request_times_out_when_the_body_stalls() -> anyhow::Result
             .map(|response| response.status)
     });
 
-    assert!(headers_seen.recv().await.is_some());
-    let error = request
-        .await?
+    // Paused time makes this watchdog free; it only has to outlast the client deadline.
+    let watchdog = std::time::Duration::from_secs(120);
+    assert!(
+        tokio::time::timeout(watchdog, headers_seen.recv())
+            .await?
+            .is_some(),
+        "the fixture never reached the body phase"
+    );
+    let error = tokio::time::timeout(watchdog, request)
+        .await??
         .expect_err("a stalled body must not be awaited forever");
     assert!(error.to_string().contains("timed out"), "{error}");
 

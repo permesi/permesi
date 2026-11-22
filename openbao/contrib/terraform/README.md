@@ -199,7 +199,7 @@ template {
   # Note: set to 0640 or 0600 to protect the private key.
   perms = "0640"
   contents = <<EOH
-{{- with secret "pki-int/issue/permesi-runtime" "ttl=24h" "common_name=api.permesi.dev" "alt_names=api.permesi.dev" -}}
+{{- with secret "pki-int/issue/permesi-runtime" "ttl=24h" "common_name=api.permesi.localhost" -}}
 {{ .Data.private_key }}
 {{ .Data.certificate }}
 {{- range .Data.ca_chain }}
@@ -209,6 +209,8 @@ template {
 EOH
 }
 ```
+
+The requested names must be allowed by the PKI role: the module ships `api.permesi.localhost` and `genesis.permesi.localhost` (`local.permesi_dns_sans` / `local.genesis_dns_sans` in `pki.tf`). Change those locals to your production names, and the cert-auth roles follow.
 
 `genesis`:
 ```hcl
@@ -258,7 +260,7 @@ template {
   destination = "/run/genesis/tls.bundle.pem"
   perms = "0640"
   contents = <<EOH
-{{- with secret "pki-int/issue/genesis-runtime" "ttl=24h" "common_name=genesis.permesi.dev" "alt_names=genesis.permesi.dev" -}}
+{{- with secret "pki-int/issue/genesis-runtime" "ttl=24h" "common_name=genesis.permesi.localhost" -}}
 {{ .Data.private_key }}
 {{ .Data.certificate }}
 {{- range .Data.ca_chain }}
