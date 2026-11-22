@@ -95,11 +95,10 @@ also changes permanent OPAQUE setup and needs a deliberate password reenrollment
 recovery migration; do not rotate it merely to clean up transcripts. Encryption
 does not promise forward secrecy or erasure from archived WAL/backups.
 
-Apply schema and runtime grants first. This batch changes transient OPAQUE ciphertext
-format and authenticated admission metadata in both stores. Drain old starts or let
-clients restart outstanding ceremonies; mixed old/new replicas cannot finish older
-pending formats. There is no plaintext fallback. Permanent passwords and WebAuthn
-credentials remain usable.
+Apply schema and runtime grants first when upgrading from an older transient exchange
+format. Drain old starts or let clients restart outstanding ceremonies; mixed old/new
+replicas cannot finish older pending formats. There is no plaintext fallback. Permanent
+passwords and WebAuthn credentials remain usable.
 
 ## Regression checks
 
@@ -112,11 +111,9 @@ explicit policy and reject invalid limits/networks. Run
 `cargo test --locked -p permesi pending_ --lib`,
 `cargo test --locked -p permesi operations --lib` and workspace gates.
 
-Advisory locking still serializes starts within each store. Contention regressions
-prove safety and bounded waits, not production throughput. Multi-host load/fault
-exercises and independent exchange-key rotation remain tracked follow-ups.
-Completed workspace, real-dependency and independent review results are recorded in
-[authentication release validation](authentication-release-validation.md).
+Advisory locking serializes starts within each store. Contention regressions
+verify safety and bounded waits rather than production throughput; multi-host load/fault
+exercises and independent exchange-key rotation remain tracked in [TODO.md](../TODO.md).
 
 ## Registration and delivery
 

@@ -56,12 +56,9 @@ normal expiration; immediate revocation requires the separately tracked resource
 server/introspection policy. Operator designation does not itself confer any
 delegated OAuth scope.
 
-## Validation
+## Testing
 
-The runtime-role PostgreSQL/HTTP tests exercise distinct approvals, the one-time
-bootstrap exception, expiry, replay, concurrent approval, cross-replica state,
-rollback, exact recent sessions, audit reasons and suspension token retirement.
-`just test`, all-feature workspace tests, schema/bootstrap verification, OpenAPI
-drift checks and browser tests pass. An independent review found
-audit-reason and approver-context gaps and questioned designation lock ordering;
-the corrected diff received a second review with no remaining confirmed defects.
+Runtime-role PostgreSQL and HTTP tests cover distinct-operator approvals, the
+one-time bootstrap exception, request expiry, replay, concurrent approval,
+cross-replica state, rollback, exact recent-session checks, fixed audit reasons,
+and suspension token retirement.

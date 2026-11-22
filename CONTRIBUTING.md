@@ -13,12 +13,13 @@ full before a first contribution:
   are mandatory.
 - [AI_POLICY.md](AI_POLICY.md) says how AI-assisted work is treated. In short,
   a human owns every contribution and is accountable for it.
-- [README.md](README.md) explains the architecture and how to run the stack.
+- [README.md](README.md) explains the architecture and how to run the stack, and
+  [docs/README.md](docs/README.md) indexes the engineering and operations guides.
 
 ## Getting started
 
 1. Install the prerequisites and start the local stack as described in the
-   [Quick Start](README.md#-quick-start-full-local-stack): `just doctor` checks
+   [Quick Start](README.md#quick-start-full-local-stack): `just doctor` checks
    the host, `just start` brings up PostgreSQL 19, OpenBao, Genesis, Permesi and
    the web console, and `just status` shows whether everything is healthy.
 2. Pick something to work on from [TODO.md](TODO.md) or the open issues. For a
@@ -101,11 +102,9 @@ past CI run.
 
 ## Continuous integration
 
-See [focused modules and CI measurement](docs/maintainability-ci.md) for the
-current module boundaries, compilation and execution timing reports and
-remaining performance work. The [fixture runtime and provenance
-guide](docs/ci-runtime-provenance.md) documents `just test-fixture-profile`,
-`just test-build-identity` and the scenario commit checks.
+See [CI, module boundaries, and build provenance](docs/ci-and-testing.md) for
+module organization conventions, CI test/cache structure, `just test-fixture-profile`,
+`just test-build-identity`, scenario commit checks, and `just ci-timings`.
 
 Container jobs verify the API endpoint used by tests before proceeding. Each
 self-hosted job starts a Podman service with its own runtime and Unix socket
@@ -136,16 +135,31 @@ tested, and the workflow changes nothing in the repository:
    section in `CHANGELOG.md`: the version heading with the release date and the
    link at the foot of the file. The reviewer checks that the bump is present and
    complete.
-2. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check
+2. Verify that `cargo audit --deny unsound --deny yanked` passes.
+3. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check
    on the commit, so the CI run that passed on `sandbox` already counts for the
    release guard once `develop` points at the same commit, and you can run
    `just release` at once.
-3. Run `just release`. It starts `.github/workflows/release.yml` on `develop`,
+4. Run `just release`. It starts `.github/workflows/release.yml` on `develop`,
    follows the run and, once it has succeeded and `develop`'s own Test & Build
    has finished, fast-forwards `main` to the released commit. `main` only allows
    the operator to push (the workflow's token cannot), and a protected branch
    refuses an update while a `CI OK` check of that commit is still pending, so
    this push waits for `develop`'s run and runs from the operator's machine.
+
+   **Helm qualification before chart publication:** `release.yml` builds fresh
+   images and dispatches their final digests to `permesi/permesi-helm`, where
+   `release-bump-pr.yml` opens a bump PR with auto-merge enabled (so passing
+   Charts CI can merge to Helm `main` and publish the chart automatically).
+   Whenever a release carries Helm-affecting configuration, auth-mode, or SQL
+   changes that require manual packaged-stack qualification, establish a merge
+   hold on `permesi/permesi-helm` (for example, pause auto-merge or require
+   manual review on Helm `main`) **before** running `just release` so the
+   dispatched PR cannot auto-merge before qualification completes. Then qualify
+   those exact dispatched image digests with matching SQL (packaged umbrella
+   stack, Agent / native-Kubernetes / AppRole auth-mode transitions, and browser
+   upgrade preserving existing OPAQUE and discoverable passkey credentials)
+   before releasing the hold and merging to Helm `main`.
 
 ```
 Release workflow (workflow_dispatch on develop)

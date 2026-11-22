@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1680" height="1156" viewBox="0 0 1680 1156" role="img" aria-labelledby="svgtitle svgdesc">
+<title id="svgtitle">How Permesi works — admission and identity architecture</title>
+<desc id="svgdesc">A two-step admission flow for selected authentication endpoints: the client requests a short-lived pass from Genesis through CDN/WAF protection, then sends a separate request with that pass to Permesi. Other public OAuth and OIDC endpoints have their own controls. Genesis can run in multiple regions and Permesi in multiple core replicas. Current Genesis token issuance performs a PostgreSQL client lookup and token insert, then calls OpenBao Transit to sign. These remain shared capacity dependencies.</desc>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F7FAFF"/><stop offset="1" stop-color="#F4FBFA"/></linearGradient>
+<linearGradient id="teal" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#EDFDF9"/><stop offset="1" stop-color="#DFF7F0"/></linearGradient>
+<linearGradient id="purple" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F8F5FF"/><stop offset="1" stop-color="#EEE9FF"/></linearGradient>
+<marker id="arrowBlue" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4.5 L0,9" fill="none" stroke="#4B6F95" stroke-width="1.7"/></marker>
+<marker id="arrowTeal" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4.5 L0,9" fill="none" stroke="#0F9D8E" stroke-width="1.7"/></marker>
+<marker id="arrowPurple" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4.5 L0,9" fill="none" stroke="#7154C8" stroke-width="1.7"/></marker>
+</defs>
+<rect x="0" y="0" width="1680" height="1156" rx="0" fill="url(#bg)" stroke="none"/>
+<path d="M 87 46 L 113 56 L 110 88 Q 107 104 87 113 Q 67 104 64 88 L 61 56 Z" fill="none" stroke="#159D91" stroke-width="3.8"/>
+<polyline points="75,79 84,88 102,69" fill="none" stroke="#159D91" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="141" y="81" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="50" font-weight="750" fill="#14273F" text-anchor="start">Permesi</text>
+<rect x="378" y="44" width="3" height="42" rx="1.5" fill="#CFDDE7" stroke="none"/>
+<text x="404" y="75" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="650" fill="#223E60" text-anchor="start">Admission at the edge. Identity in the core.</text>
+<text x="141" y="118" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="400" fill="#586E87" text-anchor="start">What clients do — and how the services can be deployed</text>
+<rect x="1300" y="43" width="314" height="44" rx="22" fill="#E7F6F1" stroke="none"/>
+<text x="1457" y="72" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="650" fill="#096F62" text-anchor="middle">REFERENCE ARCHITECTURE</text>
+<rect x="36" y="157" width="1608" height="522" rx="28" fill="#FFFFFF" stroke="#D5E4EB" stroke-width="2"/>
+<text x="70" y="209" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="33" font-weight="750" fill="#142B45" text-anchor="start">The simple story: two separate requests</text>
+<text x="70" y="245" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="22" font-weight="400" fill="#5A7088" text-anchor="start">Get a temporary pass at the entrance, then present it to the identity service.</text>
+<rect x="62" y="274" width="759" height="341" rx="24" fill="#F3FCF9" stroke="#C4EDE2" stroke-width="2"/>
+<rect x="842" y="274" width="775" height="341" rx="24" fill="#F8F6FF" stroke="#DDD5FF" stroke-width="2"/>
+<circle cx="103" cy="317" r="25" fill="#D5F5E9" stroke="none"/>
+<text x="103" y="326" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="26" font-weight="750" fill="#087F70" text-anchor="middle">1</text>
+<text x="143" y="325" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="28" font-weight="750" fill="#133D3B" text-anchor="start">Get a short-lived pass</text>
+<text x="94" y="363" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="400" fill="#476C68" text-anchor="start">The client requests a token from Genesis.</text>
+<circle cx="884" cy="317" r="25" fill="#E5DEFF" stroke="none"/>
+<text x="884" y="326" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="26" font-weight="750" fill="#694AB7" text-anchor="middle">2</text>
+<text x="926" y="325" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="28" font-weight="750" fill="#43377A" text-anchor="start">Use the pass to access Permesi</text>
+<text x="872" y="363" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="19" font-weight="400" fill="#70638E" text-anchor="start">A new request goes to Permesi, not through Genesis.</text>
+<rect x="82" y="390" width="184" height="117" rx="17" fill="#FFFFFF" stroke="#B5D8E5" stroke-width="2"/>
+<circle cx="118" cy="429" r="15" fill="none" stroke="#376B8A" stroke-width="3"/>
+<path d="M 94 471 C 94 446, 142 446, 142 471" fill="none" stroke="#376B8A" stroke-width="3.5" stroke-linecap="round"/>
+<text x="156" y="443" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="#1A3F5B" text-anchor="start">User</text>
+<text x="156" y="473" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#667F91" text-anchor="start">Web / app</text>
+<rect x="316" y="390" width="188" height="117" rx="17" fill="#FFFFFF" stroke="#B5D8E5" stroke-width="2"/>
+<path d="M 361 413 L 387 423 L 384 455 Q 381 471 361 480 Q 341 471 338 455 L 335 423 Z" fill="none" stroke="#3E7296" stroke-width="3.8"/>
+<polyline points="349,446 358,455 376,436" fill="none" stroke="#3E7296" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="398" y="433" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="23" font-weight="700" fill="#214665" text-anchor="start">CDN</text>
+<text x="398" y="460" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="23" font-weight="700" fill="#214665" text-anchor="start">/ WAF</text>
+<text x="398" y="483" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="400" fill="#667F91" text-anchor="start">Traffic filter</text>
+<rect x="556" y="390" width="244" height="117" rx="17" fill="url(#teal)" stroke="#70D0B8" stroke-width="2"/>
+<rect x="574" y="418" width="40" height="61" rx="4" fill="none" stroke="#069788" stroke-width="3"/>
+<polyline points="614,418 627,411 627,470 614,479" fill="none" stroke="#069788" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="603" cy="451" r="3" fill="#069788" stroke="none"/>
+<text x="642" y="434" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="25" font-weight="750" fill="#087B72" text-anchor="start">Genesis</text>
+<text x="642" y="465" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#236B66" text-anchor="start">Admission issuer</text>
+<text x="642" y="487" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="400" fill="#236B66" text-anchor="start">Issues pass</text>
+<polyline points="273,448 306,448" fill="none" stroke="#4B6F95" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<polyline points="511,448 546,448" fill="none" stroke="#4B6F95" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<polyline points="678,508 678,567 174,567 174,513" fill="none" stroke="#0F9D8E" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowTeal)"/>
+<rect x="242" y="544" width="376" height="42" rx="20" fill="#DDF8F0" stroke="#A7E6D4" stroke-width="1"/>
+<text x="430" y="571" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="650" fill="#087F70" text-anchor="middle">Signed token returned to client</text>
+<rect x="864" y="390" width="188" height="117" rx="17" fill="#FFFFFF" stroke="#CBC6EB" stroke-width="2"/>
+<circle cx="900" cy="429" r="15" fill="none" stroke="#6256A3" stroke-width="3"/>
+<path d="M 876 471 C 876 446, 924 446, 924 471" fill="none" stroke="#6256A3" stroke-width="3.5" stroke-linecap="round"/>
+<text x="938" y="434" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="23" font-weight="700" fill="#4A407A" text-anchor="start">User</text>
+<text x="938" y="461" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="19" font-weight="600" fill="#6256A3" text-anchor="start">+ pass</text>
+<text x="938" y="486" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="400" fill="#7A709B" text-anchor="start">New request</text>
+<rect x="1094" y="390" width="179" height="117" rx="17" fill="#FFFFFF" stroke="#CBC6EB" stroke-width="2"/>
+<path d="M 1134 413 L 1160 423 L 1157 455 Q 1154 471 1134 480 Q 1114 471 1111 455 L 1108 423 Z" fill="none" stroke="#7567B5" stroke-width="3.8"/>
+<polyline points="1122,446 1131,455 1149,436" fill="none" stroke="#7567B5" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1172" y="433" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="23" font-weight="700" fill="#514685" text-anchor="start">CDN</text>
+<text x="1172" y="460" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="23" font-weight="700" fill="#514685" text-anchor="start">/ WAF</text>
+<text x="1172" y="483" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="400" fill="#7A709B" text-anchor="start">Traffic filter</text>
+<rect x="1316" y="390" width="276" height="117" rx="17" fill="url(#purple)" stroke="#AD9CEB" stroke-width="2"/>
+<rect x="1334" y="425" width="54" height="45" rx="7" fill="none" stroke="#7154C8" stroke-width="3"/>
+<circle cx="1349" cy="443" r="7" fill="none" stroke="#7154C8" stroke-width="2.5"/>
+<polyline points="1339,460 1359,460" fill="none" stroke="#7154C8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="1368,439 1381,439" fill="none" stroke="#7154C8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="1368,450 1381,450" fill="none" stroke="#7154C8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1400" y="435" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="26" font-weight="750" fill="#59429E" text-anchor="start">Permesi</text>
+<text x="1400" y="465" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="400" fill="#65539E" text-anchor="start">Identity service</text>
+<text x="1400" y="487" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="400" fill="#65539E" text-anchor="start">Verifies pass locally</text>
+<polyline points="1058,448 1084,448" fill="none" stroke="#4B6F95" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<polyline points="1279,448 1306,448" fill="none" stroke="#4B6F95" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<rect x="965" y="538" width="540" height="48" rx="20" fill="#EEEAFE" stroke="#DAD1FA" stroke-width="1.5"/>
+<text x="1235" y="569" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="650" fill="#57409A" text-anchor="middle">Genesis does NOT forward the request.</text>
+<text x="838" y="650" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#61768C" text-anchor="middle">Passes protect selected auth routes; OAuth/OIDC endpoints have their own safeguards.</text>
+<text x="51" y="739" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="32" font-weight="750" fill="#142B45" text-anchor="start">Under the hood: an example deployment</text>
+<text x="51" y="777" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="400" fill="#5B7188" text-anchor="start">Deploy one or many edge replicas; issuing tokens still depends on core SQL and OpenBao.</text>
+<rect x="36" y="806" width="768" height="316" rx="24" fill="#F0FCF8" stroke="#73D0B9" stroke-width="2.5" stroke-dasharray="9 7"/>
+<rect x="876" y="806" width="768" height="316" rx="24" fill="#F6F3FF" stroke="#A99DE3" stroke-width="2.5" stroke-dasharray="9 7"/>
+<text x="64" y="849" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="27" font-weight="750" fill="#087A70" text-anchor="start">EDGE  |  Genesis</text>
+<text x="64" y="877" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#527B75" text-anchor="start">Anycast or load balancer; one or multiple locations</text>
+<rect x="60" y="914" width="224" height="122" rx="17" fill="#FFFFFF" stroke="#B6E2D7" stroke-width="1.8"/>
+<circle cx="95" cy="966" r="23" fill="#E4FAF2" stroke="none"/>
+<rect x="72" y="938" width="38" height="58" rx="4" fill="none" stroke="#0C9585" stroke-width="3"/>
+<polyline points="110,938 122,931 122,988 110,996" fill="none" stroke="#0C9585" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="100" cy="969" r="3" fill="#0C9585" stroke="none"/>
+<text x="138" y="958" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="22" font-weight="700" fill="#1B5C55" text-anchor="start">Europe</text>
+<text x="138" y="985" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="19" font-weight="600" fill="#285B58" text-anchor="start">Genesis x N</text>
+<text x="138" y="1012" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#5A8079" text-anchor="start">Issues passes</text>
+<rect x="308" y="914" width="224" height="122" rx="17" fill="#FFFFFF" stroke="#B6E2D7" stroke-width="1.8"/>
+<circle cx="343" cy="966" r="23" fill="#E4FAF2" stroke="none"/>
+<rect x="320" y="938" width="38" height="58" rx="4" fill="none" stroke="#0C9585" stroke-width="3"/>
+<polyline points="358,938 370,931 370,988 358,996" fill="none" stroke="#0C9585" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="348" cy="969" r="3" fill="#0C9585" stroke="none"/>
+<text x="386" y="958" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="22" font-weight="700" fill="#1B5C55" text-anchor="start">Americas</text>
+<text x="386" y="985" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="19" font-weight="600" fill="#285B58" text-anchor="start">Genesis x N</text>
+<text x="386" y="1012" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#5A8079" text-anchor="start">Issues passes</text>
+<rect x="556" y="914" width="224" height="122" rx="17" fill="#FFFFFF" stroke="#B6E2D7" stroke-width="1.8"/>
+<circle cx="591" cy="966" r="23" fill="#E4FAF2" stroke="none"/>
+<rect x="568" y="938" width="38" height="58" rx="4" fill="none" stroke="#0C9585" stroke-width="3"/>
+<polyline points="606,938 618,931 618,988 606,996" fill="none" stroke="#0C9585" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="596" cy="969" r="3" fill="#0C9585" stroke="none"/>
+<text x="634" y="958" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="22" font-weight="700" fill="#1B5C55" text-anchor="start">Asia</text>
+<text x="634" y="985" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="19" font-weight="600" fill="#285B58" text-anchor="start">Genesis x N</text>
+<text x="634" y="1012" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#5A8079" text-anchor="start">Issues passes</text>
+<text x="420" y="1084" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="600" fill="#227B6B" text-anchor="middle">Each issued token requires core SQL + OpenBao Transit</text>
+<!-- Current Genesis issuance depends on core services. Centered dashed arrow shows boundary dependency, not request forwarding. -->
+<path d="M 808 964 L 868 964" fill="none" stroke="#0E9F90" stroke-width="3" stroke-dasharray="7 6" marker-end="url(#arrowTeal)"/>
+<text x="904" y="849" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="27" font-weight="750" fill="#5943A0" text-anchor="start">PROTECTED CORE  |  Permesi</text>
+<text x="904" y="877" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="17" font-weight="400" fill="#766B9A" text-anchor="start">Private network + controlled public API ingress</text>
+<rect x="904" y="898" width="712" height="74" rx="17" fill="#FFFFFF" stroke="#C7BCEA" stroke-width="1.8"/>
+<rect x="920" y="913" width="54" height="45" rx="7" fill="none" stroke="#7154C8" stroke-width="3"/>
+<circle cx="935" cy="931" r="7" fill="none" stroke="#7154C8" stroke-width="2.5"/>
+<polyline points="925,948 945,948" fill="none" stroke="#7154C8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="954,927 967,927" fill="none" stroke="#7154C8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="954,938 967,938" fill="none" stroke="#7154C8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="996" y="931" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="750" fill="#4F3D91" text-anchor="start">Permesi replicas</text>
+<text x="996" y="956" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="400" fill="#766B97" text-anchor="start">Identity, users, OAuth / OIDC, local pass checks</text>
+<rect x="904" y="1024" width="346" height="72" rx="15" fill="#FFFFFF" stroke="#C7BCEA" stroke-width="1.6"/>
+<ellipse cx="948" cy="1041" rx="22" ry="9" fill="none" stroke="#467AAB" stroke-width="3"/>
+<path d="M 926 1041 L 926 1073 Q 948 1091 970 1073 L 970 1041" fill="none" stroke="#467AAB" stroke-width="3"/>
+<path d="M 926 1057 Q 948 1075 970 1057" fill="none" stroke="#467AAB" stroke-width="3"/>
+<text x="991" y="1054" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="700" fill="#284E71" text-anchor="start">PostgreSQL (HA)</text>
+<text x="991" y="1079" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="400" fill="#6C7F93" text-anchor="start">Authoritative shared state</text>
+<rect x="1270" y="1024" width="346" height="72" rx="15" fill="#FFFFFF" stroke="#C7BCEA" stroke-width="1.6"/>
+<circle cx="1306" cy="1051" r="13" fill="none" stroke="#6F58AE" stroke-width="3"/>
+<polyline points="1316,1061 1338,1083 1346,1075" fill="none" stroke="#6F58AE" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="1328,1073 1335,1066" fill="none" stroke="#6F58AE" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1364" y="1054" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="700" fill="#5A4890" text-anchor="start">OpenBao (HA)</text>
+<text x="1364" y="1079" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="400" fill="#7A739A" text-anchor="start">Transit signing &amp; secrets</text>
+<polyline points="1077,974 1077,1016" fill="none" stroke="#7154C8" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowPurple)"/>
+<polyline points="1443,974 1443,1016" fill="none" stroke="#7154C8" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrowPurple)"/>
+</svg>

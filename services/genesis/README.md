@@ -1,8 +1,7 @@
 # genesis
 
-[![Deploy](https://github.com/permesi/genesis/actions/workflows/deploy.yml/badge.svg)](https://github.com/permesi/genesis/actions/workflows/deploy.yml)
-[![Test & Build](https://github.com/permesi/genesis/actions/workflows/build.yml/badge.svg)](https://github.com/permesi/genesis/actions/workflows/build.yml)
-[![codecov](https://codecov.io/gh/permesi/genesis/graph/badge.svg?token=KLKV2M5JCT)](https://codecov.io/gh/permesi/genesis)
+[![Test & Build](https://github.com/permesi/permesi/actions/workflows/build.yml/badge.svg)](https://github.com/permesi/permesi/actions/workflows/build.yml)
+[![codecov](https://codecov.io/gh/permesi/permesi/graph/badge.svg?token=ODC4S2YHPF)](https://codecov.io/gh/permesi/permesi)
 
 Token Zero generator (edge admission token mint).
 
@@ -41,7 +40,7 @@ In the workspace “Split-Trust” flow:
 
 ## HTTP API
 
-Implemented routes (see `services/genesis/src/genesis/mod.rs`):
+Implemented routes (see `services/genesis/src/api/mod.rs` and `services/genesis/src/api/openapi.rs`):
 
 | Method | Path | Notes |
 |---|---|---|
@@ -304,7 +303,7 @@ SELECT * FROM cron.job_run_details order by start_time DESC limit 5;
 
 For API testing workflows, this service keeps Bruno request collections in `services/genesis/api_docs/` and Schemathesis contract-test configuration in `services/genesis/openapi/schemathesis/`. The workspace recipe `just schemathesis-genesis` runs OpenAPI-driven checks against `docs/openapi/genesis.json`.
 
-## TODO / Roadmap
+## Roadmap
 
 The repository-level docs describe `genesis` as “the edge / bouncer”. The following pieces are
 either not implemented yet in this service or need hardening:

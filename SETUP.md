@@ -1,6 +1,6 @@
 # Setup & Deployment Guide
 
-This guide describes how to set up the Permesi IAM stack. It remains agnostic of your specific orchestration (systemd, Podman, Kubernetes) and focuses on the core requirements: **Postgres 19** and **OpenBao**.
+This guide describes how to set up the Permesi IAM stack. It remains agnostic of your specific orchestration (systemd, Podman, Kubernetes) and focuses on the core requirements: **Postgres 19** and **OpenBao**. For architecture, security policies, and feature guides, see the [Documentation Index](docs/README.md).
 
 ## 1. Prerequisites
 
@@ -159,7 +159,7 @@ terraform init
 terraform apply
 ```
 
-Refer to the `openbao/README.md` for details on the specific resources provisioned.
+Refer to [openbao/README.md](openbao/README.md) for provisioned resources and its [production readiness checklist](openbao/README.md#production-readiness-checklist) (HA failover, auto-unseal, backups/restore drills, and renewal alerts).
 
 ### Terraform tests
 Terraform tests run in the module directory and validate the PKI + cert-auth wiring at plan time:
@@ -414,13 +414,15 @@ Each service reads its own copy of these, prefixed with `PERMESI_` or `GENESIS_`
 
 Permesi enforces authentication limits in PostgreSQL across replicas. The
 defaults use a 600-second window, 100 attempts per IP/action, 10 attempts per
-account/action, and at most 10,000 pending protocol states per flow/replica.
-Override them with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
-`PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
-`PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, and
-`PERMESI_AUTH_MAX_PENDING_STATES`. Forwarded client-IP headers are trusted only
-as a deployment boundary: the public-facing proxy must remove client-supplied
-copies and set canonical values before forwarding to Permesi.
+account/action, and cluster-wide per-purpose pending-state ceilings (10,000 login,
+1,000 reauthentication, 1,000 per registration purpose, and 1,000 MFA, with 16
+pending rows per subject/purpose). Override them with
+`PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`, `PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
+`PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`, `PERMESI_AUTH_MAX_PENDING_STATES`,
+and `PERMESI_AUTH_PENDING_*`. Forwarded client-IP headers are trusted only when
+explicitly configured via `PERMESI_AUTH_TRUSTED_PROXIES` (or
+`PERMESI_AUTH_TRUST_UNIX_PROXY` for a restricted same-host Unix edge); see
+[authentication operations](docs/authentication-operations.md).
 
 ---
 

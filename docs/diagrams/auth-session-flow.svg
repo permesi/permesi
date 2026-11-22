@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 704" width="1100" height="704" role="img" aria-label="Multi-Replica Authentication and MFA Session Flow">
+  <title>Multi-Replica Authentication and MFA Session Flow</title>
+  <defs>
+    <style>
+      text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .title { font-size: 16px; font-weight: 700; fill: #0f172a; }
+      .subtitle { font-size: 11.5px; font-weight: 400; fill: #475569; }
+      .zone-title { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+      .node-title { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .node-body { font-size: 11px; font-weight: 400; fill: #334155; }
+      .edge-label { font-size: 10.5px; font-weight: 500; fill: #334155; }
+      .phase-label { font-size: 11px; font-weight: 700; fill: #1e40af; }
+      .seq-head { font-size: 12px; font-weight: 700; fill: #0f172a; }
+      .seq-msg { font-size: 11px; font-weight: 500; fill: #1e293b; }
+    </style>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-emerald" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#047857"/>
+    </marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#4f46e5"/>
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="1100" height="704" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="24" y="32" class="title">Multi-Replica Authentication &amp; MFA Session Flow</text>
+  <text x="24" y="50" class="subtitle">Start and finish can execute on different Permesi replicas using AEAD-sealed PostgreSQL state (no sticky sessions)</text>
+  <rect x="24" y="70" width="260" height="182" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="38" y="92" class="zone-title" fill="#b45309">1. EDGE ADMISSION</text>
+  <rect x="42" y="110" width="224" height="122" rx="8" fill="#fef3c7" stroke="#b45309" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="154.0" y="137.5" text-anchor="middle" class="node-title">Genesis Zero Token</text>
+  <text x="154.0" y="154.5" text-anchor="middle" class="node-body">Client calls GET /token?client_id=...</text>
+  <text x="154.0" y="169.5" text-anchor="middle" class="node-body">Short-lived PASETO v4.public</text>
+  <text x="154.0" y="184.5" text-anchor="middle" class="node-body">Sent in X-Permesi-Zero-Token</text>
+  <text x="154.0" y="199.5" text-anchor="middle" class="node-body">Required on start &amp; finish</text>
+  <text x="154.0" y="214.5" text-anchor="middle" class="node-body">Verified locally via PASERK</text>
+  <rect x="324" y="70" width="752" height="182" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="338" y="92" class="zone-title" fill="#1d4ed8">2. CEREMONY START (PERMESI REPLICA A)</text>
+  <rect x="342" y="104" width="272" height="62" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="478.0" y="124.0" text-anchor="middle" class="node-title">OPAQUE Password Login</text>
+  <text x="478.0" y="141.0" text-anchor="middle" class="node-body">POST /v1/auth/opaque/login/start</text>
+  <text x="478.0" y="156.0" text-anchor="middle" class="node-body">1. IP + account rate limits -&gt; 2. Zero Token</text>
+  <rect x="342" y="176" width="272" height="62" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="478.0" y="196.0" text-anchor="middle" class="node-title">Discoverable Passkey Login</text>
+  <text x="478.0" y="213.0" text-anchor="middle" class="node-body">POST /v1/auth/passkey/login/start</text>
+  <text x="478.0" y="228.0" text-anchor="middle" class="node-body">1. IP rate limit -&gt; 2. Zero Token</text>
+  <rect x="654" y="112" width="404" height="118" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="666" y="137.5" text-anchor="start" class="node-title">Quota Gate &amp; AEAD Sealing</text>
+  <text x="666" y="154.5" text-anchor="start" class="node-body">3. Advisory-locked per-purpose &amp; per-subject</text>
+  <text x="666" y="169.5" text-anchor="start" class="node-body">   pending quotas in PostgreSQL (429 / 503)</text>
+  <text x="666" y="184.5" text-anchor="start" class="node-body">4. Seal server transcript with XChaCha20-Poly1305</text>
+  <text x="666" y="199.5" text-anchor="start" class="node-body">   (192-bit nonce, OpenBao-derived key)</text>
+  <text x="666" y="214.5" text-anchor="start" class="node-body">5. Store SHA-256 reference; return opaque ref</text>
+  <rect x="24" y="286" width="396" height="180" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="38" y="308" class="zone-title" fill="#047857">3. SHARED SEALED STATE (POSTGRESQL 19)</text>
+  <path d="M 42 333 L 42 435 A 180.0 11 0 0 0 402 435 L 402 333 Z" fill="#d1fae5" stroke="#047857" stroke-width="1.5" filter="url(#shadow)"/>
+  <ellipse cx="222.0" cy="333" rx="180.0" ry="11" fill="#d1fae5" stroke="#047857" stroke-width="1.5"/>
+  <text x="222.0" y="368.5" text-anchor="middle" class="node-title">opaque_exchanges / webauthn_exchanges</text>
+  <text x="222.0" y="385.5" text-anchor="middle" class="node-body">SHA-256 ref hash · XChaCha20-Poly1305 AEAD</text>
+  <text x="222.0" y="400.5" text-anchor="middle" class="node-body">Bound: purpose, user, session, RP/origin, expiry</text>
+  <text x="222.0" y="415.5" text-anchor="middle" class="node-body">Pruned on new start &amp; cleanup_expired_tokens()</text>
+  <rect x="460" y="286" width="616" height="180" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="474" y="308" class="zone-title" fill="#1d4ed8">4. CEREMONY FINISH (PERMESI REPLICA B — ANY REPLICA)</text>
+  <rect x="478" y="318" width="274" height="132" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="490" y="343.0" text-anchor="start" class="node-title">OPAQUE Finish</text>
+  <text x="490" y="360.0" text-anchor="start" class="node-body">1. Verify Zero Token</text>
+  <text x="490" y="375.0" text-anchor="start" class="node-body">2. Atomic DELETE ... RETURNING</text>
+  <text x="490" y="390.0" text-anchor="start" class="node-body">3. Verify OPAQUE proof</text>
+  <text x="490" y="405.0" text-anchor="start" class="node-body">4. Lock user &amp; credential</text>
+  <text x="490" y="420.0" text-anchor="start" class="node-body">5. Check status, cutoff &amp; MFA</text>
+  <text x="490" y="435.0" text-anchor="start" class="node-body">   -&gt; commit session</text>
+  <rect x="780" y="318" width="278" height="132" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="792" y="343.0" text-anchor="start" class="node-title">Passkey Finish</text>
+  <text x="792" y="360.0" text-anchor="start" class="node-body">1. IP rate limit -&gt; 2. Zero Token</text>
+  <text x="792" y="375.0" text-anchor="start" class="node-body">3. Atomic DELETE ... RETURNING</text>
+  <text x="792" y="390.0" text-anchor="start" class="node-body">4. Lock user/cred &amp; check cutoff</text>
+  <text x="792" y="405.0" text-anchor="start" class="node-body">   (authentication_not_before)</text>
+  <text x="792" y="420.0" text-anchor="start" class="node-body">5. Verify WebAuthn assertion,</text>
+  <text x="792" y="435.0" text-anchor="start" class="node-body">   active status &amp; MFA -&gt; commit</text>
+  <rect x="24" y="500" width="1052" height="180" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="38" y="522" class="zone-title" fill="#4338ca">5. ISSUED SESSION KIND (HTTPONLY SECURE COOKIE)</text>
+  <rect x="44" y="536" width="294" height="88" rx="8" fill="#d1fae5" stroke="#047857" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="191.0" y="561.5" text-anchor="middle" class="node-title">Full Session Cookie</text>
+  <text x="191.0" y="578.5" text-anchor="middle" class="node-body">Issued directly when MFA is disabled</text>
+  <text x="191.0" y="593.5" text-anchor="middle" class="node-body">Authorizes /v1/me, /v1/orgs, /authorize</text>
+  <text x="191.0" y="608.5" text-anchor="middle" class="node-body">Records monotonic last_login_at</text>
+  <rect x="402" y="536" width="294" height="88" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="549.0" y="561.5" text-anchor="middle" class="node-title">MFA Challenge Session</text>
+  <text x="549.0" y="578.5" text-anchor="middle" class="node-body">Issued when MFA is enabled</text>
+  <text x="549.0" y="593.5" text-anchor="middle" class="node-body">Shared DB proof cap (default 5 attempts)</text>
+  <text x="549.0" y="608.5" text-anchor="middle" class="node-body">TOTP (single-use) · Security Key · Recovery</text>
+  <rect x="762" y="536" width="294" height="88" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="909.0" y="561.5" text-anchor="middle" class="node-title">MFA Bootstrap Session</text>
+  <text x="909.0" y="578.5" text-anchor="middle" class="node-body">MFA required &amp; unenrolled, or post-Recovery</text>
+  <text x="909.0" y="593.5" text-anchor="middle" class="node-body">Restricted strictly to factor enrollment</text>
+  <text x="909.0" y="608.5" text-anchor="middle" class="node-body">Invalidated once enrollment completes</text>
+  <path d="M 284 161 L 324 161" fill="none" stroke="#b45309" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <path d="M 614 135 L 654 135" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <path d="M 614 207 L 654 207" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <path d="M 856 230 L 856 268 L 222 268 L 222 286" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="317.8" y="257.0" width="442.4" height="22.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="539.0" y="270.0" text-anchor="middle" class="edge-label" fill="#047857">Insert hashed reference &amp; sealed state (no sticky sessions required)</text>
+  <path d="M 420 382 L 460 382" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <path d="M 768 466 L 768 482 L 549 482 L 549 500" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <rect x="480.9" y="471.0" width="354.2" height="22.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="658.0" y="484.0" text-anchor="middle" class="edge-label" fill="#4f46e5">Commit session (plus passkey audit) in one transaction</text>
+  <path d="M 402 580 L 338 580" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="331.5" y="539.0" width="77.0" height="36.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="370.0" y="552.0" text-anchor="middle" class="edge-label" fill="#047857">TOTP / Key</text>
+  <text x="370.0" y="566.0" text-anchor="middle" class="edge-label" fill="#047857">-&gt; full</text>
+  <path d="M 696 580 L 762 580" fill="none" stroke="#b45309" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="693.6" y="539.0" width="70.7" height="36.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="729.0" y="552.0" text-anchor="middle" class="edge-label" fill="#b45309">Recovery</text>
+  <text x="729.0" y="566.0" text-anchor="middle" class="edge-label" fill="#b45309">-&gt; enroll</text>
+  <path d="M 909 624 L 909 656 L 191 656 L 191 624" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="237.4" y="645.0" width="625.1" height="22.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="550.0" y="658.0" text-anchor="middle" class="edge-label" fill="#047857">Factor enrollment consumes bootstrap cookie and issues replacement full session (+ last_login_at)</text>
+</svg>

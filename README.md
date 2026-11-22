@@ -1,80 +1,127 @@
-# permesi
+# Permesi
 
-**permesi** Identity and Access Management
+Identity and Access Management (IAM) and OpenID Connect (OIDC) provider.
 
 [![Test & Build](https://github.com/permesi/permesi/actions/workflows/build.yml/badge.svg)](https://github.com/permesi/permesi/actions/workflows/build.yml)
+[![Security Audit](https://github.com/permesi/permesi/actions/workflows/security-audit.yml/badge.svg)](https://github.com/permesi/permesi/actions/workflows/security-audit.yml)
 [![codecov](https://codecov.io/gh/permesi/permesi/graph/badge.svg?token=ODC4S2YHPF)](https://codecov.io/gh/permesi/permesi)
+[![Latest Release](https://img.shields.io/github/v/release/permesi/permesi)](https://github.com/permesi/permesi/releases)
 [![API Docs](https://img.shields.io/badge/API-Docs-blue)](https://permesi.github.io/permesi/)
+[![License](https://img.shields.io/github/license/permesi/permesi)](LICENSE)
 
-<img src="permesi.svg" height="400">
+![Permesi — Admission at the edge. Identity in the core.](docs/diagrams/permesi-overview.svg)
 
-## ⚡ Quick Start (Full Local Stack)
+> **Documentation:** Browse the full **[Documentation Index](docs/README.md)** for system architecture, authentication, OAuth 2.0 / OIDC, database hardening, governance, and CI guides. For production deployment, see [SETUP.md](SETUP.md).
 
-**Prerequisites (intentional):**
-- **System**: `zsh`, `podman`, `jq`, `curl`, `xh`, `ripgrep` (rg), and [`herdr`](https://herdr.dev) (or `tmux` as the fallback)
-- **Languages**: `rust` (stable) with `cargo-watch`, `node` (LTS)
-- **Infrastructure**: `just`, `terraform`, `openbao` (its CLI is `bao`), `mkcert`, `direnv`
-> These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, OpenBao-backed cryptography, and reproducible infrastructure. `zsh` is a hard requirement: the justfile runs under it, so no recipe works without it.
+## Architecture
+
+Permesi uses a **split-trust architecture** backed by **PostgreSQL 19** and **OpenBao 2.7** to isolate public edge traffic from core identity logic while keeping all service replicas stateless.
+
+- **`genesis` (Edge Admission Mint):** Accepts public admission requests, persists short-term audit metadata in partitioned PostgreSQL tables, signs short-lived PASETO `v4.public` (Ed25519) admission/zero tokens via OpenBao Transit, and publishes its PASERK public keyset at `GET /paserk.json`.
+- **`permesi` (Core IAM & OIDC Authority):** Verifies Genesis tokens **locally** via a PASERK keyset (inline JSON for fully offline operation, or cached `/paserk.json` refreshed on startup, stale TTL—including `/ready` and `/health` probes—or unknown `kid`), and manages OPAQUE password auth, discoverable passkeys/MFA, multi-tenant resources, and OAuth 2.0 / OIDC protocol flows using shared PostgreSQL state across replicas.
+- **`apps/web` (Web Console):** Static client-side-rendered (CSR) Leptos WebAssembly admin console built with Trunk and Tailwind CSS.
+
+See [System Architecture](docs/architecture.md) for trust boundaries, cryptography, multi-replica authentication flows, and authority separation.
+
+## Capabilities
+
+### Implemented
+
+- **Authentication & Registration:** Client-side OPAQUE signup/login/reauthentication and discoverable WebAuthn passkeys backed by AEAD-sealed shared PostgreSQL exchanges ([OPAQUE](docs/opaque-exchanges.md), [WebAuthn](docs/webauthn-exchanges.md)), TOTP/security-key/recovery MFA with recency checks and terminal challenge lockouts ([MFA lifecycle](docs/mfa-lifecycle.md)), signup admission modes and TLS SMTP/outbox delivery ([registration security](docs/registration-security.md)), and shared IP/account/pending-state quotas ([authentication operations](docs/authentication-operations.md)).
+- **Multi-Tenant Resources:** Organization → Project → Environment (`0..1` active `production`, unlimited `non_production`) → Application hierarchy with explicit bottom-up soft deletion ([resource lifecycle](docs/resource-lifecycle.md)) and configurable handler/lock deadlines ([tenant mutation deadlines](docs/tenant-mutation-deadlines.md)).
+- **OAuth 2.0 & OIDC:** Application-owned public/confidential clients, exact redirect allow-lists, `<resource>:<action>` API scopes and immutable OIDC scopes, confidential-client Argon2id secret rotation, Authorization Code + S256 PKCE with tenant-bound consent, transactional `POST /token` with OpenBao-signed RS256 access (`at+jwt`) and ID tokens, `/jwks.json` and discovery, rotating refresh-token families with reuse revocation, `POST /revoke`, `GET`/`POST /userinfo`, and user Connected apps grant revocation ([OAuth foundation](docs/oauth-foundation.md), [token exchange](docs/oauth-token-exchange.md), [refresh tokens](docs/oauth-refresh-tokens.md)).
+- **Platform Governance & Security:** Read-only global tenant inspection for platform operators ([tenant inspection](docs/admin-tenant-inspection.md)), auditable account suspension/reactivation ([account containment](docs/account-containment.md)), two-operator designation lifecycle ([operator designation](docs/operator-designation.md)), and non-superuser PostgreSQL ownership with least-privilege runtime grants ([database hardening](docs/database-hardening.md)).
+
+### Planned
+
+Tracked in [TODO.md](TODO.md): OAuth token introspection and immediate access-token revocation, `client_credentials` (M2M) and Device Authorization grants, formal OIDC conformance testing, broader administrator grant/audit views, fair hierarchical lock coordination, PostgreSQL RLS evaluation, and open stabilization items.
+
+## Workspace Layout
+
+This repository is a Rust workspace (2024 edition) with a single shared version across crates:
+
+- `services/permesi`: Core IAM / OIDC service ([README](services/permesi/README.md))
+- `services/genesis`: Edge admission token mint ([README](services/genesis/README.md))
+- `apps/web`: Leptos CSR web console ([README](apps/web/README.md))
+- `crates/admission_token`: Shared PASETO / PASERK admission token contract and sign/verify helpers
+- `crates/openbao_client`: Shared OpenBao HTTP/Unix/Kubernetes client and lease renewal
+- `crates/service_utils`: Shared error envelopes, request IDs, shutdown draining, and transaction startup helpers
+- `crates/test_support`: Disposable PostgreSQL 19 and OpenBao 2.7 integration test fixtures
+- `tools/oauth_scenario`: Standalone multi-replica OAuth/HA integration runner ([docs](docs/oauth-scenarios.md))
+
+SQL schemas and bootstrap scripts live in `db/sql/` ([README](db/sql/README.md)); OpenBao Terraform provisioning lives in `openbao/contrib/terraform/` ([README](openbao/contrib/terraform/README.md)); OpenAPI contracts live in `docs/openapi/`.
+
+## Quick Start (Full Local Stack)
+
+### Prerequisites
+
+- **System:** `zsh` (required by the justfile), `podman`, `jq`, `curl`, `xh`, `ripgrep` (`rg`), and [`herdr`](https://herdr.dev) (or `tmux` as fallback)
+- **Languages:** `rust` (stable) with `cargo-watch`, `node` (LTS, for Tailwind CSS builds)
+- **Infrastructure:** `just`, `terraform` (v1.7+), `openbao` (`bao` CLI), `mkcert`, `direnv`
 
 ```bash
-# 1. Clone the repo
+# 1. Clone the repository
 git clone https://github.com/permesi/permesi.git
 cd permesi
 
-# 2. Check the host: tools, ports, name resolution, network and OpenBao state
+# 2. Check the host: tools, ports, name resolution, network, and OpenBao state
 just doctor
 
-# 3. Allow listening on privileged ports (Linux only, for HAProxy on :443),
-#    or skip it with: export PERMESI_HTTPS_PORT=8443
+# 3. Allow binding to privileged port 443 on Linux for local HAProxy,
+#    or skip this step by setting: export PERMESI_HTTPS_PORT=8443
 just haproxy-sysctl
 
-# 4. Ignite the engine: this opens a `permesi-dev` Herdr workspace (tmux as the fallback) with all services running in panes.
+# 4. Start PostgreSQL 19, OpenBao, Jaeger, HAProxy, genesis, permesi, and the web console
 just start
 
-# 5. (Optional) run firefox in developer mode:
+# 5. (Optional) Launch Firefox Developer Edition with an isolated profile trusting local mkcert
 just firefox
 ```
 
-`just firefox-install` installs or updates the latest official Firefox Developer
-Edition under `~/.local/opt` without changing the host image. The `just firefox`
-recipe launches it with the isolated `dev` profile, falling back to the system
-Firefox when Developer Edition is absent. It imports the laptop's mkcert public
-CA into that profile's NSS database only; `TRUST_MKCERT_CA=0 just firefox` disables
-the import without changing any system or other Firefox trust store. The profile
-opens the web console, both API health pages, Jaeger, and the OpenBao UI as separate
-tabs. Its HTTPS pages default to port 8443; set `PERMESI_HTTPS_PORT=443` when the
-stack uses the standard HTTPS port.
+*Historical local startup walkthrough (recorded before the OpenBao and Herdr migration):*
 
 [![asciicast](https://asciinema.org/a/782038.svg)](https://asciinema.org/a/782038)
 
-*`just start` launches the full infrastructure (Postgres, OpenBao, Jaeger,
-HAProxy) and starts the services (`genesis`, `permesi`, and the `web` console)
-in a Herdr workspace over HTTPS/TLS — the same transport used in production and
-k8s, so local dev mirrors real deployments. Without Herdr it falls back to a `tmux`
-session, and without either it starts the infra and prints the commands to run the
-services in your own terminals.*
+**Local endpoints** (append `:$PERMESI_HTTPS_PORT` when not using `443`):
 
-*For a same-host performance optimization you can instead run `just start-socket`,
-which serves the backends over Unix domain sockets (opt-in; not portable across
-hosts/pods).*
+- **Web Console:** `https://permesi.localhost`
+- **Permesi API:** `https://api.permesi.localhost/health`
+- **Genesis API:** `https://genesis.permesi.localhost/health`
+- **Jaeger Tracing UI:** `http://localhost:16686`
+- **OpenBao UI:** `http://localhost:8200`
 
-**Verify the stack is healthy:**
-- **Web Console:** [https://permesi.localhost](https://permesi.localhost)
-- **API (Permesi):** [https://api.permesi.localhost/health](https://api.permesi.localhost/health)
-- **API (Genesis):** [https://genesis.permesi.localhost/health](https://genesis.permesi.localhost/health)
-- **Tracing (Jaeger):** [http://localhost:16686](http://localhost:16686)
-- **Secrets (OpenBao):** [http://localhost:8200](http://localhost:8200)
+### Local Development Notes
 
-### 🛰️ Remote VM (one per developer)
+- **Transport:** `just start` runs HAProxy with mkcert TLS termination and forwards to `genesis` (`:8000`) and `permesi` (`:8001`) over OpenBao-issued TLS (matching production/Kubernetes) and to the local Trunk `web` dev server (`:8081`) over HTTP. `just start-socket` is an opt-in same-host alternative using Unix domain sockets under `.tmp/` (not portable across pods/hosts). `just start-http` is an alias for `just start`.
+- **Multiplexer:** `just start` opens panes in a `permesi-dev` Herdr workspace and falls back to a `tmux` session named `permesi`. Override with `PERMESI_MUX=herdr|tmux|none` (`none` starts only infra and prints service commands) or `PERMESI_NO_ATTACH=1`. Re-attach with `just attach`, inspect output with `just logs [genesis|permesi|web]`, or start infra alone with `just infra` followed by `just genesis`, `just permesi`, and `just web` in your own terminals.
+- **Host binding & ports:** `PERMESI_BIND_ADDR` (default `127.0.0.1`) controls where infra containers publish ports. **Do not set `PERMESI_BIND_ADDR=0.0.0.0` on an untrusted network:** local PostgreSQL runs with `POSTGRES_HOST_AUTH_METHOD=trust` (passwordless `postgres` superuser) and `openbao/keys.json` holds the OpenBao root token; use the SSH tunnel in [Remote VM Development](#remote-vm-development) instead. `PERMESI_HTTPS_PORT` (default `443`) controls the browser-facing HAProxy port and is propagated into `.envrc`, CORS, and passkey origins. On shared or cloud hosts, keep the host firewall closed to everything except SSH, because the dev `genesis`, `permesi`, and `trunk` processes bind all interfaces so HAProxy can reach them via `host.containers.internal`.
+- **Isolated browser helper:** `just firefox-install` installs Firefox Developer Edition under `~/.local/opt`; `just firefox` launches an isolated `dev` profile importing the laptop's mkcert public CA only (`TRUST_MKCERT_CA=0 just firefox` disables import) and opens the console, API health, Jaeger, and OpenBao tabs (defaulting to port `8443`; set `PERMESI_HTTPS_PORT=443` when using `443`).
+- **Platform operator claim:** `just dev-envrc` exports `PERMESI_OPERATOR_TOKEN` (never printed to startup logs). Navigate to `https://permesi.localhost/admin/claim` (or mint a fresh token with `just operator-token`) and submit it to claim the platform operator role.
+- **Database connection:** Run `PGSERVICEFILE="$PWD/.pg_service.conf" psql service=permesi-dev` from the repo root.
+- **Container network & cleanup:** Dev containers run on the dedicated `permesi-net` (`172.31.20.0/24`) network (override with `PERMESI_NET` / `PERMESI_SUBNET`). Integration tests use isolated `permesi-test-*` networks; `just test-clean` (also invoked by `just stop`) removes **every** `permesi-test-*` container and network owned by your Podman user, so do not run it while tests in any Permesi checkout are active.
 
-The same stack runs on a remote Linux VM while the browser stays on your laptop. Everything runs on the VM with `just start`; the laptop only needs a clone of this repository (for `scripts/dev-remote`), `mkcert` and SSH. One SSH connection carries the HTTPS port plus the Jaeger and OpenBao UIs, so the browser keeps using the usual `https://*.permesi.localhost` URLs.
+### Common Development Recipes
 
-On the VM, once:
+| Recipe | Purpose |
+| --- | --- |
+| `just status` | Read-only health check across containers, PostgreSQL 19, OpenBao, and both services |
+| `just signup-verify-url` | Extract the latest email verification link from the local outbox database |
+| `just operator-token` | Mint a fresh OpenBao token with the `permesi-operators` policy |
+| `just db-bootstrap` / `just db-verify` | Reapply canonical SQL bootstrap and verify constraints |
+| `just dev-tls-certs` | Refresh 24-hour local OpenBao backend TLS certificates without restarting services |
+| `just openapi` / `just openapi-check` | Regenerate `docs/openapi/*.json` or verify byte-for-byte parity |
+| `just stop` / `just reset` | Stop the dev stack or wipe local OpenBao data and `db/data/19` |
+
+### Remote VM Development
+
+You can run the full stack on a remote Linux VM while using your laptop's browser at `https://permesi.localhost:8443`. The laptop only needs a checkout of this repo, `mkcert`, and SSH; the laptop's mkcert CA private key never leaves the laptop.
+
+On the VM (once):
 
 ```bash
-# zsh, podman (rootless), jq and curl from the OS packages; the rest from mise.toml
+# Install zsh, rootless podman, jq, and curl from OS packages; install remaining tools via mise
 mise trust && mise install
-loginctl enable-linger "$USER"   # keep the stack running after you log out
+loginctl enable-linger "$USER"
 git clone https://github.com/permesi/permesi.git ~/permesi
 cd ~/permesi && just doctor
 ```
@@ -82,597 +129,61 @@ cd ~/permesi && just doctor
 On the laptop:
 
 ```bash
-export PERMESI_HTTPS_PORT=8443     # use the same value on the VM (e.g. in ~/.zshenv); no sysctl anywhere
-scripts/dev-remote --start <vm>    # push the cert, forward the ports, start and attach the dev session
-scripts/dev-remote --stop <vm>     # close the tunnel; the session keeps running on the VM
+export PERMESI_HTTPS_PORT=8443     # set the same port on the VM (e.g. ~/.zshenv)
+scripts/dev-remote --start <vm>    # push leaf cert + public CA, forward ports, start session
+scripts/dev-remote --stop <vm>     # close the SSH tunnel; remote services keep running
 ```
 
-The equivalent `just remote-start <vm> [remote-repo-path]` recipe defaults to port
-8443. Pass the checkout path when it is not `~/permesi`, for example
-`just remote-start pulque projects/permesi/permesi`.
-
-For a dedicated laptop browser, install it once with `just firefox-install`, then
-launch the isolated profile with `just firefox`; its home pages use the forwarded
-port 8443 by default.
-
-Then open `https://permesi.localhost:8443`. Without `--start`, SSH in your own way and run `just start` (or `just infra` plus the services) on the VM; `scripts/dev-remote <vm>` then only refreshes the certificate and the tunnel. Detaching from the session, Herdr or tmux, leaves both the services and the tunnel running. When your laptop terminal is itself inside Herdr, `--start` builds the session but does not attach it there (Herdr does not nest); open it from a plain terminal or with `herdr --remote <vm>`.
-
-The laptop's mkcert CA issues the HAProxy certificate, limited to the `permesi.localhost` names, and only that leaf plus the CA's public certificate are copied to the VM. The CA private key never leaves the laptop, and the laptop never trusts a CA that lives on a server. Remote helpers such as `just genesis-token` pin the copied public CA directly instead of adding it to the VM's system trust store. If `just start` on the VM stops at a missing TLS certificate, run `scripts/dev-remote` from the laptop first. CORS and passkeys compare origins including the port, so `PERMESI_HTTPS_PORT` must be the same on both ends, and the script refuses to forward when the remote HAProxy listens on another port. Editors that forward ports automatically (VS Code Remote-SSH, JetBrains Gateway) switch to a different local port when the one they want is busy, which breaks those origins: turn automatic forwarding off (`"remote.autoForwardPorts": false` in VS Code) and let `scripts/dev-remote` own the tunnel. On the VM, keep the firewall closed to everything but SSH, because the backend ports listen on all interfaces (see Local Development below). If the stack runs for days, refresh the 24-hour backend certificates with `just dev-tls-certs`; the services pick them up without a restart.
-
-## Workspace Layout
-
-This repository is a Rust workspace (monorepo) containing:
-
-- `services/permesi`: core IAM / OIDC authority
-- `services/genesis`: edge admission token mint
-- `crates/admission_token`: shared admission token contract + sign/verify helpers
-- `apps/web`: CSR-only Leptos admin console (Trunk + Tailwind, static `dist/`)
-- `tools/oauth_scenario`: standalone real-service OAuth integration runner
-
-Note: service HTTP modules live under `src/api/` (previously `src/permesi/` and `src/genesis/`).
-
-### Isolated OAuth scenarios
-
-`just oauth-scenario` builds and runs the full suite on fresh, disposable PostgreSQL
-and OpenBao containers, with real Genesis, three Permesi replicas by default, the compiled Web console
-and Chromium. It creates accounts and tenant fixtures through the APIs and cleans up
-its own resources. Linux and local Podman are required; the development stack and
-production endpoints are never used.
-
-Use `just oauth-scenario-list` for stable case IDs or `just oauth-scenario --suite smoke`
-for the shorter browser suite. The built `target/debug/permesi-oauth-scenario` also
-runs independently with local artifact paths. See [OAuth scenarios](docs/oauth-scenarios.md)
-for manifests, coverage, reports and cleanup recovery. The suite tests internal redemption
-and runtime-role HTTP exchange with independent access/ID-token signature and claim checks.
-Lifecycle cases exercise configuration changes during consent and after issuance,
-including fresh-consent recovery without reviving an old grant/code.
-Use `--replicas 5 --suite ha` for the focused availability suite, or `--replicas 5 --suite full`
-for every case. The runner accepts three through five replicas, exercises code/refresh
-races on every configured socket, and includes owned-process rolling replacements
-and abrupt backend loss. See [HA validation](docs/oauth-ha-validation.md) for the
-current checks, recovery boundary and remaining multi-host/load work.
-`--suite interop --access-token-ttl-seconds 10` tests
-standard `openidconnect-rs` public/confidential clients and an owned HTTPS jobs API,
-including tenant/scopes, strict JWT rejection, real expiration and signing-key rotation.
-The full suite includes these cases; this coverage does not claim OIDC certification
-or immediate access-token revocation. `--suite refresh` covers explicit offline consent,
-cross-replica rotation/reuse, client-authenticated family revocation, concurrency and
-current-grant lifecycle rejection.
-
-The `Test & Build` workflow also runs `just web-test-browser-built` against its own
-frontend artifact, covering console fixtures and real PostgreSQL authorization/OPAQUE
-browser flows on an isolated hosted job. Its result is required by the aggregate `CI OK`
-check. Locally, `just web-test-browser` builds the console before running the same suite.
-
-## Architecture
-
-permesi employs a **Split-Trust Architecture** to separate network noise from core identity logic.
-
-### The Components
-
-#### 1. `genesis` (The Edge / "The Bouncer")
-* **Role:** Public-facing edge service.
-* **Responsibility:** Handles raw TCP/HTTP connections, sanitizes inputs, and issues short-lived admission tokens. Abuse controls (for example, rate limiting and challenges) are currently enforced at the edge layer (for example, Cloudflare WAF) while native controls remain on the Genesis hardening roadmap.
-* **Output:** Issues a short-lived, cryptographically signed **Admission Token**.
-* **State:** Stateless / Ephemeral.
-* **Key Publication:** Publishes a PASERK keyset at `GET /paserk.json`.
-
-#### 2. `permesi` (The Core / "The Authority")
-* **Role:** The OIDC Authority.
-* **Responsibility:** OPAQUE signup/login, email verification, sessions, passkeys/MFA, tenant authorization, OAuth client/scope management, and Authorization Code + S256 PKCE with tenant-bound consent and signed access/ID-token issuance.
-* **Trust Model:** Verifies **Admission Tokens** from `genesis` *offline* (signature + `exp` + `aud` + `iss`) without calling `genesis` during normal request handling. Validates short-lived **Zero Tokens** offline using the PASERK keyset for auth POSTs.
-* **Output:** Authenticated sessions, tenant-scoped management APIs, single-use authorization codes, RS256 access/ID tokens and hashed rotating refresh families after explicit offline consent.
-
-#### 3. Database
-* **Role:** System of Record.
-* **Usage:** Stores identity/session records, tenant membership/resources, authentication rate limits, email verification/outbox, audit records, and OAuth registration/grant data. Admission token verification is offline and does not query the database.
-
----
-
-## Production bootstrap (no containers)
-
-To bootstrap Postgres without the local container flow, run the SQL directly. `db/sql/` is the
-single source of truth for dev containers and bare-metal setups:
-
-```sh
-# 1) Create OpenBao root users, runtime roles, grants, and load schemas (edit passwords first).
-psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/00_init.sql
-```
-
-`db/sql/00_init.sql` uses dev defaults (`openbao_genesis` / `openbao_permesi` with the same password).
-For production, update those passwords and remove the `seed_test_client.sql` include before
-running it, or use it as a template for your own bootstrap script. If you choose not to run
-`db/sql/00_init.sql`, load the service schemas directly with `db/sql/01_genesis.sql` and
-`db/sql/02_permesi.sql` as the dedicated non-superuser service owners, with runtime
-roles created first. Direct schema loading as `postgres` does not establish the
-ownership boundary; follow the [ownership and privilege rollout](docs/database-hardening.md).
-
-For scheduled maintenance, `db/sql/cron_jobs.sql` is the only place where pg_cron jobs are
-registered (run it against the `postgres` database). Application schemas never install or
-schedule pg_cron jobs directly.
-
-The [database hardening phase](docs/database-hardening.md) adds verified non-superuser
-schema ownership, explicit runtime grants and retained-history parent-deletion restrictions.
-Independent source review has identified and corrected bootstrap and test
-issues. The refreshed dependency graph passes database/OpenBao regressions, both
-workspace test variants, browser checks, all 32 three-replica scenarios and seven
-harness checks on CI. See the linked validation evidence and rollout instructions.
-
-## Cryptography
-
-- **Admission tokens:** PASETO v4.public (Ed25519). `genesis` signs via OpenBao Transit; private keys never leave OpenBao. Public keys are published via a PASERK keyset for offline verification.
-- **TOTP protection:** Per-user TOTP secrets use envelope encryption backed by the OpenBao Transit `chacha20-poly1305` key at `transit/permesi` / `totp`; plaintext seeds are not stored in PostgreSQL.
-- **OPAQUE (user auth):** Client-side OPAQUE; permanent credentials are registration records, while temporary login/reauthentication state is sealed in shared PostgreSQL. The server setup seed is stored in OpenBao KV v2 (`opaque_server_seed`).
-
-## Admission Token Verification (Offline)
-
-Admission token verification never calls `genesis` on the hot path. The flow is:
-
-1. `genesis` signs a PASETO v4.public token with OpenBao Transit and puts the PASERK ID (`k4.pid...`) in the token footer as `kid`.
-2. `permesi` parses the footer `kid`, looks up the matching `k4.public...` key in the PASERK keyset, and verifies the signature.
-3. `permesi` validates claims (`iss`, `aud`, `action`, `iat/exp`, TTL). If any check fails, the request is rejected.
-
-Keyset behavior:
-
-- `active_kid` is only used by `genesis` to choose the signing key. Verification always uses the token's footer `kid`.
-- When configured with a PASERK URL, `permesi` caches `/paserk.json` (default TTL 5 minutes) and refreshes it on unknown `kid` with a cooldown. No per-request calls are made.
-- When configured with a local file or JSON string, verification is fully offline (no network fetches).
-
-Missing / planned:
-- Optional revocation mode (DB lookup or cached revocation list). There is no public token introspection endpoint.
-
-## Tenant model (prototype)
-
-Organizations are the tenant boundary in permesi. Each organization owns projects, projects own
-environments, environments own applications, and applications own multiple OAuth clients. Applications remain logical tenant resources, rather than becoming OAuth clients. Org-scoped membership and roles are the source
-of authorization for tenant resources. Environments are independent sibling resources
-owned directly by a Project. Their names and slugs identify development, QA, staging,
-production, or other environments; `production` and `non_production` classify them.
-A Project may have zero or one active production environment and any number of
-non-production environments, created in any order. Non-production never requires
-production to exist first. The database's partial unique index protects the production
-limit even during concurrent creation, and soft-deleting production releases that slot.
-
-More details and the creation flow live in `services/permesi/README.md` under “Organization
-endpoints and authorization”.
-
-## OAuth/OIDC implementation status
-
-Identity/authentication, organization authorization, and the OAuth client/scope foundation
-are implemented. Public and confidential clients have independent public identifiers,
-exact redirect registrations, and explicit delegated scope allow-lists. Saved-consent
-tables bind one user and client to one application and its owning organization; there
-is a minimal server-rendered authorization consent flow. Internal `Principal.scopes` remain Permesi capabilities
-and never become OAuth delegation.
-
-The web console manages this configuration through Organizations → Project →
-Environment → Application → OAuth Configuration. Client pages manage registration,
-redirect URI and scope allow-lists, lifecycle state, and confidential-client secrets; the application scope registry
-distinguishes editable API scopes from immutable OIDC system entries. See the
-[frontend documentation](apps/web/README.md#oauth-configuration-console) for routes
-and management behavior.
-
-Application scopes must use `<resource>:<action>`: the resource names the
-thing being protected and the action names the delegated operation. `jobs:read`
-means permission to read jobs; applications may define actions such as `cancel`,
-`approve`, or `invite`. The console composes and previews one OAuth name from these
-two fields and groups client choices by resource. Only that name is persisted;
-opaque application names without this format are no longer accepted. Protocol scopes are system-managed, and
-OAuth delegation remains separate from internal permissions such as `platform:admin`
-and `users:write`. The existing `platform:` and `users:` namespaces remain reserved.
-
-Tenant resources follow Organization → Project → Environment → Application and are
-soft-deleted explicitly from the bottom up. Delete OAuth clients before their application;
-client deletion revokes credentials and consent. Environments require no active applications,
-projects require no active environments, and organizations require no active projects.
-Owners/admins manage resource deletion; deleting the organization itself requires its
-owner and recent authentication. Server-issued capabilities control deletion visibility;
-typed dialogs pin the organization UUID and show immediate-child blockers. When requested,
-inline OPAQUE password verification refreshes authority and children before returning to
-confirmation; the owner must explicitly click Delete Organization again. See [resource lifecycle](docs/resource-lifecycle.md) for API,
-transactional race protection and OAuth effects; populated parents never silently cascade.
-Hierarchy writes also use configurable [mutation deadlines](docs/tenant-mutation-deadlines.md)
-for handler work and PostgreSQL locks. Exhaustion returns a generic 503; reconcile an
-ambiguous outcome before retrying. These bounds preserve lifecycle safety across replicas
-without claiming writer fairness or a production load SLO.
-OPAQUE login/reauthentication exchanges use bounded, encrypted, single-attempt PostgreSQL
-state across replicas, including original-session binding for reauthentication. See
-[shared OPAQUE exchanges](docs/opaque-exchanges.md) for migration, expiry, retention and
-regression checks. Passkey and hardware-key ceremonies also use [shared sealed PostgreSQL state](docs/webauthn-exchanges.md); [MFA lifecycle](docs/mfa-lifecycle.md) and [shared admission policy](docs/authentication-operations.md) guard current authority and bounded authentication capacity.
-Factor mutations require recent authentication for full sessions; required-enrollment
-bootstrap sessions retain their limited path. Primary-login MFA challenges share a
-PostgreSQL attempt limit across TOTP, recovery and hardware-key proofs and require a
-fresh sign-in when exhausted, including across replicas.
-
-Authorization Code + S256 PKCE is implemented at `GET /authorize`, with durable
-PostgreSQL requests across login/MFA, tenant membership checks, minimal consent,
-and hashed, single-use authorization codes (120-second default TTL).
-The consent page shows the signed-in account and registered callback origin. Switching
-accounts requires cancelling, signing out of Permesi, and starting a new request in the
-application. Expired requests show a restart instruction without accepting a
-browser-supplied callback.
-PKCE is required for public and confidential clients. `POST /token` owns client
-authentication, S256 redemption, OpenBao signing and hash-only
-issuance receipts in one PostgreSQL transaction. Public clients supply their ID;
-confidential clients use HTTP Basic with bounded Argon2id current/retiring credentials.
-Access tokens bind the explicit resource audience and tenant/application/grant; OIDC
-ID tokens bind client audience, nonce and original authentication time. Both default
-to a five-minute TTL. [Refresh families](docs/oauth-refresh-tokens.md) use hashed,
-single-use PostgreSQL tokens with atomic rotation, family revocation on reuse and current
-tenant/consent checks. Initial offline access requires `openid` and explicit `prompt=consent`;
-other code exchanges return no refresh token. Password rotation/recovery revoke families
-and invalidate older codes. The signed-in user can review current saved OAuth consent
-under Connected apps and revoke a grant through `GET /v1/me/oauth/grants` and
-`DELETE /v1/me/oauth/grants/{grant_id}`. Revocation blocks later code redemption and
-refresh across replicas; already-issued JWT access tokens remain valid until expiry.
-`GET` and `POST /userinfo` accept only a header-carried issued OIDC access token and
-return the matching subject plus current profile/email fields only when those scopes
-were issued. The endpoint rechecks the user's credential revision and live tenant
-authority, with a shared PostgreSQL IP budget; older receipts without a revision or
-issued-scope snapshot cannot disclose claims. Immediate JWT revocation remains planned.
-`POST /revoke` authenticates the registered client and atomically revokes the exact
-refresh-token family across replicas. It returns the same empty success for unknown or
-already revoked tokens and does not retract already signed JWTs.
-The [authentication release validation record](docs/authentication-release-validation.md)
-tracks the completed shared-state, MFA, admission and refresh batch, independent review,
-regression evidence and remaining release boundaries.
-The [current release-readiness record](docs/release-readiness.md) covers the
-2026-10-27 Helm/passkey qualification and the unresolved dependency audit blocker.
-
-Explicit `PERMESI_OIDC_ISSUER` (a canonical HTTPS origin) and `PERMESI_OAUTH_AUDIENCE`
-enable the protocol routes. `/jwks.json` publishes retained shared OpenBao RSA versions;
-discovery advertises the implemented code/token and refresh revocation endpoints, S256, Basic/public-none
-methods and issuer response identification. Runtime signs but cannot rotate/export/retire
-keys. Confidential secret management includes one-time creation, overlap rotation and
-revocation at commit. Introspection and immediate access-token revocation,
-the `client_credentials` machine grant and OIDC conformance testing remain planned.
-See [token exchange](docs/oauth-token-exchange.md) for claims, configuration, rollout,
-cache/rotation behavior and finite-lifetime JWT revocation limits. Follow [TODO](TODO.md)
-and the [OAuth roadmap](docs/oauth-foundation.md#roadmap) for remaining milestones.
-See [OAuth foundation](docs/oauth-foundation.md)
-for configuration, exact redirect/error rules, consent policy and rollout.
-
-## Trust Boundaries
-
-```mermaid
-flowchart LR
-  subgraph Internet["Untrusted: Internet"]
-    U[User / Client]
-  end
-
-  subgraph Edge["Trust Boundary: Edge"]
-    G["genesis<br/>edge admission token mint"]
-    PASERK[("PASERK<br/>GET /paserk.json")]
-  end
-
-  subgraph Core["Trust Boundary: Core IAM"]
-    P["permesi<br/>core IAM / OIDC authority"]
-  end
-
-  subgraph Data["Optional: Data Plane"]
-    DB[("Audit / Revocation DB")]
-  end
-
-  U -->|1. Request admission| G
-  G -->|"2. Signed Admission Token (PASETO)"| U
-
-  G -->|Publishes public keys| PASERK
-  P -->|Loads PASERK keyset at deploy/startup| PASERK
-
-  U -->|3. Credentials + Admission Token| P
-  P -->|"4. Offline verify: sig + exp + aud + iss"| P
-
-  G -.->|"Optional audit write (jti)"| DB
-  P -.->|"Optional revocation check (jti)"| DB
-```
-
-## User Authentication (OPAQUE + Zero Token)
-
-All auth POSTs require a Genesis zero token (validated offline using the PASERK keyset).
-
-```mermaid
-sequenceDiagram
-    participant U as User / Client
-    participant G as Genesis (Edge)
-    participant P as Permesi (Core)
-    participant DB as Postgres
-
-    Note over U, G: Zero token mint
-    U->>G: Request zero token
-    G-->>U: Zero token
-
-    Note over U, P: OPAQUE login
-    U->>P: /v1/auth/opaque/login/start + zero token
-    P->>P: Verify token (PASERK keyset)
-    P->>DB: Store hashed reference and encrypted exchange
-    P-->>U: credential_response + login_id
-
-    Note over P, DB: Finish may execute on another Permesi replica
-    U->>P: /v1/auth/opaque/login/finish + zero token
-    P->>P: Verify token (PASERK keyset)
-    P->>DB: Atomically consume exchange
-    P->>P: OPAQUE finish (no password sent)
-    P->>DB: Lock current user/credential and persist session
-    P-->>U: 204 + Set-Cookie (session)
-
-    Note over U, P: Session hydration
-    U->>P: /v1/auth/session (cookie)
-    P->>DB: Load session
-    P-->>U: 200 session or 204
-```
-
- Signup uses `/v1/auth/opaque/signup/start` + `/finish` and email verification uses `/v1/auth/verify-email` + `/v1/auth/resend-verification` (all require zero tokens).
-
-Signup admission rejects reserved/example email domains and subdomains by default.
-Operators can select public, exact-domain restricted or closed registration. Accounts
-remain pending until mailbox verification; a link cannot reactivate a disabled user.
-Email defaults to a local outbox, with explicit TLS SMTP delivery for production.
-Verification links are never logged. See [registration security](docs/registration-security.md)
-for configuration, bounded per-user coordination, durable worker leases and upgrade steps.
-
-Enabled platform operators can suspend/reactivate accounts through recently
-authenticated management APIs. Suspension atomically retires sessions, pending
-proofs, saved consent and refresh authority across replicas; recovery requires
-fresh login/consent and preserves mailbox verification. See
-[account containment](docs/account-containment.md) for authorization, audit, rollout
-and the remaining offline-JWT revocation boundary.
-
-Operator designation can be requested, approved or disabled from the user-detail
-console. Restoration requires a different enabled operator's approval; only the
-sole bootstrap operator may approve the first new peer. Changes retire target
-sessions and invalidate earlier admin elevation tokens. See
-[operator designation](docs/operator-designation.md) for incident recovery and
-multi-replica rules.
-
-
-## Passkey + MFA Login Flow
-
-Users sign up with email and password, then can register passkeys from `/console/me/security` once they are logged in. Passkey login is discoverable and does not send an email or account-specific credential list during the start request; the authenticator returns an opaque user handle that Permesi binds to the stored credential before verification. Email is required only when the user expands the password form and uses OPAQUE.
-
-Password rotation atomically revokes full and limited MFA sessions, and factor completion rechecks current session authority under PostgreSQL locks; see [MFA lifecycle](docs/mfa-lifecycle.md). Enrollment returns a replacement cookie that callers must adopt.
-
-MFA enforcement is consistent across login paths. If TOTP is enabled for the account, the login flow always proceeds to the MFA challenge after either password or passkey authentication succeeds.
-
-```mermaid
-flowchart TD
-  Signup[Signup: email + password] --> Verify[Email verification]
-  Verify --> Console["/console/me/security"]
-  Console --> AddPasskey[Register passkey]
-
-  Login[Login] --> Passkey{Use passkey?}
-  Passkey -->|Yes| PasskeyAuth[Passkey auth]
-  Passkey -->|No| ShowPassword[Show password fields]
-  ShowPassword --> Opaque[OPAQUE password login]
-
-  PasskeyAuth --> Session[Session issued]
-  Opaque --> Session
-  Session --> MFA{TOTP enabled?}
-  MFA -->|Yes| Challenge[MFA challenge]
-  MFA -->|No| Success[Signed in]
-  Challenge --> Success
-```
-
-### Platform tenant inspection
-
-Platform operators can use [read-only tenant inspection](docs/admin-tenant-inspection.md)
-to browse all active organizations and their resource hierarchy from Global
-Organizations. Workspace Organizations retains membership-scoped management.
-
-### Admin Rate Limiting
-
-Administrative endpoints (bootstrap and elevation) are strictly rate-limited to 3 attempts per 10 minutes per user to protect against OpenBao token brute-forcing. Consecutive failures trigger a 15-minute cooldown.
-
-Unauthenticated authentication flows also use PostgreSQL-backed fixed-window
-limits shared across replicas. The defaults are 100 attempts per IP and 10 per
-normalized account identifier per action in 10 minutes. Each shared exchange store applies
-independent cluster-wide purpose ceilings: 10,000 login, 1,000 reauthentication,
-1,000 per registration purpose and 1,000 MFA authentication, with 16 pending rows per
-subject/purpose. `PERMESI_AUTH_MAX_PENDING_STATES` defaults to 10,000 and supplies an
-additional ceiling for each purpose, rather than a combined login/reauthentication total.
-Configure rate limits with `PERMESI_AUTH_RATE_LIMIT_WINDOW_SECONDS`,
-`PERMESI_AUTH_RATE_LIMIT_IP_ATTEMPTS`,
-and `PERMESI_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS`; use the `PERMESI_AUTH_PENDING_*`
-options described in [authentication operations](docs/authentication-operations.md)
-for purpose/subject ceilings and the shared admission policy.
-
-### Auth endpoints (quick scan)
-| Method | Path | Notes |
-|---|---|---|
-| `POST` | `/v1/auth/opaque/signup/start` | OPAQUE registration start; requires zero token |
-| `POST` | `/v1/auth/opaque/signup/finish` | OPAQUE registration finish; requires zero token |
-| `POST` | `/v1/auth/opaque/login/start` | OPAQUE login start; requires zero token |
-| `POST` | `/v1/auth/opaque/login/finish` | OPAQUE login finish; requires zero token |
-| `POST` | `/v1/auth/verify-email` | Consume email verification token; requires zero token |
-| `POST` | `/v1/auth/resend-verification` | Resend verification link; requires zero token |
+`just remote-start <vm> [remote-repo-path]` wraps this flow (defaulting to port `8443` and `~/permesi`). Disable automatic IDE port forwarding (such as `"remote.autoForwardPorts": false` in VS Code) so CORS and passkey origins stay on the exact forwarded port.
 
 ## OpenBao Dependency
 
-OpenBao is required for both services in production (AppRole auth or Agent proxy, dynamic DB creds, transit encryption, and the OPAQUE seed in KV v2). Running without OpenBao is not supported.
+OpenBao is required in production for both `genesis` and `permesi` (dynamic database credentials, Transit signing/encryption, KV v2 OPAQUE seed and MFA pepper, and internal PKI). Running without OpenBao is not supported.
 
-### Connectivity Modes
+Supported connectivity modes (`PERMESI_OPENBAO_URL` / `GENESIS_OPENBAO_URL`):
 
-The `openbao-url` (and its env equivalents) supports two operational modes:
+1. **Agent Mode (recommended):** Unix socket path (`/run/openbao/proxy.sock` or `unix:///run/openbao/proxy.sock`) to an OpenBao Agent `api_proxy` configured with `use_auto_auth_token = true`. No AppRole credentials are required. *(Note: OpenBao 2.7 logs that `api_proxy` is migrating from `bao agent` to `bao proxy`; review sidecar config when upgrading.)*
+2. **TCP AppRole Mode:** `https://...` with `--openbao-role-id` and `--openbao-secret-id` (or single-use `--openbao-wrapped-token`).
+3. **Native Kubernetes Mode (opt-in):** `--openbao-auth-method kubernetes` with `--openbao-kubernetes-role` and a projected ServiceAccount token.
 
-1.  **TCP Mode (`http://` or `https://`)**:
-    -   Requires `openbao-role-id` and `openbao-secret-id` (or `openbao-wrapped-token`).
-    -   The application performs the AppRole login and manages background token/lease renewals.
-2.  **Agent Mode (`/path/to/socket` or `unix:///path/to/socket`)**:
-    -   Connects to an OpenBao Agent `api_proxy` via a Unix domain socket.
-    -   No role/secret IDs are required.
-    -   The application delegates authentication and renewals to the Agent.
-    -   **Requirement**: OpenBao Agent must be configured with `use_auto_auth_token = true`.
-    -   OpenBao 2.7 still serves `api_proxy` from `bao agent` but logs that this function is moving to `bao proxy`; re-check the sidecar setup when upgrading OpenBao.
+See [openbao/README.md](openbao/README.md#production-readiness-checklist) and [SETUP.md](SETUP.md) for Terraform provisioning, production HA readiness, and lease renewal behavior.
 
-Production readiness checklist:
-- HA cluster with tested failover.
-- Automated unseal or a documented unseal runbook.
-- Backups plus restore drills (e.g., raft snapshots or storage backups).
-- Monitoring and alerts for health, sealed state, and token/lease renew failures.
+## Build, Testing & Containers
 
-## Build
+### Building
 
-- `cargo build -p permesi`
-- `cargo build -p genesis`
-- `cargo build -p permesi --features telemetry` (same for `genesis`) adds OTLP trace export.
-
-Trace export is behind the default-off `telemetry` Cargo feature, so a plain build carries
-only local structured logging and none of the OpenTelemetry/tonic stack. The container
-images, release tarballs, Debian and RPM packages, and the `just` dev recipes all build with
-`--features telemetry`. The feature only makes export possible: a telemetry build sends
-spans only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set at startup, and a build without the
-feature logs a warning if that variable is present instead of silently dropping traces.
-- **Terraform** (v1.7+): Required for provisioning local OpenBao infrastructure.
-
-## Web Console
-
-- `just web`: Tailwind build/watch + Trunk dev server.
-- `just web-build`: production build (`apps/web/dist`).
-- Node.js is only required for CSS tooling; the output is fully static.
-- Frontend env is compile-time (via `option_env!`). Set `PERMESI_API_BASE_URL`, `PERMESI_TOKEN_BASE_URL`, and `PERMESI_CLIENT_ID` before build.
-- `PERMESI_CLIENT_ID` is public (embedded in WASM); store it in GitHub Actions Variables, not Secrets.
-
-Authentication admission uses shared subject/flow quotas and explicit proxy trust. See
-[authentication operations](docs/authentication-operations.md) for configuration,
-upgrade requirements, outage responses, telemetry and encryption lifetime policy.
-
-## Local Development (Full Flow)
-
-Default ports: genesis `8000`, permesi `8001`, web `8081`.
-
-Local HTTPS is the default for development. HAProxy terminates TLS for `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` using a mkcert-issued certificate, then forwards to the services over TLS using OpenBao-issued certificates. `just start` launches HAProxy with TLS termination on port `443` and runs the backends over HTTPS/TLS (the same transport as production and k8s). The Trunk dev server runs on `8081` behind HAProxy and binds to `0.0.0.0` for container access.
-
-Two environment variables adapt the stack to the host. `PERMESI_BIND_ADDR` (default `127.0.0.1`) is where every container publishes its ports: Postgres runs with trust auth and `openbao/keys.json` holds the OpenBao root token, so no container port is reachable from the network unless you set it to `0.0.0.0`. `PERMESI_HTTPS_PORT` (default `443`) is the HAProxy port the browser uses; any other value, for example `8443`, is carried into every browser-facing URL (`.envrc`, the compiled web console, CORS and passkey origins), so the console lives at `https://permesi.localhost:8443` and no `sysctl` change is needed. `just dev-envrc` records both values in `.envrc`, and later recipes (`just restart`, `just web`, `just genesis-token`) fall back to them, so the running stack keeps its port without re-exporting it; an explicit value in your environment always wins (`PERMESI_HTTPS_PORT=443 just restart` switches back). One caveat on shared or cloud hosts: genesis (`:8000`), permesi (`:8001`) and trunk (`:8081`) still listen on all interfaces because HAProxy reaches them from its container through `host.containers.internal`, so keep the host firewall closed to everything but SSH.
-If HAProxy can't reach host services on macOS, it falls back to `host.docker.internal` automatically.
-`just start-socket` is an opt-in alternative that serves the backends over Unix domain sockets for a same-host performance optimization. In that mode the HAProxy container runs with your current UID/GID so it can open the `0660` Unix sockets created under `.tmp/` without widening local socket permissions. Sockets are same-host only and are not portable across separate hosts/pods (k8s), so HTTPS remains the default.
-
-If you want to run services manually instead of using the all-in-one `just start`:
-1) Run services: `just genesis` and `just permesi` (HTTPS/TCP), or `just genesis-socket` and `just permesi-socket` for the socket flow. They auto-source `.envrc`, so direnv is optional. (`just start-http` is kept as an alias of `just start`.)
-
-`just start` runs genesis, permesi and web, plus a fourth pane for ad hoc commands, in a `permesi-dev` [Herdr](https://herdr.dev) workspace, and falls back to a `tmux` session named `permesi` when Herdr is not installed. Set `PERMESI_MUX=herdr|tmux|none` to force a choice; `none` starts the infra and prints the three commands for your own terminals. Inside Herdr the command creates the workspace and switches to it (Herdr does not nest); outside it attaches to your running Herdr, starting a headless Herdr server first if none is running. `PERMESI_NO_ATTACH=1` builds the session without attaching. Re-running `just start` while the session is alive only attaches, `just attach` does the same from any shell, and `just logs [genesis|permesi|web]` prints a pane's recent output without attaching. Before opening the panes, `just start` builds genesis and permesi once so the two cargo-watch runs do not queue on the shared build lock; set `PERMESI_NO_PREBUILD=1` to skip that. `just stop` stops the containers and dev processes first and closes the session last, so it also works from the session's own spare pane (it then keeps that pane open).
-
-Because AppRole SecretIDs are single-use (`secret_id_num_uses=1`), `just genesis` and `just permesi` fetch a fresh
-SecretID before each `cargo watch` run using the OpenBao CLI. Make sure the `bao` CLI is installed and authenticated (via
-`BAO_ADDR`/`BAO_TOKEN` or your OpenBao token helper).
-
-If you want infra only: `just infra` (the infra containers plus `.envrc`; it also runs `direnv allow` if available), then `just genesis`, `just permesi` and `just web` in terminals of your choice.
-
-To connect to the local development database from the project root, run `PGSERVICEFILE="$PWD/.pg_service.conf" psql service=permesi-dev`. The project connection profile uses the default localhost port and the development `postgres` role; it contains no password. PostgreSQL does not automatically load service files from the current directory, so `PGSERVICEFILE` selects this profile explicitly.
-If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
-to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
-
-`just status` shows at a glance whether the stack is healthy: the four containers, the PostgreSQL server version and schema verification, OpenBao's seal state, and both services' health endpoints. It changes nothing and exits non-zero when something is down, with the recipe that fixes it.
-
-Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe OpenBao data, and delete the local Postgres cluster and logs (`db/data/19`, `db/log`). The cluster directory is named after the PostgreSQL major version, so a directory left by another major is neither used nor deleted.
-
-The dev stack keeps to itself so it can share a host with other projects. Every container (`postgres-permesi`, `permesi-openbao`, `permesi-jaeger`, `permesi-haproxy`) runs on the dedicated `permesi-net` podman network with subnet `172.31.20.0/24` and carries the label `io.permesi.stack=dev`. Set `PERMESI_NET` or `PERMESI_SUBNET` when that range collides with something else on the host; `just setup-network` reports the clash instead of silently picking another subnet. `just stop` only signals processes whose working directory is inside this checkout, so another project's `cargo watch` or port-8000 server survives it. Integration tests create their own uniquely named `permesi-test-*` networks and containers; `just test-clean` removes any that an interrupted run left behind. It removes every `permesi-test-*` resource of your user, so do not run it while tests of any permesi checkout are running. Container names and ports are fixed, so a host user runs one permesi stack at a time (one VM per developer). If you ran the stack before the containers were renamed, remove the old `openbao` and `jaeger` containers once (`podman rm -f openbao jaeger`) after confirming they are permesi's: the OpenBao data volume `permesi-openbao-data` is reused by `permesi-openbao`.
-
-`just dev-envrc` emits OpenBao credentials plus local endpoints. In local dev, both services use TLS certificates issued by a single OpenBao PKI CA. `PERMESI_ADMISSION_PASERK_CA_PATH` should point at the Genesis OpenBao CA bundle when fetching `paserk.json` directly from the Genesis service.
-- `PERMESI_TLS_PEM_BUNDLE=.../certs/permesi/tls.bundle.pem`
-- `PERMESI_ADMISSION_PASERK_CA_PATH=.../certs/genesis/ca.pem`
-- `GENESIS_TLS_PEM_BUNDLE=.../certs/genesis/tls.bundle.pem`
-- `PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json`
-- `PERMESI_FRONTEND_BASE_URL=https://permesi.localhost`
-- `PERMESI_API_BASE_URL=https://api.permesi.localhost`
-- `PERMESI_TOKEN_BASE_URL=https://genesis.permesi.localhost`
-- `PERMESI_PASSKEYS_ALLOWED_ORIGINS=https://permesi.localhost`
-- `PERMESI_OPERATOR_TOKEN` (used for `/admin/claim`)
-
-### Useful Development Recipes
-
-- `just signup-verify-url`: Extract the latest email verification link from the database.
-- `just operator-token`: Generate a fresh platform operator token for admin claim/elevation.
-- `just status`: Check containers, PostgreSQL, OpenBao and both services in one read-only pass.
-- `just db-verify`: Confirm database constraints and schema state.
-- `just openapi`: Regenerate OpenAPI specs from code.
-
-Passkey credentials are persisted in the dedicated `passkeys` table when preview mode is disabled. Configure the relying party and origin validation via `PERMESI_PASSKEYS_RP_ID`, `PERMESI_PASSKEYS_RP_NAME`, and `PERMESI_PASSKEYS_ALLOWED_ORIGINS`, adjust challenge TTL with `PERMESI_PASSKEYS_CHALLENGE_TTL_SECONDS`, and toggle preview behavior with `PERMESI_PASSKEYS_PREVIEW_MODE=true|false`. Startup now rejects formerly accepted empty values, invalid TTL fallbacks, trailing empty origins and boolean aliases; see the [upgrade notes](docs/webauthn-exchanges.md#policy-and-operation).
-
-### Local HTTPS for Passkeys (mkcert + HAProxy)
-
-Passkeys require HTTPS. The repo includes a local HAProxy config at `config/haproxy/haproxy.cfg` that terminates TLS and routes `permesi.localhost`, `api.permesi.localhost`, and `genesis.permesi.localhost` to the usual local ports. Generate a local certificate with mkcert, combine it for HAProxy, then run the container:
-
-```
-just mkcert-local
-
-just haproxy-start
-
+```bash
+cargo build -p permesi
+cargo build -p genesis
+cargo build -p permesi --features telemetry   # enables OTLP trace export (default off)
 ```
 
-Manual steps (if you prefer to run them directly):
+OTLP trace export is behind the default-off `telemetry` Cargo feature; container images, release artifacts, and `just` dev recipes enable it. When enabled, traces export only if `OTEL_EXPORTER_OTLP_ENDPOINT` is set (local dev points to Jaeger at `http://localhost:4317`).
 
-```
-mkcert -install
-mkcert -key-file config/haproxy/certs/permesi.localhost-key.pem \
-  -cert-file config/haproxy/certs/permesi.localhost-cert.pem \
-  "localhost" "127.0.0.1" "::1" "*.localhost" \
-  "permesi.localhost" "api.permesi.localhost" "genesis.permesi.localhost" "*.permesi.localhost"
-cat config/haproxy/certs/permesi.localhost-cert.pem config/haproxy/certs/permesi.localhost-key.pem \
-  > config/haproxy/certs/permesi.localhost.pem
+For the web console:
 
-podman run -d --name permesi-haproxy \
-  --network permesi-net \
-  --add-host=host.containers.internal:host-gateway \
-  -p 443:8080 \
-  -v "$(pwd)/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
-  -v "$(pwd)/config/haproxy/certs:/usr/local/etc/haproxy/certs:ro" \
-  docker.io/library/haproxy:3.4
+```bash
+just web         # Tailwind watch + Trunk dev server
+just web-build   # Production static bundle in apps/web/dist
 ```
 
-On Linux, binding to `:443` may require allowing unprivileged ports: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443` (persist with a sysctl.d config if desired). The services resolve `*.permesi.localhost` through the system resolver: nss-myhostname (`myhostname` in `/etc/nsswitch.conf`) or systemd-resolved map `*.localhost` to loopback; otherwise add `127.0.0.1 permesi.localhost api.permesi.localhost genesis.permesi.localhost` (and a matching `::1` line) to `/etc/hosts`.
-You can run `just haproxy-sysctl` to apply the sysctl setting, or avoid it entirely with `export PERMESI_HTTPS_PORT=8443`.
+Frontend configuration (`PERMESI_API_BASE_URL`, `PERMESI_TOKEN_BASE_URL`, `PERMESI_CLIENT_ID`) is compiled into WASM and can be overridden at runtime via `config.js`. All frontend values are public; never store secrets there.
 
-### Testing Admin Claim (Platform Operator)
-To test bootstrapping the first admin or elevating privileges, you need an OpenBao token with the `permesi-operators` policy.
-The dev bootstrap generates one and exports it as `PERMESI_OPERATOR_TOKEN` in `.envrc` (via `just dev-envrc`); it is never printed to the startup logs.
+### Testing
 
-1. Run `echo $PERMESI_OPERATOR_TOKEN` (with `.envrc` loaded), or mint a fresh one with `just operator-token`.
-2. Navigate to `https://permesi.localhost/admin/claim` (add `:$PERMESI_HTTPS_PORT` when it is not 443).
-3. Paste the token and submit to claim the operator role.
+- **Full local validation:** `just test` (formatting, native & WASM Clippy, release web build, and workspace tests).
+- **Browser tests:** `just web-test-browser` builds the console and runs the Chromium fixture suite plus real PostgreSQL authorization, OPAQUE deletion, and admin inspection browser tests (`just web-test-browser-built` reuses an existing build).
+- **Isolated multi-replica OAuth & HA scenarios:** On a clean checkout, install the Better Auth fixture's Node 24 dependencies once with `just oauth-scenario-better-auth-setup` before running the default `full` or `interop` suites. Then run `just oauth-scenario` to launch disposable PostgreSQL 19, OpenBao 2.7, Genesis, 3–5 Permesi replicas, the compiled Web console, and Chromium (`--suite smoke`, `--suite ha`, `--suite token`, `--suite refresh`, `--suite interop --access-token-ttl-seconds 10`, or `--replicas 5 --suite full`). See [docs/oauth-scenarios.md](docs/oauth-scenarios.md).
 
-## API Contract (OpenAPI)
+### Containers & Production Bootstrap
 
-This repo treats the OpenAPI specs as versioned artifacts, checked in under:
+- **Images:** `just image-permesi`, `just image-genesis`, or `just images` compile static `x86_64-unknown-linux-musl` binaries into `dist-bin/` and package them with Podman (`podman build -f apps/web/Dockerfile -t web:dev .` builds the nginx web image). Dockerfiles copy `dist-bin/<service>` rather than compiling Rust.
+- **Database bootstrap:** `db/sql/` is the canonical schema source for both local dev and bare-metal/Kubernetes deployments. Before running `db/sql/00_init.sql` in production, update the placeholder passwords and remove the `\ir seed_test_client.sql` include line inside `00_init.sql` (do not delete the file while the include remains, or `ON_ERROR_STOP=1` will abort mid-bootstrap). If loading `db/sql/01_genesis.sql` and `db/sql/02_permesi.sql` manually instead of `00_init.sql`, create the runtime roles first and connect as each service's dedicated non-superuser owner role. Register scheduled maintenance via `db/sql/cron_jobs.sql`, and follow [SETUP.md](SETUP.md) and [docs/database-hardening.md](docs/database-hardening.md) for ownership and grant setup.
 
-- `docs/openapi/permesi.json`
-- `docs/openapi/genesis.json`
+## Contributing & Security
 
-Regenerate them from code:
-
-- `cargo run -p permesi --bin permesi-openapi > docs/openapi/permesi.json`
-- `cargo run -p genesis --bin genesis-openapi > docs/openapi/genesis.json`
-
-Run `just openapi-check` to regenerate both contracts in a temporary directory and
-compare them byte-for-byte with the committed files. CI requires this check on
-pushes, pull requests and releases without rewriting the artifacts.
-
-## Containers
-
-- `just image-permesi`, `just image-genesis` or `just images`: build the static musl binaries, then the service images with podman.
-- `podman build -f apps/web/Dockerfile -t web:dev .`
-
-The service Dockerfiles compile nothing. They copy `dist-bin/<service>`, the same binary CI builds
-with the run's Rust toolchain and the release publishes in its archives, so a plain `podman build`
-needs `dist-bin/` first. The host needs the `x86_64-unknown-linux-musl` rustup target and `musl-gcc`.
-
-The Dockerfiles use fully qualified Docker Hub base images pinned by digest, so these builds do
-not depend on the host's unqualified registry search configuration. Dependabot refreshes each tag and
-digest together.
-
-## Local Tracing (Jaeger)
-
-The development environment sends OTLP traces to the local Jaeger collector at
-`http://localhost:4317`. The `just genesis` and `just permesi` recipes build both
-services with `--features telemetry`, and `just dev-envrc` records the endpoint in
-`.envrc`; an existing `OTEL_EXPORTER_OTLP_ENDPOINT` overrides that default. Open the
-Jaeger UI at http://localhost:16686 to inspect traces. With remote development, the
-services and collector run on the VM while `scripts/dev-remote` forwards the UI to
-the laptop.
-
-## Contributing
-
-Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers how to
-work on Permesi, the checks to run before submitting and how a release is made;
-[AGENTS.md](AGENTS.md) holds the mandatory code and security guidelines, and
-[AI_POLICY.md](AI_POLICY.md) says how AI-assisted work is treated. Changes are
-listed in [CHANGELOG.md](CHANGELOG.md), and security issues are reported as
-described in the [security policy](.github/SECURITY.md).
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development workflow, test gates, commit rules, and release process.
+- [AGENTS.md](AGENTS.md) — Mandatory coding, documentation, and security invariants.
+- [AI_POLICY.md](AI_POLICY.md) — Policy on AI-assisted contributions and human accountability.
+- [CHANGELOG.md](CHANGELOG.md) — Release history.
+- [Security Policy](.github/SECURITY.md) — Private vulnerability reporting procedure.

@@ -50,7 +50,7 @@ aggregate check.
 Verify runner usage with `just ci-timings <run-id>`. This read-only metadata report
 records actual job assignments and step durations, separating retry attempts and
 retaining incomplete/failed status. Runner names do not establish independent
-physical hosts. See [timing reports](../../docs/ci-runtime-provenance.md#hosted-timing-reports)
+physical hosts. See [hosted timing reports](../../docs/ci-and-testing.md#hosted-timing-reports)
 before interpreting queue or wall-time differences as a speedup.
 
 ## Workflow Overview
@@ -155,7 +155,7 @@ before interpreting queue or wall-time differences as a speedup.
   including `main`, use independent run-specific groups; these
   runs cannot be cancelled by development pushes. Different branches still run their
   own checks, even for an identical SHA. `CI_RUNNER` selection and the aggregate failure
-  policy are unchanged. See [measurement and remaining work](../../docs/maintainability-ci.md).
+  policy are unchanged. See [CI, module boundaries, and build provenance](../../docs/ci-and-testing.md).
 - **`schemathesis.yml`**: Runs OpenAPI contract checks with Schemathesis as a post-deploy verification.
   It runs manually via `workflow_dispatch` and is intended to be triggered after deployment settles.
   It waits for each service `/health` endpoint (up to 10 minutes for genesis), verifies the deployed
@@ -170,21 +170,16 @@ before interpreting queue or wall-time differences as a speedup.
 
 ## Hardening
 
-Actions are referenced by their major version tag (`actions/checkout@v7`), not by a
-commit SHA: fixes within a major version arrive on their own, and a moved tag changes
-the code a workflow runs, so only actions whose maintainers are trusted belong here.
-`sigstore/cosign-installer` has no major tag and is referenced by its exact version.
-`.github/dependabot.yml` proposes new major versions once a week, grouped into one pull
-request into `sandbox` (never `main`, which only holds releases), for the workflows and
-the composite actions. A separate weekly Cargo group watches the OPAQUE, WebAuthn
-and OAuth-client parent libraries involved in the crypto-bigint launch blocker.
-Those proposals also target `sandbox`; protocol compatibility aliases remain
-under manual control and the audit must pass before a production release.
-GitHub reads Dependabot configuration from the default branch, so a prepared
-watch on `sandbox` becomes active only after that configuration is promoted.
-No checkout keeps the GitHub token (`persist-credentials:
-false`), the reusable workflows are read-only by default, and every Cargo command uses
-`--locked`. The release workflow uses no build cache.
+Remote actions in workflows and composite actions are pinned to full commit SHAs
+(enforced by `python3 scripts/check-action-pins.py`), with inline comments
+recording the corresponding version tag. `.github/dependabot.yml` proposes weekly
+grouped pull requests into `sandbox` (never `main`, which only holds releases)
+for GitHub Actions, Docker base images (digest-pinned), and authentication parent
+libraries (`opaque-ke`, `webauthn-rs`, `webauthn-rs-proto`, `openidconnect`).
+No checkout keeps the GitHub token (`persist-credentials: false`), reusable
+workflows are read-only by default, build/test/lint/release Cargo commands use
+`--locked` (`coverage.yml` runs `cargo llvm-cov` without `--locked`), and the
+release workflow uses no build cache.
 
 ## Required Secrets
 

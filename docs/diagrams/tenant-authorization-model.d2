@@ -1,0 +1,120 @@
+# Permesi Tenant Resource Hierarchy & Authority Boundaries
+# Paired SVG illustration maintained alongside this D2 source (use `d2` as a starting point when updating).
+
+direction: right
+
+hierarchy: Tenant Resource Hierarchy (Bottom-Up Soft Deletion) {
+  style: {
+    fill: "#eff6ff"
+    stroke: "#2563eb"
+    stroke-dash: 4
+    border-radius: 8
+  }
+
+  org: Organization {
+    label: "Organization\nTenant boundary (unique slug)\nDelete: owner + recent auth, 0 active projects"
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1d4ed8"
+      border-radius: 6
+    }
+  }
+
+  project: Project {
+    label: "Project\nScoped to Organization\nDelete: owner/admin, 0 active environments"
+    style: {
+      fill: "#ffffff"
+      stroke: "#2563eb"
+      border-radius: 6
+    }
+  }
+
+  envs: Environments (Independent Siblings) {
+    style: {
+      fill: "#f8fafc"
+      stroke: "#60a5fa"
+      border-radius: 6
+    }
+    prod: "production tier (0..1 active)"
+    nonprod: "non_production tier (0..* active)\ne.g. dev, qa, staging"
+  }
+
+  app: Application {
+    label: "Application (Logical Resource)\nOwned by Environment\nDelete: owner/admin, 0 undeleted OAuth clients"
+    style: {
+      fill: "#ffffff"
+      stroke: "#2563eb"
+      border-radius: 6
+    }
+  }
+
+  oauth_assets: Application OAuth Configuration {
+    style: {
+      fill: "#f8fafc"
+      stroke: "#60a5fa"
+      border-radius: 6
+    }
+    clients: "OAuth Clients (public / confidential)\nExact redirect URIs · Scope allow-lists\nArgon2id secrets (confidential only)"
+    scopes: "Scope Registry\nAPI: <resource>:<action>\nOIDC: openid, profile, email, address, phone, offline_access\nReserved: platform:*, users:*"
+  }
+
+  org -> project: "owns"
+  project -> envs: "contains"
+  envs -> app: "hosts"
+  app -> oauth_assets: "owns"
+}
+
+authorities: Separate Authority Domains (No Implicit Escalation) {
+  style: {
+    fill: "#ecfdf5"
+    stroke: "#059669"
+    stroke-dash: 4
+    border-radius: 8
+  }
+
+  platform: Platform Operator (platform:admin) {
+    label: "1. Platform Operator\nRead-only /v1/admin/orgs inspection\nAccount suspension/reactivation & two-operator designation\nOpenBao step-up PASETO for /v1/auth/admin/infra\n(Never bypasses tenant write roles or OAuth consent)"
+    style: {
+      fill: "#fef3c7"
+      stroke: "#d97706"
+      border-radius: 6
+    }
+  }
+
+  org_roles: Organization Membership & Roles {
+    label: "2. Organization Membership (active)\nowner: manage org/resources + delete organization\nadmin: update org settings; manage projects, envs, apps, OAuth\nmember / readonly: read tenant resources\n(Active membership required for user OAuth consent)"
+    style: {
+      fill: "#d1fae5"
+      stroke: "#047857"
+      border-radius: 6
+    }
+  }
+
+  delegated: Delegated OAuth Grants & Scopes {
+    label: "3. Delegated OAuth Grants\nBound to 1 User + 1 Client + 1 App + 1 Org\nRequested scopes ⊆ client allow-list ∩ user consent\nSeparate from internal Principal.scopes\n(Never expands across organizations)"
+    style: {
+      fill: "#eef2ff"
+      stroke: "#4f46e5"
+      border-radius: 6
+    }
+  }
+}
+
+authorities.platform -> hierarchy.org: "Read-only global inspection\n(/v1/admin/orgs)" {
+  style: {
+    stroke-dash: 4
+    stroke: "#d97706"
+  }
+}
+
+authorities.org_roles -> hierarchy.org: "Authorizes tenant\nreads & writes" {
+  style: {
+    stroke: "#047857"
+  }
+}
+
+authorities.delegated -> hierarchy.oauth_assets: "Bound to exact client,\napp & owning org" {
+  style: {
+    stroke: "#4f46e5"
+  }
+}

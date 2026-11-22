@@ -1,0 +1,44 @@
+# OAuth 2.0 / OIDC Authorization Code + S256 PKCE, Token Exchange & Refresh Flow
+# Paired SVG illustration maintained alongside this D2 source (use `d2` as a starting point when updating).
+
+shape: sequence_diagram
+
+browser: User / Browser
+client: OAuth Client
+permesi: Permesi (Any Replica)
+postgres: PostgreSQL 19
+openbao: OpenBao Transit
+resource: Resource Server
+
+# Phase 1: Discovery & Authorization
+client -> permesi: "GET /.well-known/openid-configuration & /jwks.json"
+permesi -> client: "Issuer metadata & RS256 public keys (cached)"
+
+browser -> permesi: "GET /authorize (response_type=code, S256 PKCE, exact redirect_uri, nonce iff openid)"
+permesi -> postgres: "Validate active client, org/app ancestry, redirect & scope allow-list; save request + __Host cookie"
+permesi -> browser: "Login / MFA via Web Console if needed -> /authorize/resume"
+
+# Phase 2: Tenant-Bound Consent & Code Issuance
+browser -> permesi: "POST /authorize/consent (Allow + CSRF) or saved grant"
+permesi -> postgres: "Lock membership & ancestry; save oauth_grants + SHA-256 code"
+permesi -> browser: "303 See Other -> exact redirect_uri?code=...&state=...&iss=..."
+browser -> client: "Follow redirect callback with authorization code"
+
+# Phase 3: Transactional Token Exchange
+client -> permesi: "POST /token (code, redirect_uri, S256 code_verifier, client_id or HTTP Basic)"
+permesi -> postgres: "Single TX: lock client/user/grant/code; verify S256 & revision; consume code"
+permesi -> openbao: "Sign RS256 access token (at+jwt) & ID token (oidc-signing)"
+openbao -> permesi: "RSA-2048 signatures (verified locally)"
+permesi -> postgres: "Save hash receipt (+ refresh if openid offline_access + prompt=consent); COMMIT"
+permesi -> client: "200 access_token, id_token (if openid), optional refresh_token"
+
+# Phase 4: Offline Resource Verification, Live UserInfo & Refresh/Revoke
+resource -> permesi: "GET /jwks.json (cached; Cache-Control: no-cache on unknown kid)"
+client -> resource: "API request with Bearer <access_token> (offline RS256 verify: iss, aud, exp, org/app, scope)"
+
+client -> permesi: "GET/POST /userinfo (Bearer access_token)"
+permesi -> postgres: "Resolve hash receipt, user revision & active tenant"
+permesi -> client: "Verify RS256 signature & claims -> scoped sub/profile/email"
+
+client -> permesi: "POST /token (grant_type=refresh_token) or POST /revoke"
+permesi -> postgres: "Atomic rotation (reuse revokes entire family) or family revocation"

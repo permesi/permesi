@@ -1,0 +1,64 @@
+# Multi-Replica Authentication & MFA Session Flow
+# Paired SVG illustration maintained alongside this D2 source (use `d2` as a starting point when updating).
+
+direction: down
+
+step1: "1. Edge Admission" {
+  style: {
+    fill: "#fffbeb"
+    stroke: "#d97706"
+    border-radius: 8
+  }
+  zero: "Genesis mints short-lived Zero Token\n(PASETO v4.public; sent in X-Permesi-Zero-Token on start & finish)"
+}
+
+step2: "2. Ceremony Start (Permesi Replica A)" {
+  style: {
+    fill: "#eff6ff"
+    stroke: "#2563eb"
+    border-radius: 8
+  }
+  opaque_start: "OPAQUE Password Login\nPOST /v1/auth/opaque/login/start\n1. IP + account rate limits -> 2. Zero Token verify"
+  passkey_start: "Discoverable Passkey Login\nPOST /v1/auth/passkey/login/start\n1. IP rate limit -> 2. Zero Token verify"
+  quota: "3. Advisory-locked per-purpose & per-subject\npending quotas (429 / 503) -> 4. XChaCha20-Poly1305 seal\n5. Store SHA-256 ref; return opaque ref"
+  opaque_start -> quota
+  passkey_start -> quota
+}
+
+pg_state: "3. Shared Sealed Ceremony State (PostgreSQL 19)" {
+  shape: cylinder
+  label: "opaque_exchanges / webauthn_exchanges\nSHA-256 reference hash · XChaCha20-Poly1305 AEAD\n(192-bit nonce, OpenBao-derived key) · DB-clock expiry"
+  style: {
+    fill: "#ecfdf5"
+    stroke: "#059669"
+  }
+}
+
+step4: "4. Ceremony Finish (Permesi Replica B — Any Replica)" {
+  style: {
+    fill: "#eff6ff"
+    stroke: "#2563eb"
+    border-radius: 8
+  }
+  opaque_fin: "OPAQUE Finish\n1. Zero Token verify -> 2. Atomic DELETE ... RETURNING\n3. Verify OPAQUE proof -> 4. Lock user & credential\n5. Check status, cutoff & MFA -> commit session"
+  passkey_fin: "Passkey Finish\n1. IP rate limit -> 2. Zero Token verify\n3. Atomic DELETE ... RETURNING -> 4. Lock user/cred & check cutoff\n5. Verify WebAuthn assertion, active status & MFA -> commit session"
+}
+
+outcomes: "5. Issued Session Kind (HttpOnly Secure Cookie)" {
+  style: {
+    fill: "#eef2ff"
+    stroke: "#4f46e5"
+    border-radius: 8
+  }
+  full: "Full Session\n(MFA not enabled; records monotonic last_login_at)\nAccess /v1/me, /v1/orgs, /authorize"
+  challenge: "MFA Challenge Session\n(MFA enabled; shared DB attempt cap, default 5)\nTOTP (single-use step) · Security Key · Recovery"
+  bootstrap: "MFA Bootstrap Session\n(MFA required & unenrolled, or post-Recovery)\nRestricted strictly to factor enrollment"
+  challenge -> full: "TOTP / Security Key valid ->\nconsume challenge, issue full cookie (+ last_login_at)"
+  challenge -> bootstrap: "Recovery code valid -> retire sessions,\nrequire fresh enrollment (bootstrap cookie)"
+  bootstrap -> full: "Factor enrollment valid ->\nconsume bootstrap, issue full cookie (+ last_login_at)"
+}
+
+step1 -> step2: "X-Permesi-Zero-Token"
+step2 -> pg_state: "Insert hashed reference & sealed state (no sticky sessions)"
+pg_state -> step4: "Load & consume on any replica"
+step4 -> outcomes: "Commit session (plus passkey audit) in one transaction"

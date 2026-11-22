@@ -62,10 +62,9 @@ Runtime tenant-parent and grant DELETE privileges are removed. Composite retaine
 foreign keys use immediate RESTRICT, so the administrative user-delete API cannot
 cascade into a live family or retained receipt; dependent users produce a generic 409.
 Schema reapplication upgrades the constraints without deleting existing rows and resets
-legacy broad grants. See [database hardening](database-hardening.md) for migration,
-independent source-review corrections and passing PostgreSQL, refreshed dependency
-and three-replica validation. Live A/B/C races require one committed issuance and
-reject reuse of the successor on every replica after losing requests revoke its family.
+legacy broad grants. See [database hardening](database-hardening.md) for the ownership
+and privilege rollout requirements. Multi-replica races commit at most one rotation and
+reject reuse of the winning successor on every replica after losing requests revoke its family.
 Owner-authorized cleanup resolves trusted `public` tables before explicitly searching
 `pg_temp`, preventing runtime-created temporary tables and triggers from crossing the
 function-owner boundary. Actual OpenBao credential tests exercise that rejection on both
@@ -137,7 +136,5 @@ without substitution. Password/issuance race observers recognize the revision-ch
 password write while still requiring a real database blocker before releasing issuance.
 Run `just oauth-scenario-build`, then
 `target/debug/permesi-oauth-scenario --suite refresh` for actual Web offline consent and
-runtime-role A/B rotation/replay/lifecycle cases. The full suite includes these cases.
-Independent review and complete gate results are recorded in
-[authentication release validation](authentication-release-validation.md) and
-[TODO.md](../TODO.md). Passing isolated cases alone is not a release assertion.
+runtime-role multi-replica rotation, replay, and lifecycle cases. The full suite includes these cases.
+See [TODO.md](../TODO.md) for remaining OAuth milestones.

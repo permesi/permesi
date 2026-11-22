@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 960" width="1160" height="960" role="img" aria-label="OAuth 2.0 and OIDC Authorization Code, Token Exchange, and Refresh Flow">
+  <title>OAuth 2.0 and OIDC Authorization Code, Token Exchange, and Refresh Flow</title>
+  <defs>
+    <style>
+      text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .title { font-size: 16px; font-weight: 700; fill: #0f172a; }
+      .subtitle { font-size: 11.5px; font-weight: 400; fill: #475569; }
+      .zone-title { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+      .node-title { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .node-body { font-size: 11px; font-weight: 400; fill: #334155; }
+      .edge-label { font-size: 10.5px; font-weight: 500; fill: #334155; }
+      .phase-label { font-size: 11px; font-weight: 700; fill: #1e40af; }
+      .seq-head { font-size: 12px; font-weight: 700; fill: #0f172a; }
+      .seq-msg { font-size: 11px; font-weight: 500; fill: #1e293b; }
+    </style>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-emerald" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#047857"/>
+    </marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#4f46e5"/>
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="1160" height="960" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="24" y="32" class="title">OAuth 2.0 &amp; OIDC Authorization Code + S256 PKCE Flow</text>
+  <text x="24" y="50" class="subtitle">Durable cross-replica PostgreSQL state, OpenBao Transit RS256 signing, rotating refresh families, and offline resource verification</text>
+  <line x1="95" y1="108" x2="95" y2="932" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="29.0" y="74" width="132" height="34" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="95" y="95" text-anchor="middle" class="seq-head">User / Browser</text>
+  <line x1="285" y1="108" x2="285" y2="932" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="219.0" y="74" width="132" height="34" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="285" y="95" text-anchor="middle" class="seq-head">OAuth Client</text>
+  <line x1="500" y1="108" x2="500" y2="932" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="427.0" y="74" width="146" height="34" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="500" y="95" text-anchor="middle" class="seq-head">Permesi (Replica)</text>
+  <line x1="725" y1="108" x2="725" y2="932" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="659.0" y="74" width="132" height="34" rx="6" fill="#d1fae5" stroke="#047857" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="725" y="95" text-anchor="middle" class="seq-head">PostgreSQL 19</text>
+  <line x1="915" y1="108" x2="915" y2="932" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="849.0" y="74" width="132" height="34" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="915" y="95" text-anchor="middle" class="seq-head">OpenBao Transit</text>
+  <line x1="1070" y1="108" x2="1070" y2="932" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="1004.0" y="74" width="132" height="34" rx="6" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="1070" y="95" text-anchor="middle" class="seq-head">Resource Server</text>
+  <rect x="20" y="120" width="1120" height="134" rx="6" fill="#f8fafc" fill-opacity="0.65" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="30" y="136" class="phase-label">1. DISCOVERY &amp; AUTHORIZATION REQUEST</text>
+  <line x1="285" y1="160" x2="500" y2="160" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <rect x="234.0" y="141" width="317.0" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="392.5" y="152" text-anchor="middle" class="seq-msg" fill="#2563eb">GET /.well-known/openid-configuration &amp; /jwks.json</text>
+  <line x1="95" y1="198" x2="500" y2="198" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <rect x="78.0" y="179" width="439.0" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="297.5" y="190" text-anchor="middle" class="seq-msg" fill="#1d4ed8">GET /authorize (code, S256 PKCE, exact redirect_uri, nonce iff openid)</text>
+  <line x1="500" y1="234" x2="725" y2="234" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="408.2" y="215" width="408.5" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="612.5" y="226" text-anchor="middle" class="seq-msg" fill="#047857">Validate client/ancestry/allow-list; save request + __Host cookie</text>
+  <rect x="20" y="268" width="1120" height="166" rx="6" fill="#eff6ff" fill-opacity="0.65" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="30" y="284" class="phase-label">2. LOGIN / MFA RESUME, TENANT CONSENT &amp; CODE ISSUANCE</text>
+  <line x1="95" y1="308" x2="500" y2="308" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <rect x="29.2" y="289" width="536.6" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="297.5" y="300" text-anchor="middle" class="seq-msg" fill="#1d4ed8">Authenticate if needed (/authorize/resume) -&gt; POST /authorize/consent (or saved grant)</text>
+  <line x1="500" y1="344" x2="725" y2="344" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="411.3" y="325" width="402.4" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="612.5" y="336" text-anchor="middle" class="seq-msg" fill="#047857">Lock org membership &amp; ancestry; save oauth_grants + SHA-256 code</text>
+  <line x1="500" y1="380" x2="95" y2="380" stroke="#1d4ed8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-blue)"/>
+  <rect x="102.4" y="361" width="390.2" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="297.5" y="372" text-anchor="middle" class="seq-msg" fill="#1d4ed8">303 See Other -&gt; exact redirect_uri?code=...&amp;state=...&amp;iss=...</text>
+  <line x1="95" y1="414" x2="285" y2="414" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow-slate)"/>
+  <rect x="37.6" y="395" width="304.8" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="190.0" y="406" text-anchor="middle" class="seq-msg" fill="#475569">Follow redirect callback with authorization code</text>
+  <rect x="20" y="448" width="1120" height="194" rx="6" fill="#fffbeb" fill-opacity="0.65" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="30" y="464" class="phase-label">3. TRANSACTIONAL TOKEN EXCHANGE (SINGLE POSTGRESQL TRANSACTION)</text>
+  <line x1="285" y1="488" x2="500" y2="488" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <rect x="160.8" y="469" width="463.4" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="392.5" y="480" text-anchor="middle" class="seq-msg" fill="#1d4ed8">POST /token (code, redirect_uri, S256 verifier, client_id or Basic secret)</text>
+  <line x1="500" y1="522" x2="725" y2="522" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="408.2" y="503" width="408.5" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="612.5" y="514" text-anchor="middle" class="seq-msg" fill="#047857">Lock client/user/grant/code; verify S256 &amp; revision; consume code</text>
+  <line x1="500" y1="556" x2="915" y2="556" stroke="#b45309" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="524.6" y="537" width="365.8" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="707.5" y="548" text-anchor="middle" class="seq-msg" fill="#b45309">Sign RS256 access_token (at+jwt) &amp; id_token (oidc-signing)</text>
+  <line x1="500" y1="590" x2="725" y2="590" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="365.6" y="571" width="493.9" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="612.5" y="582" text-anchor="middle" class="seq-msg" fill="#047857">Save hash receipt (+ refresh if openid offline_access + prompt=consent); COMMIT</text>
+  <line x1="500" y1="624" x2="285" y2="624" stroke="#1d4ed8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-blue)"/>
+  <rect x="197.4" y="605" width="390.2" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="392.5" y="616" text-anchor="middle" class="seq-msg" fill="#1d4ed8">200 access_token, id_token (if openid), optional refresh_token</text>
+  <rect x="20" y="656" width="1120" height="266" rx="6" fill="#ecfdf5" fill-opacity="0.65" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="30" y="672" class="phase-label">4. OFFLINE RESOURCE VERIFICATION, LIVE USERINFO &amp; REFRESH / REVOCATION</text>
+  <line x1="1070" y1="696" x2="500" y2="696" stroke="#4f46e5" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-indigo)"/>
+  <rect x="586.9" y="677" width="396.3" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="785.0" y="688" text-anchor="middle" class="seq-msg" fill="#4f46e5">GET /jwks.json (cached; Cache-Control: no-cache on unknown kid)</text>
+  <line x1="285" y1="730" x2="1070" y2="730" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <rect x="390.9" y="711" width="573.2" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="677.5" y="722" text-anchor="middle" class="seq-msg" fill="#4f46e5">API request with Bearer &lt;access_token&gt; (offline RS256 verify: iss, aud, exp, org/app, scope)</text>
+  <line x1="285" y1="766" x2="500" y2="766" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <rect x="264.5" y="747" width="256.0" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="392.5" y="758" text-anchor="middle" class="seq-msg" fill="#1d4ed8">GET/POST /userinfo (Bearer access_token)</text>
+  <line x1="500" y1="800" x2="725" y2="800" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="451.0" y="781" width="323.1" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="612.5" y="792" text-anchor="middle" class="seq-msg" fill="#047857">Resolve hash receipt, user revision &amp; active tenant</text>
+  <line x1="500" y1="834" x2="285" y2="834" stroke="#1d4ed8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-blue)"/>
+  <rect x="194.4" y="815" width="396.3" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="392.5" y="826" text-anchor="middle" class="seq-msg" fill="#1d4ed8">Verify RS256 signature &amp; claims -&gt; scoped sub / profile / email</text>
+  <line x1="285" y1="870" x2="500" y2="870" stroke="#b45309" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="221.8" y="851" width="341.4" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="392.5" y="862" text-anchor="middle" class="seq-msg" fill="#b45309">POST /token (grant_type=refresh_token) or POST /revoke</text>
+  <line x1="500" y1="904" x2="725" y2="904" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="405.2" y="885" width="414.6" height="15" rx="3" fill="#ffffff" fill-opacity="0.94"/>
+  <text x="612.5" y="896" text-anchor="middle" class="seq-msg" fill="#047857">Atomic rotation (reuse revokes entire family) or family revocation</text>
+</svg>

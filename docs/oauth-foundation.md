@@ -204,6 +204,10 @@ The helper alone does not authorize claims, issue tokens, or validate consent.
 
 ## Authorization Code + PKCE
 
+![OAuth 2.0 and OIDC Authorization Code + S256 PKCE Flow](diagrams/oauth-oidc-flow.svg)
+
+*Source: [diagrams/oauth-oidc-flow.d2](diagrams/oauth-oidc-flow.d2)*
+
 `GET /authorize` validates an active public client identifier, the complete active
 application/environment/project/organization ancestry and the exact registered
 redirect before it trusts any redirect destination. It supports `response_type=code`
@@ -473,147 +477,27 @@ transaction until their operation completes. Credentials establish no user conse
 
 ## Roadmap
 
-[TODO.md](../TODO.md) is the authoritative completion checklist. This document explains
-boundaries and dependencies; README and the frontend documentation link back to it.
-A milestone is complete only after its implementation, required checks and independent
-review pass. Token exchange, signed access/ID tokens, accurate code-flow discovery,
-refresh families, client-authenticated refresh revocation and limited UserInfo are implemented; formal conformance remains pending.
+[TODO.md](../TODO.md) is the authoritative roadmap checklist.
 
-Tenant deletion polish adds permission-aware controls and inline password reauthentication
-with an explicit final confirmation. Durable OPAQUE login/reauthentication is implemented in a separate shared PostgreSQL
-exchange store with AEAD, single-attempt consumption, exact original-session binding
-and cross-replica expiry/replay/race tests. [Deployment and retention](opaque-exchanges.md)
-describe its limits. [WebAuthn/passkey ceremony state](webauthn-exchanges.md) also uses
-shared PostgreSQL, eliminating challenge replica affinity. [MFA lifecycle](mfa-lifecycle.md)
-and [authentication admission](authentication-operations.md) guard current sessions and
-shared capacity; broader operational/browser follow-ups remain tracked.
-The completed batch's checks, corrected security findings and coverage limits are recorded
-in [authentication release validation](authentication-release-validation.md).
+### Implemented
 
-The implemented [token exchange](oauth-token-exchange.md) owns authentication/redemption/
-signing/persistence through commit and is tested through the isolated runtime-role HTTP
-stack. It includes current/retiring credentials, failure rollback, claim/signature checks,
-replay/concurrency, issuer identification, shared signing-key rotation and refresh-family
-rotation/reuse with strict current scope/tenant revalidation. The isolated runner's
-standard `openidconnect-rs` client and protected HTTPS jobs fixture exercise public and
-confidential code flow, callback/ID rejection, exact resource scopes/tenants, real expiry
-and public-key rotation. This is a narrow interoperability foundation, not OIDC
-certification. Broader client/conformance coverage and production revocation/resource
-policy remain separate work; see [scenario coverage](oauth-scenarios.md).
-[Refresh families](oauth-refresh-tokens.md) persist hashed lineage, detect reuse, revoke
-families, recheck current tenant/consent and require explicit offline consent. UserInfo
-returns only current `sub`, `profile` name and `email`/`email_verified` from an exact
-hash-only issued access-token receipt after RS256 and claim-to-receipt verification.
-Both GET and POST require a Bearer header;
-query/form tokens, ID tokens and tokens without `openid` fail. Active user, grant,
-membership, client, credential revision and ancestry are rechecked before disclosure. Historical receipts
-from before the per-token scope and revision migration cannot disclose UserInfo until clients obtain
-new short-lived access tokens. `POST /revoke` now authenticates a public or confidential
-client and atomically revokes only that client's presented refresh family, including
-rotated successors. Unknown tokens receive the same empty success. Introspection and
-immediate access-token revocation follow separately, with an authenticated caller and
-resource disclosure policy. Family revocation does not retract an already signed JWT.
+- **Client & scope management:** Application-owned public and confidential clients, exact redirect URI allow-lists, `<resource>:<action>` API scopes, immutable OIDC system scopes, and confidential-client secret creation/rotation/revocation.
+- **Authorization Code + S256 PKCE:** Durable PostgreSQL authorization requests across login/MFA, explicit tenant/resource binding, minimal consent and saved grants, hashed single-use codes, RFC 9207 `iss` callback parameters, and Connected apps user self-service grant review/revocation (`/v1/me/oauth/grants`).
+- **Token exchange & OIDC:** Transactional `POST /token` with OpenBao-signed RS256 access tokens (`at+jwt`) and OIDC ID tokens, `/jwks.json` with single-flight caching and forced refresh, accurate `/.well-known/openid-configuration` discovery, [rotating refresh-token families](oauth-refresh-tokens.md), `POST /revoke` for refresh families, and header-only `GET`/`POST /userinfo`.
+- **Shared multi-replica state & governance:** AEAD-sealed PostgreSQL [OPAQUE](opaque-exchanges.md) and [WebAuthn](webauthn-exchanges.md) ceremonies, [MFA lifecycle](mfa-lifecycle.md), [shared admission quotas](authentication-operations.md), [bottom-up resource deletion](resource-lifecycle.md) with [bounded mutation deadlines](tenant-mutation-deadlines.md), [database least privilege](database-hardening.md), [account containment](account-containment.md), and the [isolated multi-replica OAuth scenario suite](oauth-scenarios.md) (including `openidconnect-rs` and Better Auth fixtures).
 
-Authorization UX now shows the signed-in account and registered callback origin,
-explains the cancel-and-restart account-switch policy, and shows a value-free restart
-page for unavailable requests. Browser regressions cover the presentation, scope
-immutability and local-expiry behavior during MFA reloads.
-The required browser CI gate now exercises the existing console and real-database
-authorization/OPAQUE flows against the same commit's frontend artifact on an isolated
-hosted runner. Operational work still includes Firefox/Safari coverage, multi-replica load tests for shared
-locks/MultiXact behavior, and sanitized metrics/alerts. Ancestor rows still use ordinary
-share locks: overlapping readers across clients in a subtree can starve organization,
-project, environment or application updates/deletions. Hierarchy writers now have
-[bounded handler/database waits](tenant-mutation-deadlines.md), returning generic 503
-without automatic mutation retries. They retain row locks and do not gain the client-level
-fair advisory coordination. Hierarchical fairness and load benchmarks remain necessary
-before claiming sustained-load lifecycle guarantees. Those row locks continue to protect
-current ancestry during authorization.
-Record coverage actually exercised;
-local Chromium tests do not establish cross-browser or production load behavior.
+### Planned
 
-[Platform-operator account containment](account-containment.md) now retires user sessions,
-pending proofs, saved grants and refresh authority atomically across replicas.
-Reactivation requires fresh authentication/consent and does not restore old authority.
-Broader administrator grant management, introspection, immediate access-token revocation,
-device flow and client credentials/M2M remain pending. M2M requires explicit service-principal
-and resource policy; possession of a confidential credential must not manufacture a user
-grant. Audit UI and tenant RLS remain tracked separately in TODO.md; the implemented
-service-role ownership/privilege policy and its validation record are described in
-[database hardening](database-hardening.md).
+- **Introspection & immediate access-token revocation:** Authenticated resource-server policy for revoking or introspecting already-issued JWTs before expiration.
+- **Additional grant types:** `client_credentials` (M2M, requiring explicit service-principal and resource policy) and Device Authorization flow.
+- **Broader governance & UX:** Administrator grant/family management views and consent history without widening consent.
+- **Operations & conformance:** Formal OIDC certification/conformance testing, Firefox/Safari browser coverage, multi-host load/fault testing (including PostgreSQL MultiXact churn under shared ancestor locks and fair ancestor-writer coordination), and tenant-level PostgreSQL RLS evaluation.
 
-## Review boundaries and deferred policy
+## Operational & Security Trade-Offs
 
-The confidential-credential milestone passed four independent security reviews.
-Confirmed medium findings in reader/writer starvation, foreign-tenant
-coordination and bulk revocation deadlines were fixed with PostgreSQL regressions.
-Lower-severity findings in CPU-permit ordering, revocation quotas, lifecycle constraints
-and missing negative coverage were also resolved. No critical or high findings remain.
-The token adapter now enforces a transaction-owning authentication guard; inherited
-ancestor-row starvation belongs to the operations milestone as described above.
-
-Final primary validation passed `just test` (484 tests), all-feature workspace tests
-(514), default/all-feature workspace builds, required formatting/Clippy, Web native and
-release WASM builds, Chromium console tests, the separately exercised real-PostgreSQL
-browser consent test, schema bootstrap/verification and OpenAPI byte consistency.
-There are 21 PostgreSQL credential test groups plus crypto/config/native Web coverage.
-The reviewer independently reran 60 OAuth tests, 24 authorization tests, formatting, Clippy
-and OpenAPI consistency. The existing browser-target Clippy backlog is reproduced at
-HEAD and tracked separately; Chromium coverage does not imply Firefox/Safari or load coverage.
-
-A lost COMMIT acknowledgement can remain ambiguous if PostgreSQL committed before the
-caller observed success; the review's earlier claim that cancellation always rolls back
-was rejected for that reason. Metadata refresh and explicit revoke/create recovery handle
-this case without automatically retrying issuance or recovering plaintext. Informational
-trade-offs retained deliberately include early rejection of random credential locators,
-brief membership locks for reads, and plaintext destruction on disclosure dismissal.
-
-
-Independent review reproduced the cross-origin consent CSP defect
-and identified client-lock/throttling and uncached OpenBao-read availability issues. The
-corrected design uses script-free consent navigation, bounded shared transactions,
-race-safe grants, shared quotas and a single-flight public JWKS cache. Regression tests
-exercise both IPv4/IPv6 cross-origin browser callbacks, concurrent grants/redemption,
-expired/abandoned login handles, recovery-code acknowledgement before OAuth resume,
-browser-bound per-request budgets, database-independent metadata, cache coalescing/expiry
-and value-free SQL diagnostics. Three review rounds independently verified every accepted
-fix; the final review reports no remaining critical, high, medium or low findings. The
-primary default/all-feature workspace suites and the reviewer's targeted Rust/browser suites
-pass. No confirmed finding was rejected as a false positive.
-
-The code phase deliberately requires an OIDC nonce even though Core makes it optional
-for code flow, trading compatibility for explicit ID-token replay binding. RFC 9207
-issuer response parameters and accurate token metadata are now implemented by the token
-milestone; the standard-library interoperability fixture is now covered, while broader
-clients and formal conformance remain separately tracked.
-Broader grants UX remains separate work; inactive tenant membership fails closed now.
-Existing broad database runtime privileges are outside this change: SQL constraints defend normal writes and browser input,
-not an already compromised database runtime role. Least privilege/RLS need a workspace-wide
-review because that role can also write identity/session tables. Key retirement remains an
-operator decision using signed-token lifetimes and cache windows; no automatic destructive
-trimming is introduced. Chromium is covered locally; Firefox/Safari are not claimed tested.
-
-The request budget incorporates both the opaque request ID and browser-binding digest
-before its existing HMAC subject transform, so a leaked locator cannot exhaust another
-browser's counter. Authorization IP quotas still count each start/resume/consent step;
-NAT-heavy deployments should size the existing configured budgets accordingly. Public
-metadata is served without those quotas or PostgreSQL access, while the public-key cache
-coalesces upstream refreshes and bounds an OpenBao outage using its existing 30-second
-transport timeout and negative cache. Shared client/ancestor locks need load testing for
-PostgreSQL MultiXact churn at higher concurrency. This phase does not claim load testing.
-The browser expiry is only a cleanup hint compared with its wall clock; severe clock skew
-can require restarting the flow after login, while PostgreSQL remains the expiry authority.
-Consent's same-origin referrer contains the incoming request parameters until it leaves
-the issuer; reverse-proxy log configuration must exclude query strings and Referer values.
-No authorization code is present in that referrer. Terraform was validated without plan
-or apply; an operator must verify that any future mount-description change is an in-place
-tune before applying it to preserve existing TOTP keys.
-
-Two final informational items remain deliberately outside the secure code-state design.
-Intermediate, uncommitted development schemas briefly supported an `oidc_metadata` rate
-counter; a developer who applied that intermediate version must discard only those
-obsolete counters before reapplying the canonical action constraint. No committed schema
-or normal upgrade has that action, and canonical schema reapplication with live grants
-and codes passes. Browser-facing invalid or expired resume locators show the same
-value-free restart page as consent replay; malformed initial `/authorize` requests
-still fail directly without trusting a callback URL.
+- **Mandatory OIDC nonce:** Permesi requires a non-empty `nonce` whenever `openid` is requested in the Authorization Code flow (stricter than OIDC Core) to enforce explicit ID-token replay binding.
+- **Per-request rate-limit keying:** The authorization request budget keys on both the opaque request ID and the browser-binding digest before HMAC hashing, preventing a leaked locator from exhausting another browser's budget. NAT-heavy deployments should size IP quotas for multi-step start/resume/consent traffic.
+- **Reverse-proxy log hygiene:** Consent's `Referrer-Policy: same-origin` preserves incoming query parameters on same-origin POSTs (without carrying authorization codes); configure reverse-proxy access logs to strip query strings and `Referer` headers.
+- **Ambiguous commit acknowledgements:** If a connection drops during a credential-issuance or token-exchange `COMMIT`, the server may have committed without delivering the response. Clients must not blindly retry issuance; refresh credential metadata (or start a fresh authorization flow) to reconcile state.
+- **Key retirement:** Never trim or retire previous `oidc-signing` versions in OpenBao until all issued token lifetimes, downstream JWKS caches, and rollback windows have elapsed.
+- **Ancestor lock contention:** Ancestor rows use ordinary `SHARE` locks during authorization/redemption; sustained overlapping readers can starve hierarchy writes until `--tenant-lock-timeout-ms` returns `503`. Fair hierarchical coordination remains planned.

@@ -1,0 +1,112 @@
+# Permesi Split-Trust Architecture
+# Paired SVG illustration maintained alongside this D2 source (use `d2` as a starting point when updating).
+
+direction: right
+
+internet: Untrusted Internet {
+  style: {
+    fill: "#f8fafc"
+    stroke: "#94a3b8"
+    stroke-dash: 4
+    border-radius: 8
+  }
+
+  browser: Browser & Web Console {
+    label: "Browser / Web Console\nLeptos CSR (static WASM)"
+    style: {
+      fill: "#ffffff"
+      stroke: "#64748b"
+      border-radius: 6
+    }
+  }
+
+  client: OAuth / OIDC Client {
+    label: "OAuth Client / API\nPublic or Confidential"
+    style: {
+      fill: "#ffffff"
+      stroke: "#64748b"
+      border-radius: 6
+    }
+  }
+}
+
+edge: Edge Trust Boundary {
+  style: {
+    fill: "#fffbeb"
+    stroke: "#d97706"
+    stroke-dash: 4
+    border-radius: 8
+  }
+
+  genesis: genesis {
+    label: "genesis\nEdge Admission Token Mint\nGET /token · GET /paserk.json"
+    style: {
+      fill: "#fef3c7"
+      stroke: "#b45309"
+      border-radius: 6
+    }
+  }
+}
+
+core: Core IAM Trust Boundary {
+  style: {
+    fill: "#eff6ff"
+    stroke: "#2563eb"
+    stroke-dash: 4
+    border-radius: 8
+  }
+
+  permesi: permesi (Stateless Replicas) {
+    label: "permesi\nCore IAM & OIDC Authority\nLocal PASERK verify · OPAQUE · WebAuthn · MFA\nTenants · /authorize · /token · /userinfo · /revoke · /jwks.json"
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1d4ed8"
+      border-radius: 6
+    }
+  }
+}
+
+infra: Data & Cryptography Plane {
+  style: {
+    fill: "#ecfdf5"
+    stroke: "#059669"
+    stroke-dash: 4
+    border-radius: 8
+  }
+
+  openbao: OpenBao 2.7 {
+    label: "OpenBao 2.7\nAppRole · Agent socket · K8s auth\nTransit: Ed25519 · ChaCha20 · RSA-2048\nKV v2: OPAQUE seed & MFA pepper\nDynamic DB creds · Internal PKI"
+    style: {
+      fill: "#d1fae5"
+      stroke: "#047857"
+      border-radius: 6
+    }
+  }
+
+  postgres: PostgreSQL 19 {
+    shape: cylinder
+    label: "PostgreSQL 19\ngenesis DB: clients, partitioned tokens\npermesi DB: users, sessions, sealed exchanges,\ntenants, grants, codes, refresh families & receipts"
+    style: {
+      fill: "#d1fae5"
+      stroke: "#047857"
+    }
+  }
+}
+
+internet.browser -> edge.genesis: "1. Request admission / zero token"
+edge.genesis -> internet.browser: "2. Signed PASETO v4.public"
+internet.browser -> core.permesi: "3. Auth POST + Zero Token\nor Session Cookie"
+internet.client -> core.permesi: "OAuth / OIDC protocol\n& /jwks.json"
+
+core.permesi -> edge.genesis: "Local PASERK verify\nInline JSON = fully offline\nURL mode: refresh /paserk.json on startup,\nstale TTL (incl. /ready & /health -> 503 if unreachable),\nor unknown kid" {
+  style: {
+    stroke-dash: 4
+    stroke: "#d97706"
+  }
+}
+
+edge.genesis -> infra.openbao: "Transit Ed25519 sign\n& dynamic DB creds"
+edge.genesis -> infra.postgres: "Write audit jti\n(genesis_runtime)"
+
+core.permesi -> infra.openbao: "Transit RSA-2048 / TOTP,\nKV v2 seed & dynamic DB creds"
+core.permesi -> infra.postgres: "Shared state & row locks\n(permesi_runtime)"

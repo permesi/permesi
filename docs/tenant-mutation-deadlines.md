@@ -62,7 +62,18 @@ not establish writer fairness, multi-host partition handling, throughput, a prod
 latency SLO, or an HTTP body-read deadline. Fair hierarchical coordination, sanitized
 operational metrics and load benchmarks remain follow-ups.
 
-Run `cargo test --locked -p permesi --lib tenant_mutation -- --nocapture` and
-`cargo test --locked -p permesi --lib mutation_policy`. Execution evidence, mutation
-checks, independent review dispositions and live HA limits are recorded separately in
-[the validation record](tenant-mutation-validation.md).
+## Testing
+
+Run the focused mutation and policy regressions with:
+
+```sh
+cargo test --locked -p permesi --lib tenant_mutation -- --nocapture
+cargo test --locked -p permesi --lib mutation_policy
+```
+
+The PostgreSQL regressions cover all nine hierarchy write routes under lock contention
+and pool exhaustion, `BEGIN`-acknowledgement cancellation through a loopback relay,
+duplicate-name conflicts, bounded slug-candidate exhaustion, and concurrent rename
+preservation. Note that `service_utils::database::begin` relies on SQLx 0.9's
+doc-hidden owned-connection transaction constructor; verify the `BEGIN` cancellation
+regression whenever upgrading SQLx.

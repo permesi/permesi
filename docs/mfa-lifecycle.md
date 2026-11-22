@@ -91,5 +91,3 @@ Missing dependencies return 503 without spending an attempt. This counter does n
 replace the independent account/IP budgets. Deploy the schema before this version and
 finish replacing old replicas before relying on terminal lockout: old binaries do not
 read the new counter columns.
-Completed workspace, real-dependency and independent review results are recorded in
-[authentication release validation](authentication-release-validation.md).

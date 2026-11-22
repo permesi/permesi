@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 560" width="1140" height="560" role="img" aria-label="Permesi Tenant Resource Hierarchy and Authority Boundaries">
+  <title>Permesi Tenant Resource Hierarchy and Authority Boundaries</title>
+  <defs>
+    <style>
+      text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .title { font-size: 16px; font-weight: 700; fill: #0f172a; }
+      .subtitle { font-size: 11.5px; font-weight: 400; fill: #475569; }
+      .zone-title { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+      .node-title { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .node-body { font-size: 11px; font-weight: 400; fill: #334155; }
+      .edge-label { font-size: 10.5px; font-weight: 500; fill: #334155; }
+      .phase-label { font-size: 11px; font-weight: 700; fill: #1e40af; }
+      .seq-head { font-size: 12px; font-weight: 700; fill: #0f172a; }
+      .seq-msg { font-size: 11px; font-weight: 500; fill: #1e293b; }
+    </style>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-emerald" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#047857"/>
+    </marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#4f46e5"/>
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="1140" height="560" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="24" y="32" class="title">Tenant Resource Hierarchy &amp; Authority Boundaries</text>
+  <text x="24" y="50" class="subtitle">Bottom-up soft-deleted tenant resources alongside three strictly separated authorization domains</text>
+  <rect x="24" y="70" width="520" height="466" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="38" y="92" class="zone-title" fill="#1d4ed8">TENANT RESOURCE HIERARCHY (EXPLICIT BOTTOM-UP SOFT DELETION)</text>
+  <rect x="48" y="104" width="472" height="62" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="284.0" y="131.5" text-anchor="middle" class="node-title">Organization (Tenant Boundary)</text>
+  <text x="284.0" y="148.5" text-anchor="middle" class="node-body">Unique slug · Delete requires owner + recent auth &amp; 0 active projects</text>
+  <rect x="48" y="190" width="472" height="56" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="284.0" y="214.5" text-anchor="middle" class="node-title">Project</text>
+  <text x="284.0" y="231.5" text-anchor="middle" class="node-body">Scoped to Organization · Delete requires owner/admin &amp; 0 active environments</text>
+  <rect x="48" y="270" width="472" height="74" rx="10" fill="#f8fafc" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="62" y="292" class="zone-title" fill="#1e40af">ENVIRONMENTS (INDEPENDENT SIBLINGS — CREATED IN ANY ORDER)</text>
+  <rect x="62" y="298" width="212" height="36" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="168.0" y="320.0" text-anchor="middle" class="node-title">production (0..1 active)</text>
+  <rect x="294" y="298" width="212" height="36" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="400.0" y="320.0" text-anchor="middle" class="node-title">non_production (0..* active)</text>
+  <rect x="48" y="368" width="472" height="56" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="284.0" y="392.5" text-anchor="middle" class="node-title">Application (Logical Resource — Not an OAuth Client)</text>
+  <text x="284.0" y="409.5" text-anchor="middle" class="node-body">Scoped to Environment · Delete requires owner/admin &amp; 0 undeleted clients</text>
+  <rect x="48" y="448" width="228" height="72" rx="8" fill="#ffffff" stroke="#4f46e5" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="162.0" y="465.5" text-anchor="middle" class="node-title">OAuth Clients</text>
+  <text x="162.0" y="482.5" text-anchor="middle" class="node-body">Public or Confidential (immutable)</text>
+  <text x="162.0" y="497.5" text-anchor="middle" class="node-body">Exact redirects · Scope allow-lists</text>
+  <text x="162.0" y="512.5" text-anchor="middle" class="node-body">Argon2id secrets (confidential only)</text>
+  <rect x="292" y="448" width="228" height="72" rx="8" fill="#ffffff" stroke="#4f46e5" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="406.0" y="465.5" text-anchor="middle" class="node-title">Scope Registry</text>
+  <text x="406.0" y="482.5" text-anchor="middle" class="node-body">API: &lt;resource&gt;:&lt;action&gt;</text>
+  <text x="406.0" y="497.5" text-anchor="middle" class="node-body">OIDC: openid, profile, email, ...</text>
+  <text x="406.0" y="512.5" text-anchor="middle" class="node-body">Reserved: platform:*, users:*</text>
+  <path d="M 284 166 L 284 190" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <path d="M 284 246 L 284 270" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <path d="M 284 344 L 284 368" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <path d="M 162 424 L 162 448" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <path d="M 406 424 L 406 448" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <rect x="638" y="70" width="478" height="466" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="652" y="92" class="zone-title" fill="#047857">THREE SEPARATE AUTHORITY DOMAINS (NO IMPLICIT ESCALATION)</text>
+  <rect x="660" y="108" width="434" height="122" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="672" y="143.0" text-anchor="start" class="node-title">1. Platform Operator (platform:admin)</text>
+  <text x="672" y="160.0" text-anchor="start" class="node-body">• Read-only global tenant inspection (/v1/admin/orgs)</text>
+  <text x="672" y="175.0" text-anchor="start" class="node-body">• Account suspension / reactivation &amp; two-operator designation</text>
+  <text x="672" y="190.0" text-anchor="start" class="node-body">• OpenBao step-up PASETO required for /v1/auth/admin/infra</text>
+  <text x="672" y="205.0" text-anchor="start" class="node-body">• Never bypasses tenant write roles or confers OAuth scopes</text>
+  <rect x="660" y="250" width="434" height="122" rx="8" fill="#d1fae5" stroke="#047857" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="672" y="285.0" text-anchor="start" class="node-title">2. Organization Membership &amp; Roles (Active Only)</text>
+  <text x="672" y="302.0" text-anchor="start" class="node-body">• owner: manage org/resources + delete organization</text>
+  <text x="672" y="317.0" text-anchor="start" class="node-body">• admin: update org settings; manage projects, envs, apps, OAuth</text>
+  <text x="672" y="332.0" text-anchor="start" class="node-body">• member / readonly: read tenant resources</text>
+  <text x="672" y="347.0" text-anchor="start" class="node-body">• Active org membership gates user OAuth consent eligibility</text>
+  <rect x="660" y="392" width="434" height="124" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="672" y="428.0" text-anchor="start" class="node-title">3. Delegated OAuth Grants &amp; Scopes</text>
+  <text x="672" y="445.0" text-anchor="start" class="node-body">• Bound to 1 User + 1 Client + 1 Application + 1 Organization</text>
+  <text x="672" y="460.0" text-anchor="start" class="node-body">• Granted scopes ⊆ client allow-list ∩ explicit user consent</text>
+  <text x="672" y="475.0" text-anchor="start" class="node-body">• Completely separate from internal Principal.scopes</text>
+  <text x="672" y="490.0" text-anchor="start" class="node-body">• Never expands across a user's other organizations</text>
+  <path d="M 660 142 L 520 142" fill="none" stroke="#d97706" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-amber)"/>
+  <rect x="552.5" y="104.0" width="77.0" height="36.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="591.0" y="117.0" text-anchor="middle" class="edge-label" fill="#b45309">Read-only</text>
+  <text x="591.0" y="131.0" text-anchor="middle" class="edge-label" fill="#b45309">inspection</text>
+  <path d="M 660 294 L 591 294 L 591 218 L 520 218" fill="none" stroke="#047857" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+  <rect x="564.0" y="240.0" width="54.0" height="36.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="591.0" y="253.0" text-anchor="middle" class="edge-label" fill="#047857">Tenant</text>
+  <text x="591.0" y="267.0" text-anchor="middle" class="edge-label" fill="#047857">RBAC</text>
+  <path d="M 660 484 L 520 484" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <rect x="549.4" y="446.0" width="83.3" height="36.0" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="0.8"/>
+  <text x="591.0" y="459.0" text-anchor="middle" class="edge-label" fill="#4f46e5">Exact app &amp;</text>
+  <text x="591.0" y="473.0" text-anchor="middle" class="edge-label" fill="#4f46e5">org binding</text>
+</svg>

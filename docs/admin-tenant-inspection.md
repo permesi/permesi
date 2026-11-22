@@ -57,30 +57,6 @@ through `just web-test-browser-built` beside the existing OAuth console,
 authorization and OPAQUE tenant-deletion browser coverage. Missing test discovery,
 dependency setup failure or a skipped browser test does not establish coverage.
 
-The broader default/all-feature, schema, OpenAPI, native/WASM lint and browser
-gates protect existing behavior. Three/five-replica OAuth CI remains required.
-The separate dependency audit blocker described in [release readiness](release-readiness.md)
-is unchanged; inspection does not add a dependency exception or authorize publication.
-
-## Validation on 2026-10-27
-
-Local validation passed 814 default and 844 all-feature workspace tests, seven
-focused PostgreSQL inspection tests and all three explicit PostgreSQL browser
-tests through the required browser recipe. Native/WASM Clippy, formatting, the
-release web build and OpenAPI regeneration/drift checks passed. Review traced
-navigation, trusted-principal extraction, active ancestry and cache/error policy.
-
-The visibility regression failed against the original missing API. The browser
-test failed with the old dashboard destination and with two simultaneously active
-sidebar sections. Separately bypassing the operator guard, removing application
-ancestry scoping or broadening the ordinary membership query made the corresponding
-tests fail at their intended assertions. Those deliberate mutations were restored;
-the corrected implementation and final browser artifact passed. Browser checks
-also require malicious metadata to remain text before any document reload.
-
-The OpenAPI contract also has a regression for unique administrator operation IDs
-and unchanged tenant operation IDs. It failed when new inspection operations
-shadowed existing tenant names, then passed with explicit `admin_` identifiers.
-This changes only the new operation metadata; existing tenant/auth operation IDs
-are preserved. The pre-existing WebAuthn `register_finish` name collision is
-tracked separately in TODO rather than silently renaming existing operations.
+The OpenAPI contract also includes a regression verifying that administrator
+inspection operations use unique `admin_*` operation IDs without shadowing existing
+tenant-management operation IDs.

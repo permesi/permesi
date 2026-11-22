@@ -125,11 +125,7 @@ just oauth-scenario --case authentication.account_containment --replicas 3
 just oauth-scenario --case authentication.account_containment --replicas 5
 ```
 
-The `full`, `security` and `ha` suites include it. Its topology has real independent
-Permesi processes sharing PostgreSQL, not a production multi-host or load benchmark.
-The default and all-feature workspace suites, browser tests, schema/runtime-role
-verification, strict native/WASM Clippy, Web build and OpenAPI drift check pass.
-Both full isolated topologies pass 38/38 cases, and the five-replica harness passes
-its eight recovery/isolation checks. Independent review identified
-one stale HA-guide count, corrected in [HA validation](oauth-ha-validation.md);
-the corrected-diff review found no confirmed defects.
+The `full`, `security` and `ha` suites include it. Its topology runs independent
+Permesi processes sharing PostgreSQL on one host rather than a production multi-host
+or load benchmark. See [OAuth & HA scenarios](oauth-scenarios.md) for runner options
+and recovery rules.

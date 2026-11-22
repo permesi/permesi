@@ -58,7 +58,8 @@ The resources are defined in `openbao/contrib/terraform/`:
   - Roles: `permesi`, `genesis`
   - Policies: `permesi`, `genesis`
 - **Transit (permesi)**: mounted at `transit/permesi`
-  - Key: `users` (type `chacha20-poly1305`)
+  - Key: `totp` (type `chacha20-poly1305`)
+  - Key: `oidc-signing` (type `rsa-2048`, non-exportable, non-deletable)
 - **Transit (genesis)**: mounted at `transit/genesis`
   - Key: `genesis-signing` (type `ed25519`)
 - **PKI (TLS certificates)**: mounted at `pki-root` and `pki-int`
@@ -157,16 +158,14 @@ else (database host, credentials, SSL mode and PKI URLs) is a Terraform variable
 `openbao/contrib/terraform/variables.tf`. In local dev the database host defaults to the
 `postgres-permesi` container on the shared `permesi-net` network.
 
-## OpenBao requirement
+## Production readiness checklist
 
-OpenBao is required in production for authentication, dynamic DB creds, and transit encryption. Running without OpenBao is not supported.
-Rotation in production is typically operator-driven; the dev bootstrap defaults to a 30d auto-rotate period.
+OpenBao is required in production for dynamic database credentials, Transit signing/encryption, PKI, and the persistent KV v2 `opaque_server_seed` (losing that seed makes existing OPAQUE user registrations unusable). Before running in production, verify:
 
-Production readiness checklist:
-- HA cluster with tested failover.
-- Automated unseal or a documented unseal runbook.
-- Backups plus restore drills (e.g., raft snapshots or storage backups).
-- Monitoring and alerts for health, sealed state, and token/lease renew failures.
+- HA OpenBao cluster with tested leader failover.
+- Automated unseal (KMS/transit) or a documented, rehearsed unseal runbook.
+- Regular Raft snapshots or storage backups with tested restore drills.
+- Monitoring and alerts for OpenBao health, sealed state, and service token/lease renewal failures.
 
 ## Native Kubernetes authentication
 

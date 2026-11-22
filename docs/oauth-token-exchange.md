@@ -38,12 +38,14 @@ without returning a response; retry then fails as `invalid_grant` and the client
 start a new authorization. Codes and unique issuance receipts prevent a second winner,
 including concurrent exchanges on different processes. PostgreSQL stores SHA-256 code
 and token hashes, receipt JTI/context and bounded timestamps, never bearer plaintext.
-The runtime role can read/insert receipts but cannot update/delete/truncate them;
-privileged cleanup removes expired receipts after seven days. Redirect retirement does
-not erase receipts. Normal APIs revoke grants and soft-delete resources; physical grant/user
-deletion through privileged SQL can cascade receipts. Their direct runtime privileges do
-not remove the broader existing runtime role's trust boundary. No process-local map,
-filesystem or sticky session supplies authority.
+The runtime role can read/insert receipts but cannot update/delete/truncate them.
+Redirect retirement does not erase receipts. Normal APIs revoke grants and soft-delete
+resources; composite `ON DELETE RESTRICT` foreign keys prevent grant or user deletion
+from cascading into retained issuance receipts or refresh history (see
+[database hardening](database-hardening.md#retained-authorization-history)). Privileged
+maintenance cleanup removes expired receipts seven days after the later of their
+access-token and ID-token expiry. No process-local map, filesystem or sticky session
+supplies authority.
 
 Access tokens follow the [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068.html) shape:
 `typ=at+jwt`, fixed `alg=RS256`, public `kid`, `iss`, user `sub`, resource `aud`, `iat`,
@@ -126,31 +128,10 @@ Likewise replay is denied, but automatic revocation of already-issued JWTs on co
 replay is deferred with resource-server/introspection policy. Keep short lifetimes and
 retain verification keys through token lifetimes, downstream caches and rollback windows.
 
+## Testing
+
 Run `just oauth-scenario-build`, then `target/debug/permesi-oauth-scenario --suite token`
 for the disposable real-service checks. See [scenario coverage](oauth-scenarios.md)
-for HTTP/SQL/browser distinctions, artifacts and cleanup. Unit/router tests additionally
+for HTTP/SQL/browser distinctions, artifacts and cleanup. Unit and router tests additionally
 exercise deadline/signing rollback, expired codes, inactive membership, wrong bindings,
-claim verification and concurrent single-use issuance with real PostgreSQL/OpenBao.
-
-Primary validation passed `just test` (534 tests), the all-feature workspace suite
-(564 tests), formatting/Clippy, schema bootstrap and idempotent reapplication with
-runtime privilege checks, OpenAPI consistency, release WASM/native Web checks,
-Chromium console and both real PostgreSQL browser tests, all 22 isolated scenarios
-and seven process-harness checks. Terraform formatting passed without applying
-infrastructure changes.
-
-Two independent reviews were made. The first reported
-one high finding in callback response-key collisions, two medium findings in unknown
-token parameters/empty optional IDs and delayed signing reads overwriting newer JWKS,
-and one low finding in case-sensitive refresh directives. All four were independently
-verified and fixed. Each regression group failed on the original implementation and
-passed after correction. The second review inspected the corrected complete diff,
-including fixed-issuer unknown-kid refresh in the test client, and reported no confirmed
-defects. Execution evidence comes from the primary run; the reviewer did not rerun the suites.
-
-Suspected error-envelope rewriting was rejected because mounted middleware preserves
-OAuth JSON; suspected guaranteed rollback after interrupted commit was rejected because
-commit acknowledgement can be ambiguous, while code/receipt uniqueness still denies replay.
-Collapsing redeemer database failures to value-free `invalid_grant` preserves the existing
-helper contract. Existing forwarding-header trust, broader runtime SQL privileges,
-ancestor writer starvation and finite-lifetime JWT revocation remain explicit boundaries.
+claim verification and concurrent single-use issuance with real PostgreSQL and OpenBao.

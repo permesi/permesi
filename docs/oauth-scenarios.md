@@ -9,7 +9,16 @@ creates actual full sessions. No user, membership, session or grant is seeded di
 
 ## Running
 
-On Linux with working local Podman, run `just oauth-scenario-build`, then:
+On Linux with working local Podman (and Node 24 for the `full` and `interop` suites,
+which include the Better Auth cases), install the Better Auth fixture dependencies
+once and build the workspace artifacts:
+
+```sh
+just oauth-scenario-better-auth-setup   # required once on a clean checkout for full / interop suites
+just oauth-scenario-build
+```
+
+Then run the desired suite or case:
 
 ```sh
 target/debug/permesi-oauth-scenario --list
@@ -63,12 +72,11 @@ after request persistence and completes consent on B. At least as many independe
 minted runtime database identities as configured replicas are required. Code and refresh
 races synchronize requests across every configured socket and require exactly one
 committed winner plus `invalid_grant` from every other participant. Offline authorization starts
-on A, code exchange uses B and refresh rotation uses C. Both service databases use
-non-superuser schema ownership and canonical runtime policies; see
-[database hardening](database-hardening.md) for rollout and validation evidence.
-This is multi-process state coverage on one host. The [HA extension](oauth-ha-validation.md)
-adds graceful rolling replacements, abrupt backend loss and journaled process recovery;
-multi-host transport/load testing remains separate.
+on A, code exchange uses B and refresh rotation uses C. Both service databases use non-superuser schema ownership and canonical runtime policies;
+see [database hardening](database-hardening.md) for rollout requirements.
+This is multi-process state coverage on one host; see [High-availability topology and recovery](#high-availability-topology-and-recovery)
+for rolling replacements, abrupt backend loss, and journaled process recovery.
+Multi-host transport and load testing remain separate.
 
 Service children receive explicit existing CLI inputs and fresh private credential
 environments, with inherited deployment/proxy/OpenBao settings cleared. The runner
@@ -80,9 +88,8 @@ loopback listeners; this local test transport does not provide network sandboxin
 Build artifacts are trusted local inputs. `--expected-commit` (or
 `PERMESI_SCENARIO_EXPECTED_COMMIT`) optionally
 requires the runner and both services to match a full commit and workspace version
-before startup; CI always sets it to the workflow SHA. Commit labels detect
-accidental stale/mixed builds and do not attest hostile executables. See
-[cached-build checks](ci-runtime-provenance.md#cached-build-identity).
+before startup; CI always sets it to the workflow SHA. Commit labels detect accidental stale/mixed builds and do not attest hostile executables.
+See [cached build identity](ci-and-testing.md#cached-build-identity-and-commit-verification).
 Cached dependency/browser images remain available; cleanup removes run containers,
 networks and private files. The public HTTP loopback callback uses a different
 hostname from the issuer, so issuer cookies do not travel to the client. Browser
@@ -147,6 +154,7 @@ repetitions and parallel isolation with
 | `foundation.provisioning` | Real accounts/login, manifest hierarchy/registry, immutable protocol scopes, actual console, accurate code/token discovery and public JWKS |
 | `authorization.consent` | Real browser S256 consent, exact scopes/state/nonce/redirect/TTL, high-entropy code and hash-only row |
 | `authentication.registration_policy` | Reserved-domain signup has no side effects; pending activation and verifier replay cross replicas, and mailbox links cannot reactivate disabled users |
+| `authentication.account_containment` | Real operator suspension on A and reactivation on B permanently retire sessions, codes, grants, refresh families and pending proofs across every replica, while allowing fresh login/consent recovery |
 | `authentication.shared_exchanges` | Real OPAQUE login A→B, reauthentication B→C, actual session verification and replay/same-user session-binding rejection across A/B/C |
 | `ha.rolling_restart` | Replace every configured process with SIGTERM and a clean exit; preserve pending code/reauthentication, session identity and cross-incarnation OPAQUE/code replay rejection |
 | `ha.replica_outage` | Abruptly stop the last backend; issuer returns 503 and direct exchange fails without consuming a code; surviving code/refresh races commit once and recovered replicas reject replay |
@@ -311,225 +319,37 @@ verifies the linked provider subject and a usable local session against the
 expected fixture owner. `interop.better_auth_state_reject` uses a fresh
 unauthenticated cookie jar to deliver an actual callback whose state is tampered
 by one character, requires the library's exact `state_mismatch` rejection with
-unchanged storage counts and no token issuance, and finishes with the same
-unmodified callback as a fresh valid control, so a fixture that rejects
-everything cannot pass. Removing the tampering makes the negative assertion
-fail, as mutation-checked. The fixture README documents its environment inputs,
+unchanged storage counts and no token issuance, and finishes with the same unmodified callback as a fresh valid control, so a fixture
+that rejects everything cannot pass. The fixture README documents its environment inputs,
 local invocation (`just oauth-scenario-better-auth`) and limits; the CI OAuth
 scenario matrix installs the pinned fixture dependencies before the full suite.
+
+## High-availability topology and recovery
+
+The runner accepts `--replicas 3` through `--replicas 5` (default `3`). Each replica is a real Permesi process with its own private Unix socket and OpenBao-minted runtime database login, sharing one issuer, audience, PostgreSQL 19 instance, and OpenBao 2.7 instance. Replica selection is controlled exclusively by the harness; browser parameters and headers cannot choose a backend.
+
+- **All-replica races:** Authorization-code and refresh-token races dispatch concurrently across every configured socket. Exactly one response must succeed; every other response must be an actual `invalid_grant` (never a network error or `503`). Losing refresh reuse revokes the entire family, including the winning successor, across every replica.
+- **Rolling replacement (`ha.rolling_restart`):** Issues a code and starts login/reauthentication on a slot, sends `SIGTERM` and requires a bounded clean exit (5-second idle-replacement test budget), verifies surviving replicas preserve session/login state, then starts a replacement process with a distinct PID and birth-tick identity that redeems the pending code and completes reauthentication while rejecting replay. Repeats for every slot.
+- **Abrupt outage (`ha.replica_outage`):** Stops the last backend before redemption. The stable issuer returns `503` for that slot and direct exchange fails without consuming the code in PostgreSQL; surviving replicas then race code and refresh redemption, and after recovery every replica rejects replay. This tests explicit survivor selection rather than production load-balancer failover.
+- **Journaled process ownership & recovery:** Every service child, replacement, and host Chromium Podman controller has its handle retained and its PID/birth-tick identity atomically written to the secret-free `ownership-<repetition>.json` before readiness checks. Recovery requires Linux 5.3+ and Python 3.9+, opens a [`pidfd_open`](https://docs.python.org/3/library/os.html#os.pidfd_open) descriptor before verifying birth ticks and private command paths, and signals that descriptor to prevent PID-reuse races. Private directory removal requires an owned mode-`0700` directory with a matching `owner` marker; containers and networks are removed solely by exact ownership labels.
+- **Harness & recovery tests:** Eight harness checks (`just oauth-scenario-harness-test`, optionally `--replicas 5`) exercise remote-engine rejection, partial startup, repeated `SIGTERM`, total deadline, injected cleanup failure, fresh repetitions, parallel stacks, and `SIGKILL` after a replica replacement. Six dependency-free Python recovery unit tests run via:
+
+```sh
+python3 -m unittest discover -s tools/oauth_scenario/tests -p '*_test.py'
+```
+
+**Scope limits:** This is single-host multi-process coverage. It does not establish multi-host network partitions, production throughput, PostgreSQL/OpenBao outage policies, mid-commit crash ambiguity, zero-downtime draining of in-flight requests, or host-power-loss journal durability. A brief `SIGKILL` window also remains between process spawn and journal publication.
 
 ## Extension contract and remaining work
 
 Add future protocol stages as stable cases with documented preconditions, fresh
 tenant/client/grant state, independently calculated assertions and negative coverage.
-Extend both report formats and this coverage table. Negative requests must reach the
-actual API rather than merely exercise manifest validation. Keep runtime ownership,
+Extend both report formats and the coverage table above. Negative requests must reach
+the actual API rather than merely exercise manifest validation. Keep runtime ownership,
 bounded waits and secret-free reporting intact as scenarios grow.
 
-[Token exchange](oauth-token-exchange.md) now has real runtime-role HTTP scenarios,
-independent RS256/claim verification, current/retiring credentials, rollback, replay,
-concurrency and shared rotation. Refresh-family rotation/reuse/concurrency are now covered; next add broader MFA/account-switching
-coverage alongside its implementation. The seven standard-library/resource scenarios
-and the Better Auth client fixture provide a narrow interoperability foundation;
-broader clients, formal OIDC conformance
-and production resource-server revocation policy remain separately tracked.
-
-Broader scenario coverage for the implemented durable WebAuthn/passkey exchanges,
-MFA-required variants, richer consent/grants UX, Firefox/Safari, multi-host/load/fault
-tests, broader third-party OIDC clients, introspection and immediate JWT revocation,
-device flow and M2M remain in `TODO.md`. Current scenarios
-preserve default MFA policy and require a genuine full session; they do not establish
-the full MFA matrix or formal OIDC conformance.
-
-## Validation and independent review
-
-The A/B/C extension passed all 32 cases with zero cleanup errors and all seven
-harness checks in
-[run 39028187785](https://github.com/permesi/permesi/actions/runs/39028187785),
-alongside the browser, database, dependency and default/all-feature workspace gates.
-Its source reviews and rollout boundary are recorded in
-[database hardening](database-hardening.md). Three same-host processes do not
-establish multi-host load or network-failure behavior.
-The records below preserve the earlier A/B milestones and their suite sizes.
-
-The earlier shared-authentication/refresh batch passed all 32 cases, including runtime-role
-refresh rotation, replay and lifecycle rejection across A/B. Its workspace, database,
-browser, hosted CI and corrected security review evidence is recorded in
-[authentication release validation](authentication-release-validation.md). The earlier
-milestone records below preserve their historical suite sizes and review boundaries.
-
-Local checks cover formatting, workspace Clippy, default/all-feature tests and builds,
-PostgreSQL bootstrap/schema verification, regenerated OpenAPI consistency, native Web and
-WASM builds, the broader Chromium console suite and both real PostgreSQL browser tests.
-The runner now includes thirty-two cases; its seven process checks cover startup/deadline
-failure, repeated SIGTERM during cleanup, an injected removal failure, repetitions and
-simultaneous runs. The eight-case lifecycle suite also passes two fresh-stack repetitions
-from another working directory with explicit artifacts and an alternate manifest of
-three environments and six applications.
-The container-runtime action's fifteen fixture tests also run with the calling job's
-Podman requirement enabled and disabled. Each fixture selects its own policy, and an
-explicit hosted-runner case verifies that required Podman bypasses system Docker.
-The first CI attempt exposed inherited runtime-policy inputs in these fixtures before
-scenarios could run. Isolating each fixture's policy fixed the failure without changing
-the runtime or weakening Docker-policy assertions. A focused independent review
-passed both suites and found no defects.
-
-The first independent review's three medium findings were accepted: host-visible CDP was replaced by inherited pipes,
-container logging was disabled and verified, and saved-consent codes gained fresh
-state/nonce and full persistence assertions. Four low findings were also fixed:
-canonical environment slugs, complete immutable protocol registry checks, measured
-credential overlap against validated CLI policy, and isolated case routing with
-failover always last. Additional assertions cover displayed scope descriptions,
-allow-list versus consent, registered-client/redirect negatives, barrier-synchronized
-redemption and all standard private RSA JWK components.
-
-The second-signal finding was rejected: Tokio keeps its installed Unix signal handler
-when a receiver is dropped, and the real repeated-SIGTERM test completes cleanup.
-The second independent review verified all seven
-fixes and the signal finding's rejection, with no remaining confirmed defects. The
-reviewer inspected the code and protocol contracts; the execution results above come
-from the primary implementation run. Runtime-role token exchange was deferred in that
-initial foundation and is implemented by the token milestone below. MFA variants, network
-sandboxing/multi-host tests and pinned browser interoperability remain explicit follow-ups.
-
-A separate independent review of the lifecycle extension found no confirmed actionable defects.
-It checked real A/B routing, committed mutations/read-back, current consent and grant
-validation, redirect cascades, pre-expiry negative controls, fresh exact-bound code
-recovery and replay, browser response receipts, private IPC and the documented token
-deferrals. The reviewer traced the mounted error middleware to verify the JSON direct
-error contract. The execution evidence above comes from the primary run; this review
-required no code corrections or second review.
-
-The token milestone received two further independent reviews. All four confirmed findings were fixed with regressions proven
-to fail on the original implementation: callback parameter collisions, unknown token
-extensions/empty optional identifiers, delayed signing-cache overwrites and case-sensitive
-JWKS refresh. The corrected verifier refreshes the fixed issuer JWKS once on an unknown
-kid without retrying exchange or relaxing assertions. The second review found no
-confirmed defects. Primary execution passed all 22 cases, seven harness checks,
-534 default/564 all-feature workspace tests and the browser/schema/OpenAPI gates.
-See [token exchange](oauth-token-exchange.md) for the fixes and remaining trust boundaries.
-
-The standard-client/resource milestone passed all 28 full-suite cases with zero cleanup
-errors, all six interoperability cases again after review fixes, and twelve cases across
-two fresh-stack interoperability repetitions with an alternate manifest omitting jobs:read.
-All 22 runner unit tests, seven process checks, 549 default/579 all-feature workspace tests,
-workspace formatting/Clippy, native/WASM builds, the Chromium console and both real
-PostgreSQL browser tests, schema verification and unchanged OpenAPI comparisons passed.
-Cargo audit passed the existing policy with three maintenance warnings; its RSA advisory
-comment now accurately describes public-key verification and test-only private keys,
-without changing the ignore list or enforcement.
-
-Independent reviews covered the full
-implementation and corrected diff. The first review confirmed a low-severity test defect:
-unreachable destinations could make the transport-pinning test pass after removing its
-guard. Reachable, counted HTTPS controls now prove rejection before I/O, including a
-foreign origin whose CA is trusted by the test client. Accepted coverage improvements
-also exercise missing ID-token type, known-key signature tampering in unit and live cases,
-duplicate JSON members, resource audience arrays and tenant-versus-scope error precedence.
-Mutation tests independently proved the guards fail when removed; the HTTP downgrade
-control checks the policy failure itself so TLS rejection cannot mask a missing guard.
-
-The second review independently killed the corresponding mutations, ran all 22 runner
-tests under default/all features and all six live interoperability cases, and found no
-remaining critical, high, medium or low findings. It also verified the cache-cancellation
-regression: expired keys are cleared before refresh I/O, so cancelling a fetch cannot
-renew stale authority. Informational observations are explicit fixture limits: a cold
-cache with an unknown kid can make two bounded fetches, and repeated full runs with the
-default 300-second token TTL may need a larger total deadline. Use the documented
-ten-second TTL for expiration scenarios. These reviews do not claim formal OIDC
-certification, broader browser/client coverage or production immediate revocation.
-
-Two final focused follow-ups independently verified the documentation evidence
-and closed the remaining informational downgrade coverage gap. GET discovery/JWKS and
-POST token requests now each fail the test when only that method's scheme guard is
-weakened. The final review reported no confirmed findings at any severity; restored
-default/all-feature runner tests, formatting and runner Clippy passed independently.
-
-The browser-CI extension passes 549 default workspace tests, workspace formatting and
-all-target/all-feature Clippy, the release WASM build, all three browser stages, the
-container action's fifteen fixtures, Actionlint/ShellCheck, JavaScript syntax and
-unchanged OpenAPI comparisons. Three independent review rounds resolved
-three low findings: a renamed test could silently run zero cases, browser selection
-documentation was inaccurate, and background-network suppression was overstated.
-Exact ignored-test discovery, accurate browser documentation and explicit DNS rules
-address these findings. Missing-test and admission-origin mutations fail as expected;
-The reviewer's final review found no remaining actionable findings and independently passed
-the browser helper against the downloaded GitHub frontend artifact. The prior
-[baseline CI run](https://github.com/permesi/permesi/actions/runs/37353233392) passed
-after retrying a transient PostgreSQL startup failure.
-
-The [first hosted browser run](https://github.com/permesi/permesi/actions/runs/37361954328)
-passed private Podman setup and exact test discovery, but Chromium did not create a
-DevTools port file despite its successful version command; startup output was suppressed,
-so the cause is unknown. Browser setup
-now prefers native Chrome and probes headless startup in an empty private profile,
-requiring both a valid port file and reachable loopback DevTools endpoint before
-publishing the alias. Ten fixture regressions cover selection, fallback, unavailable
-or unusable browsers, unterminated port files, invalid ports, HTTP readiness and
-process/profile cleanup including delayed termination, and direct checks despite proxy
-configuration. Reinstating
-the original selector makes the readiness regression fail. The subsequent corrected hosted run
-37426417421 passes; the TODO now records that completed gate. Live checks cannot be repeated
-inside the primary session's current loopback-binding restriction; earlier full browser
-validation remains valid for the unchanged test scripts. The reviewer independently ran the
-live probe and console suite through the selected alias. Its startup review found four
-low issues: an unterminated file could abort fallback, process cleanup and numeric port
-validation lacked decisive assertions, and the startup comment suggested an unproven
-cause. The fallback regression failed before the fix; the code, assertions and comment
-have been corrected. The probe also explicitly bypasses proxies for its loopback check.
-The reviewer's second startup review verified all fixes, repeated the live probe and console
-suite, and found no remaining actionable findings. Removing the read guard, kill/wait,
-port regex/bounds, or proxy bypass makes the affected regression fail. Delayed shutdown
-verifies waiting for process retirement; it does not assert the precise kill-after duration.
-
-The shared-OPAQUE phase adds `authentication.shared_exchanges` and passes all 29 full-suite
-cases on the corrected gateway, with zero cleanup errors. Four independent
-reviews verified real A/B routing, replay/session binding, PostgreSQL constraints and
-transaction ordering. The initial gateway pinned OPAQUE requests to A; a real Unix-backend
-routing regression now prevents that false cross-replica result. With corrected routing,
-the old in-memory binary fails the native finish step and the shared-store binary passes.
-The reviewer independently passed all seven process/harness checks and all three browser stages
-against the final rebuilt native binaries and CSR assets.
-
-Final workspace runs pass 581 default and 611 all-feature tests, including 29 real PostgreSQL
-exchange regressions. The two ignored PostgreSQL browser tests were exercised separately.
-Formatting, all-target/all-feature Clippy, release WASM/native builds, OpenAPI generation
-and comparisons, fresh bootstrap/reapplication and runtime-privilege verification pass.
-The final review's targeted reversions fail on the intended assertions for metadata
-retargeting, early identity commits in both HTTP handlers, global-capacity serialization,
-configured deadlines and pooled-setting leaks, and malformed reauthentication consumption.
-No confirmed implementation defects remain; operational limits and hardening follow-ups
-are explicit in [the exchange design](opaque-exchanges.md) and [TODO](../TODO.md).
-
-The old browser selector failed again on the retry of `bf31d19`. The selector and shared
-OPAQUE implementation were subsequently committed and pushed as `5453167`. Its
-[hosted run](https://github.com/permesi/permesi/actions/runs/37421297944) passes Chrome
-readiness, the console browser stage and all other required jobs, including the 29 real
-OAuth scenarios and seven harness checks, but both attempts fail during PostgreSQL
-fixture port resolution. The reviewer reproduced the failure against Podman 4.9.3: implicit
-publish-all bindings report an empty `HostIp`, which testcontainers 0.28 cannot parse.
-Podman 5.x supplies `0.0.0.0`, explaining the passing local tests. Fixtures now explicitly
-request a random `127.0.0.1` port for PostgreSQL and OpenBao; this is discoverable on both
-versions and avoids exposing test services to the LAN. A regression checks the requested
-binding and its discoverability on the actual PostgreSQL/OpenBao builders and both network modes.
-The reviewer independently ran all three browser stages on Podman 4.9.3 and 5.4.2; removing either
-explicit binding makes the regression fail. The [corrected hosted run](https://github.com/permesi/permesi/actions/runs/37426417421)
-on e78ae6f passes every required job, including browser and isolated OAuth scenarios.
-
-## Registration policy regression
-
-`authentication.registration_policy` runs real signup and verification endpoints
-across replicas. Ninety-two reserved-domain attempts create no accounts or mail;
-verification succeeds across processes, replay fails on another process, and a live
-link cannot undo local account suspension. The fixture explicitly uses outbox mode
-and the exact `example.test` development exception. No test grants mailbox authority
-from a browser claim or sends email to external recipients.
-
-
-The `authentication.account_containment` case uses dedicated verified accounts and
-a local fixture-bootstrap operator. Real HTTP suspension on A and reactivation on
-B permanently retire old cookies, codes, grants, refresh families and pending proofs
-on every configured replica. Browser recovery proves fresh authentication and
-consent still work. The case runs in `security`, `ha` and `full`; see
-[account containment](account-containment.md) for the current boundary, independent
-review and validation details.
+Broader scenario coverage for WebAuthn/passkey browser flows, MFA-required variants,
+Firefox/Safari, multi-host load/fault tests, additional third-party OIDC clients,
+introspection/immediate JWT revocation, device authorization, and M2M grants remains
+tracked in [TODO.md](../TODO.md). Current scenarios preserve default MFA policy and
+require a genuine full session; they do not establish formal OIDC conformance.

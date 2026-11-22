@@ -380,8 +380,9 @@ without a valid pending request, completion goes to the dashboard. Scopes, tenan
 redirect, nonce and PKCE state remain in PostgreSQL and are protected by the API's
 host-only HttpOnly binding cookie; browser state confers no authority. Deploy the Web
 API base URL against the same HTTPS issuer origin. Minimal consent is rendered by
-the backend, with read-only registry descriptions and Allow/Cancel. Token issuance
-and broader consent/grant management remain deferred.
+the backend, with read-only registry descriptions and Allow/Cancel. Users can review
+and revoke their saved grants under Connected apps; broader administrator grant
+management remains tracked in [TODO.md](../../TODO.md).
 
 `just web-test-browser` runs both the compiled console/login-resume fixtures and
 a real Chromium consent flow against an isolated PostgreSQL-backed authorization

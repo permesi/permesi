@@ -8,19 +8,20 @@ never depend on a process-local map, sticky sessions or a local file. WebAuthn/p
 ceremony state also uses [separate sealed PostgreSQL storage](webauthn-exchanges.md).
 
 The backend, browser client and scenario runner share the published
-`opaque-ke` 5.0.0-pre.0 prerelease, pinned once in the workspace manifest.
-It contains the RustCrypto migration already used by the former Git pin:
-Argon2 0.6, rand 0.10 and SHA-2 0.11. The existing
-Ristretto255/TripleDH/SHA-512/Argon2 suite and disabled optional KEM
-feature remain unchanged.
+`opaque-ke` 5.0.0-pre.0 prerelease, pinned once in the workspace manifest, using
+Argon2 0.6, rand 0.10 and SHA-2 0.11 with the Ristretto255/TripleDH/SHA-512/Argon2
+suite and the optional KEM feature disabled.
 
 Each fresh ceremony uses a CSPRNG seeded from operating-system/browser entropy;
 entropy failure rejects the operation before an exchange is issued. Deterministic
-ChaCha20 setup derivation still uses the existing OpenBao seed. No credential rewrite
-or seed rotation is needed for this dependency migration. RSA verification separately
+ChaCha20 setup derivation uses the existing OpenBao seed. RSA verification separately
 retains SHA-2 0.10 under `rsa_sha2` because RSA 0.9 requires its older digest traits.
 
 ## Flow and trust boundary
+
+![Multi-Replica Authentication and MFA Session Flow](diagrams/auth-session-flow.svg)
+
+*Source: [diagrams/auth-session-flow.d2](diagrams/auth-session-flow.d2)*
 
 Start validates the existing request and builds the library's credential response.
 It generates a random UUID and stores only its SHA-256 hash in `opaque_exchanges`.
@@ -134,44 +135,11 @@ Cross-replica MFA regressions verify bootstrap/challenge session kinds, required
 full-session revocation, single use and rollback when scoped-session issuance fails.
 They do not claim complete multi-replica passkey/TOTP browser coverage.
 
-The isolated binary adds `authentication.shared_exchanges` to the full/security suites.
-Run `just oauth-scenario-build`, then
+The isolated binary adds `authentication.shared_exchanges` to the `full`, `security`,
+and `ha` suites. Run `just oauth-scenario-build`, then
 `target/debug/permesi-oauth-scenario --case authentication.shared_exchanges`.
-It uses real OpenBao/Genesis/Permesi A/B/C and runtime-role PostgreSQL access: login on
-A→B, reauthenticate on B→C, and reject replay or another session of the same user
-across all three replicas. No exchange or session is seeded in SQL. The latest
-three-replica execution remains pending in [database hardening](database-hardening.md).
-See [scenario instructions](oauth-scenarios.md) and [TODO](../TODO.md) for validation
-status and remaining WebAuthn, multi-host/load/fault and operational work.
-
-## Validation and independent review
-
-The local implementation passes 29 real PostgreSQL exchange regressions, 581 default
-and 611 all-feature workspace tests, formatting and strict all-target/all-feature Clippy.
-OpenAPI generation/comparisons and the native/release WASM builds pass. The two ignored
-real PostgreSQL browser tests were exercised separately. The reviewer independently passed
-the console browser stage, both PostgreSQL browser stages and all seven harness checks
-again against the final rebuilt native binaries and CSR assets, verified
-fresh bootstrap and schema reapplication/privilege verification, and passed all 29 isolated
-scenarios twice against the corrected routing. The primary session's restrictions on
-direct Node loopback binding and Podman runtime access prevented its combined browser
-and isolated-stack commands; the independent reviewer ran those normal workflows.
-
-Four independent reviews identified the scenario's A-only routing,
-unbounded database waits, nonindexable pruning, bootstrap/reapplication privilege drift,
-the missing schema-check guard and overbroad documentation; fixes were independently
-reverified. Targeted code reversions in
-disposable scratch copies fail on actual assertions for metadata bindings, login and
-reauthentication transaction ordering, capacity serialization, deadline propagation/reset,
-cleanup, MFA issuance/rollback and malformed-proof handling. The final user-only binding
-case deliberately duplicates a record in a privileged fixture so credential-hash checking
-cannot mask a missing authenticated user ID. Removing that binding produces 204 instead
-of 401; restoring it passes. The final review found no confirmed implementation defects.
-
-A purpose-only metadata change without a session-hash change is rejected by the schema;
-a schema-valid purpose change must also alter the authenticated session hash. Therefore
-an isolated purpose-removal mutation staying green is not a protocol bypass. Exact-count
-throughput remains a measured deployment concern; shared subject/flow quotas, dependency
-classification, trusted-peer handling and nonce policy now follow [authentication operations](authentication-operations.md). The pre-existing `AGENTS.md`
-OpenAPI binary example is outside this phase; `just openapi` uses the actual
-`permesi-openapi` binary. The implementation is published on `sandbox`; corrected hosted run 37426417421 passes every required job; see [validation evidence](oauth-scenarios.md#validation-and-independent-review).
+It uses real OpenBao, Genesis, and three Permesi replicas with runtime-role PostgreSQL
+access: login on A→B, reauthenticate on B→C, and reject replay or another session of
+the same user across all three replicas. No exchange or session is seeded in SQL.
+See [scenario instructions](oauth-scenarios.md) and [TODO](../TODO.md) for coverage
+and remaining operational work.

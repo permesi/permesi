@@ -165,45 +165,11 @@ must use the existing authenticated, scoped UserInfo response and bind its subje
 to the authenticated user. Missing verification information must not be treated as
 verified. Permesi does not issue a KYC or asset-ownership claim.
 
-## Validation and independent review
+## Testing and limits
 
-The completed batch passes 745 default-feature and 775 all-feature workspace tests,
-with both normally ignored real PostgreSQL browser tests exercised explicitly.
-Strict native and WASM Clippy, formatting, Web release build, OpenAPI regeneration
-and drift checks pass. Canonical owner-authenticated schema verification and actual
-least-privilege runtime-login tests include lease persistence across schema reapply.
-The full isolated suite passes all 37 cases on both three and five replicas with
-zero cleanup errors; each topology's eight harness checks and the eight Python
-harness/identity unit tests also pass. `cargo audit --deny unsound --deny yanked`
-passes with the previously tracked unmaintained `paste` warning; this batch does
-not remove that dependency or change the existing audit exception policy.
+PostgreSQL/HTTP integration tests in `services/permesi` cover reserved-domain denial, signup admission modes, disabled-account activation rejection, single-connection verification under rate limits, outbox lease claim/acknowledgement, and local TLS SMTP peers (certificate rejection, mandatory STARTTLS, and stalls). The isolated multi-replica scenario `authentication.registration_policy` exercises reserved-domain rejection, cross-replica verification, replay denial, and disabled-account protection.
 
-The disabled-account regression failed against the old activation implementation.
-The SMTP trace/lock regression was deliberately mutated twice: logging a synthetic
-verification payload failed its secret assertion, and holding an outbox row lock
-during SMTP failed the concurrent `NOWAIT` probe. Both mutations were restored and
-the corrected tests passed. All capabilities used for these tests are synthetic
-and stay in owned local fixtures, not real recipients or production infrastructure.
-
-Two independent reviews were made.
-The first review confirmed an existing verification availability defect: an open
-transaction waited for a rate-limit query on the same pool, requiring a second
-connection. A real one-connection regression reproduced HTTP 503 instead of 204.
-Moving the non-authoritative rate-limit lookup/check before transaction acquisition
-fixed it without moving account status, expiry or single-use authorization outside
-the locked transaction. The reviewer independently ran ten registration and eleven
-email integration tests. The second review found no remaining confirmed critical,
-high, medium or low issues and additionally tested CLI parser isolation under
-hostile inherited signup/SMTP environment values. No confirmed findings were
-rejected or left unresolved.
-
-SMTP transport was exercised against owned local TLS peers, including certificate
-rejection, mandatory STARTTLS and stalls; no external provider's deliverability,
-DNS authentication records or production configuration is certified by these tests.
-Outbox mode remains the default until an operator configures SMTP. The documented
-commit-acknowledgement ambiguity, at-least-once email delivery, replacement of legacy
-workers, and broader distributed-abuse/retention roadmap remain explicit limits.
-
+External mail provider deliverability, DNS authentication records (SPF/DKIM/DMARC), and production SMTP tuning are operator responsibilities. Outbox mode remains the default until SMTP is explicitly configured.
 
 ## Incident containment
 

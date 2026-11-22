@@ -18,7 +18,7 @@ On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C),
 ## CLI example
 
 The `dsn` can omit username/password because OpenBao injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).
-Admission PASERK keyset can be provided via a local file/string or fetched from a URL.
+Admission PASERK keyset can be provided via an inline JSON string (fully offline) or fetched from an HTTPS URL (cached with TTL/unknown-`kid` refresh).
 Admission tokens use RFC3339 `iat` / `exp` claims.
 
 Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8001` and point the PASERK URL at `genesis` on `:8000` to avoid collisions.
@@ -178,8 +178,8 @@ For API testing workflows, this service keeps request collections in `services/p
 
 Zero tokens (`X-Permesi-Zero-Token`, minted by `genesis`) are required on abuse-sensitive auth
 entrypoints such as OPAQUE start/finish, passkey login start/finish, and email
-verify/resend flows. Tokens are validated offline using the PASERK keyset (same as Admission
-Tokens). Session-bound routes (for example `/v1/auth/session`, `/v1/auth/logout`, `/v1/auth/admin/*`,
+verify/resend flows. Tokens are validated locally using the PASERK keyset (inline JSON
+for fully offline verification, or cached HTTPS URL refreshed when stale or on unknown `kid`). Session-bound routes (for example `/v1/auth/session`, `/v1/auth/logout`, `/v1/auth/admin/*`,
 `/v1/me/*`, and `/v1/orgs/*`) use the session cookie instead. Password changes require a recent
 re-auth (default 10 minutes) and revoke all sessions once the new registration record is stored.
 
@@ -324,10 +324,12 @@ Success marks the row `sent`; failures are retried with exponential backoff + ji
 `next_attempt_at` until max attempts is reached (default 5), then marked `failed`.
 Defaults: base delay 5s, max delay 5m.
 
-The default sender is a log-only stub for local dev. To deliver real email, implement
-`EmailSender` (SMTP, SendGrid, etc.) and swap it in where the worker is spawned.
-If you later need higher throughput or multi-service fan-out, consider a broker (NATS JetStream,
-RabbitMQ). For current scale, the DB outbox keeps infrastructure minimal and consistent.
+The default delivery mode (`--email-delivery outbox`) leaves rows pending without
+logging verification links (use `just signup-verify-url` in local development).
+For production mail delivery, configure `--email-delivery smtp` with explicit TLS
+(`implicit` on port 465 or mandatory `starttls` on port 587) and durable worker
+leases; see [registration security](../../docs/registration-security.md#email-delivery).
+For current scale, the DB outbox keeps infrastructure minimal and consistent.
 
 ### Token cleanup (pg_cron or system cron)
 
@@ -405,7 +407,7 @@ The pool is shared by request handlers and background work. A request that canno
 
 ## Admission Token Verification
 
-- `permesi` verifies Admission Tokens offline using the PASERK keyset (file/string/URL).
+- `permesi` verifies Admission Tokens locally using the PASERK keyset (inline JSON string for fully offline verification, or cached HTTPS URL).
 - There is no online revocation check today; `jti` is not looked up in a database.
 
 ## Missing / Planned
@@ -420,20 +422,19 @@ Endpoints under `/v1/auth/admin/*` (bootstrap and elevation) are strictly rate-l
 - **Failure Cooldown**: 3 consecutive failed attempts (invalid OpenBao tokens) trigger a **15-minute cooldown** for the user.
 - **Response**: `429 Too Many Requests` is returned when limits are exceeded. The `/v1/auth/admin/status` endpoint includes a `cooldown_seconds` field to help the UI surface the remaining time.
 
-## OAuth foundation
+## OAuth 2.0 & OIDC
 
-Applications now own OAuth clients and a delegated scope registry beneath the
-existing org/project/environment hierarchy. Management uses full sessions and
-existing org roles; owner/admin may mutate, active members may inspect, and
-inaccessible resources return 404. OAuth scopes are independent of internal
-`Principal.scopes`. Authorization endpoints are implemented; token issuance remains planned.
-See [the foundation design](../../docs/oauth-foundation.md) for routes and invariants.
+Applications own OAuth clients and a delegated `<resource>:<action>` scope registry
+beneath the org/project/environment hierarchy. Management uses full sessions and
+org roles (`owner`/`admin` mutate, active members read, unauthorized requests
+return `404`). OAuth scopes are completely separate from internal `Principal.scopes`.
 
-## Authorization Code + PKCE
+When `PERMESI_OIDC_ISSUER` and `PERMESI_OAUTH_AUDIENCE` are configured, Permesi
+exposes `/.well-known/openid-configuration`, `/jwks.json`, `/authorize`
+(Authorization Code + mandatory S256 PKCE), `/token` (OpenBao-signed RS256 access
+and ID tokens, plus rotating refresh-token families after explicit offline consent),
+`/revoke`, and `/userinfo`. See:
 
-The authorization phase implements `/authorize`, PostgreSQL-backed login resume and
-minimal consent, and hashed single-use codes with S256 required for all clients. It
-exposes no `/token` or signed access/ID/refresh-token issuance. Explicit issuer/resource
-audience and a shared OpenBao RSA key enable preparatory discovery and public JWKS.
-See [OAuth/OIDC flow and rollout](../../docs/oauth-foundation.md#authorization-code--pkce)
-for configuration, tenant/consent policy, transaction semantics and discovery limitations.
+- [OAuth/OIDC foundation](../../docs/oauth-foundation.md)
+- [Authorization-code token exchange](../../docs/oauth-token-exchange.md)
+- [Refresh-token families](../../docs/oauth-refresh-tokens.md)

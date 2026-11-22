@@ -5,6 +5,10 @@ Applications own OAuth clients and their delegated scope registry. Resources are
 soft-deleted explicitly from the bottom up; no endpoint recursively deletes a
 populated tenant hierarchy. Existing rows and historical bindings remain in PostgreSQL.
 
+![Tenant Resource Hierarchy and Authority Boundaries](diagrams/tenant-authorization-model.svg)
+
+*Source: [diagrams/tenant-authorization-model.d2](diagrams/tenant-authorization-model.d2)*
+
 Delete each application's OAuth clients first, including disabled registrations.
 The existing client deletion transaction disables and soft-deletes the client and
 permanently revokes its credentials and saved consent. The application can then be
@@ -130,48 +134,22 @@ and expires with the server-issued exchange. [WebAuthn/passkey ceremonies](webau
 also persist in shared PostgreSQL; remaining MFA/quota milestones are tracked in TODO.md.
 OAuth authorization requests/codes and tenant lifecycle coordination remain PostgreSQL-backed.
 
-## Validation and review
+## Testing and scope limits
 
-Database regressions establish both queue orders for child/client creation against
-deletion, recheck membership, management roles and user status after waits, and pin
-the resolved organization UUID across committed slug reuse. Mutation checks demonstrate
-that the child-creation race, disabled-user and slug-pin regressions fail without their
-guards. Authorization tests reject pending consent and outstanding codes after teardown,
-including redemption through an independent PostgreSQL pool.
+PostgreSQL regressions cover both queue orders for child/client creation against
+deletion, post-wait membership/role/user revalidation, resolved organization UUID
+pinning across slug reuse, and rejection of pending consent and outstanding codes
+after teardown. Browser tests (`just web-test-browser`) cover keyboard/focus
+accessibility, dark/mobile styling, typed confirmation, pending-dialog protection,
+409 child-list refresh, held-Enter repeat rejection, and real OPAQUE/PostgreSQL
+organization deletion.
 
-The earlier lifecycle phase passed workspace tests, formatting, Clippy, schema verification,
-native builds, OpenAPI consistency, the release WASM build and Chromium tests. Browser coverage includes
-keyboard/focus, dark/mobile scope actions, typed confirmation, pending-dialog protection,
-409 child-list refresh and parent navigation. Additional real OPAQUE/PostgreSQL browser
-coverage exercises password rejection, throttle/unavailable responses, explicit post-proof
-confirmation, new children, role loss, account changes and committed slug reuse.
-The earlier lifecycle implementation received three independent reviews.
-The capability/reauthentication extension's first review found no critical, high or
-medium defects, and identified missing permission-loss feedback and stale failure-flow
-documentation. Both were corrected. An informational held-Enter concern was independently
-reproduced in real Chromium: a trusted repeat event submitted another DELETE after
-password proof. The regression failed before the repeat-key guard, and now checks both
-rejection of repeat Enter and successful fresh Enter confirmation. The second independent
-review verified the corrected diff and found no remaining critical, high, medium or low
-defects. Its documentation observation about recoverable password-step failures was
-verified against the state machine and corrected; accepting a fresh deliberate Enter
-press after successful verification remains the explicit confirmation policy.
+Current UX scope limits tracked in [TODO.md](../TODO.md):
 
-That earlier phase passed 509 workspace tests with default features and 539 with all
-features. Their two ignored real browser tests are run explicitly and pass through
-`just web-test-browser`, alongside the console browser suite. Formatting, native Clippy,
-both native builds, PostgreSQL schema verification, OpenAPI generation/consistency,
-native Web checks and the release WASM build pass.
-
-The remaining informational observations have explicit scope limits. Organization DELETE
-authorizes the current cookie account even if another tab switched it after the final
-refresh; only an owner of the pinned UUID with recent authentication can succeed. An
-optional expected-account condition and UUID guards for slug-addressed child deletion
-remain future UX hardening, without weakening current server authorization. Ambiguous
-DELETE timeouts need explicit reconciliation and capability failures currently require
-a page reload. These usability follow-ups are tracked in TODO.md.
-
-The current required CI browser gate builds WASM and exercises real PostgreSQL/OPAQUE
-authorization and console flows; see [scenario validation](oauth-scenarios.md#validation-and-independent-review). Four other security-settings flows still contain inline OPAQUE exchanges;
-sharing their helper is outside this focused milestone. Fair ancestor coordination
-and broader MFA/browser coverage remain separate roadmap items. [WebAuthn exchanges](webauthn-exchanges.md) now use shared PostgreSQL storage.
+- Organization DELETE authorizes the active session cookie even if another browser tab
+  switched accounts after the last refresh (only an owner of the pinned UUID with recent
+  authentication can succeed); optional expected-account verification and UUID guards
+  for slug-addressed child deletions remain planned.
+- Ambiguous DELETE timeouts require explicit state reconciliation rather than automatic
+  retry, and a failed capability refresh requires reloading the page.
+- Fair ancestor-writer coordination under sustained read load remains planned.
