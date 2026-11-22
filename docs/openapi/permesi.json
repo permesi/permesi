@@ -386,12 +386,11 @@
         "tags": [
           "health"
         ],
-        "summary": "Perform a detailed dependency health check.",
-        "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh OpenBao\nDB credentials.",
+        "summary": "Return coarse service status and build identity from local state.",
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "Database and admission PASERK endpoint are healthy",
+            "description": "Service available",
             "content": {
               "application/json": {
                 "schema": {
@@ -401,7 +400,7 @@
             }
           },
           "503": {
-            "description": "Database or admission PASERK endpoint is unhealthy",
+            "description": "Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -459,8 +458,7 @@
         "tags": [
           "health"
         ],
-        "summary": "Report process liveness without checking external dependencies.",
-        "description": "This endpoint is suitable for liveness probes to avoid restart loops during\ntransient dependency outages.",
+        "summary": "Report process liveness independently of dependencies.",
         "operationId": "live",
         "responses": {
           "200": {
@@ -474,15 +472,14 @@
         "tags": [
           "health"
         ],
-        "summary": "Report readiness based on database and admission dependency health.",
-        "description": "Returns `503` when dependencies are unhealthy so orchestrators can stop\nrouting traffic to this instance.",
+        "summary": "Report whether this replica can receive traffic from the service.",
         "operationId": "ready",
         "responses": {
           "200": {
-            "description": "Service is ready to receive traffic"
+            "description": "Ready"
           },
           "503": {
-            "description": "Service dependencies are not ready",
+            "description": "Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -8810,25 +8807,13 @@
         "type": "object",
         "required": [
           "commit",
-          "name",
-          "version",
-          "database",
-          "admission_keyset"
+          "status"
         ],
         "properties": {
-          "admission_keyset": {
-            "type": "string"
-          },
           "commit": {
             "type": "string"
           },
-          "database": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "version": {
+          "status": {
             "type": "string"
           }
         }

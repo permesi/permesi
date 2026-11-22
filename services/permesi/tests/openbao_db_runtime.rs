@@ -283,6 +283,13 @@ async fn verify_genesis_runtime(
             .await
             .context("Failed to insert token with genesis runtime creds")?;
 
+    assert_permission_denied(
+        sqlx::query("CREATE TEMP TABLE denied(id int)")
+            .execute(&mut connection)
+            .await,
+        "Genesis runtime cannot create temporary tables",
+    )?;
+
     let delete_result = sqlx::query("DELETE FROM tokens WHERE id::text = $1")
         .bind(&token_id)
         .execute(&mut connection)
@@ -337,47 +344,6 @@ async fn verify_genesis_runtime(
     Ok(())
 }
 
-/// The maintenance owner must ignore temporary catalog views created under the runtime role.
-async fn verify_rollover_ignores_runtime_temporary_views(
-    connection: &mut PgConnection,
-) -> Result<()> {
-    sqlx::raw_sql(
-        "SET ROLE genesis_runtime;
-         CREATE TEMP TABLE rollover_authority_probe (executor NAME NOT NULL);
-         GRANT INSERT ON pg_temp.rollover_authority_probe TO PUBLIC;
-         CREATE FUNCTION pg_temp.capture_rollover_authority(relation_name TEXT) RETURNS TEXT
-         LANGUAGE plpgsql VOLATILE AS $$
-           BEGIN INSERT INTO pg_temp.rollover_authority_probe VALUES (current_user);
-             RETURN relation_name; END;
-         $$;
-         CREATE TEMP VIEW pg_class AS
-           SELECT oid,pg_temp.capture_rollover_authority(relname::TEXT) AS relname
-           FROM pg_catalog.pg_class;
-         GRANT SELECT ON pg_temp.pg_class TO PUBLIC;
-         RESET ROLE;
-         -- An empty premake range avoids any partition DDL in this harmless authority probe.
-         SELECT public.genesis_tokens_rollover(7,-1);",
-    )
-    .execute(&mut *connection)
-    .await?;
-    let function_calls: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM pg_temp.rollover_authority_probe")
-            .fetch_one(&mut *connection)
-            .await?;
-    ensure!(
-        function_calls == 0,
-        "Privileged rollover executed a runtime temporary view's function"
-    );
-    sqlx::raw_sql(
-        "DROP VIEW pg_temp.pg_class;
-         DROP FUNCTION pg_temp.capture_rollover_authority(TEXT);
-         DROP TABLE pg_temp.rollover_authority_probe;",
-    )
-    .execute(&mut *connection)
-    .await?;
-    Ok(())
-}
-
 /// Tests the actual psql bootstrap; OpenBao connection passwords are replaced with per-run entropy.
 async fn bootstrap_database(
     postgres: &PostgresContainer,
@@ -400,12 +366,6 @@ async fn bootstrap_database(
         .execute(&mut admin)
         .await?;
     }
-    let mut maintenance = PgConnection::connect(&format!(
-        "postgres://openbao_genesis:{genesis_password}@127.0.0.1:{}/genesis?sslmode=disable",
-        postgres.host_port()
-    ))
-    .await?;
-    verify_rollover_ignores_runtime_temporary_views(&mut maintenance).await?;
     Ok(())
 }
 

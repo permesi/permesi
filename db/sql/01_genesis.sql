@@ -46,9 +46,9 @@ BEGIN
         REVOKE CREATE ON SCHEMA public FROM genesis_runtime, PUBLIC;
         GRANT USAGE ON SCHEMA public TO genesis_runtime;
         EXECUTE pg_catalog.format('REVOKE ALL ON DATABASE %I FROM genesis_runtime',current_database());
-        EXECUTE pg_catalog.format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO genesis_runtime',current_database());
-        GRANT SELECT ON clients TO genesis_runtime;
-        GRANT SELECT, INSERT ON tokens,tokens_default TO genesis_runtime;
+        EXECUTE pg_catalog.format('GRANT CONNECT ON DATABASE %I TO genesis_runtime',current_database());
+        GRANT SELECT (id, uuid, is_reserved) ON clients TO genesis_runtime;
+        GRANT INSERT (client_id, ip_address, country, user_agent), SELECT (id) ON tokens TO genesis_runtime;
         ALTER DEFAULT PRIVILEGES REVOKE ALL ON TABLES FROM genesis_runtime, PUBLIC;
         ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM genesis_runtime, PUBLIC;
         ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM genesis_runtime, PUBLIC;

@@ -18,10 +18,10 @@ On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C),
 ## CLI example
 
 The `dsn` can omit username/password because OpenBao injects DB creds (e.g. `postgres://postgres@localhost:5432/permesi`).
-Admission PASERK keyset can be provided via an inline JSON string (fully offline) or fetched from an HTTPS URL (cached with TTL/unknown-`kid` refresh).
+Core OpenBao supplies the approved admission versions and withdrawal floor.
 Admission tokens use RFC3339 `iat` / `exp` claims.
 
-Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8001` and point the PASERK URL at `genesis` on `:8000` to avoid collisions.
+Local dev note: when running the workspace frontend (Trunk on `:8081` behind HAProxy), use `--port 8001` to avoid collisions.
 
 When serving over TCP/TLS (that is, without `--socket-path`), `permesi` first binds `[::]:PORT`
 with dual-stack enabled so one listener can accept both IPv6 and IPv4 traffic. If the host does
@@ -35,7 +35,6 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
  cargo run -p permesi --bin permesi -- \
    --port 8001 \
    --dsn "postgres://postgres@localhost:5432/permesi" \
-   --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
    --tls-pem-bundle "certs/permesi/tls.bundle.pem" \
    --openbao-url "http://openbao:8200/v1/auth/approle/login" \
    --openbao-role-id "$PERMESI_ROLE_ID" \
@@ -50,7 +49,6 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
  cargo run -p permesi --bin permesi -- \
    --port 8001 \
    --dsn "postgres://postgres@localhost:5432/permesi" \
-   --admission-paserk-url "https://genesis.permesi.localhost:8000/paserk.json" \
    --tls-pem-bundle "/run/permesi/tls.bundle.pem" \
    --openbao-url "/run/openbao/proxy.sock"
  ```
@@ -178,8 +176,7 @@ For API testing workflows, this service keeps request collections in `services/p
 
 Zero tokens (`X-Permesi-Zero-Token`, minted by `genesis`) are required on abuse-sensitive auth
 entrypoints such as OPAQUE start/finish, passkey login start/finish, and email
-verify/resend flows. Tokens are validated locally using the PASERK keyset (inline JSON
-for fully offline verification, or cached HTTPS URL refreshed when stale or on unknown `kid`). Session-bound routes (for example `/v1/auth/session`, `/v1/auth/logout`, `/v1/auth/admin/*`,
+verify/resend flows. Tokens are validated locally against the current core OpenBao snapshot. Session-bound routes (for example `/v1/auth/session`, `/v1/auth/logout`, `/v1/auth/admin/*`,
 `/v1/me/*`, and `/v1/orgs/*`) use the session cookie instead. Password changes require a recent
 re-auth (default 10 minutes) and revoke all sessions once the new registration record is stored.
 
@@ -407,7 +404,7 @@ The pool is shared by request handlers and background work. A request that canno
 
 ## Admission Token Verification
 
-- `permesi` verifies Admission Tokens locally using the PASERK keyset (inline JSON string for fully offline verification, or cached HTTPS URL).
+- `permesi` verifies Admission Tokens locally using approved public keys cached from core OpenBao.
 - There is no online revocation check today; `jti` is not looked up in a database.
 
 ## Missing / Planned

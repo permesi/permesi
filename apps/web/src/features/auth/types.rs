@@ -225,10 +225,7 @@ pub struct PlatformStats {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub commit: String,
-    pub name: String,
-    pub version: String,
-    pub database: String,
-    pub admission_keyset: String,
+    pub status: String,
 }
 
 #[cfg(test)]
@@ -239,20 +236,16 @@ mod tests {
     fn test_health_response_serialization() -> Result<(), serde_json::Error> {
         let health = HealthResponse {
             commit: "abcdef1".to_string(),
-            name: "permesi".to_string(),
-            version: "0.1.0".to_string(),
-            database: "ok".to_string(),
-            admission_keyset: "ok".to_string(),
+            status: "ok".to_string(),
         };
 
         let json = serde_json::to_string(&health)?;
         assert!(json.contains("abcdef1"));
-        assert!(json.contains("permesi"));
+        assert!(json.contains("ok"));
 
         let deserialized: HealthResponse = serde_json::from_str(&json)?;
         assert_eq!(deserialized.commit, "abcdef1");
-        assert_eq!(deserialized.name, "permesi");
-        assert_eq!(deserialized.database, "ok");
+        assert_eq!(deserialized.status, "ok");
         Ok(())
     }
 }

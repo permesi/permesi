@@ -225,8 +225,6 @@ impl Services {
                     "example.test".into(),
                     "--frontend-base-url".into(),
                     origin.into(),
-                    "--admission-paserk-url".into(),
-                    format!("{origin}/admission/paserk.json"),
                     "--admission-paserk-ca-path".into(),
                     ca.display().to_string(),
                 ],

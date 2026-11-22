@@ -14,475 +14,230 @@ pub(crate) mod token;
 pub(crate) mod userinfo;
 pub mod users;
 
-use admission_token::{
-    AdmissionTokenClaims, Error as AdmissionError, PaserkKeySet, VerificationOptions,
-    verify_v4_public,
-};
-use anyhow::{Context, Result, anyhow};
-use reqwest::{
-    Client,
-    header::{ETAG, IF_NONE_MATCH},
-};
+use admission_token::{AdmissionTokenClaims, PaserkKeySet, VerificationOptions, verify_v4_public};
+use anyhow::{Context, Result, ensure};
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::RwLock;
-use tracing::{Instrument, error, info, info_span, instrument, warn};
-use url::Url;
+use tracing::{debug, instrument, warn};
 
-// PASERK caching: use in-memory keyset with TTL; refresh on stale cache or unknown kid.
-// If refresh fails, keep the last known keyset so verification keeps working.
-const KEYSET_CACHE_TTL_SECONDS: u64 = 300;
-const KEYSET_REFRESH_COOLDOWN_SECONDS: u64 = 30;
-/// Minimum spacing between refresh attempts while the cache is stale, so a slow
-/// or unreachable genesis costs one request the fetch, not every request.
-const KEYSET_STALE_RETRY_SECONDS: u64 = 5;
-/// Bounds for the keyset fetch; verification must never wait on genesis for long.
-const KEYSET_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const KEYSET_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const MIN_TOKEN_TTL_SECONDS: i64 = 60;
 const MAX_TOKEN_TTL_SECONDS: i64 = 180;
 const ADMISSION_ACTION: &str = "admission";
 
-#[derive(Debug)]
-enum KeysetSource {
-    /// Keyset loaded from a local file or CLI string and never refreshed.
-    Static,
-    /// Keyset fetched from genesis `/paserk.json` and refreshed as needed.
-    Remote { url: String, client: Client },
-}
-
-#[derive(Debug, Clone)]
-struct KeysetCache {
-    /// Last known PASERK keyset for admission token verification.
-    keyset: PaserkKeySet,
-    /// When the keyset was last successfully fetched.
-    fetched_at: Instant,
-    /// `ETag` from the last successful fetch, if provided by genesis.
-    etag: Option<String>,
-}
-
-impl KeysetCache {
-    /// Keyset is fresh if within TTL; stale keysets trigger a refresh attempt.
-    fn is_fresh(&self) -> bool {
-        self.fetched_at.elapsed() < Duration::from_secs(KEYSET_CACHE_TTL_SECONDS)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DependencyStatus {
-    /// Remote dependency is reachable and PASERK fetch succeeded.
     Ok,
-    /// Remote dependency is unreachable or PASERK fetch failed.
     Error,
-    /// Static keyset means no external dependency.
+    #[cfg(test)]
     Static,
 }
 
-impl DependencyStatus {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Error => "error",
-            Self::Static => "static",
-        }
-    }
-
-    const fn is_healthy(self) -> bool {
-        !matches!(self, Self::Error)
-    }
-}
-
-/// Verifies admission (zero) tokens using a cached PASERK keyset.
-///
-/// Used by auth handlers (signup/login/verify) to validate tokens offline and
-/// by `/health` to report dependency status when the keyset is fetched remotely.
+/// The verifier starts empty on every boot. Only the background reader can install
+/// keys. The validity deadline includes time spent waiting for the authority read.
 #[derive(Debug)]
 pub struct AdmissionVerifier {
-    /// Where the PASERK keyset comes from (static or remote genesis URL).
-    keyset_source: KeysetSource,
-    /// In-memory cached keyset and last fetch timestamp.
-    keyset_cache: RwLock<KeysetCache>,
-    /// Expected token issuer (genesis base URL).
+    snapshot: RwLock<Option<Snapshot>>,
     issuer: String,
-    /// Expected token audience (permesi).
     audience: String,
-    /// Expected token action ("admission").
-    action: String,
-    /// Timestamp to throttle refresh attempts on unknown kid.
-    last_refresh_unix: AtomicU64,
-    /// Unix seconds of the last refresh attempted because the cache was stale.
-    last_stale_attempt_unix: AtomicU64,
+}
+
+#[derive(Debug)]
+struct Snapshot {
+    keyset: PaserkKeySet,
+    deadline: Option<Instant>,
+    floor: u32,
+}
+
+/// The operator publishes at most two approved Ed25519 versions in the core KV.
+/// A higher withdrawal floor immediately excludes every lower version.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Authority {
+    minimum_version: u32,
+    keys: std::collections::BTreeMap<u32, String>,
+}
+
+impl Authority {
+    fn into_snapshot(self, deadline: Instant) -> Result<Snapshot> {
+        ensure!(
+            self.minimum_version > 0 && self.keys.len() <= 2,
+            "invalid admission authority"
+        );
+        let mut keys = Vec::new();
+        for (version, material) in self.keys.into_iter().rev() {
+            ensure!(
+                version > 0 && material.len() == 44,
+                "invalid Ed25519 version or encoding"
+            );
+            if version >= self.minimum_version {
+                keys.push(admission_token::PaserkKey::from_ed25519_public_key_base64(
+                    &material,
+                )?);
+            }
+        }
+        let keyset = PaserkKeySet {
+            version: "v4".into(),
+            purpose: "public".into(),
+            active_kid: keys.first().map_or_else(String::new, |key| key.kid.clone()),
+            keys,
+        };
+        if !keyset.keys.is_empty() {
+            keyset.validate()?;
+        }
+        Ok(Snapshot {
+            keyset,
+            deadline: Some(deadline),
+            floor: self.minimum_version,
+        })
+    }
 }
 
 impl AdmissionVerifier {
-    /// Build from a static keyset (file/inline CLI), no remote refresh.
-    #[must_use]
+    #[cfg(test)]
     pub fn new(keyset: PaserkKeySet, issuer: String, audience: String) -> Self {
         Self {
-            keyset_source: KeysetSource::Static,
-            keyset_cache: RwLock::new(KeysetCache {
+            snapshot: RwLock::new(Some(Snapshot {
                 keyset,
-                fetched_at: Instant::now(),
-                etag: None,
-            }),
+                deadline: None,
+                floor: 1,
+            })),
             issuer,
             audience,
-            action: ADMISSION_ACTION.to_string(),
-            last_refresh_unix: AtomicU64::new(0),
-            last_stale_attempt_unix: AtomicU64::new(0),
         }
     }
 
-    /// Build a verifier that fetches a PASERK keyset from a remote URL.
-    ///
-    /// # Errors
-    /// Returns an error if the keyset cannot be fetched or parsed.
-    pub async fn new_remote(url: String, issuer: String, audience: String) -> Result<Self> {
-        let parsed = Url::parse(&url).context("Invalid admission PASERK URL")?;
-        if parsed.scheme() != "https" {
-            return Err(anyhow!("Admission PASERK URL must use https: {url}"));
-        }
-
-        let ca_certs = crate::tls::load_reqwest_ca()?;
-        let mut builder = Client::builder()
-            .use_rustls_tls()
-            .connect_timeout(KEYSET_CONNECT_TIMEOUT)
-            .timeout(KEYSET_FETCH_TIMEOUT)
-            .user_agent(crate::APP_USER_AGENT);
-
-        for cert in ca_certs {
-            builder = builder.add_root_certificate(cert);
-        }
-
-        let client = builder
-            .build()
-            .context("Failed to build PASERK HTTP client")?;
-        // Startup fetch is best-effort: if genesis isn't ready yet, start with an empty, stale cache
-        // so /health stays red and verification fails closed until refresh succeeds.
-        let (keyset, fetched_at, last_refresh_unix, etag) =
-            match fetch_keyset(&client, &url, None).await {
-                Ok(FetchOutcome::Updated { keyset, etag }) => {
-                    keyset
-                        .validate()
-                        .context("Invalid admission PASERK keyset")?;
-                    (keyset, Instant::now(), now_unix_seconds_u64(), etag)
-                }
-                Ok(FetchOutcome::NotModified) => {
-                    warn!("admission PASERK fetch returned not-modified during startup");
-                    (empty_keyset(), stale_instant(), 0, None)
-                }
-                Err(err) => {
-                    warn!(
-                        url = %url,
-                        error = %err,
-                        "admission PASERK fetch failed during startup; continuing with empty keyset"
+    /// Poll only the core-controlled KV v2 record. Read failures age out the last
+    /// successful observation. Stopping the service drops the reader's weak reference.
+    pub(crate) fn start(
+        globals: &crate::cli::globals::GlobalArgs,
+        mount: &str,
+        refresh: Duration,
+        max_age: Duration,
+        issuer: String,
+        audience: String,
+    ) -> Arc<Self> {
+        let verifier = Arc::new(Self {
+            snapshot: RwLock::new(None),
+            issuer,
+            audience,
+        });
+        let weak = Arc::downgrade(&verifier);
+        let transport = globals.openbao_transport.clone();
+        let token = transport.is_tcp().then(|| globals.openbao_token.clone());
+        let path = format!("/v1/{mount}/data/admission-authority");
+        tokio::spawn(async move {
+            use secrecy::ExposeSecret;
+            let mut timer = tokio::time::interval(refresh);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                timer.tick().await;
+                let Some(verifier) = weak.upgrade() else {
+                    break;
+                };
+                let started = Instant::now();
+                let observation = async {
+                    let response = transport
+                        .read_bounded(&path, token.as_ref().map(ExposeSecret::expose_secret), 8192)
+                        .await?;
+                    ensure!(
+                        response.status.is_success(),
+                        "admission authority read failed"
                     );
-                    (empty_keyset(), stale_instant(), 0, None)
+                    let authority: Authority = serde_json::from_value(
+                        response
+                            .body
+                            .pointer("/data/data")
+                            .context("missing admission authority")?
+                            .clone(),
+                    )?;
+                    verifier
+                        .install(authority.into_snapshot(started + max_age)?)
+                        .await
+                };
+                if !matches!(tokio::time::timeout(refresh, observation).await, Ok(Ok(()))) {
+                    warn!("admission authority refresh failed");
                 }
-            };
-        Ok(Self {
-            keyset_source: KeysetSource::Remote { url, client },
-            keyset_cache: RwLock::new(KeysetCache {
-                keyset,
-                fetched_at,
-                etag,
-            }),
-            issuer,
-            audience,
-            action: ADMISSION_ACTION.to_string(),
-            last_refresh_unix: AtomicU64::new(last_refresh_unix),
-            last_stale_attempt_unix: AtomicU64::new(0),
-        })
+            }
+        });
+        verifier
     }
 
-    /// Return the remote PASERK URL when configured, otherwise `None`.
-    pub fn keyset_url(&self) -> Option<&str> {
-        match &self.keyset_source {
-            KeysetSource::Static => None,
-            KeysetSource::Remote { url, .. } => Some(url.as_str()),
-        }
+    /// Reject a regressing floor even if an older read arrives from a stale replica.
+    async fn install(&self, next: Snapshot) -> Result<()> {
+        let mut stored = self.snapshot.write().await;
+        ensure!(
+            stored.as_ref().is_none_or(|old| next.floor >= old.floor),
+            "admission floor regressed"
+        );
+        *stored = Some(next);
+        Ok(())
     }
 
-    /// Return the configured issuer string for admission token verification.
     #[must_use]
     pub fn issuer(&self) -> &str {
         &self.issuer
     }
-
-    /// Return the configured audience for admission token verification.
     #[must_use]
     pub fn audience(&self) -> &str {
         &self.audience
     }
 
-    /// Return a keyset snapshot; refresh if stale, keep cache if refresh fails.
-    async fn keyset_snapshot(&self) -> Result<PaserkKeySet> {
-        let (cached, fresh) = {
-            let cache = self.keyset_cache.read().await;
-            (cache.keyset.clone(), cache.is_fresh())
-        };
-
-        if fresh {
-            return Ok(cached);
-        }
-
-        // Only one request per retry interval pays for a refresh of a stale cache;
-        // the others verify against the cached keyset straight away.
-        let now = now_unix_seconds_u64();
-        let last = self.last_stale_attempt_unix.load(Ordering::Relaxed);
-        if now.saturating_sub(last) < KEYSET_STALE_RETRY_SECONDS
-            || self
-                .last_stale_attempt_unix
-                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-                .is_err()
-        {
-            return Ok(cached);
-        }
-
-        if let KeysetSource::Remote { url, .. } = &self.keyset_source
-            && let Err(err) = self.refresh_keyset().await
-        {
-            // Refresh failure shouldn't break verification; keep using the last cached keyset.
-            warn!(
-                error = %err,
-                url = %url,
-                "failed to refresh paserk keyset cache"
-            );
-            return Ok(cached);
-        }
-
-        let cache = self.keyset_cache.read().await;
-        Ok(cache.keyset.clone())
-    }
-
-    /// Fetch PASERK from genesis and update the in-memory cache.
-    async fn refresh_keyset(&self) -> Result<()> {
-        let (url, client, etag) = match &self.keyset_source {
-            KeysetSource::Static => return Ok(()),
-            KeysetSource::Remote { url, client } => {
-                let etag = self.keyset_cache.read().await.etag.clone();
-                (url.clone(), client.clone(), etag)
-            }
-        };
-
-        match fetch_keyset(&client, &url, etag.as_deref()).await? {
-            FetchOutcome::NotModified => {
-                let mut cache = self.keyset_cache.write().await;
-                cache.fetched_at = Instant::now();
-            }
-            FetchOutcome::Updated { keyset, etag } => {
-                keyset
-                    .validate()
-                    .context("Invalid admission PASERK keyset")?;
-                let mut cache = self.keyset_cache.write().await;
-                cache.keyset = keyset;
-                cache.fetched_at = Instant::now();
-                cache.etag = etag;
-                info!(
-                    keyset_keys = cache.keyset.keys.len(),
-                    "paserk keyset cache refreshed"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Report dependency status for `/health` using cached freshness.
-    ///
-    /// When the keyset cache is fresh, return `Ok` without hitting genesis.
-    /// Stale caches trigger a refresh attempt, and failures report `Error`.
     async fn dependency_status(&self) -> DependencyStatus {
-        match &self.keyset_source {
-            KeysetSource::Static => DependencyStatus::Static,
-            KeysetSource::Remote { url, .. } => {
-                let is_fresh = self.keyset_cache.read().await.is_fresh();
-                if is_fresh {
-                    return DependencyStatus::Ok;
-                }
-                match self.refresh_keyset().await {
-                    Ok(()) => DependencyStatus::Ok,
-                    Err(err) => {
-                        // /health reports dependency errors when refresh fails.
-                        warn!(
-                            error = %err,
-                            url = %url,
-                            "paserk keyset fetch failed during health check"
-                        );
-                        DependencyStatus::Error
-                    }
-                }
-            }
+        let stored = self.snapshot.read().await;
+        match stored.as_ref() {
+            #[cfg(test)]
+            Some(snapshot) if snapshot.deadline.is_none() => DependencyStatus::Static,
+            Some(snapshot) if snapshot.is_current() => DependencyStatus::Ok,
+            _ => DependencyStatus::Error,
         }
-    }
-
-    /// Refresh if a token `kid` is unknown, with cooldown to avoid spamming genesis.
-    async fn refresh_on_unknown_kid(&self) -> Result<bool> {
-        if matches!(&self.keyset_source, KeysetSource::Static) {
-            return Ok(false);
-        }
-        let now = now_unix_seconds_u64();
-        let last = self.last_refresh_unix.load(Ordering::Relaxed);
-        if now.saturating_sub(last) < KEYSET_REFRESH_COOLDOWN_SECONDS {
-            // Avoid spamming genesis when many unknown-kid tokens arrive.
-            return Ok(false);
-        }
-        self.last_refresh_unix.store(now, Ordering::Relaxed);
-        self.refresh_keyset().await?;
-        Ok(true)
     }
 }
 
-/// Unix seconds for token TTL validation.
+impl Snapshot {
+    fn is_current(&self) -> bool {
+        !self.keyset.keys.is_empty() && self.deadline.is_none_or(|end| Instant::now() < end)
+    }
+}
+
 fn now_unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// Convenience for cooldown tracking (unsigned).
-fn now_unix_seconds_u64() -> u64 {
-    u64::try_from(now_unix_seconds()).unwrap_or(0)
-}
-
-/// Empty keyset used when startup fetch fails; forces verification to fail closed.
-fn empty_keyset() -> PaserkKeySet {
-    PaserkKeySet {
-        version: "v4".to_string(),
-        purpose: "public".to_string(),
-        active_kid: String::new(),
-        keys: Vec::new(),
-    }
-}
-
-/// Produce an Instant that is already stale to trigger an early refresh.
-fn stale_instant() -> Instant {
-    Instant::now()
-        .checked_sub(Duration::from_secs(KEYSET_CACHE_TTL_SECONDS + 1))
-        .unwrap_or_else(Instant::now)
-}
-
-enum FetchOutcome {
-    NotModified,
-    Updated {
-        keyset: PaserkKeySet,
-        etag: Option<String>,
-    },
-}
-
-/// Fetch the PASERK keyset from genesis and parse its JSON response.
-async fn fetch_keyset(client: &Client, url: &str, etag: Option<&str>) -> Result<FetchOutcome> {
-    let span = info_span!(
-        "admission.keyset.fetch",
-        http.method = "GET",
-        url = %url
-    );
-    async {
-        let mut request = client.get(url);
-        if let Some(etag_value) = etag {
-            request = request.header(IF_NONE_MATCH, etag_value);
-        }
-        let response = request.send().await?;
-        let status = response.status();
-        if status.as_u16() == 304 {
-            return Ok(FetchOutcome::NotModified);
-        }
-        let etag = response
-            .headers()
-            .get(ETAG)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        let body = response.text().await?;
-
-        if !status.is_success() {
-            return Err(anyhow!("paserk keyset fetch failed: {status}"));
-        }
-
-        let keyset = PaserkKeySet::from_json(&body).context("Invalid admission PASERK JSON")?;
-        Ok(FetchOutcome::Updated { keyset, etag })
-    }
-    .instrument(span)
-    .await
-}
-
-/// Convenience wrapper that returns true/false instead of claims.
-#[instrument(skip(verifier, token))]
+/// Verify issuer, audience, action, time bounds and signature against the current local snapshot.
+#[instrument(skip_all)]
 pub async fn verify_token(verifier: &AdmissionVerifier, token: &str) -> bool {
     verify_token_claims(verifier, token).await.is_some()
 }
 
-/// Verify a zero token and return its claims if valid.
-///
-/// Flow: use cached keyset; on unknown `kid`, refresh (with cooldown) and retry once.
+/// Reject unknown keys and expired observations locally. Only the reader contacts OpenBao.
 pub async fn verify_token_claims(
     verifier: &AdmissionVerifier,
     token: &str,
 ) -> Option<AdmissionTokenClaims> {
-    let keyset = match verifier.keyset_snapshot().await {
-        Ok(keyset) => keyset,
-        Err(e) => {
-            error!("Admission PASERK snapshot failed: {e}");
-            return None;
-        }
-    };
-
-    let now = now_unix_seconds();
+    let stored = verifier.snapshot.read().await;
+    let snapshot = stored.as_ref().filter(|s| s.is_current())?;
     let options = VerificationOptions {
         expected_issuer: &verifier.issuer,
         expected_audience: &verifier.audience,
-        expected_action: &verifier.action,
-        now_unix_seconds: now,
+        expected_action: ADMISSION_ACTION,
+        now_unix_seconds: now_unix_seconds(),
         min_ttl_seconds: MIN_TOKEN_TTL_SECONDS,
         max_ttl_seconds: MAX_TOKEN_TTL_SECONDS,
     };
-
-    match verify_v4_public(token, &keyset, &options) {
-        Ok(claims) => Some(claims),
-        Err(AdmissionError::UnknownKid(kid)) => match verifier.refresh_on_unknown_kid().await {
-            Ok(true) => {
-                let keyset = match verifier.keyset_snapshot().await {
-                    Ok(keyset) => keyset,
-                    Err(e) => {
-                        error!("Admission PASERK refresh failed: {e}");
-                        return None;
-                    }
-                };
-                let options = VerificationOptions {
-                    expected_issuer: &verifier.issuer,
-                    expected_audience: &verifier.audience,
-                    expected_action: &verifier.action,
-                    now_unix_seconds: now_unix_seconds(),
-                    min_ttl_seconds: MIN_TOKEN_TTL_SECONDS,
-                    max_ttl_seconds: MAX_TOKEN_TTL_SECONDS,
-                };
-                match verify_v4_public(token, &keyset, &options) {
-                    Ok(claims) => Some(claims),
-                    Err(e) => {
-                        error!("Admission token verification failed after refresh: {e}");
-                        None
-                    }
-                }
-            }
-            Ok(false) => {
-                warn!(kid = %kid, "Admission token kid not found and refresh suppressed");
-                None
-            }
-            Err(e) => {
-                error!("Admission PASERK refresh failed: {e}");
-                None
-            }
-        },
-        Err(e) => {
-            error!("Admission token verification failed: {e}");
-            None
-        }
-    }
+    let result = verify_v4_public(token, &snapshot.keyset, &options).ok();
+    debug!(accepted = result.is_some(), "admission verification");
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use admission_token::Error as AdmissionError;
     use admission_token::{
         AdmissionTokenFooter, PaserkKey, build_token, encode_signing_input, rfc3339_from_unix,
     };
@@ -571,93 +326,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_on_unknown_kid_skips_static_source() -> anyhow::Result<()> {
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let keyset = keyset_for_signing_key(&signing_key)?;
-        let verifier = AdmissionVerifier::new(keyset, ISSUER.to_string(), AUDIENCE.to_string());
-        let refreshed = verifier.refresh_on_unknown_kid().await?;
-        assert!(!refreshed);
-        Ok(())
-    }
-
-    /// A stale cache with genesis failing: verification keeps the cached keyset and
-    /// only one request per retry interval pays for a refresh attempt.
-    #[tokio::test]
-    async fn stale_keyset_refresh_is_spaced_out_and_keeps_the_cached_keys() -> anyhow::Result<()> {
-        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(503))
-            .mount(&server)
-            .await;
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let keyset = keyset_for_signing_key(&signing_key)?;
+    async fn withdrawal_rejects_the_same_unexpired_token_and_a_regressing_floor() -> Result<()> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let signer = SigningKey::from_bytes(&[7; 32]);
+        let keys = keyset_for_signing_key(&signer)?;
+        let token = sign_token(
+            &build_claims(now_unix_seconds(), "withdrawn")?,
+            &keys.active_kid,
+            &signer,
+        )?;
         let verifier = AdmissionVerifier {
-            keyset_source: KeysetSource::Remote {
-                url: server.uri(),
-                client: Client::builder()
-                    .connect_timeout(KEYSET_CONNECT_TIMEOUT)
-                    .timeout(KEYSET_FETCH_TIMEOUT)
-                    .build()?,
-            },
-            keyset_cache: RwLock::new(KeysetCache {
-                keyset: keyset.clone(),
-                fetched_at: stale_instant(),
-                etag: None,
-            }),
-            issuer: ISSUER.to_string(),
-            audience: AUDIENCE.to_string(),
-            action: ADMISSION_ACTION.to_string(),
-            last_refresh_unix: AtomicU64::new(0),
-            last_stale_attempt_unix: AtomicU64::new(0),
+            snapshot: RwLock::new(None),
+            issuer: ISSUER.into(),
+            audience: AUDIENCE.into(),
         };
-        let fetches = || async {
-            server
-                .received_requests()
-                .await
-                .map_or(0, |requests| requests.len())
+        let observation = |minimum_version, deadline| {
+            Authority {
+                minimum_version,
+                keys: [(1, STANDARD.encode(signer.verifying_key().as_bytes()))].into(),
+            }
+            .into_snapshot(deadline)
         };
-
-        for _ in 0..5 {
-            let snapshot = verifier.keyset_snapshot().await?;
-            assert_eq!(snapshot.active_kid, keyset.active_kid);
-        }
-        assert_eq!(fetches().await, 1, "one stale attempt per retry interval");
-
-        // Once the retry interval has passed, the next request tries again.
-        verifier.last_stale_attempt_unix.store(
-            now_unix_seconds_u64() - KEYSET_STALE_RETRY_SECONDS,
-            Ordering::Relaxed,
-        );
-        verifier.keyset_snapshot().await?;
-        verifier.keyset_snapshot().await?;
-        assert_eq!(fetches().await, 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn refresh_on_unknown_kid_suppresses_within_cooldown() -> anyhow::Result<()> {
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let keyset = keyset_for_signing_key(&signing_key)?;
-        let cache = KeysetCache {
-            keyset,
-            fetched_at: Instant::now(),
-            etag: None,
-        };
-        let verifier = AdmissionVerifier {
-            keyset_source: KeysetSource::Remote {
-                url: "http://example.test".to_string(),
-                client: Client::builder().build()?,
-            },
-            keyset_cache: RwLock::new(cache),
-            issuer: ISSUER.to_string(),
-            audience: AUDIENCE.to_string(),
-            action: ADMISSION_ACTION.to_string(),
-            last_refresh_unix: AtomicU64::new(now_unix_seconds_u64()),
-            last_stale_attempt_unix: AtomicU64::new(0),
-        };
-        let refreshed = verifier.refresh_on_unknown_kid().await?;
-        assert!(!refreshed);
+        let future = Instant::now() + Duration::from_secs(60);
+        assert!(!verify_token(&verifier, &token).await);
+        verifier.install(observation(1, future)?).await?;
+        assert!(verify_token(&verifier, &token).await);
+        verifier.install(observation(1, Instant::now())?).await?;
+        assert!(!verify_token(&verifier, &token).await);
+        verifier.install(observation(2, future)?).await?;
+        assert!(verifier.install(observation(1, future)?).await.is_err());
+        assert!(!verify_token(&verifier, &token).await);
         Ok(())
     }
 }

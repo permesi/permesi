@@ -1,5 +1,5 @@
 use super::state::AppState;
-use crate::api::handlers::{headers, health, paserk, token};
+use crate::api::handlers::{health, paserk, token};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -23,7 +23,6 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(health::health))
-        .routes(routes!(headers::headers))
         .routes(routes!(token::token))
         .routes(routes!(paserk::paserk));
 
@@ -103,6 +102,7 @@ mod tests {
     #[test]
     fn openapi_contains_health_probe_paths() {
         let spec = openapi();
+        assert!(!spec.paths.paths.contains_key("/headers"));
         assert!(spec.paths.paths.contains_key("/live"));
         assert!(spec.paths.paths.contains_key("/ready"));
         assert!(spec.paths.paths.contains_key("/health"));

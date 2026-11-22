@@ -208,6 +208,61 @@ pub(crate) fn openbao_auth(
     Ok(None)
 }
 
+/// Construct the service budget from clap-validated limits and recheck all three bounds.
+fn work_limits(
+    matches: &clap::ArgMatches,
+    group: &str,
+) -> anyhow::Result<service_utils::work_limit::Limits> {
+    let value = |suffix| {
+        matches
+            .get_one::<u32>(&format!("{group}-{suffix}"))
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("missing work limit"))
+    };
+    service_utils::work_limit::Limits::new(
+        value("requests-per-second")?,
+        value("burst")?,
+        value("max-in-flight")?,
+    )
+}
+
+/// Recheck the refresh interval against the maximum withdrawal window at startup.
+fn admission_timing(
+    matches: &clap::ArgMatches,
+) -> Result<(std::time::Duration, std::time::Duration)> {
+    let refresh = *matches
+        .get_one::<u64>("admission-refresh-seconds")
+        .context("missing admission refresh interval")?;
+    let max_age = *matches
+        .get_one::<u64>("admission-max-age-seconds")
+        .context("missing admission maximum age")?;
+    anyhow::ensure!(
+        refresh > 0 && refresh < max_age && max_age <= 60,
+        "admission refresh must precede the maximum age of at most 60 seconds"
+    );
+    Ok((
+        std::time::Duration::from_secs(refresh),
+        std::time::Duration::from_secs(max_age),
+    ))
+}
+
+/// Recheck the timeout and lifetime of persisted OPAQUE exchanges before dispatch.
+fn validate_opaque_limits(auth_opts: &auth::Options) -> Result<()> {
+    if !(1..=3600).contains(&auth_opts.opaque.login_ttl_seconds) {
+        return Err(anyhow!(
+            "invalid argument: --{} must be between 1 and 3600",
+            auth::ARG_OPAQUE_LOGIN_TTL
+        ));
+    }
+    if !(1..=10_000).contains(&auth_opts.opaque.exchange_timeout_ms) {
+        return Err(anyhow!(
+            "invalid argument: --{} must be between 1 and 10000",
+            auth::ARG_OPAQUE_EXCHANGE_TIMEOUT
+        ));
+    }
+    Ok(())
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -233,18 +288,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let admission_opts = admission::Options::parse(matches)?;
     let auth_opts = auth::Options::parse(matches)?;
-    if !(1..=3600).contains(&auth_opts.opaque.login_ttl_seconds) {
-        return Err(anyhow!(
-            "invalid argument: --{} must be between 1 and 3600",
-            auth::ARG_OPAQUE_LOGIN_TTL
-        ));
-    }
-    if !(1..=10_000).contains(&auth_opts.opaque.exchange_timeout_ms) {
-        return Err(anyhow!(
-            "invalid argument: --{} must be between 1 and 10000",
-            auth::ARG_OPAQUE_EXCHANGE_TIMEOUT
-        ));
-    }
+    validate_opaque_limits(&auth_opts)?;
     let auth_max_pending_states = pending_state_limit(auth_opts.max_pending_states)?;
     let auth_rate_limit_window_seconds = require_positive(
         auth::ARG_AUTH_RATE_LIMIT_WINDOW,
@@ -269,7 +313,11 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let registration = crate::api::handlers::auth::registration::Policy::from_matches(matches)?;
     let email_delivery = crate::api::email::DeliveryConfig::from_matches(matches)?;
+    let (admission_refresh, admission_max_age) = admission_timing(matches)?;
     Ok(Action::Server(Args {
+        public_limits: work_limits(matches, "public")?,
+        protocol_limits: work_limits(matches, "protocol")?,
+
         registration,
         email_delivery,
         port,
@@ -284,7 +332,8 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         openbao_role_id: openbao_opts.role_id,
         openbao_secret_id: openbao_opts.secret_id,
         openbao_wrapped_token: openbao_opts.wrapped_token,
-        admission_paserk_url: admission_opts.url,
+        admission_refresh,
+        admission_max_age,
         admission_issuer: admission_opts.issuer,
         admission_audience: admission_opts.audience,
         tls_pem_bundle: tls_opts.map(|o| o.pem_bundle),
@@ -330,8 +379,6 @@ mod tests {
             "permesi",
             "--dsn",
             "postgres://",
-            "--admission-paserk-url",
-            "https://url",
             "--tls-pem-bundle",
             "bundle",
             "--openbao-url",
@@ -377,8 +424,6 @@ mod tests {
                     "permesi",
                     "--dsn",
                     "postgres://",
-                    "--admission-paserk-url",
-                    "https://url",
                     "--tls-pem-bundle",
                     "bundle",
                     "--openbao-url",
@@ -453,46 +498,12 @@ mod tests {
     }
 
     #[test]
-    fn admission_paserk_url_required() {
-        temp_env::with_vars(
-            [
-                ("PERMESI_ADMISSION_PASERK_URL", None::<&str>),
-                ("PERMESI_TLS_PEM_BUNDLE", Some("/tmp/permesi-bundle.pem")),
-                (
-                    "PERMESI_DSN",
-                    Some("postgres://user@localhost:5432/permesi"),
-                ),
-                (
-                    "PERMESI_OPENBAO_URL",
-                    Some("http://127.0.0.1:8200/v1/auth/approle/login"),
-                ),
-                ("PERMESI_OPENBAO_ROLE_ID", Some("role-id")),
-                ("PERMESI_OPENBAO_SECRET_ID", Some("secret-id")),
-            ],
-            || {
-                let command = crate::cli::commands::new();
-                let matches = command.get_matches_from(vec!["permesi"]);
-                let result = handler(&matches);
-                assert!(result.is_err());
-                if let Err(err) = result {
-                    assert!(
-                        err.to_string()
-                            .contains("missing required argument: --admission-paserk-url")
-                    );
-                }
-            },
-        );
-    }
-
-    #[test]
     fn openbao_mounts_are_normalized_in_dispatch() {
         let command = crate::cli::commands::new();
         let matches = command.get_matches_from(vec![
             "permesi",
             "--dsn",
             "postgres://",
-            "--admission-paserk-url",
-            "https://url",
             "--tls-pem-bundle",
             "bundle",
             "--openbao-url",
@@ -522,8 +533,6 @@ mod tests {
             "permesi",
             "--dsn",
             "postgres://",
-            "--admission-paserk-url",
-            "https://url",
             "--tls-pem-bundle",
             "bundle",
             "--openbao-url",

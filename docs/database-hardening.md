@@ -131,3 +131,13 @@ just oauth-scenario-harness-test
 ```
 
 Database setup errors are failures and never count as skipped security coverage.
+
+Genesis runtime can read the lookup columns `clients.id`, `uuid` and
+`is_reserved`, insert four receipt columns through `tokens`, and read the
+returned receipt ID. Maintenance owns the partitions. On the dedicated cluster
+bootstrap, `genesis_connection_limit` (psql variable, default 32) bounds aggregate
+connections to the Genesis database. New dynamic logins default to ten connections
+each. Credential management connects to `postgres` so a full Genesis database
+still permits revocation. Reserve cluster-wide connection capacity for the core
+and management roles when sizing these limits. Restrict additional databases
+through CONNECT ACLs or pg_hba rules. Shared storage, CPU and I/O remain shared.

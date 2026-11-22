@@ -7,6 +7,9 @@ use url::Url;
 
 #[derive(Debug)]
 pub struct Args {
+    pub signing_version: u32,
+    pub public_limits: service_utils::work_limit::Limits,
+
     pub port: u16,
     pub socket_path: Option<String>,
     pub dsn: String,
@@ -92,6 +95,8 @@ pub async fn execute(args: Args) -> Result<()> {
         args.socket_path,
         dsn.to_string(),
         args.db_pool,
+        args.public_limits,
+        args.signing_version,
         &globals,
     )
     .await

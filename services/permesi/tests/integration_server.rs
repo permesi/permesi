@@ -3,7 +3,7 @@
 //! This suite verifies the full startup and dependency integration of the
 //! `permesi` binary by:
 //! 1. Orchestrating transient infrastructure (Postgres and OpenBao containers).
-//! 2. Providing a static PASERK keyset to the service.
+//! 2. Publishing approved Ed25519 metadata in core OpenBao.
 //! 3. Provisioning OpenBao with required OPAQUE seeds and database engine.
 //! 4. Spawning the actual `permesi` binary as a supervised child process.
 //! 5. Executing real HTTPS requests against the running service.
@@ -155,6 +155,8 @@ async fn setup_permesi_openbao(
         )
         .await?;
 
+    openbao.write_kv_v2("secret", "admission-authority", json!({"minimum_version":1,"keys":{"1":"cHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo8="}})).await?;
+
     let db_config = test_support::openbao::DatabaseConfig::new(
         postgres.openbao_connection_url_for_db("permesi"),
         "openbao_permesi",
@@ -190,6 +192,7 @@ async fn setup_permesi_openbao(
 path "database/creds/permesi" {
   capabilities = ["read"]
 }
+path "secret/data/admission-authority" { capabilities = ["read"] }
 path "secret/data/permesi/config" {
   capabilities = ["read"]
 }
@@ -329,19 +332,6 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
         return Ok(());
     };
 
-    let keyset_json = json!({
-        "version": "v4",
-        "purpose": "public",
-        "active_kid": "k4.pid.9ShR3xc8-qVJ_di0tc9nx0IDIqbatdeM2mqLFBJsKRHs",
-        "keys": [
-            {
-                "kid": "k4.pid.9ShR3xc8-qVJ_di0tc9nx0IDIqbatdeM2mqLFBJsKRHs",
-                "paserk": "k4.public.cHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo8"
-            }
-        ]
-    })
-    .to_string();
-
     let ctx = TestContext::new(tls).await?;
     let base = format!("https://api.permesi.localhost:{}", ctx.port);
 
@@ -367,8 +357,6 @@ async fn server_starts_and_connects_to_deps() -> Result<()> {
                 &ctx.secret_id,
                 "--tls-pem-bundle",
                 &ctx.tls.bundle,
-                "--admission-paserk-url",
-                &keyset_json,
                 "--openbao-kv-mount",
                 "secret",
                 "--openbao-kv-path",
@@ -435,19 +423,6 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
         return Ok(());
     };
 
-    let keyset_json = json!({
-        "version": "v4",
-        "purpose": "public",
-        "active_kid": "k4.pid.9ShR3xc8-qVJ_di0tc9nx0IDIqbatdeM2mqLFBJsKRHs",
-        "keys": [
-            {
-                "kid": "k4.pid.9ShR3xc8-qVJ_di0tc9nx0IDIqbatdeM2mqLFBJsKRHs",
-                "paserk": "k4.public.cHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo8"
-            }
-        ]
-    })
-    .to_string();
-
     let ctx = TestContext::new(tls).await?;
     let base = format!("https://api.permesi.localhost:{}", ctx.port);
 
@@ -471,8 +446,6 @@ async fn revoked_db_lease_forces_health_shutdown() -> Result<()> {
                 &ctx.secret_id,
                 "--tls-pem-bundle",
                 &ctx.tls.bundle,
-                "--admission-paserk-url",
-                &keyset_json,
                 "--openbao-kv-mount",
                 "secret",
                 "--openbao-kv-path",

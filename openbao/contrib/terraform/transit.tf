@@ -35,10 +35,11 @@ resource "vault_mount" "transit_genesis" {
 }
 
 resource "vault_transit_secret_backend_key" "genesis_signing" {
-  backend            = vault_mount.transit_genesis.path
-  name               = "genesis-signing"
-  type               = "ed25519"
-  auto_rotate_period = 2592000 # 30 days
+  backend = vault_mount.transit_genesis.path
+  name    = "genesis-signing"
+  type    = "ed25519"
+  # Operators stage, publish and activate admission versions explicitly.
+  auto_rotate_period = 0
 }
 
 # OIDC signing is distinct from TOTP encryption and Genesis admission keys.

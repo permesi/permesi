@@ -340,3 +340,44 @@ caches and rollback before trimming. The binary uses explicit issuer/audience se
 and reads retained public versions through a bounded single-flight JWKS response cache.
 Exchanges select the current shared version explicitly and verify its signature; unknown-kid clients can force a rate-limited JWKS refresh. A different runtime
 key/mount requires matching provisioning and policy changes. Deploying token exchange requires applying the signing policy update through the normal operator workflow. Repository tests provision fresh stacks and never apply infrastructure changes.
+
+### Admission authority and eviction
+
+Core operators own the KV v2 record `secret/permesi/data/admission-authority`.
+Terraform provisions read access. The record itself lives outside Terraform
+and the Helm release. Restrict write, delete, undelete, metadata and mount
+administration to the core operator boundary. Route the reader to authoritative
+core storage. Restoring an older OpenBao backup requires restoring the current
+withdrawal floor before exposing admission.
+
+Initialize a fresh authority with `scripts/admission-authority initialize 1`.
+For isolated installations, pass `--reader-socket /absolute/path/to/agent.sock`
+to initialization and publication. The core-side Agent needs only read access to
+`transit/genesis/keys/genesis-signing` on the edge OpenBao. It sends no core
+credential to that endpoint. Every runtime verifier reads the approved public bytes
+from core OpenBao independently of edge PostgreSQL, OpenBao and Genesis.
+
+For planned rotation, create the next Transit version and run
+`scripts/admission-authority publish VERSION`. Confirm each core replica accepts
+the published key before rolling Genesis with `GENESIS_ADMISSION_SIGNING_VERSION`
+set to that version. Two approved versions permit overlap. Publication and
+withdrawal compare-and-set the KV revision. Conflicts require rereading current
+state. To evict existing signatures, use `scripts/admission-authority withdraw VERSION`.
+This can suspend all admission before the replacement signer is available.
+
+On suspected compromise, disable reissuance first. Isolate the affected workload,
+remove its Kubernetes login binding, revoke its issued tokens and unconsumed
+wrapping and SecretID credentials, revoke its certificate and dynamic SQL leases,
+and terminate its sessions. Where identities are shared, establish independent
+credentials for healthy siblings before fencing the shared identity. A compromised
+host also requires node isolation, invalidation of the node credentials and
+controlled reenrollment. Inventory the highest Transit version reachable by the
+old signer, including staged versions, then advance beyond it. A previous
+application digest is eligible for rollback only after it enforces withdrawal.
+Drain legacy replicas and check every serving replica with the same unexpired
+token before declaring eviction complete.
+
+The signing, credential, PKI and AppRole quotas apply per reachable OpenBao node
+and source IP. Restrict edge egress and size the rate times both counts against
+the shared service budget. Keep management and core reads on a separately
+budgeted path. Existing isolated endpoints require equivalent constraints.

@@ -175,8 +175,6 @@ mod cli_tests {
             "/tmp/oauth-test.sock",
             "--openbao-url",
             "/tmp/openbao-test.sock",
-            "--admission-paserk-url",
-            "https://genesis.test/paserk.json",
         ]
     }
     #[test]

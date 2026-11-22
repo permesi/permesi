@@ -28,6 +28,13 @@ use tokio::sync::mpsc;
 /// Dependencies shared by every permesi route.
 #[derive(Clone, FromRef)]
 pub struct AppState {
+    #[from_ref(skip)]
+    pub public_budget: Arc<service_utils::work_limit::Budget>,
+    #[from_ref(skip)]
+    pub protocol_budget: Arc<service_utils::work_limit::Budget>,
+
+    /// Last bounded background readiness observation.
+    pub observation: service_utils::health::Observation,
     /// Operator limits for hierarchy mutation handlers and their transactions.
     pub tenant_mutations: super::tenant::MutationPolicy,
     /// OPAQUE, session, MFA, and rate-limit state for the auth endpoints.
@@ -86,7 +93,15 @@ impl AppState {
         let origins = vec!["https://permesi.dev".to_string()];
 
         let globals = GlobalArgs::new(openbao_url.clone(), transport.clone());
+        let budget = || {
+            Ok::<_, anyhow::Error>(Arc::new(service_utils::work_limit::Budget::new(
+                service_utils::work_limit::Limits::new(100, 100, 20)?,
+            )))
+        };
         Ok(Self {
+            public_budget: budget()?,
+            protocol_budget: budget()?,
+            observation: service_utils::health::Observation::default(),
             tenant_mutations: super::tenant::MutationPolicy::for_tests(),
             oauth: Arc::new(crate::oauth::oidc::OAuthState::new(
                 crate::oauth::config::OAuthConfig::disabled(),

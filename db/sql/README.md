@@ -130,7 +130,7 @@ SELECT * FROM pg_default_acl WHERE defaclnamespace = 'public'::regnamespace;
 
 -- programmatic checks (examples)
 \c genesis
-SELECT has_table_privilege('genesis_runtime', 'public.clients', 'SELECT') AS clients_select;
+SELECT has_column_privilege('genesis_runtime', 'public.clients', 'uuid', 'SELECT') AS client_lookup;
 \c permesi
 SELECT has_table_privilege('permesi_runtime', 'public.users', 'SELECT') AS users_select;
 ```

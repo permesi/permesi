@@ -314,6 +314,22 @@ impl OpenBao {
             self.post(&format!("{mount}/keys/{key}"), json!({"type":kind}))
                 .await?;
         }
+        let metadata = self
+            .request(
+                reqwest::Method::GET,
+                "transit/genesis/keys/genesis-signing",
+                None,
+            )
+            .await?;
+        let public = metadata
+            .pointer("/data/keys/1/public_key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Failure::infrastructure("Genesis fixture has no Ed25519 public key"))?;
+        self.post(
+            "secret/permesi/data/admission-authority",
+            json!({"options":{"cas":0},"data":{"minimum_version":1,"keys":{"1":public}}}),
+        )
+        .await?;
         self.post(
             "transit/permesi/keys/oidc-signing",
             json!({"type":"rsa-2048"}),
@@ -332,7 +348,7 @@ impl OpenBao {
             "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';", "GRANT permesi_runtime TO \"{{name}}\";"
         ])).await?;
         let genesis_role = self.role("genesis", "path \"transit/genesis/keys/genesis-signing\" { capabilities=[\"read\"] }\npath \"transit/genesis/sign/genesis-signing\" { capabilities=[\"update\"] }").await?;
-        let permesi_role = self.role("permesi", "path \"secret/permesi/data/config\" { capabilities=[\"read\"] }\npath \"transit/permesi/keys/oidc-signing\" { capabilities=[\"read\"] }\npath \"transit/permesi/sign/oidc-signing\" { capabilities=[\"update\"] }\npath \"transit/permesi/datakey/plaintext/totp\" { capabilities=[\"update\"] }\npath \"transit/permesi/decrypt/totp\" { capabilities=[\"update\"] }").await?;
+        let permesi_role = self.role("permesi", "path \"secret/permesi/data/admission-authority\" { capabilities=[\"read\"] }\npath \"secret/permesi/data/config\" { capabilities=[\"read\"] }\npath \"transit/permesi/keys/oidc-signing\" { capabilities=[\"read\"] }\npath \"transit/permesi/sign/oidc-signing\" { capabilities=[\"update\"] }\npath \"transit/permesi/datakey/plaintext/totp\" { capabilities=[\"update\"] }\npath \"transit/permesi/decrypt/totp\" { capabilities=[\"update\"] }").await?;
         Ok((genesis_role, permesi_role))
     }
 

@@ -186,6 +186,11 @@ async fn handle(
     tokens::exchange(pool, oauth, request, authentication).await
 }
 
+/// Preserve token protocol and cache headers for rejection at the router boundary.
+pub(crate) fn limited_response() -> Response {
+    failure(TokenError::Limited, false)
+}
+
 /// Uses RFC 6749 status/challenge semantics without revealing registration or credential state.
 fn failure(error: TokenError, supplied_auth: bool) -> Response {
     let status = match error {

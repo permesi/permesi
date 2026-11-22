@@ -74,7 +74,7 @@ jobs:
   deploy:
     runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
     needs: integrity
-    if: inputs.deploy
+    if: inputs.deploy && github.ref_name != 'sandbox'
     permissions:
       contents: read
     steps:

@@ -86,9 +86,35 @@ pub fn new() -> Command {
                 .required(true),
         );
 
+    let command = command.arg(
+        Arg::new("admission-signing-version")
+            .long("admission-signing-version")
+            .env("GENESIS_ADMISSION_SIGNING_VERSION")
+            .default_value("1")
+            .value_parser(clap::value_parser!(u32).range(1..))
+            .help("Published Transit version to use for new admission signatures"),
+    );
     let command = openbao::with_args(command);
     let command = with_native_openbao_args(command);
     let command = tls::with_args(command);
+    let mut command = command;
+    for (name, env, default) in [
+        (
+            "public-requests-per-second",
+            "GENESIS_PUBLIC_REQUESTS_PER_SECOND",
+            "32",
+        ),
+        ("public-burst", "GENESIS_PUBLIC_BURST", "32"),
+        ("public-max-in-flight", "GENESIS_PUBLIC_MAX_IN_FLIGHT", "8"),
+    ] {
+        command = command.arg(
+            clap::Arg::new(name)
+                .long(name)
+                .env(env)
+                .default_value(default)
+                .value_parser(clap::value_parser!(u32).range(1..=65535)),
+        );
+    }
     let command = database::with_args(command);
     logging::with_args(command)
 }

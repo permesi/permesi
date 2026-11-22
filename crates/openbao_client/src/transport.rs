@@ -217,6 +217,32 @@ impl OpenBaoTransport {
         body: Option<&Value>,
         headers: Option<HeaderMap>,
     ) -> Result<OpenBaoResponse> {
+        self.request_json_inner(method, path, token, body, headers, None)
+            .await
+    }
+
+    /// Read trusted public metadata with a hard response body budget on both transports.
+    /// # Errors
+    /// Rejects transport failures, oversized responses and invalid JSON.
+    pub async fn read_bounded(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        limit: usize,
+    ) -> Result<OpenBaoResponse> {
+        self.request_json_inner(Method::GET, path, token, None, None, Some(limit))
+            .await
+    }
+
+    async fn request_json_inner(
+        &self,
+        method: Method,
+        path: &str,
+        token: Option<&str>,
+        body: Option<&Value>,
+        headers: Option<HeaderMap>,
+        limit: Option<usize>,
+    ) -> Result<OpenBaoResponse> {
         let url = self.endpoint_url(path)?;
         debug!("openbao request: {} {}", method, url);
 
@@ -235,9 +261,21 @@ impl OpenBaoTransport {
                 if let Some(body) = body {
                     request = request.json(body);
                 }
-                let response = request.send().await?;
+                let mut response = request.send().await?;
                 let status = response.status();
-                let json_body: Value = response.json().await?;
+                let json_body = if let Some(limit) = limit {
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = response.chunk().await? {
+                        anyhow::ensure!(
+                            chunk.len() <= limit - bytes.len(),
+                            "OpenBao response too large"
+                        );
+                        bytes.extend_from_slice(&chunk);
+                    }
+                    serde_json::from_slice(&bytes)?
+                } else {
+                    response.json().await?
+                };
                 Ok(OpenBaoResponse {
                     url,
                     status,
@@ -278,11 +316,13 @@ impl OpenBaoTransport {
                         )
                     })?;
                     let status = response.status();
-                    let collected = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .map_err(|e| anyhow!("body collection error: {e}"))?;
+                    let collected = http_body_util::Limited::new(
+                        response.into_body(),
+                        limit.unwrap_or(usize::MAX),
+                    )
+                    .collect()
+                    .await
+                    .map_err(|e| anyhow!("body collection error: {e}"))?;
                     Ok::<_, anyhow::Error>((status, collected))
                 })
                 .await

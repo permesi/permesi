@@ -40,6 +40,7 @@ pub const MAX_TOKEN_TTL_SECONDS: i64 = 180;
 /// It keeps the openbao details + PASERK cache together so handlers stay simple and stateless.
 #[derive(Debug, Clone)]
 pub struct AdmissionSigner {
+    signing_version: u32,
     issuer: String,
     audience: String,
     action: String,
@@ -76,7 +77,7 @@ impl AdmissionSigner {
     ///
     /// # Errors
     /// Returns an error if PASERK refresh fails.
-    pub async fn new(globals: &GlobalArgs) -> Result<Self> {
+    pub async fn new(globals: &GlobalArgs, signing_version: u32) -> Result<Self> {
         let issuer = std::env::var("GENESIS_ADMISSION_ISS")
             .unwrap_or_else(|_| "https://genesis.permesi.dev".to_string());
         let audience =
@@ -92,6 +93,7 @@ impl AdmissionSigner {
         };
 
         let signer = Self {
+            signing_version,
             issuer,
             audience,
             action: ADMISSION_ACTION.to_string(),
@@ -105,6 +107,27 @@ impl AdmissionSigner {
         signer.refresh_paserk().await?;
 
         Ok(signer)
+    }
+
+    /// Verify signing availability with a fixed non-token message. The probe never
+    /// creates a receipt or a usable admission token.
+    pub(crate) async fn probe(&self) -> Result<()> {
+        let snapshot = self.paserk_snapshot().await?;
+        let sig = openbao::transit::sign_ed25519(
+            &self.openbao_transport,
+            self.openbao_token.as_ref(),
+            &self.transit_mount,
+            &self.key_name,
+            snapshot.latest_version,
+            b"genesis readiness v1",
+        )
+        .await?;
+        anyhow::ensure!(
+            sig.key_version == snapshot.latest_version
+                && BASE64_STANDARD.decode(sig.signature_base64)?.len() == 64,
+            "unexpected readiness signature"
+        );
+        Ok(())
     }
 
     /// Build admission claims with the configured issuer/audience/action.
@@ -243,7 +266,7 @@ impl AdmissionSigner {
         .await
         .context("failed to fetch transit keys")?;
 
-        let snapshot = build_paserk_snapshot(&transit)?;
+        let snapshot = build_paserk_snapshot(&transit, self.signing_version)?;
 
         info!(
             latest_version = snapshot.latest_version,
@@ -263,8 +286,16 @@ impl AdmissionSigner {
     }
 }
 
-fn build_paserk_snapshot(transit: &openbao::transit::TransitKeySet) -> Result<PaserkSnapshot> {
-    let latest = transit.latest_version;
+/// Select the operator-activated version. Staging a newer Transit key cannot
+/// switch the signer before all core readers have observed its publication.
+fn build_paserk_snapshot(
+    transit: &openbao::transit::TransitKeySet,
+    latest: u32,
+) -> Result<PaserkSnapshot> {
+    anyhow::ensure!(
+        latest > 0 && latest <= transit.latest_version,
+        "invalid active admission signing version"
+    );
     let previous = latest.checked_sub(1).filter(|v| *v >= 1);
 
     let mut keys = Vec::new();
@@ -321,6 +352,7 @@ mod tests {
         let openbao_transport =
             crate::openbao::OpenBaoTransport::from_target("test-agent", target)?;
         Ok(AdmissionSigner {
+            signing_version: 1,
             issuer: "https://issuer.test".to_string(),
             audience: "permesi".to_string(),
             action: ADMISSION_ACTION.to_string(),
@@ -398,7 +430,7 @@ mod tests {
             keys,
         };
 
-        let snapshot = build_paserk_snapshot(&transit)?;
+        let snapshot = build_paserk_snapshot(&transit, transit.latest_version)?;
         assert_eq!(snapshot.latest_version, 2);
         assert_eq!(snapshot.previous_version, Some(1));
         assert_eq!(snapshot.keyset.keys.len(), 2);
@@ -425,7 +457,7 @@ mod tests {
             keys,
         };
 
-        let snapshot = build_paserk_snapshot(&transit)?;
+        let snapshot = build_paserk_snapshot(&transit, transit.latest_version)?;
         let latest_key = PaserkKey::from_ed25519_public_key_base64(&public_key_latest)?;
         assert_eq!(snapshot.keyset.active_kid, latest_key.kid);
         Ok(())
@@ -442,7 +474,7 @@ mod tests {
             keys,
         };
 
-        let snapshot = build_paserk_snapshot(&transit)?;
+        let snapshot = build_paserk_snapshot(&transit, transit.latest_version)?;
         assert_eq!(snapshot.keyset.keys.len(), 1);
         let latest_key = PaserkKey::from_ed25519_public_key_base64(&public_key_latest)?;
         assert_eq!(snapshot.keyset.active_kid, latest_key.kid);
@@ -456,7 +488,7 @@ mod tests {
             keys: BTreeMap::new(),
         };
 
-        let result = build_paserk_snapshot(&transit);
+        let result = build_paserk_snapshot(&transit, transit.latest_version);
         assert!(result.is_err());
     }
 }

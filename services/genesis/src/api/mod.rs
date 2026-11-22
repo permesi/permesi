@@ -61,6 +61,8 @@ pub async fn new(
     socket_path: Option<String>,
     dsn: String,
     pool_config: PoolConfig,
+    public_limits: service_utils::work_limit::Limits,
+    signing_version: u32,
     globals: &GlobalArgs,
 ) -> Result<()> {
     // Renew bao token, gracefully shutdown if failed
@@ -70,9 +72,18 @@ pub async fn new(
 
     let pool = pool_config.connect(&dsn, env!("CARGO_PKG_NAME")).await?;
 
-    let admission = Arc::new(admission::AdmissionSigner::new(globals).await?);
+    let admission = Arc::new(admission::AdmissionSigner::new(globals, signing_version).await?);
 
+    let signer = Arc::clone(&admission);
+    let observation =
+        service_utils::health::Observation::monitor(pool.clone(), shutdown_tx.clone(), move || {
+            let signer = Arc::clone(&signer);
+            async move { signer.probe().await.is_ok() }
+        });
     let app = build_router(AppState {
+        public_budget: Arc::new(service_utils::work_limit::Budget::new(public_limits)),
+
+        observation,
         admission,
         shutdown: shutdown_tx,
         pool: pool.clone(),
@@ -103,11 +114,43 @@ fn build_router(state: AppState) -> Router {
     let app = api_error::with_error_envelope(
         router
             .route("/", get(root::root))
-            .route("/health", options(health::health)),
+            .route("/health", options(health::health))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                limit_public_work,
+            )),
     )
     .layer(cors)
     .with_state(state);
     request_id::with_request_correlation(app)
+}
+
+/// Shed work before invoking handlers, acquiring a database connection or signing.
+/// Route selection uses the router's matched path, independent of caller headers.
+async fn limit_public_work(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or("", |p| p.as_str());
+    let budget = match path {
+        "/token" | "/paserk.json" => &state.public_budget,
+        _ => return next.run(request).await,
+    };
+    let Some(_permit) = budget.enter() else {
+        tracing::debug!(route = path, "public work rejected");
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            [("Cache-Control", "no-store")],
+            axum::Json(serde_json::json!({"error":"too_many_requests"})),
+        )
+            .into_response();
+    };
+    next.run(request).await
 }
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.

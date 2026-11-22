@@ -88,3 +88,23 @@ variable "pki_int_crl_distribution_points_url" {
   type    = string
   default = "https://openbao.example.invalid/v1/pki-int/crl"
 }
+
+variable "genesis_login_connection_limit" {
+  description = "Maximum simultaneous PostgreSQL connections per Genesis lease."
+  type        = number
+  default     = 10
+  validation {
+    condition     = var.genesis_login_connection_limit >= 1 && var.genesis_login_connection_limit == floor(var.genesis_login_connection_limit) && var.genesis_login_connection_limit <= 2147483647
+    error_message = "Use a positive PostgreSQL connection limit."
+  }
+}
+
+variable "genesis_quota_rate" {
+  description = "Requests per second per source IP and reachable node for each edge path."
+  type        = number
+  default     = 30
+  validation {
+    condition     = var.genesis_quota_rate >= 1 && var.genesis_quota_rate == floor(var.genesis_quota_rate)
+    error_message = "Rate must be a positive integer."
+  }
+}

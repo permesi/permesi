@@ -15,6 +15,11 @@ use tokio::sync::mpsc;
 /// Dependencies shared by every Genesis route.
 #[derive(Clone, FromRef)]
 pub struct AppState {
+    #[from_ref(skip)]
+    pub public_budget: Arc<service_utils::work_limit::Budget>,
+
+    /// Last bounded background readiness observation.
+    pub observation: service_utils::health::Observation,
     /// Admission token signer (OpenBao transit) and PASERK keyset source.
     pub admission: Arc<AdmissionSigner>,
     /// Fail-closed shutdown channel used by readiness probes.

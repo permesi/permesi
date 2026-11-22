@@ -97,6 +97,7 @@ before interpreting queue or wall-time differences as a speedup.
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
   pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
+  On `sandbox`, CI keeps candidate OCI images as workflow artifacts. Pages, GHCR and external coverage uploads are disabled.
   Frontend deployments from ordinary CI are previews only: `main` still builds and tests the frontend,
   but only `release.yml` publishes the signed release build to the production `main` Pages branch.
   The preview publisher rejects `main`, including explicit branch

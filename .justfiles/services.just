@@ -18,52 +18,6 @@ permesi:
   fi
   # The local HAProxy overwrites forwarding headers; explicit trust is limited to loopback.
   export PERMESI_AUTH_TRUSTED_PROXIES="${PERMESI_AUTH_TRUSTED_PROXIES:-127.0.0.1/32,::1/128}"
-  if [[ -n "${PERMESI_SOCKET_MODE:-}" ]]; then
-    https_port="${PERMESI_HTTPS_PORT:-443}"
-    https_suffix=""
-    if [[ "$https_port" != "443" ]]; then
-      https_suffix=":${https_port}"
-    fi
-    export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost${https_suffix}/paserk.json"
-  fi
-  paserk_url="${PERMESI_ADMISSION_PASERK_URL:-}"
-  ca_path="{{root}}/certs/permesi/ca.pem"
-  paserk_ca_path="${PERMESI_ADMISSION_PASERK_CA_PATH:-$ca_path}"
-  if [[ -n "${PERMESI_ADMISSION_PASERK_CA_PATH:-}" && ! -f "$paserk_ca_path" ]]; then
-    echo "Missing ${paserk_ca_path}; falling back to ${ca_path}" >&2
-    paserk_ca_path="${ca_path}"
-  fi
-  if [[ "$paserk_url" == *"permesi.localhost"* && "$paserk_url" != *":8000"* ]]; then
-    mkcert_ca="{{root}}/certs/mkcert-root.pem"
-    if [[ -f "$mkcert_ca" ]]; then
-      paserk_ca_path="$mkcert_ca"
-    fi
-  fi
-  if [[ -n "$paserk_url" ]]; then
-  if [[ ! -f "$paserk_ca_path" ]]; then
-    echo "Missing ${paserk_ca_path}; run: just dev-tls-certs" >&2
-    exit 1
-  fi
-  # Wait generously: on a cold start genesis, permesi, and web serialize on the
-  # shared cargo build lock, so genesis can take well over 30s to compile and
-  # serve PASERK. Override with PERMESI_PASERK_WAIT_SECONDS if needed.
-  wait_seconds="${PERMESI_PASERK_WAIT_SECONDS:-180}"
-  echo "Waiting up to ${wait_seconds}s for genesis PASERK at ${paserk_url}..."
-  deadline=$((SECONDS + wait_seconds))
-  success=0
-  while (( SECONDS < deadline )); do
-    code="$(curl -sS --cacert "$paserk_ca_path" -o /dev/null -w "%{http_code}" "$paserk_url" || true)"
-    if [[ "$code" == "200" ]]; then
-      success=1
-      break
-    fi
-    sleep 1
-  done
-  if [[ "$success" -ne 1 ]]; then
-    echo "Timed out after ${wait_seconds}s waiting for ${paserk_url}" >&2
-    exit 1
-  fi
-  fi
   if ! command -v bao >/dev/null 2>&1; then
     echo "bao CLI not found; install it or set PERMESI_OPENBAO_SECRET_ID manually before running." >&2
     exit 1
@@ -100,19 +54,6 @@ permesi-socket:
   export PERMESI_AUTH_TRUST_UNIX_PROXY="${PERMESI_AUTH_TRUST_UNIX_PROXY:-true}"
   # Unset TLS bundle to avoid conflict with --socket-path
   unset PERMESI_TLS_PEM_BUNDLE
-  # Override PASERK URL to go through HAProxy (HTTPS on PERMESI_HTTPS_PORT, baked
-  # into .envrc by `just dev-envrc`).
-  https_port="${PERMESI_HTTPS_PORT:-443}"
-  https_suffix=""
-  if [[ "$https_port" != "443" ]]; then
-    https_suffix=":${https_port}"
-  fi
-  export PERMESI_ADMISSION_PASERK_URL="https://genesis.permesi.localhost${https_suffix}/paserk.json"
-  # Override CA path to trust mkcert (HAProxy) instead of internal OpenBao CA
-  if [[ -f "{{root}}/certs/mkcert-root.pem" ]]; then
-    export PERMESI_ADMISSION_PASERK_CA_PATH="{{root}}/certs/mkcert-root.pem"
-  fi
-
   if ! command -v bao >/dev/null 2>&1; then
     echo "bao CLI not found; install it or set PERMESI_OPENBAO_SECRET_ID manually before running." >&2
     exit 1

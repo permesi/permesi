@@ -26,7 +26,7 @@ Permesi is an identity and access management (IAM) and OpenID Connect (OIDC) pro
   - Multi-tenant Organization → Project → Environment → Application management ([resource lifecycle](resource-lifecycle.md)).
   - OAuth 2.0 / OIDC client and scope management, Authorization Code + S256 PKCE, transactional RS256 token exchange, rotating refresh families, UserInfo, and revocation ([OAuth foundation](oauth-foundation.md)).
   - Platform-operator governance: read-only global tenant inspection, auditable account containment, and two-operator designation ([account containment](account-containment.md), [operator designation](operator-designation.md)).
-- **Local admission verification:** Verifies Genesis Admission/Zero Tokens locally using a PASERK keyset (`sig`, `iss`, `aud`, `action`, `iat`/`exp`, and TTL bounds). Inline JSON keysets run completely offline; URL mode caches `/paserk.json` and refreshes on startup, stale TTL (including `/ready` and `/health` probes), or unknown `kid`.
+- **Local admission verification:** Verifies Genesis Admission/Zero Tokens locally using a PASERK keyset (`sig`, `iss`, `aud`, `action`, `iat`/`exp`, and TTL bounds). The verifier receives versioned public keys and the withdrawal floor from core OpenBao.
 
 ### 3. `apps/web` (Web Console)
 
@@ -51,10 +51,21 @@ Admission and Zero Tokens decouple edge admission from core identity traffic:
 2. `permesi` parses the footer `kid`, resolves the matching `k4.public...` key in its PASERK keyset, and verifies the Ed25519 signature locally.
 3. `permesi` validates `iss`, `aud`, `action`, `iat`, `exp`, and TTL bounds, rejecting any mismatch before touching application state.
 
-Keyset configuration (`--admission-paserk-url` / `PERMESI_ADMISSION_PASERK_URL`):
+Core OpenBao owns the KV v2 record `admission-authority` under Permesi's KV mount.
+A background reader begins with an empty snapshot and accepts only approved Ed25519
+versions at or above its minimum. The default refresh interval is 15 seconds and
+the maximum age is 60 seconds, measured from the start of each successful read.
+Unknown key IDs and expired observations fail locally. Existing session and OAuth
+handlers retain their own database, session, client and token checks. Both APIs
+are public entry points. Network placement of Genesis grants no identity authority.
 
-- **HTTPS URL:** `permesi` fetches `/paserk.json` at startup, caches it in memory (5-minute TTL), and refreshes synchronously with a cooldown when a request encounters a stale cache or an unknown `kid`. Failed refreshes retain the cached keyset for request verification. A fresh cache answers `/ready` and `/health` without contacting Genesis; when the cache is stale, `/ready` and `/health` trigger a refresh and return `503` if Genesis is unreachable.
-- **Inline JSON string:** When the argument starts with `{`, `permesi` parses the PASERK keyset directly at startup and operates completely offline with no network calls to `genesis`. Static file paths are not supported directly.
+Genesis inserts its receipt before signing. Both services enforce local rate,
+burst and in-flight ceilings before handler work. Permesi reserves an independent
+budget for session inspection, logout, OIDC discovery, authorization, token,
+revocation and UserInfo requests. The shared SQL abuse controls still apply.
+Health probes read background observations. A core replica with healthy SQL and
+unavailable admission remains ready and reports `degraded`; Genesis checks SQL
+and a fixed non-token Transit signature.
 
 `active_kid` is used only by `genesis` when selecting the signing key; verification always matches the token's footer `kid`.
 
@@ -77,7 +88,7 @@ Key invariants:
 
 | Surface | Primitive / Backing | Key Custody & Notes |
 | --- | --- | --- |
-| Admission / Zero Tokens | PASETO `v4.public` (Ed25519) | Signed in OpenBao Transit (`transit/genesis/keys/genesis-signing`); verified locally via PASERK (inline JSON offline, or cached HTTPS URL). |
+| Admission / Zero Tokens | PASETO `v4.public` (Ed25519) | Signed in OpenBao Transit (`transit/genesis/keys/genesis-signing`); verified locally using a fresh core OpenBao snapshot. |
 | User passwords | OPAQUE (Ristretto255 / TripleDH / SHA-512 / Argon2 via `opaque-ke`) | Server setup derived from 32-byte `opaque_server_seed` in OpenBao KV v2. |
 | Transient auth ceremonies | XChaCha20-Poly1305 (random 192-bit nonce) | Separate HMAC-derived key domains from `opaque_server_seed` for OPAQUE and WebAuthn; 2^48 encryption ceiling per key. |
 | TOTP secrets | Envelope encryption (ChaCha20-Poly1305) | Data keys protected by OpenBao Transit (`transit/permesi/keys/totp`); plaintext seeds never stored in PostgreSQL. |

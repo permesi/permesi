@@ -289,11 +289,60 @@ pub fn new() -> Command {
         );
 
     let command = oauth_args(command);
-    let command = admission::with_args(command);
+    let mut command = admission::with_args(command);
+    for (name, env, default) in [
+        (
+            "admission-refresh-seconds",
+            "PERMESI_ADMISSION_REFRESH_SECONDS",
+            "15",
+        ),
+        (
+            "admission-max-age-seconds",
+            "PERMESI_ADMISSION_MAX_AGE_SECONDS",
+            "60",
+        ),
+    ] {
+        command = command.arg(
+            clap::Arg::new(name)
+                .long(name)
+                .env(env)
+                .default_value(default)
+                .value_parser(clap::value_parser!(u64).range(1..=60)),
+        );
+    }
     let command = tls::with_args(command);
     let command = openbao::with_args(command);
     let command = with_native_openbao_args(command);
     let command = auth::with_args(command);
+    let mut command = command;
+    for (name, env, default) in [
+        (
+            "public-requests-per-second",
+            "PERMESI_PUBLIC_REQUESTS_PER_SECOND",
+            "32",
+        ),
+        ("public-burst", "PERMESI_PUBLIC_BURST", "32"),
+        ("public-max-in-flight", "PERMESI_PUBLIC_MAX_IN_FLIGHT", "8"),
+        (
+            "protocol-requests-per-second",
+            "PERMESI_PROTOCOL_REQUESTS_PER_SECOND",
+            "32",
+        ),
+        ("protocol-burst", "PERMESI_PROTOCOL_BURST", "32"),
+        (
+            "protocol-max-in-flight",
+            "PERMESI_PROTOCOL_MAX_IN_FLIGHT",
+            "8",
+        ),
+    ] {
+        command = command.arg(
+            clap::Arg::new(name)
+                .long(name)
+                .env(env)
+                .default_value(default)
+                .value_parser(clap::value_parser!(u32).range(1..=65535)),
+        );
+    }
     let command = database::with_args(command);
     logging::with_args(command)
 }
@@ -406,8 +455,6 @@ mod tests {
             "8080",
             "--dsn",
             "postgres://user:password@localhost:5432/permesi",
-            "--admission-paserk-url",
-            "https://genesis.permesi.localhost:8000/paserk.json",
             "--tls-pem-bundle",
             "/tmp/permesi-bundle.pem",
             "--openbao-url",
@@ -441,10 +488,6 @@ mod tests {
     fn test_check_env() {
         temp_env::with_vars(
             [
-                (
-                    "PERMESI_ADMISSION_PASERK_URL",
-                    Some("https://genesis.permesi.localhost:8000/paserk.json"),
-                ),
                 ("PERMESI_TLS_PEM_BUNDLE", Some("/tmp/permesi-bundle.pem")),
                 ("PERMESI_OPENBAO_URL", Some("https://openbao.tld:8200")),
                 ("PERMESI_OPENBAO_ROLE_ID", Some("role_id")),
@@ -511,8 +554,6 @@ mod tests {
                     "permesi",
                     "--dsn",
                     "postgres://user:password@localhost:5432/permesi",
-                    "--admission-paserk-url",
-                    "https://genesis.permesi.localhost:8000/paserk.json",
                     "--tls-pem-bundle",
                     "/tmp/permesi-bundle.pem",
                     "--openbao-url",
@@ -553,10 +594,6 @@ mod tests {
             temp_env::with_vars(
                 [
                     ("PERMESI_LOG_LEVEL", Some(level)),
-                    (
-                        "PERMESI_ADMISSION_PASERK_URL",
-                        Some("https://genesis.permesi.localhost:8000/paserk.json"),
-                    ),
                     ("PERMESI_TLS_PEM_BUNDLE", Some("/tmp/permesi-bundle.pem")),
                     ("PERMESI_OPENBAO_URL", Some("http://openbao.tld:8200")),
                     ("PERMESI_OPENBAO_ROLE_ID", Some("role_id")),
@@ -588,8 +625,6 @@ mod tests {
                     "permesi".to_string(),
                     "--dsn".to_string(),
                     "postgres://user:password@localhost:5432/permesi".to_string(),
-                    "--admission-paserk-url".to_string(),
-                    "https://genesis.permesi.localhost:8000/paserk.json".to_string(),
                     "--tls-pem-bundle".to_string(),
                     "/tmp/permesi-bundle.pem".to_string(),
                     "--openbao-url".to_string(),
@@ -672,8 +707,6 @@ mod tests {
                 "permesi",
                 "--dsn",
                 "postgres://",
-                "--admission-paserk-url",
-                "https://url",
                 "--tls-pem-bundle",
                 "bundle",
                 "--openbao-url",
@@ -693,8 +726,6 @@ mod tests {
                 "permesi",
                 "--dsn",
                 "postgres://",
-                "--admission-paserk-url",
-                "https://url",
                 "--tls-pem-bundle",
                 "bundle",
                 "--openbao-url",
@@ -719,8 +750,6 @@ mod tests {
                 "permesi",
                 "--dsn",
                 "postgres://",
-                "--admission-paserk-url",
-                "https://url",
                 "--tls-pem-bundle",
                 "bundle",
                 "--openbao-url",
@@ -747,8 +776,6 @@ mod tests {
                 "permesi",
                 "--dsn",
                 "postgres://",
-                "--admission-paserk-url",
-                "https://url",
                 "--tls-pem-bundle",
                 "bundle",
                 "--openbao-url",
@@ -768,8 +795,6 @@ mod tests {
                 "permesi",
                 "--dsn",
                 "postgres://",
-                "--admission-paserk-url",
-                "https://url",
                 "--tls-pem-bundle",
                 "bundle",
                 "--openbao-url",

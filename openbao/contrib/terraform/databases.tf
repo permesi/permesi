@@ -64,7 +64,7 @@ resource "vault_database_secret_backend_connection" "genesis" {
   ]
 
   postgresql {
-    connection_url          = "postgresql://{{username}}:{{password}}@${var.database_host}:${var.database_port}/genesis?sslmode=${var.database_sslmode}"
+    connection_url          = "postgresql://{{username}}:{{password}}@${var.database_host}:${var.database_port}/postgres?sslmode=${var.database_sslmode}"
     username                = var.genesis_database_username
     password                = var.genesis_database_password
     max_connection_lifetime = 120
@@ -81,7 +81,7 @@ resource "vault_database_secret_backend_role" "genesis" {
   # SECURITY NOTE: Dynamic users should not be able to create schemas/tables.
   # Local dev enforces this by revoking `CREATE` on the `public` schema (see `db/sql/00_init.sql`).
   creation_statements = [
-    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+    "CREATE ROLE \"{{name}}\" WITH LOGIN CONNECTION LIMIT ${var.genesis_login_connection_limit} PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
     "GRANT genesis_runtime TO \"{{name}}\";",
   ]
 

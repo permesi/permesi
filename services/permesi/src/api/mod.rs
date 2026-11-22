@@ -93,6 +93,8 @@ pub struct OpenBaoKvConfig {
 /// Comprehensive application configuration.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    pub public_limits: service_utils::work_limit::Limits,
+    pub protocol_limits: service_utils::work_limit::Limits,
     /// Auth module configuration.
     pub auth: auth::AuthConfig,
     /// Admin module configuration.
@@ -109,6 +111,22 @@ pub struct AppConfig {
     pub oauth: crate::oauth::config::OAuthConfig,
     /// Bounded hierarchy mutation policy, independent of OAuth protocol configuration.
     pub tenant_mutations: tenant::MutationPolicy,
+}
+
+/// Require a usable OIDC signing key before serving a configured issuer.
+async fn init_oauth(
+    config: &crate::oauth::config::OAuthConfig,
+    globals: &GlobalArgs,
+) -> Result<Arc<crate::oauth::oidc::OAuthState>> {
+    let oauth_state = Arc::new(crate::oauth::oidc::OAuthState::new(config.clone(), globals));
+    if oauth_state.config.issuer.is_some() {
+        oauth_state
+            .jwks()
+            .await
+            .context("OIDC signing key is unavailable or invalid")?;
+    }
+
+    Ok(oauth_state)
 }
 
 /// Start the server
@@ -194,18 +212,18 @@ pub async fn new(
     let passkey_service =
         init_passkey_service(&config.auth, pool.clone(), &secrets.opaque_server_seed)?;
 
-    let oauth_state = Arc::new(crate::oauth::oidc::OAuthState::new(
-        config.oauth.clone(),
-        globals,
-    ));
-    if oauth_state.config.issuer.is_some() {
-        oauth_state
-            .jwks()
-            .await
-            .context("OIDC signing key is unavailable or invalid")?;
-    }
-
+    let oauth_state = init_oauth(&config.oauth, globals).await?;
+    let observation =
+        service_utils::health::Observation::monitor(pool.clone(), shutdown_tx.clone(), || async {
+            true
+        });
     let app = build_router(AppState {
+        public_budget: Arc::new(service_utils::work_limit::Budget::new(config.public_limits)),
+        protocol_budget: Arc::new(service_utils::work_limit::Budget::new(
+            config.protocol_limits,
+        )),
+
+        observation,
         tenant_mutations: config.tenant_mutations,
         oauth: oauth_state,
         auth: auth_state,
@@ -290,7 +308,11 @@ fn build_router(state: AppState) -> Result<Router> {
     let app = with_response_policy(
         router
             .route("/", get(root::root))
-            .route("/health", options(health::health)),
+            .route("/health", options(health::health))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                limit_public_work,
+            )),
     )
     .layer(cors)
     .with_state(state)
@@ -299,6 +321,47 @@ fn build_router(state: AppState) -> Result<Router> {
         auth::operations::verified_peer,
     ));
     Ok(request_id::with_request_correlation(app))
+}
+
+/// Shed work before invoking handlers, acquiring a database connection or signing.
+/// Route selection uses the router's matched path, independent of caller headers.
+async fn limit_public_work(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or("", |p| p.as_str());
+    let budget = match path {
+        "/live" | "/ready" | "/health" | "/" => return next.run(request).await,
+        "/token"
+        | "/revoke"
+        | "/userinfo"
+        | "/jwks.json"
+        | "/.well-known/openid-configuration"
+        | "/v1/auth/session"
+        | "/v1/auth/logout"
+        | "/authorize"
+        | "/authorize/resume"
+        | "/authorize/consent" => &state.protocol_budget,
+        _ => &state.public_budget,
+    };
+    let Some(_permit) = budget.enter() else {
+        tracing::debug!(route = path, "public work rejected");
+        if matches!(path, "/token" | "/revoke") {
+            return handlers::token::limited_response();
+        }
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            [("Cache-Control", "no-store")],
+            axum::Json(serde_json::json!({"error":"too_many_requests"})),
+        )
+            .into_response();
+    };
+    next.run(request).await
 }
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.

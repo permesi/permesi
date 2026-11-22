@@ -60,6 +60,8 @@ jobs:
         timeout-minutes: 5
 
       - name: Build
+        env:
+          BUILD_GIT_COMMIT_HASH: ${{ github.sha }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p permesi -p genesis --features permesi/telemetry,genesis/telemetry
 
       - name: Upload image binaries
@@ -162,7 +164,7 @@ jobs:
   deploy-frontend:
     name: Deploy Frontend
     needs: frontend-build
-    if: github.ref_name != 'main'
+    if: github.ref_name != 'main' && github.ref_name != 'sandbox'
     uses: ./.github/workflows/frontend.yml
     permissions:
       contents: read
@@ -315,6 +317,42 @@ jobs:
       - uses: ./.github/actions/ensure-browser-runtime
       - name: Run console and real PostgreSQL browser tests
         run: just web-test-browser-built
+
+  sandbox-images:
+    name: Build local OCI candidates
+    needs: [build, frontend-build]
+    if: github.ref_name == 'sandbox'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: image-binaries
+          path: dist-bin
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: frontend-dist
+          path: apps/web/dist
+      - name: Archive candidate images
+        run: |
+          set -euo pipefail
+          chmod +x dist-bin/{permesi,genesis}
+          mkdir candidates
+          for service in permesi genesis web; do
+            file="services/$service/Dockerfile"
+            if [[ "$service" == web ]]; then file=apps/web/Dockerfile; fi
+            image="localhost/permesi-candidate/$service:$GITHUB_SHA"
+            podman build --format oci -f "$file" -t "$image" .
+            podman save --format oci-archive -o "candidates/$service.tar" "$image"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sandbox-oci-${{ github.sha }}
+          path: candidates/*.tar
+          if-no-files-found: error
+          retention-days: 3
 
   package:
     name: Package GHCR

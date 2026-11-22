@@ -2,12 +2,15 @@ use crate::{api, cli::globals::GlobalArgs, openbao};
 use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
 use service_utils::database::PoolConfig;
-use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info};
 use url::Url;
 
 #[derive(Debug)]
 pub struct Args {
+    pub public_limits: service_utils::work_limit::Limits,
+    pub protocol_limits: service_utils::work_limit::Limits,
+
     pub registration: crate::api::handlers::auth::registration::Policy,
     pub email_delivery: api::email::DeliveryConfig,
     pub auth_operations: crate::api::handlers::auth::operations::OperationsConfig,
@@ -23,7 +26,8 @@ pub struct Args {
     pub openbao_role_id: Option<String>,
     pub openbao_secret_id: Option<String>,
     pub openbao_wrapped_token: Option<String>,
-    pub admission_paserk_url: String,
+    pub admission_refresh: Duration,
+    pub admission_max_age: Duration,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
     pub tls_pem_bundle: Option<String>,
@@ -75,19 +79,6 @@ pub async fn execute(args: Args) -> Result<()> {
         openbao_base_url(&args.openbao_url).unwrap_or_else(|_| args.openbao_url.clone());
     log_startup_args(&args, &issuer, &audience, &openbao_addr);
 
-    let admission_verifier = Arc::new(if args.admission_paserk_url.trim().starts_with('{') {
-        let keyset = admission_token::PaserkKeySet::from_json(&args.admission_paserk_url)
-            .context("Failed to parse admission PASERK keyset from JSON string")?;
-        api::handlers::AdmissionVerifier::new(keyset, issuer, audience)
-    } else {
-        api::handlers::AdmissionVerifier::new_remote(
-            args.admission_paserk_url.clone(),
-            issuer,
-            audience,
-        )
-        .await?
-    });
-
     let openbao_transport = openbao_client::OpenBaoTransport::from_target(
         crate::APP_USER_AGENT,
         args.openbao_target.clone(),
@@ -125,6 +116,15 @@ pub async fn execute(args: Args) -> Result<()> {
         globals.set_token(SecretString::from(openbao_token));
         globals.set_token_lease(lease);
     }
+
+    let admission_verifier = api::handlers::AdmissionVerifier::start(
+        &globals,
+        &args.openbao_kv_mount,
+        args.admission_refresh,
+        args.admission_max_age,
+        issuer,
+        audience,
+    );
 
     // Get database username and password from OpenBao
     openbao::database::database_creds(&mut globals)
@@ -194,6 +194,8 @@ fn build_app_config(args: &Args, openbao_addr: String) -> api::AppConfig {
     };
 
     api::AppConfig {
+        public_limits: args.public_limits,
+        protocol_limits: args.protocol_limits,
         auth: auth_config,
         admin: admin_config,
         email: email_config,
@@ -261,7 +263,6 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &st
                 .clone()
                 .unwrap_or_else(|| "none".to_string()),
         ),
-        ("admission_paserk_url", args.admission_paserk_url.clone()),
         ("admission_paserk_ca_path", admission_paserk_ca),
         ("admission_issuer", issuer.to_string()),
         ("admission_audience", audience.to_string()),
@@ -444,6 +445,8 @@ mod tests {
 
     fn default_args() -> anyhow::Result<Args> {
         Ok(Args {
+            public_limits: service_utils::work_limit::Limits::new(20, 20, 5)?,
+            protocol_limits: service_utils::work_limit::Limits::new(20, 20, 5)?,
             registration: crate::api::handlers::auth::registration::Policy::default(),
             email_delivery: api::email::DeliveryConfig::default(),
             port: 8080,
@@ -464,7 +467,8 @@ mod tests {
             openbao_role_id: None,
             openbao_secret_id: None,
             openbao_wrapped_token: None,
-            admission_paserk_url: "https://genesis.example.com/paserk.json".to_string(),
+            admission_refresh: Duration::from_secs(15),
+            admission_max_age: Duration::from_secs(60),
             oauth: crate::oauth::config::OAuthConfig::disabled(),
             tenant_mutations: api::tenant::MutationPolicy::for_tests(),
             admission_issuer: None,

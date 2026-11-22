@@ -89,14 +89,25 @@ async fn genesis_runtime_appends_partitioned_receipts_without_maintenance_author
             .username(&name)
             .password(&password);
         let mut connection = PgConnection::connect_with(&options).await?;
+        let receipt: Uuid =
+            sqlx::query_scalar("INSERT INTO public.tokens(client_id) VALUES(0) RETURNING id")
+                .fetch_one(&mut connection)
+                .await?;
         let stored: bool = sqlx::query_scalar(
-            "WITH inserted AS (INSERT INTO public.tokens(client_id) VALUES(0) RETURNING tableoid) SELECT tableoid<> 'public.tokens_default'::regclass FROM inserted",
+            "SELECT tableoid <> 'public.tokens_default'::regclass FROM public.tokens WHERE id=$1",
         )
-        .fetch_one(&mut connection)
+        .bind(receipt)
+        .fetch_one(&mut admin)
         .await?;
         ensure!(stored, "Receipts must reach owner-created dated partitions");
         for statement in [
             "SELECT public.genesis_tokens_rollover(-100,100)",
+            "SELECT name FROM public.clients",
+            "SELECT ip_address FROM public.tokens",
+            "INSERT INTO public.tokens(client_id,metadata) VALUES(0,'{}')",
+            "SELECT id FROM public.tokens_default",
+            "INSERT INTO public.tokens_default(client_id) VALUES(0)",
+            "CREATE TEMP TABLE denied(id integer)",
             "DELETE FROM public.tokens",
             "TRUNCATE public.tokens CASCADE",
             "SET ROLE openbao_genesis",

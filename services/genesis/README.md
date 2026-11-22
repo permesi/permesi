@@ -12,7 +12,7 @@ Token Zero generator (edge admission token mint).
 `genesis` is an HTTP service that:
 
 - Issues short-lived **Admission Tokens** (PASETO v4.public signed via OpenBao Transit)
-- Publishes its public keys as a **PASERK keyset** at `GET /paserk.json` so `permesi` can verify tokens offline
+- Publishes its public keys as a **PASERK keyset** at `GET /paserk.json` for public inspection
 - Persists minted token IDs (`jti`) and request metadata in Postgres for short-term validation/auditing
 - Uses OpenBao (AppRole, Agent, or opt-in native Kubernetes auth) to obtain DB credentials and keeps OpenBao leases renewed at runtime
 - Acts as the **Zero Token** mint for user-facing auth flows; `permesi` validates these tokens offline via the PASERK keyset
@@ -48,9 +48,8 @@ Implemented routes (see `services/genesis/src/api/mod.rs` and `services/genesis/
 | `GET` | `/paserk.json` | PASERK keyset derived from the configured signing key |
 | `GET` | `/live` | Liveness probe (process-only) |
 | `GET` | `/ready` | Readiness probe (Postgres connectivity) |
-| `GET` | `/health` | Checks Postgres connectivity; returns build info; sets `X-App` header |
+| `GET` | `/health` | Returns coarse status and build commit from cached SQL and signing observations |
 | `OPTIONS` | `/health` | Health preflight |
-| `GET` | `/headers` | Debug: echoes request headers |
 
 Every response carries an `x-request-id` header holding a ULID issued by the server for that request. The same ID is recorded on the request's `http.request` trace span, so a failing response can be matched to its log lines. A client-supplied `x-request-id` is never adopted as the correlation ID; it is only logged as `client_request_id`, and only when it is at most 128 visible ASCII characters.
 

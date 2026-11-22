@@ -47,12 +47,9 @@ pub fn HealthPage() -> impl IntoView {
                                 <HealthItem label="Frontend Version" value=FRONTEND_VERSION.to_string() />
                                 <HealthItem label="Frontend Commit" value=FRONTEND_COMMIT.to_string() monospace=true />
                                 <div class="my-4 border-t border-gray-100 dark:border-gray-700"></div>
-                                <HealthItem label="Backend Service" value=info.name />
-                                <HealthItem label="Backend Version" value=info.version />
                                 <HealthItem label="Backend Commit" value=info.commit monospace=true />
                                 <div class="my-4 border-t border-gray-100 dark:border-gray-700"></div>
-                                <StatusItem label="Database" status=info.database />
-                                <StatusItem label="Admission Keyset" status=info.admission_keyset />
+                                <StatusItem label="Backend Status" status=info.status />
                             </div>
                         }.into_any(),
                         Some(Err(err)) => view! {

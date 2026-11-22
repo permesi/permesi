@@ -15,6 +15,14 @@ the signed artifacts.
 
 The first release on OpenBao and PostgreSQL 19.
 
+### Breaking
+
+- Admission verification reads approved Ed25519 keys and the minimum accepted
+  version from core OpenBao. Initialize the operator-owned authority before
+  rollout. Genesis signs with the explicitly activated Transit version.
+- Public health responses contain `status` and `commit`. Genesis has removed
+  the request-header echo endpoint.
+
 ### Added
 
 - Secrets, Transit signing and encryption, PKI and dynamic database credentials
@@ -42,6 +50,11 @@ The first release on OpenBao and PostgreSQL 19.
 - This changelog.
 
 ### Changed
+
+- Genesis and Permesi reject excess public work before database and cryptographic
+  operations. Session and OAuth traffic have a separate Permesi budget.
+- Genesis database leases receive column-level privileges and connection limits.
+  The manager uses the maintenance database during service database saturation.
 
 - The API documentation loads a pinned, integrity-checked Redoc 3 module, and its
   links name both the spec and the operation.

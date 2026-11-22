@@ -108,6 +108,23 @@ pub(crate) fn openbao_auth(
     }
     Ok(None)
 }
+/// Construct the service budget from clap-validated limits and recheck all three bounds.
+fn work_limits(
+    matches: &clap::ArgMatches,
+    group: &str,
+) -> anyhow::Result<service_utils::work_limit::Limits> {
+    let value = |suffix| {
+        matches
+            .get_one::<u32>(&format!("{group}-{suffix}"))
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("missing work limit"))
+    };
+    service_utils::work_limit::Limits::new(
+        value("requests-per-second")?,
+        value("burst")?,
+        value("max-in-flight")?,
+    )
+}
 
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
@@ -141,7 +158,15 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 
     let db_pool = crate::cli::commands::database::parse(matches)?;
 
+    let signing_version = matches
+        .get_one::<u32>("admission-signing-version")
+        .copied()
+        .filter(|version| *version > 0)
+        .context("expected a positive admission signing version")?;
     Ok(Action::Server(Args {
+        signing_version,
+        public_limits: work_limits(matches, "public")?,
+
         port,
         socket_path,
         dsn,

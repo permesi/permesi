@@ -211,7 +211,6 @@ and `/run/genesis`.
 ```
 PERMESI_DSN=postgres://postgres@localhost:5432/permesi
 PERMESI_OPENBAO_URL=https://openbao.example.com:8200
-PERMESI_ADMISSION_PASERK_URL=https://genesis.permesi.localhost:8000/paserk.json
 PERMESI_ADMISSION_ISS=https://genesis.permesi.localhost
 PERMESI_ADMISSION_AUD=permesi
 PERMESI_FRONTEND_BASE_URL=https://permesi.example.com
@@ -230,11 +229,9 @@ Both services require OpenBao-issued TLS material and must trust a single OpenBa
 `/run/permesi/tls.bundle.pem` and `/run/genesis/tls.bundle.pem`.
 Override paths with:
 `PERMESI_TLS_PEM_BUNDLE` and `GENESIS_TLS_PEM_BUNDLE`.
-If your PASERK URL is served by a different CA (for example, HAProxy with mkcert),
-set `PERMESI_ADMISSION_PASERK_CA_PATH` to that CA bundle. For direct Genesis access,
-use the OpenBao-issued Genesis CA bundle.
-Permesi also needs `PERMESI_ADMISSION_PASERK_URL` to locate the Genesis `/paserk.json` endpoint
-over HTTPS.
+Before enabling admission, initialize its authority in the core KV mount using
+`scripts/admission-authority initialize 1` with the bootstrap operator identity.
+The local OpenBao recipe performs the initial create with compare-and-set.
 
 Genesis serves public zero-token endpoints used by the frontend, and it is expected to sit
 behind Cloudflare or HAProxy for scale and edge protection.
@@ -410,7 +407,7 @@ Each service reads its own copy of these, prefixed with `PERMESI_` or `GENESIS_`
 
 ### Service Specifics
 - **Genesis**: Requires `GENESIS_DSN`.
-- **Permesi**: Requires `PERMESI_DSN` and `PERMESI_ADMISSION_PASERK_URL` (the endpoint where Genesis publishes its public key).
+- **Permesi**: Requires `PERMESI_DSN` and read access to the core KV admission authority.
 
 Permesi enforces authentication limits in PostgreSQL across replicas. The
 defaults use a 600-second window, 100 attempts per IP/action, 10 attempts per

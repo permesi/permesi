@@ -66,6 +66,23 @@ ALTER DATABASE permesi OWNER TO openbao_permesi;
 -- Prevent cross-database access via the default PUBLIC grants.
 REVOKE ALL ON DATABASE genesis FROM PUBLIC;
 REVOKE ALL ON DATABASE permesi FROM PUBLIC;
+-- This bootstrap owns the dedicated cluster's maintenance and template ACLs.
+-- Role creation and revocation connect to postgres, outside the edge database cap.
+REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC;
+GRANT CONNECT ON DATABASE postgres TO openbao_genesis, openbao_permesi;
+\if :{?genesis_connection_limit}
+\else
+\set genesis_connection_limit 32
+\endif
+CREATE TEMP TABLE genesis_capacity (cap integer NOT NULL CHECK (cap > 0));
+INSERT INTO pg_temp.genesis_capacity VALUES (:'genesis_connection_limit'::integer);
+SELECT pg_catalog.format('ALTER DATABASE genesis CONNECTION LIMIT %s', cap) FROM pg_temp.genesis_capacity\gexec
+DROP TABLE pg_temp.genesis_capacity;
+DO $$ BEGIN
+    IF (SELECT datconnlimit FROM pg_database WHERE datname='genesis') <= 0 THEN
+        RAISE EXCEPTION 'Genesis requires a positive aggregate connection limit';
+    END IF;
+END $$;
 GRANT CONNECT ON DATABASE genesis TO openbao_genesis;
 GRANT CONNECT ON DATABASE permesi TO openbao_permesi;
 

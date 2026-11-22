@@ -183,6 +183,10 @@ openbao-tf-apply:
     fi
     rg -N '^Apply complete' "$tf_log" || true
 
+    # Only initialize a new authority. CAS zero makes concurrent setup fail closed.
+    if ! BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$token" bao kv get -mount=secret/permesi admission-authority >/dev/null 2>&1; then
+      BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$token" {{root}}/scripts/admission-authority initialize 1
+    fi
     echo "✅ OpenBao configured via Terraform."
     echo "🔑 Operator token: in .envrc as PERMESI_OPERATOR_TOKEN, or mint one with: just operator-token"
 
@@ -397,7 +401,6 @@ dev-env:
     "$permesi_block" \
     "export PERMESI_TLS_PEM_BUNDLE=\"{{root}}/certs/permesi/tls.bundle.pem\"" \
     "export PERMESI_ADMISSION_PASERK_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
-    "export PERMESI_ADMISSION_PASERK_URL=\"https://genesis.permesi.localhost:8000/paserk.json\"" \
     "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost{{https_suffix}}\"" \

@@ -117,10 +117,9 @@ pub async fn configure_genesis_openbao(
         r#"CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';"#.to_string(),
         format!(r#"GRANT CONNECT ON DATABASE "{db_name}" TO "{{{{name}}}}";"#),
         r#"GRANT USAGE ON SCHEMA public TO "{{name}}";"#.to_string(),
-        r#"GRANT SELECT ON TABLE clients TO "{{name}}";"#.to_string(),
+        r#"GRANT SELECT (id, uuid, is_reserved) ON TABLE clients TO "{{name}}";"#.to_string(),
         // Genesis inserts with `RETURNING`, so SELECT is required alongside INSERT.
-        r#"GRANT SELECT, INSERT ON TABLE tokens TO "{{name}}";"#.to_string(),
-        r#"GRANT SELECT, INSERT ON TABLE tokens_default TO "{{name}}";"#.to_string(),
+        r#"GRANT SELECT (id), INSERT (client_id, ip_address, country, user_agent) ON TABLE tokens TO "{{name}}";"#.to_string(),
     ];
 
     let revocation_statements = vec![

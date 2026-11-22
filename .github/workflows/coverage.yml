@@ -45,6 +45,7 @@ jobs:
         run: cargo llvm-cov --workspace --lcov --output-path coverage.lcov
 
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
+        if: github.ref_name != 'sandbox'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.lcov
@@ -52,6 +53,7 @@ jobs:
 
       - name: Coveralls GitHub Action
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2
+        if: github.ref_name != 'sandbox'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: coverage.lcov

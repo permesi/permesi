@@ -8,8 +8,6 @@ fn matches(url: &str, extra: &[&str]) -> Result<clap::ArgMatches> {
         "postgres://",
         "--socket-path",
         "/tmp/native-config.sock",
-        "--admission-paserk-url",
-        "https://genesis.example/paserk.json",
         "--openbao-url",
         url,
     ];
