@@ -298,5 +298,6 @@ Helm sandbox commit. Both containment profiles use its immutable artifact ID,
 archive checksum and manifest digests. A repository-scoped success status links
 to the tested pair after both profiles pass. The release dispatch uses its
 existing event. Sandbox runs use disposable clusters and GitHub Actions artifact
-storage. The application checks out that exact Helm commit and uses its source and
+storage. After the application gates pass, CI resolves the Helm sandbox head, checks
+out that commit and uses its source and
 profile actions for every qualification step.

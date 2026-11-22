@@ -3,9 +3,6 @@ name: Qualify sandbox images
 on:
   workflow_call:
     inputs:
-      helm_sha:
-        required: true
-        type: string
       artifact_id:
         required: true
         type: string
@@ -29,10 +26,18 @@ jobs:
       artifact_digest: ${{ steps.source.outputs.artifact_digest }}
       rollback_id: ${{ steps.source.outputs.rollback_id }}
     steps:
+      - id: charts
+        name: Resolve the sandbox chart revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(gh api repos/permesi/permesi-helm/git/ref/heads/sandbox --jq .object.sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: permesi/permesi-helm
-          ref: ${{ inputs.helm_sha }}
+          ref: ${{ steps.charts.outputs.sha }}
           persist-credentials: false
       - id: source
         uses: ./.github/actions/containment-source

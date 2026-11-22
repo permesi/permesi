@@ -323,7 +323,6 @@ jobs:
     needs: [build, frontend-build]
     if: github.ref_name == 'sandbox'
     outputs:
-      helm_sha: ${{ steps.charts.outputs.sha }}
       artifact_id: ${{ steps.archive.outputs.artifact-id }}
       artifact_digest: ${{ steps.archive.outputs.artifact-digest }}
     runs-on: ubuntu-latest
@@ -331,6 +330,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Check qualification handoff ordering
+        run: |
+          python3 -m pip install --target "$RUNNER_TEMP/handoff-deps" PyYAML==6.0.3
+          PYTHONPATH="$RUNNER_TEMP/handoff-deps" python3 scripts/test-sandbox-qualification.py
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: image-binaries
@@ -339,14 +342,6 @@ jobs:
         with:
           name: frontend-dist
           path: apps/web/dist
-      - id: charts
-        name: Resolve the sandbox chart revision
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          sha="$(gh api repos/permesi/permesi-helm/git/ref/heads/sandbox --jq .object.sha)"
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - name: Archive candidate images
         run: |
           set -euo pipefail
@@ -467,6 +462,5 @@ jobs:
       statuses: write
     uses: ./.github/workflows/containment.yml
     with:
-      helm_sha: ${{ needs.sandbox-images.outputs.helm_sha }}
       artifact_id: ${{ needs.sandbox-images.outputs.artifact_id }}
       artifact_digest: ${{ needs.sandbox-images.outputs.artifact_digest }}
