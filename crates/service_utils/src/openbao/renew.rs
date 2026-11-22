@@ -178,15 +178,15 @@ enum Plan {
 /// the drain margin. Shutdown is requested one margin before that expiry, at once
 /// if less than a margin is left.
 ///
-/// A full lease is renewed after `jitter_percent` of its duration, but never so
-/// late that less than the margin would remain if that renewal turned out capped.
+/// A full lease is renewed after `jitter_percent` of the time it has outside the
+/// margin, so the renewal always starts with part of that time left for retries.
 fn plan(lease: Duration, full: Duration, jitter_percent: u64) -> Plan {
     let margin = drain_margin(full.max(lease));
+    let usable = lease.saturating_sub(margin);
     if lease + EXTENSION_TOLERANCE < full {
-        return Plan::ShutdownAfter(lease.saturating_sub(margin));
+        return Plan::ShutdownAfter(usable);
     }
-    let wait = Duration::from_secs(lease.as_secs() * jitter_percent / 100)
-        .min(lease.saturating_sub(margin));
+    let wait = Duration::from_secs(usable.as_secs() * jitter_percent / 100);
     Plan::RenewAfter(wait.max(MIN_RENEW_INTERVAL))
 }
 
@@ -197,14 +197,22 @@ fn drain_margin(full: Duration) -> Duration {
     DRAIN_MARGIN.min(full / 2)
 }
 
+/// Whether a lease is long enough to reserve the whole drain margin. Shorter
+/// ones (seconds-long leases in tests) cannot, and fall back to a fixed number
+/// of attempts.
+fn reserves_margin(full: Duration) -> bool {
+    full >= DRAIN_MARGIN * 2
+}
+
 /// Whether a failed renewal may be retried after `backoff`.
 ///
-/// The first `MIN_ATTEMPTS` are always made. Beyond that a retry is worthwhile
-/// only while `time_left`, the lease's remaining validity outside its drain
-/// margin, outlasts the backoff; without a known expiry there is nothing to
-/// wait for.
-fn may_retry(attempt: u32, backoff: Duration, time_left: Option<Duration>) -> bool {
-    attempt < MIN_ATTEMPTS || time_left.is_some_and(|left| backoff < left)
+/// `time_left` is the lease's remaining validity outside its drain margin. While
+/// it outlasts the backoff, retrying costs nothing. Once it does not, a lease
+/// that reserves its margin stops at once; only when the margin cannot be
+/// reserved, or the expiry is unknown, are `MIN_ATTEMPTS` made regardless.
+fn may_retry(attempt: u32, backoff: Duration, time_left: Option<Duration>, reserved: bool) -> bool {
+    time_left.is_some_and(|left| backoff < left)
+        || (attempt < MIN_ATTEMPTS && !(reserved && time_left.is_some()))
 }
 
 /// Keep one lease renewed until it fails for good or reaches its max TTL, then
@@ -242,9 +250,12 @@ async fn renew_until_shutdown(
                     .saturating_duration_since(requested)
                     .saturating_sub(drain_margin(full.max(issued)))
             });
-            // Past the guaranteed attempts, a stalled request must not eat the margin.
+            // A request that stalls must not eat the margin: it gets what is left
+            // of the budget. Leases too short to reserve one keep the transport's
+            // own timeout for their guaranteed attempts.
+            let reserved = reserves_margin(full.max(issued));
             let result = match budget {
-                Some(budget) if attempt > MIN_ATTEMPTS => {
+                Some(budget) if reserved || attempt > MIN_ATTEMPTS => {
                     match timeout(budget, lease.renew(&transport, token)).await {
                         Ok(result) => result,
                         Err(_) => Err(anyhow!("no answer before the drain margin")),
@@ -256,7 +267,7 @@ async fn renew_until_shutdown(
                 Ok(seconds) => break (requested, Duration::from_secs(seconds)),
                 Err(e) => {
                     let time_left = budget.map(|budget| budget.saturating_sub(requested.elapsed()));
-                    if !may_retry(attempt, backoff, time_left) {
+                    if !may_retry(attempt, backoff, time_left, reserved) {
                         error!(attempts = attempt, "Failed to renew {name}: {e}");
                         let _ = tx.send(lease.failed());
                         return;
@@ -305,7 +316,7 @@ async fn renew_until_shutdown(
 mod tests {
     use super::{
         DRAIN_MARGIN, MAX_BACKOFF, MIN_RENEW_INTERVAL, Plan, ShutdownSignal, drain_margin,
-        may_retry, plan, try_renew,
+        may_retry, plan, reserves_margin, try_renew,
     };
     use crate::globals::GlobalArgs;
     use anyhow::{Result, bail};
@@ -464,21 +475,22 @@ mod tests {
     const HOUR: Duration = Duration::from_hours(1);
 
     #[test]
-    fn plan_renews_a_full_lease_at_the_jittered_fraction() {
+    fn plan_renews_a_full_lease_at_the_jittered_fraction_of_its_usable_time() {
+        // 59 of the 60 minutes are usable; 80% of that is 2832 s.
         assert_eq!(
             plan(HOUR, HOUR, 80),
-            Plan::RenewAfter(Duration::from_mins(48))
+            Plan::RenewAfter(Duration::from_secs(2832))
         );
         // The first renewal defines what a full lease is.
         assert_eq!(
             plan(HOUR, Duration::ZERO, 70),
-            Plan::RenewAfter(Duration::from_mins(42))
+            Plan::RenewAfter(Duration::from_secs(2478))
         );
         // Whole-second rounding is not a shortened lease.
-        assert_eq!(
+        assert!(matches!(
             plan(Duration::from_secs(3599), HOUR, 80),
-            Plan::RenewAfter(Duration::from_secs(2879))
-        );
+            Plan::RenewAfter(_)
+        ));
     }
 
     #[test]
@@ -509,18 +521,29 @@ mod tests {
     }
 
     #[test]
-    fn plan_never_schedules_a_renewal_inside_the_drain_margin() {
-        // 89% of five minutes would leave 33 s; the margin keeps a full minute.
-        let five_minutes = Duration::from_mins(5);
-        assert_eq!(
-            plan(five_minutes, five_minutes, 89),
-            Plan::RenewAfter(Duration::from_mins(4))
-        );
+    fn plan_always_leaves_retry_time_before_the_drain_margin() {
+        // Second review trace: leases of 2 to 23 minutes used to wake exactly at
+        // the margin, so the first failed attempt already spent it.
+        for (minutes, jitter) in [(2, 89), (5, 89), (12, 89), (15, 89), (60, 89)] {
+            let lease = Duration::from_mins(minutes);
+            let wait = match plan(lease, lease, jitter) {
+                Plan::RenewAfter(wait) => wait,
+                Plan::ShutdownAfter(_) => Duration::MAX,
+            };
+            // `None` when the renewal would wake inside the margin (or not at all).
+            let budget = lease
+                .checked_sub(wait)
+                .and_then(|left| left.checked_sub(DRAIN_MARGIN));
+            assert!(
+                budget.is_some_and(|budget| budget >= Duration::from_secs(6)),
+                "{minutes} min lease wakes with {budget:?} before the margin"
+            );
+        }
         // A lease too short for the margin keeps half of itself.
         let short = Duration::from_secs(20);
         assert_eq!(
             plan(short, short, 89),
-            Plan::RenewAfter(Duration::from_secs(10))
+            Plan::RenewAfter(Duration::from_secs(8))
         );
     }
 
@@ -542,23 +565,61 @@ mod tests {
             drain_margin(Duration::from_secs(20)),
             Duration::from_secs(10)
         );
+        assert!(reserves_margin(Duration::from_mins(2)));
+        assert!(!reserves_margin(Duration::from_secs(119)));
     }
 
     #[test]
-    fn may_retry_always_makes_the_minimum_attempts() {
-        assert!(may_retry(1, Duration::from_secs(1), None));
-        assert!(may_retry(2, Duration::from_secs(2), Some(Duration::ZERO)));
-        assert!(!may_retry(3, Duration::from_secs(4), None));
-        assert!(!may_retry(3, Duration::from_secs(4), Some(Duration::ZERO)));
+    fn may_retry_makes_the_minimum_attempts_when_no_margin_can_be_reserved() {
+        // Unknown expiry (first token renewal without a login lease).
+        assert!(may_retry(1, Duration::from_secs(1), None, true));
+        assert!(may_retry(2, Duration::from_secs(2), None, false));
+        assert!(!may_retry(3, Duration::from_secs(4), None, true));
+        // A seconds-long lease cannot reserve a margin either.
+        assert!(may_retry(
+            2,
+            Duration::from_secs(2),
+            Some(Duration::ZERO),
+            false
+        ));
+        assert!(!may_retry(
+            3,
+            Duration::from_secs(4),
+            Some(Duration::ZERO),
+            false
+        ));
+    }
+
+    #[test]
+    fn may_retry_never_spends_a_reserved_margin() {
+        // Out of budget on the first failure: the guaranteed attempts used to run
+        // anyway, 3 s (or 93 s against a stalled server) into the margin.
+        assert!(!may_retry(
+            1,
+            Duration::from_secs(1),
+            Some(Duration::ZERO),
+            true
+        ));
+        assert!(!may_retry(
+            2,
+            Duration::from_secs(2),
+            Some(Duration::from_secs(2)),
+            true
+        ));
     }
 
     #[test]
     fn may_retry_continues_while_the_lease_can_still_cover_the_drain() {
         let ten_minutes = Some(Duration::from_mins(10));
-        assert!(may_retry(3, Duration::from_secs(4), ten_minutes));
-        assert!(may_retry(40, MAX_BACKOFF, ten_minutes));
+        assert!(may_retry(3, Duration::from_secs(4), ten_minutes, true));
+        assert!(may_retry(40, MAX_BACKOFF, ten_minutes, true));
         // The next retry would land inside the drain margin: stop now.
-        assert!(!may_retry(9, MAX_BACKOFF, Some(Duration::from_secs(30))));
+        assert!(!may_retry(
+            9,
+            MAX_BACKOFF,
+            Some(Duration::from_secs(30)),
+            true
+        ));
     }
 
     #[tokio::test]
