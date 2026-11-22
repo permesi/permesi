@@ -2,13 +2,11 @@ use clap::{Arg, ArgMatches, Command};
 
 pub const ARG_ADMISSION_ISSUER: &str = "admission-issuer";
 pub const ARG_ADMISSION_AUDIENCE: &str = "admission-audience";
-pub const ARG_ADMISSION_PASERK_CA_PATH: &str = "admission-paserk-ca-path";
 
 #[derive(Debug, Clone)]
 pub struct Options {
     pub issuer: Option<String>,
     pub audience: Option<String>,
-    pub paserk_ca_path: Option<String>,
 }
 
 impl Options {
@@ -28,7 +26,6 @@ impl Options {
         Ok(Self {
             issuer: get_non_empty(ARG_ADMISSION_ISSUER),
             audience: get_non_empty(ARG_ADMISSION_AUDIENCE),
-            paserk_ca_path: get_non_empty(ARG_ADMISSION_PASERK_CA_PATH),
         })
     }
 }
@@ -47,11 +44,5 @@ pub fn with_args(command: Command) -> Command {
                 .long(ARG_ADMISSION_AUDIENCE)
                 .help("Expected Admission Token audience (aud)")
                 .env("PERMESI_ADMISSION_AUD"),
-        )
-        .arg(
-            Arg::new(ARG_ADMISSION_PASERK_CA_PATH)
-                .long(ARG_ADMISSION_PASERK_CA_PATH)
-                .help("Path to CA bundle for the PASERK URL (PEM)")
-                .env("PERMESI_ADMISSION_PASERK_CA_PATH"),
         )
 }

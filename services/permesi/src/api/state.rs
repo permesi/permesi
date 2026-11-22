@@ -31,6 +31,8 @@ pub struct AppState {
     #[from_ref(skip)]
     pub public_budget: Arc<service_utils::work_limit::Budget>,
     #[from_ref(skip)]
+    pub management_budget: Arc<service_utils::work_limit::Budget>,
+    #[from_ref(skip)]
     pub protocol_budget: Arc<service_utils::work_limit::Budget>,
 
     /// Last bounded background readiness observation.
@@ -101,6 +103,7 @@ impl AppState {
         Ok(Self {
             public_budget: budget()?,
             protocol_budget: budget()?,
+            management_budget: budget()?,
             observation: service_utils::health::Observation::default(),
             tenant_mutations: super::tenant::MutationPolicy::for_tests(),
             oauth: Arc::new(crate::oauth::oidc::OAuthState::new(

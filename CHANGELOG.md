@@ -52,7 +52,7 @@ The first release on OpenBao and PostgreSQL 19.
 ### Changed
 
 - Genesis and Permesi reject excess public work before database and cryptographic
-  operations. Session and OAuth traffic have a separate Permesi budget.
+  operations. Session and OAuth traffic have a separate Permesi budget. Management routes use an independent bucket with the protocol limits.
 - Genesis database leases receive column-level privileges and connection limits.
   The manager uses the maintenance database during service database saturation.
 

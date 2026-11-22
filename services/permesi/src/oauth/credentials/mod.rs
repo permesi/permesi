@@ -178,10 +178,16 @@ impl CredentialService {
 
     /// Rejects saturation immediately; no unbounded waiting queue or locks held for a permit.
     fn permit(&self) -> std::result::Result<OwnedSemaphorePermit, CredentialError> {
-        self.workers
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| CredentialError::Unavailable)
+        let permit = self.workers.clone().try_acquire_owned();
+        tracing::debug!(
+            active = self
+                .config
+                .workers
+                .saturating_sub(self.workers.available_permits()),
+            rejected = permit.is_err(),
+            "OAuth client credential hash capacity"
+        );
+        permit.map_err(|_| CredentialError::Unavailable)
     }
 
     /// Holds all CPU permits so integration tests can verify authentication saturation.

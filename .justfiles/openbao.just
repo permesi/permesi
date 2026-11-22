@@ -400,7 +400,6 @@ dev-env:
     "" \
     "$permesi_block" \
     "export PERMESI_TLS_PEM_BUNDLE=\"{{root}}/certs/permesi/tls.bundle.pem\"" \
-    "export PERMESI_ADMISSION_PASERK_CA_PATH=\"{{root}}/certs/genesis/ca.pem\"" \
     "export PERMESI_FRONTEND_BASE_URL=\"https://permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_API_BASE_URL=\"https://api.permesi.localhost{{https_suffix}}\"" \
     "export PERMESI_TOKEN_BASE_URL=\"https://genesis.permesi.localhost{{https_suffix}}\"" \

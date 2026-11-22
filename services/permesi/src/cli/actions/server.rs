@@ -31,7 +31,6 @@ pub struct Args {
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
     pub tls_pem_bundle: Option<String>,
-    pub admission_paserk_ca_path: Option<String>,
     pub frontend_base_url: String,
     pub cors_allowed_origins: Vec<String>,
     pub email_token_ttl_seconds: i64,
@@ -213,11 +212,6 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &st
         openbao_client::OpenBaoTarget::AgentProxy { .. } => "Agent (Sidecar)",
     };
 
-    let admission_paserk_ca = args
-        .admission_paserk_ca_path
-        .clone()
-        .unwrap_or_else(|| "none (using system roots)".to_string());
-
     let listen_addr = if let Some(sock) = &args.socket_path {
         format!("unix:{sock}")
     } else {
@@ -263,7 +257,6 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &st
                 .clone()
                 .unwrap_or_else(|| "none".to_string()),
         ),
-        ("admission_paserk_ca_path", admission_paserk_ca),
         ("admission_issuer", issuer.to_string()),
         ("admission_audience", audience.to_string()),
         ("frontend_base_url", args.frontend_base_url.clone()),
@@ -409,23 +402,10 @@ fn openbao_base_url(url: &str) -> Result<String> {
     Ok(format!("{}://{}:{}", parsed.scheme(), host, port))
 }
 
+/// Install the inbound HTTPS bundle only when the service uses a TLS listener.
 fn configure_tls_paths(args: &Args) {
     if let Some(bundle_path) = &args.tls_pem_bundle {
-        crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
-            std::path::PathBuf::from(bundle_path),
-            args.admission_paserk_ca_path
-                .clone()
-                .map(std::path::PathBuf::from),
-        ));
-    } else if let Some(ca_path) = &args.admission_paserk_ca_path {
-        // Socket mode: no server TLS bundle, but we need CA for client (AdmissionVerifier).
-        // Initialize TlsPaths with the CA path as a placeholder for the bundle.
-        // This allows runtime_paths() to succeed.
-        // load_server_config() would fail, but it's not called in socket mode.
-        crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(
-            std::path::PathBuf::from(ca_path),
-            Some(std::path::PathBuf::from(ca_path)),
-        ));
+        crate::tls::set_runtime_paths(crate::tls::TlsPaths::new(bundle_path.into(), None));
     }
 }
 
@@ -474,7 +454,6 @@ mod tests {
             admission_issuer: None,
             admission_audience: None,
             tls_pem_bundle: None,
-            admission_paserk_ca_path: None,
             frontend_base_url: "https://permesi.example.com".to_string(),
             cors_allowed_origins: vec![],
             email_token_ttl_seconds: 300,
@@ -511,35 +490,9 @@ mod tests {
     }
 
     #[test]
-    fn test_socket_mode_sets_tls_paths() -> anyhow::Result<()> {
-        let mut args = default_args()?;
-        // Socket mode simulation: No bundle, but CA path present
-        args.tls_pem_bundle = None;
-        args.admission_paserk_ca_path = Some("/tmp/ca.pem".to_string());
-
-        configure_tls_paths(&args);
-
-        // Verify that runtime paths are set
-        // Note: In a shared test environment (cargo test), this might fail if another test set it differently.
-        // However, for unit testing permesi crate, this should be consistent if run in isolation or first.
-        let paths = crate::tls::runtime_paths();
-        assert!(
-            paths.is_ok(),
-            "TLS paths should be configured in socket mode"
-        );
-
-        if let Ok(p) = paths {
-            // Check if the extra CA path matches what we set
-            assert_eq!(p.extra_ca_path(), Some(std::path::Path::new("/tmp/ca.pem")));
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_tls_mode_sets_tls_paths() -> anyhow::Result<()> {
         let mut args = default_args()?;
         args.tls_pem_bundle = Some("/tmp/bundle.pem".to_string());
-        args.admission_paserk_ca_path = Some("/tmp/ca.pem".to_string());
 
         configure_tls_paths(&args);
 

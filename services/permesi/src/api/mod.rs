@@ -219,6 +219,9 @@ pub async fn new(
         });
     let app = build_router(AppState {
         public_budget: Arc::new(service_utils::work_limit::Budget::new(config.public_limits)),
+        management_budget: Arc::new(service_utils::work_limit::Budget::new(
+            config.protocol_limits,
+        )),
         protocol_budget: Arc::new(service_utils::work_limit::Budget::new(
             config.protocol_limits,
         )),
@@ -347,6 +350,23 @@ async fn limit_public_work(
         | "/authorize"
         | "/authorize/resume"
         | "/authorize/consent" => &state.protocol_budget,
+        _ if [
+            "/v1/admin",
+            "/v1/auth/admin",
+            "/v1/me",
+            "/v1/orgs",
+            "/v1/users",
+        ]
+        .iter()
+        .any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|tail| tail.starts_with('/'))
+        }) =>
+        {
+            &state.management_budget
+        }
         _ => &state.public_budget,
     };
     let Some(_permit) = budget.enter() else {
@@ -715,6 +735,42 @@ mod tests {
         let envelope = error_envelope(response).await?;
         assert_eq!(envelope.error.code, "invalid_request");
         assert_eq!(envelope.error.message, "Missing zero token");
+        Ok(())
+    }
+
+    /// Public saturation must leave authenticated management and session checks reachable.
+    #[tokio::test]
+    async fn public_saturation_preserves_session_management_and_health() -> Result<()> {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let pool =
+            sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
+        let mut state = super::AppState::for_tests(pool)?;
+        state.public_budget = std::sync::Arc::new(service_utils::work_limit::Budget::new(
+            service_utils::work_limit::Limits::new(1, 1, 1)?,
+        ));
+        let budget = state.public_budget.clone();
+        let _busy = budget
+            .enter()
+            .ok_or_else(|| anyhow::anyhow!("missing fixture permit"))?;
+        let app = super::build_router(state)?;
+        for (method, uri, expected) in [
+            ("POST", "/v1/auth/opaque/signup/start", 429),
+            ("GET", "/v1/auth/session", 204),
+            ("GET", "/v1/orgs", 401),
+            ("GET", "/live", 200),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(response.status().as_u16(), expected, "{uri}");
+        }
         Ok(())
     }
 

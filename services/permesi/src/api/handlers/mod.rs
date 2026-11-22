@@ -166,7 +166,13 @@ impl AdmissionVerifier {
                         .await
                 };
                 if !matches!(tokio::time::timeout(refresh, observation).await, Ok(Ok(()))) {
-                    warn!("admission authority refresh failed");
+                    let snapshot = verifier.snapshot.read().await;
+                    let age_ms = snapshot
+                        .as_ref()
+                        .and_then(|s| s.deadline)
+                        .and_then(|end| end.checked_sub(max_age))
+                        .map(|t| t.elapsed().as_millis());
+                    warn!(?age_ms, "admission authority refresh failed");
                 }
             }
         });
@@ -180,7 +186,7 @@ impl AdmissionVerifier {
             stored
                 .as_ref()
                 .is_none_or(|old| next.floor >= old.floor && next.revision >= old.revision),
-            "admission floor regressed"
+            "admission authority revision or floor regressed"
         );
         *stored = Some(next);
         Ok(())
