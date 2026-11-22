@@ -13,7 +13,7 @@
 **Prerequisites (intentional):**
 - **System**: `zsh`, `podman`, `jq`, `curl`, `xh`, `ripgrep` (rg), and [`herdr`](https://herdr.dev) (or `tmux` as the fallback)
 - **Languages**: `rust` (stable) with `cargo-watch`, `node` (LTS)
-- **Infrastructure**: `just`, `terraform`, `openbao`, `mkcert`, `direnv`
+- **Infrastructure**: `just`, `terraform`, `openbao` (its CLI is `bao`), `mkcert`, `direnv`
 > These tools are required to run a real IAM stack locally: isolated services, TLS everywhere, OpenBao-backed cryptography, and reproducible infrastructure. `zsh` is a hard requirement: the justfile runs under it, so no recipe works without it.
 
 ```bash
@@ -571,7 +571,11 @@ To connect to the local development database from the project root, run `PGSERVI
 If Postgres init scripts didn't run (for example, an existing `db/data`), run `just db-bootstrap`
 to (re)apply schemas and runtime roles, then `just db-verify` to confirm constraints.
 
-Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe OpenBao data, and delete local Postgres data/logs (`db/data`, `db/log`).
+`just status` shows at a glance whether the stack is healthy: the four containers, the PostgreSQL server version and schema verification, OpenBao's seal state, and both services' health endpoints. It changes nothing and exits non-zero when something is down, with the recipe that fixes it.
+
+Cleanup: `just stop` to stop containers, and `just reset` to remove the infra containers, wipe OpenBao data, and delete the local Postgres cluster and logs (`db/data/19`, `db/log`). The cluster directory is named after the PostgreSQL major version, so a directory left by another major is neither used nor deleted.
+
+Coming from 0.5, which used HashiCorp Vault and PostgreSQL 18? See [Upgrading from 0.5](SETUP.md#8-upgrading-from-05).
 
 The dev stack keeps to itself so it can share a host with other projects. Every container (`postgres-permesi`, `permesi-openbao`, `permesi-jaeger`, `permesi-haproxy`) runs on the dedicated `permesi-net` podman network with subnet `172.31.20.0/24` and carries the label `io.permesi.stack=dev`. Set `PERMESI_NET` or `PERMESI_SUBNET` when that range collides with something else on the host; `just setup-network` reports the clash instead of silently picking another subnet. `just stop` only signals processes whose working directory is inside this checkout, so another project's `cargo watch` or port-8000 server survives it. Integration tests create their own uniquely named `permesi-test-*` networks and containers; `just test-clean` removes any that an interrupted run left behind. It removes every `permesi-test-*` resource of your user, so do not run it while tests of any permesi checkout are running. Container names and ports are fixed, so a host user runs one permesi stack at a time (one VM per developer). If you ran the stack before the containers were renamed, remove the old `openbao` and `jaeger` containers once (`podman rm -f openbao jaeger`) after confirming they are permesi's: the OpenBao data volume `permesi-openbao-data` is reused by `permesi-openbao`.
 
@@ -590,6 +594,7 @@ The dev stack keeps to itself so it can share a host with other projects. Every 
 
 - `just signup-verify-url`: Extract the latest email verification link from the database.
 - `just operator-token`: Generate a fresh platform operator token for admin claim/elevation.
+- `just status`: Check containers, PostgreSQL, OpenBao and both services in one read-only pass.
 - `just db-verify`: Confirm database constraints and schema state.
 - `just openapi`: Regenerate OpenAPI specs from code.
 
