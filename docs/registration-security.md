@@ -93,7 +93,9 @@ mutating token state. Only `pending_verification` may become `active`. Disabled
 accounts remain disabled, expired/replayed capabilities fail closed and successful
 activation retires every sibling link. Database wall-clock time is checked after
 lock acquisition, so waiting cannot extend a link's validity. The token table holds
-only the hash; the protected outbox necessarily contains the link for delivery.
+only the hash; the protected outbox necessarily contains the link for delivery,
+and only until then: a row that is delivered or abandoned has its payload erased
+in the statement that records the outcome.
 Neither is a public account-management interface.
 
 Resend takes the same user-first lock before checking status/cooldown and enqueueing.

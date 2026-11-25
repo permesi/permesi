@@ -109,6 +109,73 @@ async fn outbox_expired_lease_recovery_rejects_stale_worker() -> Result<()> {
     Ok(())
 }
 
+/// The verification link is a live capability. It stays in the outbox only while a
+/// delivery can still need it, and is erased when the row is delivered or given up on.
+#[tokio::test]
+async fn outbox_erases_the_link_once_a_message_is_delivered_or_abandoned() -> Result<()> {
+    let (_postgres, pool) = database().await?;
+    let delivery = DeliveryConfig::default();
+    let payload = || {
+        sqlx::query_as::<_, (String, bool, String)>(
+            "SELECT status::text,payload_json ? 'verify_url',payload_json::text FROM email_outbox",
+        )
+        .fetch_one(&pool)
+    };
+    let reset = || sqlx::query("DELETE FROM email_outbox").execute(&pool);
+
+    // Delivered.
+    enqueue(&pool).await?;
+    let config = EmailWorkerConfig::new();
+    let claim = storage::claim(&pool, &delivery, &config)
+        .await?
+        .context("claim")?;
+    assert!(
+        claim
+            .message
+            .payload_json
+            .contains("private-test-capability")
+    );
+    assert!(
+        payload().await?.1,
+        "a claimed message still carries its link"
+    );
+    assert!(storage::complete(&pool, &delivery, &config, &claim, true).await?);
+    assert_eq!(payload().await?, ("sent".into(), false, "{}".into()));
+
+    // A failed attempt that will be retried keeps the link; the last one erases it.
+    reset().await?;
+    enqueue(&pool).await?;
+    let config = EmailWorkerConfig::new().with_max_attempts(2);
+    let first = storage::claim(&pool, &delivery, &config)
+        .await?
+        .context("first")?;
+    assert!(storage::complete(&pool, &delivery, &config, &first, false).await?);
+    let (status, has_link, _) = payload().await?;
+    assert_eq!((status.as_str(), has_link), ("pending", true));
+    sqlx::query("UPDATE email_outbox SET next_attempt_at=clock_timestamp()")
+        .execute(&pool)
+        .await?;
+    let last = storage::claim(&pool, &delivery, &config)
+        .await?
+        .context("last")?;
+    assert!(storage::complete(&pool, &delivery, &config, &last, false).await?);
+    assert_eq!(payload().await?, ("failed".into(), false, "{}".into()));
+
+    // A worker that crashed on its final attempt is retired by the next claim.
+    reset().await?;
+    enqueue(&pool).await?;
+    let config = EmailWorkerConfig::new().with_max_attempts(1);
+    let _ = storage::claim(&pool, &delivery, &config)
+        .await?
+        .context("crashed")?;
+    sqlx::query("UPDATE email_outbox SET claim_expires_at=clock_timestamp()-INTERVAL '1 second'")
+        .execute(&pool)
+        .await?;
+    assert!(storage::claim(&pool, &delivery, &config).await?.is_none());
+    assert_eq!(payload().await?, ("failed".into(), false, "{}".into()));
+    Ok(())
+}
+
 /// Crashes count toward the configured attempt budget instead of creating an infinite retry loop.
 #[tokio::test]
 async fn outbox_crashed_final_attempt_is_retired() -> Result<()> {

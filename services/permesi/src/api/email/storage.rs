@@ -25,7 +25,7 @@ pub(super) async fn claim(
 ) -> Result<Option<Claim>> {
     super::bounded(delivery, async {
         let mut tx = crate::api::handlers::auth::operations::begin(pool, delivery.database_timeout_ms).await?;
-        sqlx::query("UPDATE email_outbox SET status='failed',last_error='delivery_attempts_exhausted',claim_id=NULL,claim_expires_at=NULL WHERE status='pending' AND attempts >= $1 AND (claim_expires_at IS NULL OR claim_expires_at<=clock_timestamp())")
+        sqlx::query("UPDATE email_outbox SET status='failed',payload_json='{}'::jsonb,last_error='delivery_attempts_exhausted',claim_id=NULL,claim_expires_at=NULL WHERE status='pending' AND attempts >= $1 AND (claim_expires_at IS NULL OR claim_expires_at<=clock_timestamp())")
             .bind(i32::try_from(config.max_attempts())?).execute(&mut *tx).await?;
         let lease = Uuid::new_v4();
         let row = sqlx::query("WITH candidate AS (SELECT id FROM email_outbox WHERE status='pending' AND attempts<$1 AND next_attempt_at<=clock_timestamp() AND (claim_expires_at IS NULL OR claim_expires_at<=clock_timestamp()) ORDER BY next_attempt_at,created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED) UPDATE email_outbox e SET claim_id=$2,claim_expires_at=clock_timestamp()+$3*INTERVAL '1 second',attempts=e.attempts+1 FROM candidate c WHERE e.id=c.id RETURNING e.id,e.attempts,e.to_email::text,e.template,e.payload_json::text")
@@ -39,6 +39,9 @@ pub(super) async fn claim(
 }
 
 /// Records only fixed diagnostic codes and refuses stale-worker results after expiry/reclaim.
+/// A row that reaches `sent` or `failed` is never read for delivery again, so its payload,
+/// which holds the verification link, is erased in the same statement. Only a row that
+/// stays `pending` for a retry keeps it.
 pub(super) async fn complete(
     pool: &PgPool,
     delivery: &DeliveryConfig,
@@ -50,7 +53,7 @@ pub(super) async fn complete(
         let mut tx = crate::api::handlers::auth::operations::begin(pool, delivery.database_timeout_ms).await?;
         let status = if sent { "sent" } else if u32::try_from(claim.attempts)? >= config.max_attempts() { "failed" } else { "pending" };
         let delay_ms = i64::try_from(super::backoff_delay(u32::try_from(claim.attempts)?, config.backoff_base(), config.backoff_max()).as_millis())?;
-        let result = sqlx::query("UPDATE email_outbox SET status=$3::email_outbox_status,sent_at=CASE WHEN $4 THEN clock_timestamp() ELSE NULL END,last_error=CASE WHEN $4 THEN NULL ELSE 'smtp_delivery_failed' END,next_attempt_at=clock_timestamp()+$5*INTERVAL '1 millisecond',claim_id=NULL,claim_expires_at=NULL WHERE id=$1 AND claim_id=$2 AND status='pending' AND claim_expires_at>clock_timestamp()")
+        let result = sqlx::query("UPDATE email_outbox SET status=$3::email_outbox_status,payload_json=CASE WHEN $3 IN ('sent','failed') THEN '{}'::jsonb ELSE payload_json END,sent_at=CASE WHEN $4 THEN clock_timestamp() ELSE NULL END,last_error=CASE WHEN $4 THEN NULL ELSE 'smtp_delivery_failed' END,next_attempt_at=clock_timestamp()+$5*INTERVAL '1 millisecond',claim_id=NULL,claim_expires_at=NULL WHERE id=$1 AND claim_id=$2 AND status='pending' AND claim_expires_at>clock_timestamp()")
             .bind(claim.id).bind(claim.lease).bind(status).bind(sent).bind(delay_ms).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(result.rows_affected() == 1)

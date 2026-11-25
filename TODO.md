@@ -14,7 +14,7 @@ Confirmed during the OpenBao 2.7 and PostgreSQL 19 stabilization and left open b
 - [ ] **Session-level DB timeout defaults:** Pool connections have no session default for `statement_timeout` or `lock_timeout`; only paths setting explicit transaction deadlines are bounded.
 - [ ] **Server-wide HTTP timeouts & shutdown budget:** Neither service sets a server-wide header-read or whole-request timeout (OAuth token, `UserInfo`, tenant mutation, and registration handlers enforce operation-specific deadlines), and a second `SIGTERM` cannot force exit during drain; drain + worker stop + pool close can exceed a 30 s grace period.
 - [ ] **Admin elevation token session binding & HA:** Admin elevation PASETO tokens use a process-local signing key, are not bound to the session, and outlive logout and password rotation. Replace with a shared managed key and rotation policy, bind to session lifecycle, and test cross-replica elevation.
-- [ ] **Smaller hardening items:** paginate `GET /v1/users`; reduce per-request session auth DB checkouts/writes; clear verification links from delivered outbox rows; zeroize OPAQUE seed, MFA pepper, and TOTP keys in memory; remove unused Genesis `tokens` indexes.
+- [ ] **Smaller hardening items:** paginate `GET /v1/users`; reduce per-request session auth DB checkouts/writes; zeroize OPAQUE seed, MFA pepper, and TOTP keys in memory; remove unused Genesis `tokens` indexes.
 - [ ] **Deployment follow-ups:** Run the browser upgrade qualification once an OpenBao-era release exists to upgrade from; track OpenBao's migration of `api_proxy` from `bao agent` to `bao proxy`; exercise native Kubernetes auth against a live cluster.
 
 ## Planned Milestones

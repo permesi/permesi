@@ -34,6 +34,9 @@ the signed artifacts.
 
 ### Security
 
+- The email outbox erases a message's payload, which holds the verification link,
+  as soon as the message is delivered or given up on. Delivered rows previously
+  kept a usable link for as long as the row existed.
 - The manual OpenBao policies in `SETUP.md` limit `sys/leases/renew` to each
   service's own database leases, as the OpenTofu module already did; the earlier
   example let a service token renew any lease. The live provisioning test now
