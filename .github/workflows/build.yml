@@ -422,6 +422,21 @@ jobs:
             ${CONTAINER_TOOL} push "${image}:develop"
           done
 
+  # TEMPORARY: first trial of release-qualify.yml against the published `:develop` images
+  # of 3aecaf9. A new workflow cannot be dispatched by hand until it is on the default
+  # branch. Removed again once the trial has run; not part of `CI OK`.
+  qualify-published-trial:
+    if: github.ref_name == 'sandbox'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-qualify.yml
+    with:
+      app_sha: 3aecaf97ddfcc5d06f78644e44d605a1de4718dd
+      permesi_digest: sha256:eef4bab912f070831781b59af18e3cd84eb267798015c39b2ecdeffb939060d0
+      genesis_digest: sha256:778b52ced9e6b30ea1f81d7a3aa0b349d50c5b2ea8883328da28307f1b1f8b7c
+      web_digest: sha256:92b3b8ec3c7039de26a96ebba45b7d4104511be2da243a62741f13f5dced9388
+
   # One aggregate check for branch protection and the release flow: it passes only
   # when every test and build job succeeded, so the required check never depends on
   # job or matrix names. Coverage and the deploy/package side effects are not gates.
