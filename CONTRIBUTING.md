@@ -177,10 +177,10 @@ Release workflow (workflow_dispatch on develop)
  build         musl archives, Debian and RPM packages for x86_64 (amd64) and aarch64 (arm64),
                each on a native hosted runner, nothing from a cache
  frontend      the production web build, signed (checksums, cosign, build provenance)
- images        permesi, genesis and web, pushed only as `:sha-<commit>`, keylessly signed
-               and OCI-attested
+ images        permesi, genesis and web, pushed only as `:sha-<commit>`
  qualify       both containment profiles against exactly those image digests, with the
                charts on permesi-helm's main; nothing below runs unless it passes
+ images-sign   the qualified digests keylessly signed and OCI-attested
  release       exact file set checked, SHA256SUMS, build-provenance attestation, the GitHub
                release (this creates the tag at the tested commit) and a final check that
                the tag and the assets are right

@@ -362,8 +362,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     outputs:
       permesi_digest: ${{ steps.push.outputs.permesi_digest }}
       genesis_digest: ${{ steps.push.outputs.genesis_digest }}
@@ -459,6 +457,46 @@ jobs:
             echo "${service}_digest=$(resolve_digest "${service}")" >> "$GITHUB_OUTPUT"
           done
 
+  # Sandbox CI qualified candidate images built from this commit; the images above are a
+  # fresh build of it. Run both containment profiles against exactly these digests, with
+  # the charts on permesi-helm's main that the bump will be built from, before the tag
+  # exists. Signing and every publishing job below wait for it, so a failure here leaves
+  # only unsigned images tagged `:sha-<commit>` behind. Fix the cause and dispatch the
+  # release again; a re-run of the failed jobs would reuse the chart revision already
+  # resolved for this run.
+  qualify:
+    name: Qualify the release images
+    needs: [guard, images]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-qualify.yml
+    with:
+      app_sha: ${{ github.sha }}
+      permesi_digest: ${{ needs.images.outputs.permesi_digest }}
+      genesis_digest: ${{ needs.images.outputs.genesis_digest }}
+      web_digest: ${{ needs.images.outputs.web_digest }}
+
+  # A signature or provenance attestation on a digest says this release stands behind it,
+  # and the chart repository's bump accepts a digest on that evidence. So the images are
+  # signed and attested only once they have qualified.
+  images-sign:
+    name: Sign Images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [images, qualify]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Login to GitHub Container Registry
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "${TOKEN}" | docker login ghcr.io -u "${ACTOR}" --password-stdin
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
@@ -466,9 +504,9 @@ jobs:
       - name: Sign the images
         shell: bash
         env:
-          PERMESI_DIGEST: ${{ steps.push.outputs.permesi_digest }}
-          GENESIS_DIGEST: ${{ steps.push.outputs.genesis_digest }}
-          WEB_DIGEST: ${{ steps.push.outputs.web_digest }}
+          PERMESI_DIGEST: ${{ needs.images.outputs.permesi_digest }}
+          GENESIS_DIGEST: ${{ needs.images.outputs.genesis_digest }}
+          WEB_DIGEST: ${{ needs.images.outputs.web_digest }}
         run: |
           set -euo pipefail
           for service in permesi genesis web; do
@@ -487,7 +525,7 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ghcr.io/permesi/permesi
-          subject-digest: ${{ steps.push.outputs.permesi_digest }}
+          subject-digest: ${{ needs.images.outputs.permesi_digest }}
           push-to-registry: true
           create-storage-record: false
 
@@ -495,7 +533,7 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ghcr.io/permesi/genesis
-          subject-digest: ${{ steps.push.outputs.genesis_digest }}
+          subject-digest: ${{ needs.images.outputs.genesis_digest }}
           push-to-registry: true
           create-storage-record: false
 
@@ -503,27 +541,9 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ghcr.io/permesi/web
-          subject-digest: ${{ steps.push.outputs.web_digest }}
+          subject-digest: ${{ needs.images.outputs.web_digest }}
           push-to-registry: true
           create-storage-record: false
-
-  # Sandbox CI qualified candidate images built from this commit; the images above are a
-  # fresh build of it. Run both containment profiles against exactly these digests, with
-  # the charts on permesi-helm's main that the bump will be built from, before the tag
-  # exists. Every publishing job below waits for `release`, so a failure here leaves only
-  # the untagged `:sha-<commit>` images behind and the release can be dispatched again.
-  qualify:
-    name: Qualify the release images
-    needs: [guard, images]
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/release-qualify.yml
-    with:
-      app_sha: ${{ github.sha }}
-      permesi_digest: ${{ needs.images.outputs.permesi_digest }}
-      genesis_digest: ${{ needs.images.outputs.genesis_digest }}
-      web_digest: ${{ needs.images.outputs.web_digest }}
 
   # The GitHub release gets exactly the built files and no others. Publishing creates the
   # tag at the tested commit.
@@ -531,7 +551,7 @@ jobs:
     name: GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [guard, build, web-dist, images, qualify]
+    needs: [guard, build, web-dist, images, qualify, images-sign]
     permissions:
       contents: write
       id-token: write
@@ -804,7 +824,7 @@ jobs:
     name: Dispatch Helm Release
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [guard, images, images-publish]
+    needs: [guard, images, qualify, images-publish]
     permissions:
       contents: read
     steps:
@@ -812,6 +832,23 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+
+      # The bump is built from permesi-helm's main. If main moved since qualification, the
+      # charts about to be bumped are not the ones these images were qualified with. The
+      # application release already exists at this point; dispatch the chart bump by hand
+      # (dispatch-helm-release.yml) once the new chart revision has been looked at.
+      - name: Require the qualified chart revision to still be permesi-helm's main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFIED: ${{ needs.qualify.outputs.chart_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$QUALIFIED" =~ ^[0-9a-f]{40}$ ]]
+          current="$(gh api repos/permesi/permesi-helm/git/ref/heads/main --jq .object.sha)"
+          if [[ "$current" != "$QUALIFIED" ]]; then
+            echo "::error::permesi-helm main is $current, but these images were qualified with $QUALIFIED."
+            exit 1
+          fi
 
       - name: Is this the latest release
         id: latest

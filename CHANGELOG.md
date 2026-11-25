@@ -16,11 +16,13 @@ the signed artifacts.
 ### Changed
 
 - The release qualifies the image digests it has just built with both containment
-  profiles before it creates the tag, the GitHub release or the version tags.
-  Until now only the sandbox candidates of the same commit ran the full suite. A
-  failed qualification leaves nothing published except the untagged
-  `:sha-<commit>` images, and the release can be dispatched again. This adds
-  about 20 minutes to a release.
+  profiles before it signs them or creates the tag, the GitHub release or the
+  version tags. Until now only the sandbox candidates of the same commit ran the
+  full suite, and images were signed as soon as they were pushed. A failed
+  qualification leaves only unsigned images tagged `:sha-<commit>`; fix the cause
+  and dispatch the release again. The chart bump is dispatched only if
+  `permesi-helm`'s `main` is still the chart revision the images were qualified
+  with. This adds about 20 minutes to a release.
 
 ## [0.6.0] - 2026-11-25
 

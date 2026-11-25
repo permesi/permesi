@@ -84,7 +84,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::app_sha must be a full commit"; exit 1; }
-          [[ "$CHART_REF" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "::error::unexpected chart_ref"; exit 1; }
+          if [[ ! "$CHART_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ || "$CHART_REF" == *..* || "$CHART_REF" == *//* ]]; then
+            echo "::error::unexpected chart_ref"; exit 1
+          fi
           sha="$(gh api "repos/permesi/permesi-helm/commits/$CHART_REF" --jq .sha)"
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -122,7 +124,7 @@ jobs:
           name: published-oci-${{ inputs.app_sha }}-${{ github.run_attempt }}
           path: candidates/*.tar
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
       # The upload reports bare hex; the suite's download check wants the registry form.
       - id: digest
         env:
@@ -147,8 +149,14 @@ jobs:
           ref: ${{ needs.resolve.outputs.chart_sha }}
           path: chart
           persist-credentials: false
+      # The value comes from the chart repository and names a commit to check out and
+      # build, so it is accepted only as a full commit and never as arbitrary text.
       - name: Select the rollback baseline
-        run: jq -r '"PREVIOUS_SHA=" + .revision' chart/scripts/ci/rollback-baseline.json >> "$GITHUB_ENV"
+        run: |
+          set -euo pipefail
+          revision="$(jq -r .revision chart/scripts/ci/rollback-baseline.json)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::rollback baseline is not a full commit"; exit 1; }
+          echo "PREVIOUS_SHA=$revision" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: permesi/permesi
@@ -179,7 +187,7 @@ jobs:
           name: published-rollback-core-${{ github.run_attempt }}
           path: ${{ runner.temp }}/previous-permesi.tar
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   qualify:
     name: Qualify (${{ matrix.profile }})
@@ -204,8 +212,10 @@ jobs:
         with:
           rollback-id: ${{ needs.rollback.outputs.rollback_id }}
           profile: ${{ matrix.profile }}
-      # The suite ran whatever the fixture recorded; prove that was these digests and that
-      # it finished with a pass, independently of the suite's own exit status.
+      # The suite ran whatever its fixture recorded; require that to be these digests, this
+      # commit and a pass. This guards against a mistake in the handoff, not against chart
+      # code that set out to forge the record: that code runs first in this job, which is
+      # why the chart revision is pinned and its repository's main is protected.
       - name: Require the qualified digests and a passing record
         env:
           PLATFORM_DIGESTS: ${{ needs.archive.outputs.platform_digests }}
