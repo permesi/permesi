@@ -360,6 +360,75 @@ mod tests {
         Ok(())
     }
 
+    /// A token's `kid` and claims are attacker-chosen until its signature verifies, so a
+    /// rejected token must leave nothing of itself in the logs, at any level.
+    #[tokio::test]
+    async fn admission_rejection_logs_nothing_from_the_unverified_token()
+    -> Result<(), AdmissionError> {
+        use std::sync::{Arc, Mutex};
+        use tracing::instrument::WithSubscriber;
+
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .map_err(|_| std::io::Error::other("capture poisoned"))?
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let trusted = SigningKey::from_bytes(&[7u8; 32]);
+        let verifier = AdmissionVerifier::new(
+            keyset_for_signing_key(&trusted)?,
+            ISSUER.to_string(),
+            AUDIENCE.to_string(),
+        );
+        let attacker = SigningKey::from_bytes(&[9u8; 32]);
+        let claims = build_claims(now_unix_seconds(), "attacker-chosen-subject")?;
+        let unknown_kid = "attacker-chosen-kid";
+        let token = sign_token(&claims, unknown_kid, &attacker)?;
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let sink = Sink(captured.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish();
+        let accepted = async {
+            let direct = verify_token(&verifier, &token).await;
+            let claims = verify_token_claims(&verifier, &token).await;
+            direct || claims.is_some()
+        }
+        .with_subscriber(subscriber)
+        .await;
+        assert!(!accepted);
+
+        let logs = String::from_utf8_lossy(
+            &captured
+                .lock()
+                .map_err(|_| AdmissionError::InvalidSignature)?,
+        )
+        .into_owned();
+        assert!(
+            logs.contains("admission verification"),
+            "the rejection itself is logged"
+        );
+        for leaked in [unknown_kid, "attacker-chosen-subject", token.as_str()] {
+            assert!(
+                !logs.contains(leaked),
+                "log carries unverified token material"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn withdrawal_rejects_the_same_unexpired_token_and_a_regressing_floor() -> Result<()> {
         use base64::{Engine, engine::general_purpose::STANDARD};
