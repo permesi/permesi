@@ -79,7 +79,7 @@ Used by the `permesi` service to initialize OPAQUE authentication and MFA recove
 - **Database creds (Postgres)**: mounted at `database`
   - Connections: `genesis`, `permesi`
   - Roles: `genesis`, `permesi`
-  - Root users (managed outside OpenBao): `openbao_genesis`, `openbao_permesi` (rotated by OpenBao)
+  - Root users (managed outside OpenBao): `openbao_genesis`, `openbao_permesi` (rotate with `bao write -f database/rotate-root/<name>`; OpenBao has no scheduled root rotation)
   - Runtime roles (managed in Postgres): `genesis_runtime`, `permesi_runtime` (grants live here; OpenBao-minted users are members)
 - **Operator Policy**: `permesi-operators` (used for admin claim/elevation).
 

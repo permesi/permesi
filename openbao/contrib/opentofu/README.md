@@ -7,7 +7,7 @@ This OpenTofu module provides a production-ready configuration for OpenBao to su
 - **AppRole**: Configures roles for both `permesi` and `genesis`.
 - **Transit**: Sets up the TOTP protection key (`totp`) and admission token signing key (`genesis-signing`).
 - **KV Store**: Generates and stores the persistent OPAQUE seed and MFA recovery pepper under `secret/permesi/config`.
-- **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the OpenBao root database credentials. The root passwords are write-only attributes from ephemeral variables, so they never reach the state or a saved plan.
+- **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and the statements OpenBao uses to rotate its root database credentials. OpenBao does not rotate them on a schedule (that is a Vault Enterprise feature): run `bao write -f database/rotate-root/permesi` and `.../genesis` once after the first apply, so only OpenBao knows the passwords, and again on your own schedule. The root passwords are write-only attributes from ephemeral variables, so they never reach the state or a saved plan.
 - **Policies**: Implements least-privilege policies for services and operators.
 - **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for OpenBao Agent-based certificate delivery. Runtime certificates are server-only (`client_flag = false`); only the longer-lived bootstrap certificates carry `ClientAuth` and can log in to cert auth.
 
@@ -37,7 +37,7 @@ unset TF_ENCRYPTION
 
 The apply writes the state back encrypted. Then delete every plaintext leftover: `terraform.tfstate.backup` here if `jq 'has("encrypted_data")' terraform.tfstate.backup` prints `false` (it holds the previous unencrypted state), and `../terraform/terraform.tfstate.backup`, `../terraform/.terraform` and the old directory itself. `just openbao-tofu-apply` does all of this in development, and refuses to choose when both directories hold a state.
 
-The first apply also moves the root passwords to write-only attributes. OpenBao verifies a connection whenever its password is sent, so if it has already rotated a root password, sending the stale bootstrap password fails that apply without changing anything. In that case add `-var permesi_database_password_version=0` and/or `-var genesis_database_password_version=0` for each rotated connection, and keep that value. Raise a connection's version only after resetting its root password in PostgreSQL; the versions are separate so that recovering one service does not resend the other's stale password.
+The first apply also moves the root passwords to write-only attributes. OpenBao verifies a connection whenever its password is sent, so if a root password has been rotated since the bootstrap, sending the stale bootstrap password fails that apply without changing anything. In that case add `-var permesi_database_password_version=0` and/or `-var genesis_database_password_version=0` for each rotated connection, and keep that value. Raise a connection's version only after resetting its root password in PostgreSQL; the versions are separate so that recovering one service does not resend the other's stale password.
 
 ## Usage
 

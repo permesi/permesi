@@ -67,8 +67,8 @@ The first release on OpenBao and PostgreSQL 19.
 - `just openbao-tofu-test` checks the module offline against mocked providers
   (CI runs the same checks), and `just openbao-tofu-test-live` provisions throwaway OpenBao and PostgreSQL
   containers from zero and checks every engine the services use, including the
-  refusals between Permesi and Genesis and a re-apply after OpenBao rotates the
-  root passwords.
+  refusals between Permesi and Genesis and a re-apply after the root passwords
+  are rotated.
 - This changelog.
 
 ### Changed
@@ -91,6 +91,10 @@ The first release on OpenBao and PostgreSQL 19.
 ### Fixed
 
 - On a fresh OpenBao installation, the module creates the root issuer before signing the intermediate used by Genesis certificate login and its quota.
+- The module set a daily `rotation_period` on both database connections, which
+  OpenBao accepts but ignores (scheduled root rotation is a Vault Enterprise
+  feature), so the root passwords were never rotated. The setting is gone and the
+  docs describe rotating with `bao write -f database/rotate-root/<service>`.
 - Every apply replaced the Genesis AppRole and cert-auth rate quotas, briefly
   leaving those login paths without a limit, because OpenBao stores the auth
   path with a trailing slash.

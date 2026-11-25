@@ -38,13 +38,14 @@ variable "genesis_database_password" {
   ephemeral = true
 }
 
-# OpenBao rotates each root password every day, so the passwords above only
-# bootstrap a connection. A password is sent when its version changes: raise one
-# after resetting that root password in PostgreSQL. The versions are separate
-# because OpenBao verifies a connection whenever its password is sent, so a
-# shared one would push the other service's stale password and fail. State from
-# before write-only passwords has version 0; keep 0 there if OpenBao has already
-# rotated, for the same reason.
+# The passwords above only bootstrap a connection: rotate each root password with
+# `bao write -f database/rotate-root/<service>` after the first apply, so only
+# OpenBao knows it. A password is sent when its version changes: raise one after
+# resetting that root password in PostgreSQL. The versions are separate because
+# OpenBao verifies a connection whenever its password is sent, so a shared one
+# would push the other service's stale password and fail. State from before
+# write-only passwords has version 0; keep 0 there if the root password has been
+# rotated since, for the same reason.
 variable "permesi_database_password_version" {
   type    = number
   default = 1

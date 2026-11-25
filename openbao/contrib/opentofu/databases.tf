@@ -12,7 +12,8 @@ resource "vault_database_secret_backend_connection" "permesi" {
   name          = "permesi"
   allowed_roles = ["permesi"]
 
-  rotation_period = 86400
+  # OpenBao has no scheduled root rotation (a Vault Enterprise feature it ignores);
+  # these statements run on `bao write -f database/rotate-root/permesi`.
   root_rotation_statements = [
     "ALTER ROLE \"${var.permesi_database_username}\" WITH PASSWORD '{{password}}';",
   ]
@@ -59,7 +60,7 @@ resource "vault_database_secret_backend_connection" "genesis" {
   name          = "genesis"
   allowed_roles = ["genesis"]
 
-  rotation_period = 86400
+  # Rotated on demand with `bao write -f database/rotate-root/genesis`.
   root_rotation_statements = [
     "ALTER ROLE \"${var.genesis_database_username}\" WITH PASSWORD '{{password}}';",
   ]
