@@ -64,8 +64,8 @@ The first release on OpenBao and PostgreSQL 19.
   `permesi_database_password_version` and `genesis_database_password_version`
   re-send one after a deliberate reset.
 - The provider lock file is committed and installed with `-lockfile=readonly`.
-- `just openbao-tofu-test` checks the module offline against mocked providers,
-  and `just openbao-tofu-test-live` provisions throwaway OpenBao and PostgreSQL
+- `just openbao-tofu-test` checks the module offline against mocked providers
+  (CI runs the same checks), and `just openbao-tofu-test-live` provisions throwaway OpenBao and PostgreSQL
   containers from zero and checks every engine the services use, including the
   refusals between Permesi and Genesis and a re-apply after OpenBao rotates the
   root passwords.

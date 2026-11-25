@@ -56,7 +56,9 @@ before interpreting queue or wall-time differences as a speedup.
 ## Workflow Overview
 
 - **`test.yml`**: Handles formatting, strict native and browser-target WASM Clippy, dependency auditing for the web app, and
-  unit/integration tests. A separate hosted OpenAPI drift job generates both service
+  unit/integration tests. The OpenTofu Module job runs the offline OpenBao module checks
+  (`tofu fmt`, `validate` and `test` against mocked providers) with the provider lock
+  file read-only, so a provider build that does not match the committed checksums fails. A separate hosted OpenAPI drift job generates both service
   contracts and compares them byte-for-byte with the committed artifacts; failure
   blocks the reusable test workflow and `CI OK`. Web auditing includes development/build dependencies so
   source-map and stylesheet-tooling advisories are covered. The unit matrix has two

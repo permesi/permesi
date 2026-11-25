@@ -132,6 +132,32 @@ jobs:
       - name: Test browser file isolation
         run: node apps/web/tests/browser_files.test.mjs
 
+  opentofu:
+    name: OpenTofu Module
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/pre-clean-workspace
+
+      # The release's SHA256SUMS is verified by the action; the version matches mise.toml.
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.10
+          tofu_wrapper: false
+
+      # Same checks as `just openbao-tofu-test`, on a clean checkout: mocked
+      # providers, no backend and no OpenBao server. -lockfile=readonly fails if a
+      # downloaded provider does not match the committed checksums.
+      - name: Check the OpenBao module offline
+        working-directory: openbao/contrib/opentofu
+        run: |
+          tofu fmt -check -recursive -diff
+          tofu init -backend=false -input=false -lockfile=readonly
+          tofu validate -no-color
+          tofu test -no-color
+
   test:
     name: Unit Tests (${{ matrix.name }})
     # Each test can start its own PostgreSQL/OpenBao fixture. Bound fixture pressure
