@@ -61,6 +61,8 @@ pub struct AdmissionVerifier {
     snapshot: RwLock<Option<Snapshot>>,
     issuer: String,
     audience: String,
+    /// Clock skew tolerated on a token's `iat`; Genesis runs on other hosts.
+    iat_leeway_seconds: i64,
 }
 
 #[derive(Debug)]
@@ -128,7 +130,15 @@ impl AdmissionVerifier {
             })),
             issuer,
             audience,
+            iat_leeway_seconds: 0,
         }
+    }
+
+    /// The same verifier with a clock-skew allowance, as the server configures it.
+    #[cfg(test)]
+    pub fn with_iat_leeway(mut self, seconds: i64) -> Self {
+        self.iat_leeway_seconds = seconds;
+        self
     }
 
     /// Poll only the core-controlled KV v2 record. Read failures age out the last
@@ -140,11 +150,13 @@ impl AdmissionVerifier {
         max_age: Duration,
         issuer: String,
         audience: String,
+        iat_leeway_seconds: i64,
     ) -> Arc<Self> {
         let verifier = Arc::new(Self {
             snapshot: RwLock::new(None),
             issuer,
             audience,
+            iat_leeway_seconds,
         });
         let weak = Arc::downgrade(&verifier);
         let transport = globals.openbao_transport.clone();
@@ -263,6 +275,7 @@ pub async fn verify_token_claims(
         now_unix_seconds: now_unix_seconds(),
         min_ttl_seconds: MIN_TOKEN_TTL_SECONDS,
         max_ttl_seconds: MAX_TOKEN_TTL_SECONDS,
+        iat_leeway_seconds: verifier.iat_leeway_seconds,
     };
     let result = verify_v4_public(token, &snapshot.keyset, &options).ok();
     debug!(accepted = result.is_some(), "admission verification");
@@ -360,6 +373,30 @@ mod tests {
         Ok(())
     }
 
+    /// Genesis runs on other hosts: a token it dated a few seconds ahead of this
+    /// replica's clock is admitted within the configured allowance and not beyond it.
+    #[tokio::test]
+    async fn admission_verifier_tolerates_bounded_signer_clock_skew() -> Result<(), AdmissionError>
+    {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let keyset = keyset_for_signing_key(&signing_key)?;
+        let now = now_unix_seconds();
+        // `build_claims` dates the token one second before its argument.
+        let ahead = build_claims(now.saturating_add(4), "skewed")?;
+        let far_ahead = build_claims(now.saturating_add(40), "far")?;
+        let sign = |claims| sign_token(claims, &keyset.active_kid, &signing_key);
+        let (ahead, far_ahead) = (sign(&ahead)?, sign(&far_ahead)?);
+
+        let strict =
+            AdmissionVerifier::new(keyset.clone(), ISSUER.to_string(), AUDIENCE.to_string());
+        assert!(verify_token_claims(&strict, &ahead).await.is_none());
+        let tolerant = AdmissionVerifier::new(keyset, ISSUER.to_string(), AUDIENCE.to_string())
+            .with_iat_leeway(5);
+        assert!(verify_token_claims(&tolerant, &ahead).await.is_some());
+        assert!(verify_token_claims(&tolerant, &far_ahead).await.is_none());
+        Ok(())
+    }
+
     /// A token's `kid` and claims are attacker-chosen until its signature verifies, so a
     /// rejected token must leave nothing of itself in the logs, at any level.
     #[tokio::test]
@@ -401,10 +438,26 @@ mod tests {
             .with_ansi(false)
             .with_writer(move || sink.clone())
             .finish();
+        let observed = captured.clone();
         let accepted = async {
-            let direct = verify_token(&verifier, &token).await;
-            let claims = verify_token_claims(&verifier, &token).await;
-            direct || claims.is_some()
+            // Tests in other threads reach the same log callsite without a subscriber, and
+            // a callsite's cached interest is whatever was computed when it was registered.
+            // A registration racing with this subscriber can cache "never"; recompute and
+            // repeat until the rejection is seen, so the test never passes on silence.
+            let mut accepted = false;
+            for _ in 0..200 {
+                tracing::callsite::rebuild_interest_cache();
+                accepted |= verify_token(&verifier, &token).await;
+                accepted |= verify_token_claims(&verifier, &token).await.is_some();
+                let seen = observed.lock().is_ok_and(|bytes| {
+                    String::from_utf8_lossy(&bytes).contains("admission verification")
+                });
+                if seen {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            accepted
         }
         .with_subscriber(subscriber)
         .await;
@@ -443,6 +496,7 @@ mod tests {
             snapshot: RwLock::new(None),
             issuer: ISSUER.into(),
             audience: AUDIENCE.into(),
+            iat_leeway_seconds: 0,
         };
         let observation = |minimum_version, deadline, revision| {
             Authority {

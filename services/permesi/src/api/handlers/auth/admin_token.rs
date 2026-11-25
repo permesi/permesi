@@ -164,6 +164,8 @@ impl AdminTokenSigner {
             now_unix_seconds: now,
             min_ttl_seconds: 0,
             max_ttl_seconds: 13 * 60 * 60, // 13h max
+            // Elevation tokens are signed and verified by this same process.
+            iat_leeway_seconds: 0,
         };
 
         let claims = verify_v4_public(token, &keyset, &options).map_err(|e| anyhow!("{e}"))?;

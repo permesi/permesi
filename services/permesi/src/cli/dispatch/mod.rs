@@ -226,6 +226,19 @@ fn work_limits(
     )
 }
 
+/// Recheck the clock-skew allowance on admission tokens: it only moves the earliest
+/// acceptable issue time, and stays far below the 60 second minimum token lifetime.
+fn admission_iat_leeway(matches: &clap::ArgMatches) -> Result<i64> {
+    let leeway = *matches
+        .get_one::<i64>("admission-iat-leeway-seconds")
+        .context("missing admission issue-time leeway")?;
+    anyhow::ensure!(
+        (0..=30).contains(&leeway),
+        "admission issue-time leeway must be between 0 and 30 seconds"
+    );
+    Ok(leeway)
+}
+
 /// Recheck the refresh interval against the maximum withdrawal window at startup.
 fn admission_timing(
     matches: &clap::ArgMatches,
@@ -314,6 +327,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let registration = crate::api::handlers::auth::registration::Policy::from_matches(matches)?;
     let email_delivery = crate::api::email::DeliveryConfig::from_matches(matches)?;
     let (admission_refresh, admission_max_age) = admission_timing(matches)?;
+    let admission_iat_leeway = admission_iat_leeway(matches)?;
     Ok(Action::Server(Args {
         public_limits: work_limits(matches, "public")?,
         protocol_limits: work_limits(matches, "protocol")?,
@@ -334,6 +348,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         openbao_wrapped_token: openbao_opts.wrapped_token,
         admission_refresh,
         admission_max_age,
+        admission_iat_leeway,
         admission_issuer: admission_opts.issuer,
         admission_audience: admission_opts.audience,
         tls_pem_bundle: tls_opts.map(|o| o.pem_bundle),
@@ -407,6 +422,63 @@ mod tests {
             assert!(mfa_challenge_limit(&matches).is_err());
         }
         Ok(())
+    }
+
+    /// The clock-skew allowance defaults to five seconds and is bounded twice, so it can
+    /// never approach the 60 second minimum lifetime of an admission token.
+    #[test]
+    fn admission_iat_leeway_defaults_and_rejects_out_of_range_values() -> Result<()> {
+        temp_env::with_vars(
+            [("PERMESI_ADMISSION_IAT_LEEWAY_SECONDS", None::<&str>)],
+            || {
+                let base = [
+                    "permesi",
+                    "--dsn",
+                    "postgres://",
+                    "--tls-pem-bundle",
+                    "bundle",
+                    "--openbao-url",
+                    "http://openbao:8200",
+                    "--openbao-role-id",
+                    "role",
+                    "--openbao-secret-id",
+                    "secret",
+                ];
+                let matches = crate::cli::commands::new().try_get_matches_from(base)?;
+                assert_eq!(admission_iat_leeway(&matches)?, 5);
+                for (value, expected) in [("0", 0), ("30", 30)] {
+                    let matches = crate::cli::commands::new().try_get_matches_from(
+                        base.into_iter()
+                            .chain(["--admission-iat-leeway-seconds", value]),
+                    )?;
+                    assert_eq!(admission_iat_leeway(&matches)?, expected);
+                }
+                for value in ["-1", "31", "60", "abc"] {
+                    assert!(
+                        crate::cli::commands::new()
+                            .try_get_matches_from(
+                                base.into_iter()
+                                    .chain(["--admission-iat-leeway-seconds", value])
+                            )
+                            .is_err(),
+                        "{value}"
+                    );
+                }
+                for value in ["-1", "31"] {
+                    let matches = crate::cli::commands::new()
+                        .mut_arg("admission-iat-leeway-seconds", |arg| {
+                            arg.value_parser(clap::value_parser!(i64))
+                                .allow_negative_numbers(true)
+                        })
+                        .try_get_matches_from(
+                            base.into_iter()
+                                .chain(["--admission-iat-leeway-seconds", value]),
+                        )?;
+                    assert!(admission_iat_leeway(&matches).is_err(), "{value}");
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Clap bounds and dispatch revalidation must both reject invalid operator budgets.

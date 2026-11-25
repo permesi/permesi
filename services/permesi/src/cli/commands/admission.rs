@@ -45,4 +45,12 @@ pub fn with_args(command: Command) -> Command {
                 .help("Expected Admission Token audience (aud)")
                 .env("PERMESI_ADMISSION_AUD"),
         )
+        .arg(
+            Arg::new("admission-iat-leeway-seconds")
+                .long("admission-iat-leeway-seconds")
+                .help("Clock skew tolerated on an Admission Token's issue time (iat), never on its expiry")
+                .env("PERMESI_ADMISSION_IAT_LEEWAY_SECONDS")
+                .default_value("5")
+                .value_parser(clap::value_parser!(i64).range(0..=30)),
+        )
 }

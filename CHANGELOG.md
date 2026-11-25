@@ -24,6 +24,14 @@ the signed artifacts.
   `permesi-helm`'s `main` is still the chart revision the images were qualified
   with. This adds about 20 minutes to a release.
 
+### Fixed
+
+- Permesi accepts an admission token whose issue time is up to five seconds ahead
+  of its own clock (`--admission-iat-leeway-seconds`,
+  `PERMESI_ADMISSION_IAT_LEEWAY_SECONDS`, 0 to 30). A Genesis host whose clock ran
+  slightly ahead previously had every fresh token rejected. The allowance applies
+  to the issue time only; expiry and the lifetime bounds are unchanged.
+
 ### Security
 
 - The manual OpenBao policies in `SETUP.md` limit `sys/leases/renew` to each

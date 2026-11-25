@@ -326,6 +326,7 @@ fn verification_options(expectations: &ClaimsExpectations) -> VerificationOption
         now_unix_seconds: now_unix_seconds(),
         min_ttl_seconds: 60,
         max_ttl_seconds: 180,
+        iat_leeway_seconds: 0,
     }
 }
 

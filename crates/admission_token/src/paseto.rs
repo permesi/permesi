@@ -36,6 +36,10 @@ pub struct VerificationOptions<'a> {
     pub now_unix_seconds: i64,
     pub min_ttl_seconds: i64,
     pub max_ttl_seconds: i64,
+    /// How far into the verifier's future `iat` may lie, to absorb clock skew between
+    /// the signer and the verifier. It never extends validity: `exp` and the lifetime
+    /// bounds are checked without it. Negative values count as zero.
+    pub iat_leeway_seconds: i64,
 }
 
 pub struct SigningInput {
@@ -154,7 +158,13 @@ fn validate_claims(
     let iat = unix_from_rfc3339(&claims.iat).map_err(|_| Error::InvalidIat)?;
     let exp = unix_from_rfc3339(&claims.exp).map_err(|_| Error::InvalidExp)?;
 
-    if iat > options.now_unix_seconds {
+    // A signer whose clock runs slightly ahead issues tokens dated in the verifier's
+    // future. Tolerating that by a bounded amount accepts nothing an attacker could not
+    // already present: the token still needs a valid signature and an unexpired `exp`.
+    let latest_iat = options
+        .now_unix_seconds
+        .saturating_add(options.iat_leeway_seconds.max(0));
+    if iat > latest_iat {
         return Err(Error::InvalidIat);
     }
     if exp <= options.now_unix_seconds {
@@ -296,9 +306,78 @@ mod tests {
             now_unix_seconds: NOW,
             min_ttl_seconds: 60,
             max_ttl_seconds: 180,
+            iat_leeway_seconds: 0,
         };
         let verified = verify_v4_public(&token, &keyset, &options)?;
         assert_eq!(verified.jti, "paseto-jti");
+        Ok(())
+    }
+
+    /// A token dated up to the leeway in the verifier's future is accepted, one dated
+    /// further is not, and the allowance never revives an expired token or widens the
+    /// lifetime bounds.
+    #[test]
+    fn iat_leeway_absorbs_signer_clock_skew_without_extending_validity() -> Result<(), Error> {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let keyset = keyset_for_signing_key(&signing_key)?;
+        let token = |iat: i64, exp: i64| -> Result<String, Error> {
+            let mut claims = test_claims("skew")?;
+            claims.iat = rfc3339_from_unix(iat)?;
+            claims.exp = rfc3339_from_unix(exp)?;
+            sign_token(&claims, &keyset.active_kid, &signing_key)
+        };
+        let verify = |token: &str, now: i64, leeway: i64| {
+            let options = VerificationOptions {
+                expected_issuer: ISSUER,
+                expected_audience: AUDIENCE,
+                expected_action: ACTION,
+                now_unix_seconds: now,
+                min_ttl_seconds: 60,
+                max_ttl_seconds: 180,
+                iat_leeway_seconds: leeway,
+            };
+            verify_v4_public(token, &keyset, &options).map(|_| ())
+        };
+
+        // The signer is five seconds ahead of the verifier.
+        let ahead = token(NOW + 5, NOW + 125)?;
+        assert!(matches!(verify(&ahead, NOW, 0), Err(Error::InvalidIat)));
+        assert!(matches!(verify(&ahead, NOW, 4), Err(Error::InvalidIat)));
+        verify(&ahead, NOW, 5)?;
+        verify(&ahead, NOW, 30)?;
+        for ignored in [-1, i64::MIN] {
+            assert!(matches!(
+                verify(&ahead, NOW, ignored),
+                Err(Error::InvalidIat)
+            ));
+        }
+        // No overflow at the extremes, and an absurd allowance is still only about `iat`.
+        verify(&ahead, NOW, i64::MAX)?;
+        assert!(matches!(
+            verify(&ahead, i64::MAX, i64::MAX),
+            Err(Error::Expired)
+        ));
+
+        // Expiry is checked against the verifier's clock alone.
+        let ordinary = token(NOW - 10, NOW + 110)?;
+        verify(&ordinary, NOW + 109, 30)?;
+        assert!(matches!(
+            verify(&ordinary, NOW + 110, 30),
+            Err(Error::Expired)
+        ));
+        assert!(matches!(
+            verify(&ordinary, NOW + 111, 30),
+            Err(Error::Expired)
+        ));
+
+        // Lifetime bounds are computed from the token's own claims, never from the leeway.
+        let too_long = token(NOW + 5, NOW + 5 + 181)?;
+        assert!(matches!(verify(&too_long, NOW, 30), Err(Error::InvalidTtl)));
+        let too_short = token(NOW + 5, NOW + 5 + 59)?;
+        assert!(matches!(
+            verify(&too_short, NOW, 30),
+            Err(Error::InvalidTtl)
+        ));
         Ok(())
     }
 
@@ -320,6 +399,7 @@ mod tests {
             now_unix_seconds: NOW,
             min_ttl_seconds: 60,
             max_ttl_seconds: 180,
+            iat_leeway_seconds: 0,
         };
 
         let result = verify_v4_public(&token, &keyset, &options);
@@ -344,6 +424,7 @@ mod tests {
             now_unix_seconds: NOW,
             min_ttl_seconds: 60,
             max_ttl_seconds: 180,
+            iat_leeway_seconds: 0,
         };
 
         let result = verify_v4_public(&token, &keyset, &options);
@@ -365,6 +446,7 @@ mod tests {
             now_unix_seconds: NOW,
             min_ttl_seconds: 60,
             max_ttl_seconds: 180,
+            iat_leeway_seconds: 0,
         };
 
         let result = verify_v4_public(&token, &keyset, &options);
@@ -395,6 +477,7 @@ mod tests {
             now_unix_seconds: NOW,
             min_ttl_seconds: 60,
             max_ttl_seconds: 180,
+            iat_leeway_seconds: 0,
         };
 
         let result = verify_v4_public(&token, &keyset, &options);

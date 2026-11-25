@@ -28,6 +28,7 @@ pub struct Args {
     pub openbao_wrapped_token: Option<String>,
     pub admission_refresh: Duration,
     pub admission_max_age: Duration,
+    pub admission_iat_leeway: i64,
     pub admission_issuer: Option<String>,
     pub admission_audience: Option<String>,
     pub tls_pem_bundle: Option<String>,
@@ -123,6 +124,7 @@ pub async fn execute(args: Args) -> Result<()> {
         args.admission_max_age,
         issuer,
         audience,
+        args.admission_iat_leeway,
     );
 
     // Get database username and password from OpenBao
@@ -449,6 +451,7 @@ mod tests {
             openbao_wrapped_token: None,
             admission_refresh: Duration::from_secs(15),
             admission_max_age: Duration::from_secs(60),
+            admission_iat_leeway: 5,
             oauth: crate::oauth::config::OAuthConfig::disabled(),
             tenant_mutations: api::tenant::MutationPolicy::for_tests(),
             admission_issuer: None,
