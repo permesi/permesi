@@ -47,6 +47,7 @@ fn client(user_agent: &str) -> Result<Client> {
         .user_agent(user_agent)
         .connect_timeout(transport::OPENBAO_CONNECT_TIMEOUT)
         .timeout(transport::OPENBAO_REQUEST_TIMEOUT)
+        .redirect(transport::refuse_redirects())
         .build()?)
 }
 
@@ -789,6 +790,85 @@ mod tests {
         assert_eq!(creds.lease_duration, 55);
         assert_eq!(creds.username, "user");
         assert_eq!(creds.password.expose_secret(), "pass");
+        Ok(())
+    }
+
+    /// A 307 keeps the method, body and `X-Vault-Token`, so following it would deliver
+    /// the `SecretID`, the wrapping token or the service token to the named host.
+    #[tokio::test]
+    async fn token_bearing_requests_refuse_redirects() -> Result<()> {
+        if !can_bind_localhost() {
+            eprintln!("Skipping test: cannot bind localhost");
+            return Ok(());
+        }
+        let openbao = MockServer::start().await;
+        let attacker = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": {"client_token": "stolen", "lease_duration": 60},
+                "data": {"secret_id": "stolen", "username": "u", "password": "p"},
+                "lease_id": "l",
+                "lease_duration": 60
+            })))
+            .mount(&attacker)
+            .await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", attacker.uri()))
+            .mount(&openbao)
+            .await;
+        let token = SecretString::from("openbao-token".to_string());
+        let login_url = approle_login_url(&openbao.uri())?;
+
+        assert!(
+            approle_login(USER_AGENT, &login_url, "secret-id", "role-id")
+                .await
+                .is_err()
+        );
+        assert!(
+            unwrap(USER_AGENT, &openbao.uri(), "wrapped-token")
+                .await
+                .is_err()
+        );
+        assert!(
+            renew_token(USER_AGENT, &openbao.uri(), &token, None)
+                .await
+                .is_err()
+        );
+        assert!(
+            database_creds(
+                USER_AGENT,
+                &openbao.uri(),
+                &token,
+                "/v1/database/creds/permesi"
+            )
+            .await
+            .is_err()
+        );
+        let transport =
+            OpenBaoTransport::from_target(USER_AGENT, OpenBaoTarget::parse(&openbao.uri())?)?;
+        let error = transport
+            .request_json(
+                http::Method::GET,
+                "/v1/secret/data/permesi/config",
+                Some("openbao-token"),
+                None,
+            )
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("followed redirect"))?;
+        assert!(format!("{error:#}").contains("redirects are refused"));
+
+        let delivered = attacker
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow!("request recording disabled"))?;
+        assert!(delivered.is_empty(), "a redirect was followed");
+        let asked = openbao
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow!("request recording disabled"))?;
+        let paths: Vec<_> = asked.iter().map(|r| r.url.path().to_string()).collect();
+        assert_eq!(asked.len(), 5, "{paths:?}");
         Ok(())
     }
 }

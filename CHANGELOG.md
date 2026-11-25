@@ -130,6 +130,12 @@ The first release on OpenBao and PostgreSQL 19.
   accepted up to 2 MB of arbitrary JSON. They now require
   `Content-Type: application/json`, answer an oversized body with 413 after the
   usual session check, and no longer echo parser errors back to the caller.
+- The services refuse HTTP redirects from OpenBao on every request, as the
+  Kubernetes login already did. A followed redirect would have carried the
+  service token, a wrapping token or the AppRole SecretID to the host it named.
+  OpenBao standbys forward requests to the active node by default; a cluster with
+  request forwarding disabled must be reached through its active node or a load
+  balancer.
 - Findings from the stabilization review that remain open are listed in
   `TODO.md`.
 

@@ -120,6 +120,17 @@ enum OpenBaoTransportInner {
     },
 }
 
+/// Redirect policy of every token-bearing OpenBao client: the request fails instead of
+/// following a 3xx. `reqwest` keeps `X-Vault-Token` and, on 307/308, the request body
+/// across origins, so a followed redirect would hand the token, a wrapping token or an
+/// `AppRole` `SecretID` to whatever host the answer names. OpenBao standbys forward
+/// requests to the active node by default and do not need client redirects.
+pub(crate) fn refuse_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        attempt.error("OpenBao answered with a redirect; redirects are refused")
+    })
+}
+
 impl OpenBaoTransport {
     /// Build a transport from the parsed OpenBao target.
     /// # Errors
@@ -131,6 +142,7 @@ impl OpenBaoTransport {
                     .user_agent(user_agent)
                     .connect_timeout(OPENBAO_CONNECT_TIMEOUT)
                     .timeout(OPENBAO_REQUEST_TIMEOUT)
+                    .redirect(refuse_redirects())
                     .build()?;
                 OpenBaoTransportInner::Tcp { client, base_url }
             }

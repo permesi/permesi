@@ -173,7 +173,7 @@ else (database host, credentials, SSL mode and PKI URLs) is an OpenTofu variable
 
 OpenBao is required in production for dynamic database credentials, Transit signing/encryption, PKI, and the persistent KV v2 `opaque_server_seed` (losing that seed makes existing OPAQUE user registrations unusable). Before running in production, verify:
 
-- HA OpenBao cluster with tested leader failover.
+- HA OpenBao cluster with tested leader failover. The services refuse HTTP redirects from OpenBao, so keep request forwarding enabled (the default) or point them at the active node or a load balancer that follows it.
 - Automated unseal (KMS/transit) or a documented, rehearsed unseal runbook.
 - Regular Raft snapshots or storage backups with tested restore drills.
 - Monitoring and alerts for OpenBao health, sealed state, and service token/lease renewal failures.
