@@ -41,6 +41,19 @@ fn openbao_error_message(json_response: &Value) -> &str {
         .unwrap_or("")
 }
 
+/// The part of a URL that is safe in diagnostics: scheme, host, port and path. Userinfo,
+/// query and fragment are dropped, and an unparseable value is not echoed at all.
+fn loggable_url(url: &str) -> String {
+    let Ok(parsed) = Url::parse(url) else {
+        return "<unparseable URL>".to_string();
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    let port = parsed
+        .port()
+        .map_or_else(String::new, |port| format!(":{port}"));
+    format!("{}://{host}{port}{}", parsed.scheme(), parsed.path())
+}
+
 /// Bounded like the transport so a stalled OpenBao cannot hang startup login.
 fn client(user_agent: &str) -> Result<Client> {
     Ok(Client::builder()
@@ -170,12 +183,12 @@ pub async fn approle_login(
         "secret_id": sid
     });
 
-    debug!("login URL: {}, role ID: {}", url, rid);
-
+    // The login URL is operator-supplied and may carry userinfo or a query string, and the
+    // RoleID is half of the credential: neither goes into a log line or a span.
     let span = info_span!(
         "openbao.approle_login",
         http.method = "POST",
-        url = %url
+        url = %loggable_url(url)
     );
     let response = client
         .post(url)
@@ -190,7 +203,7 @@ pub async fn approle_login(
 
         return Err(anyhow!(
             "{} - {}, {}",
-            url,
+            loggable_url(url),
             status,
             openbao_error_message(&json_response)
         ));
@@ -397,6 +410,23 @@ mod tests {
 
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    #[test]
+    fn loggable_url_keeps_only_scheme_host_port_and_path() {
+        assert_eq!(
+            loggable_url(
+                "https://user:secret@openbao.example:8200/v1/auth/approle/login?token=abc#frag"
+            ),
+            "https://openbao.example:8200/v1/auth/approle/login"
+        );
+        assert_eq!(
+            loggable_url("http://openbao.example/v1/auth/custom/login"),
+            "http://openbao.example/v1/auth/custom/login"
+        );
+        for opaque in ["not a url with secret", "", "//secret@host"] {
+            assert_eq!(loggable_url(opaque), "<unparseable URL>");
+        }
     }
 
     #[test]

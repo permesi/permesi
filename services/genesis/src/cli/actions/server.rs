@@ -5,7 +5,6 @@ use service_utils::database::PoolConfig;
 use tracing::{debug, info};
 use url::Url;
 
-#[derive(Debug)]
 pub struct Args {
     pub signing_version: u32,
     pub public_limits: service_utils::work_limit::Limits,
@@ -22,6 +21,20 @@ pub struct Args {
     pub openbao_wrapped_token: Option<String>,
     pub openbao_transit_mount: String,
     pub tls_pem_bundle: Option<String>,
+}
+
+/// Formats only settings that are safe in a log. The struct holds the database DSN, the
+/// `AppRole` `RoleID` and `SecretID`, a wrapped token and an OpenBao URL that may carry
+/// userinfo, so nothing is derived: a field has to be listed here to appear at all.
+impl std::fmt::Debug for Args {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Args")
+            .field("port", &self.port)
+            .field("socket_path", &self.socket_path)
+            .field("openbao_mode", &self.openbao_target.mode())
+            .field("tls", &self.tls_pem_bundle.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Start with Agent, `AppRole`, or the explicitly selected Kubernetes login.

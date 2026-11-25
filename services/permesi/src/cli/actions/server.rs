@@ -6,7 +6,6 @@ use std::time::Duration;
 use tracing::{debug, info};
 use url::Url;
 
-#[derive(Debug)]
 pub struct Args {
     pub public_limits: service_utils::work_limit::Limits,
     pub protocol_limits: service_utils::work_limit::Limits,
@@ -57,6 +56,20 @@ pub struct Args {
     pub openbao_kv_mount: String,
     pub openbao_kv_path: String,
     pub openbao_transit_mount: String,
+}
+
+/// Formats only settings that are safe in a log. The struct holds the database DSN, the
+/// `AppRole` `RoleID` and `SecretID`, a wrapped token and an OpenBao URL that may carry
+/// userinfo, so nothing is derived: a field has to be listed here to appear at all.
+impl std::fmt::Debug for Args {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Args")
+            .field("port", &self.port)
+            .field("socket_path", &self.socket_path)
+            .field("openbao_mode", &self.openbao_target.mode())
+            .field("tls", &self.tls_pem_bundle.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Start with Agent, `AppRole`, or the explicitly selected Kubernetes login.
@@ -422,6 +435,33 @@ mod tests {
         args.opaque_exchange_timeout_ms = 5000;
         let config = build_app_config(&args, "http://localhost:8200".into());
         assert_eq!(config.auth.opaque_exchange_timeout_ms(), 5000);
+        Ok(())
+    }
+
+    /// Startup arguments are sometimes formatted in diagnostics and test output; none of
+    /// their credentials may come out.
+    #[test]
+    fn args_debug_output_names_no_credential() -> anyhow::Result<()> {
+        let mut args = default_args()?;
+        args.dsn = "postgres://dsn-user:dsn-password@db.internal:5432/permesi".to_string();
+        args.openbao_url = "https://bao-user:bao-password@openbao.internal:8200".to_string();
+        args.openbao_role_id = Some("role-id-value".to_string());
+        args.openbao_secret_id = Some("secret-id-value".to_string());
+        args.openbao_wrapped_token = Some("wrapped-token-value".to_string());
+        let direct = format!("{args:?}");
+        let shown = format!("{direct} {:#?}", crate::cli::actions::Action::Server(args));
+        for secret in [
+            "dsn-password",
+            "dsn-user",
+            "db.internal",
+            "bao-password",
+            "role-id-value",
+            "secret-id-value",
+            "wrapped-token-value",
+        ] {
+            assert!(!shown.contains(secret), "{secret}");
+        }
+        assert!(shown.contains("port: 8080") && shown.contains(".."));
         Ok(())
     }
 

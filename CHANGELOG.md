@@ -37,6 +37,10 @@ the signed artifacts.
 - The email outbox erases a message's payload, which holds the verification link,
   as soon as the message is delivered or given up on. Delivered rows previously
   kept a usable link for as long as the row existed.
+- Startup arguments no longer derive `Debug`: formatting them names a few safe
+  settings and never the database DSN, the AppRole RoleID or SecretID, a wrapped
+  token or the OpenBao URL. The AppRole login no longer logs the RoleID, and its
+  span and error carry the login URL without userinfo or query string.
 - The manual OpenBao policies in `SETUP.md` limit `sys/leases/renew` to each
   service's own database leases, as the OpenTofu module already did; the earlier
   example let a service token renew any lease. The live provisioning test now
