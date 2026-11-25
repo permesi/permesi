@@ -262,8 +262,11 @@ try {
  await click('Create Environment');await wait("!document.querySelector('#create-environment').open && document.body.innerText.includes('QA')");
  assert.equal(environments.length,4);assert.equal(environments.filter(value=>value.tier==='production').length,1);
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
+ // Lists render after their page heading; wait for the link itself before clicking it.
+ await wait("[...document.querySelectorAll('a')].some(e=>e.href.endsWith('/envs/production'))");
  await evaluate("[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/envs/production')).click()");
  await wait("document.body.innerText.includes('Applications in this environment')");
+ await wait(`[...document.querySelectorAll('a')].some(e=>e.href.endsWith('/apps/${app}'))`);
  await evaluate(`[...document.querySelectorAll('a')].find(e=>e.href.endsWith('/apps/${app}')).click()`);
  await wait("document.body.innerText.includes('Application overview')");
  assert.equal(await evaluate("document.querySelector('nav[aria-label=Application] a[aria-current=page]').getAttribute('aria-label')"),'Overview');
