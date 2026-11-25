@@ -14,8 +14,8 @@ use super::{
     rate_limit::{RateLimitAction, RateLimitConfig, RateLimitDecision, RateLimiter},
     state::OpaqueSuite,
     storage::{
-        ResendOutcome, SignupOutcome, consume_verification_token, enqueue_resend_verification,
-        insert_user_and_verification, insert_verification_records,
+        ResendOutcome, SignupOutcome, VerificationOutcome, consume_verification_token,
+        enqueue_resend_verification, insert_user_and_verification, insert_verification_records,
     },
     utils::{
         build_verify_url, decode_base64_field, generate_session_token, generate_verification_token,
@@ -231,6 +231,57 @@ async fn lookup_user_id(pool: &PgPool, email: &str) -> Result<Uuid> {
     Ok(row.get("id"))
 }
 
+/// The `OpaqueState` seed every auth test state uses, so bindings match across helpers.
+fn binding_state() -> OpaqueState {
+    OpaqueState::from_seed(
+        [0u8; 32],
+        "api.permesi.dev".to_string(),
+        Duration::from_mins(5),
+        100,
+    )
+}
+
+/// The cookie the registering browser holds for the account's current pending record.
+async fn signup_cookie(pool: &PgPool, user_id: Uuid) -> Result<String> {
+    let record: Vec<u8> =
+        sqlx::query_scalar("SELECT opaque_registration_record FROM users WHERE id=$1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+    let binding = binding_state().signup_binding(user_id, &record)?;
+    Ok(format!(
+        "permesi_signup={}",
+        URL_SAFE_NO_PAD.encode(binding)
+    ))
+}
+
+/// Presents a link together with the binding of the browser that registered the record,
+/// as the legitimate signup flow does; true only when the account was activated.
+async fn consume_bound(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    token_hash: &[u8],
+) -> Result<bool> {
+    let row: Option<(Uuid, Vec<u8>)> = sqlx::query_as(
+        "SELECT u.id,u.opaque_registration_record FROM email_verification_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=$1",
+    )
+    .bind(token_hash)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let opaque = binding_state();
+    let binding = match row {
+        Some((user_id, record)) => Some(opaque.signup_binding(user_id, &record)?),
+        None => None,
+    };
+    let outcome = consume_verification_token(
+        tx,
+        token_hash,
+        &opaque,
+        binding.as_ref().map(<[u8; 32]>::as_slice),
+    )
+    .await?;
+    Ok(outcome == VerificationOutcome::Activated)
+}
+
 async fn issue_verification_token(
     pool: &PgPool,
     user_id: Uuid,
@@ -261,17 +312,20 @@ async fn signup_concurrent_email_unique() -> Result<()> {
 
     let (result_one, result_two) = tokio::join!(task_one, task_two);
     let outcomes = [result_one?, result_two?];
-    let successes = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, SignupOutcome::Created))
-        .count();
-    let conflicts = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, SignupOutcome::Conflict))
-        .count();
-
-    assert_eq!(successes, 1);
-    assert_eq!(conflicts, 1);
+    // The loser replaces the winner's still-pending record instead of conflicting, so both
+    // settle on one account with exactly one live link.
+    let user_id = lookup_user_id(&db.pool, &email_normalized).await?;
+    for outcome in &outcomes {
+        assert!(matches!(outcome, SignupOutcome::Pending(id) if *id == user_id));
+    }
+    let (users, live): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM users WHERE email=$1),(SELECT count(*) FROM email_verification_tokens WHERE user_id=$2 AND consumed_at IS NULL)",
+    )
+    .bind(&email_normalized)
+    .bind(user_id)
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!((users, live), (1, 1));
 
     Ok(())
 }
@@ -382,7 +436,7 @@ async fn verify_token_reuse_rejected() -> Result<()> {
         insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config).await?;
 
     match outcome {
-        SignupOutcome::Created => {}
+        SignupOutcome::Pending(_) => {}
         SignupOutcome::Conflict | SignupOutcome::Rejected => {
             return Err(anyhow!("unexpected conflict"));
         }
@@ -392,12 +446,12 @@ async fn verify_token_reuse_rejected() -> Result<()> {
     let token_hash = hash_verification_token(&token);
 
     let mut tx = db.pool.begin().await?;
-    let first = consume_verification_token(&mut tx, &token_hash).await?;
+    let first = consume_bound(&mut tx, &token_hash).await?;
     tx.commit().await?;
     assert!(first);
 
     let mut tx = db.pool.begin().await?;
-    let second = consume_verification_token(&mut tx, &token_hash).await?;
+    let second = consume_bound(&mut tx, &token_hash).await?;
     tx.commit().await?;
     assert!(!second);
 
@@ -416,7 +470,7 @@ async fn verify_token_expired_rejected() -> Result<()> {
     let outcome =
         insert_user_and_verification(&db.pool, &email_normalized, &opaque_record, &config).await?;
     match outcome {
-        SignupOutcome::Created => {}
+        SignupOutcome::Pending(_) => {}
         SignupOutcome::Conflict | SignupOutcome::Rejected => {
             return Err(anyhow!("unexpected conflict"));
         }
@@ -434,7 +488,7 @@ async fn verify_token_expired_rejected() -> Result<()> {
     .context("failed to expire token")?;
 
     let mut tx = db.pool.begin().await?;
-    let verified = consume_verification_token(&mut tx, &token_hash).await?;
+    let verified = consume_bound(&mut tx, &token_hash).await?;
     tx.commit().await?;
     assert!(!verified);
 
@@ -527,6 +581,10 @@ fn opaque_router(
             post(super::opaque::login::opaque_login_finish),
         )
         .route(
+            "/v1/auth/verify-email",
+            post(super::verification::verify_email),
+        )
+        .route(
             "/v1/auth/opaque/reauth/start",
             post(super::opaque::reauth::opaque_reauth_start),
         )
@@ -595,13 +653,14 @@ fn issue_zero_token(signing_key: &ed25519_dalek::SigningKey, kid: &str) -> Resul
 }
 
 /// Run OPAQUE signup start+finish through HTTP handlers to populate registration records.
+/// Returns the signup-binding cookie pair the registering browser would keep.
 async fn run_opaque_signup(
     app: &Router,
     email: &str,
     password: &[u8],
     zero_token: &str,
     seed: [u8; 32],
-) -> Result<()> {
+) -> Result<String> {
     let mut rng = ChaCha20Rng::from_seed(seed);
     let ksf = argon2::Argon2::default();
     let client_start = ClientRegistration::<OpaqueSuite>::start(&mut rng, password)?;
@@ -657,7 +716,48 @@ async fn run_opaque_signup(
         .await?;
 
     assert_eq!(finish_response.status(), StatusCode::CREATED);
-    Ok(())
+    let set_cookie = finish_response
+        .headers()
+        .get(SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .context("signup finish must set the binding cookie")?;
+    assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Lax"));
+    let pair = set_cookie.split(';').next().context("cookie pair")?;
+    assert!(pair.starts_with("permesi_signup="));
+    Ok(pair.to_owned())
+}
+
+/// The newest undelivered verification link for an address, as the mailbox would receive it.
+async fn latest_verification_token(pool: &PgPool, email: &str) -> Result<String> {
+    let url: String = sqlx::query_scalar(
+        "SELECT payload_json->>'verify_url' FROM email_outbox WHERE to_email=$1 AND template='verify_email' AND status='pending' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(email)
+    .fetch_one(pool)
+    .await?;
+    let (_, token) = url.split_once("#token=").context("verification link")?;
+    Ok(token.to_owned())
+}
+
+/// Opens a verification link in a browser holding `cookie` (or none).
+async fn open_verification_link(
+    app: &Router,
+    token: &str,
+    zero_token: &str,
+    cookie: Option<&str>,
+) -> Result<axum::response::Response> {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/auth/verify-email")
+        .header(CONTENT_TYPE, "application/json")
+        .header("X-Permesi-Zero-Token", zero_token);
+    if let Some(cookie) = cookie {
+        request = request.header(COOKIE, cookie);
+    }
+    Ok(app
+        .clone()
+        .oneshot(request.body(Body::from(json!({"token": token}).to_string()))?)
+        .await?)
 }
 
 fn extract_session_cookie_token(set_cookie: &str) -> Option<String> {

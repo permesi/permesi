@@ -1,7 +1,8 @@
 # Registration and verification security
 
 Public registration creates a pending identity, not an authenticated principal.
-Only possession of a valid email-verification capability can activate that identity.
+Activating it takes both a valid email-verification capability and the signup
+binding held by the browser that registered.
 A Genesis admission token authenticates the admission contract; it does not prove
 that a caller is human, owns an email address, passed KYC or owns another resource.
 
@@ -54,6 +55,37 @@ These controls constrain request volume, not the number of distinct people, and 
 not guarantee availability against distributed automation. CAPTCHA integration,
 signup analytics and pending-account retention remain separate roadmap items.
 
+## Signup binding
+
+Anyone can start a signup for an address they do not control, and the mailed link
+only proves that whoever opens it reads that mailbox. If the link alone activated
+the account, the first registrant would choose the password that the mailbox owner
+turns on by clicking, and Permesi has no email-based password reset to take such an
+account back. Two rules close this.
+
+A signup for an address whose account is still pending replaces that account's
+registration record, retires its outstanding links and queued verification mail,
+and issues a fresh link. An unverified record carries no authority, so squatting on
+an address does not block its owner. Accounts that are active or disabled are never
+touched, and the response stays the same generic 201 in every case.
+
+Signup finish also sets an `HttpOnly` cookie, `permesi_signup`, derived with a keyed
+MAC from the pending account and its exact registration record. Verification
+activates the account only when the link arrives with that cookie, compared in
+constant time under the user lock. A link opened in any other browser answers 409,
+consumes nothing and stays usable in the right one. The cookie activates nothing
+without the mailed link, stops matching as soon as the record is replaced, expires
+with the link and is cleared on activation. An address that cannot be registered
+gets a random cookie of the same shape, so the response does not reveal that the
+address is taken. Nothing is stored for the binding; every replica derives it from
+the shared OPAQUE seed.
+
+The consequence for users is that the verification link must be opened in the
+browser used to sign up. Someone who opens it elsewhere is told to open it there or
+sign up again, which replaces the pending record and sends a new link. An attacker
+who keeps re-registering a victim's address can delay that signup, bounded by the
+per-address signup limit, but cannot activate a password of their own.
+
 ## Atomic verification and bounded coordination
 
 Verification first resolves the token's account, then locks that user row before
@@ -77,7 +109,8 @@ and rolls back the tracked transaction. As with any networked database, losing a
 commit acknowledgement can leave a valid committed result despite a 503 response;
 it cannot undo an accepted commit. Verification retries never reactivate users or
 reuse consumed capabilities; after an uncertain verification result, try signing in.
-Signup retries retain the existing opaque conflict response. Storage/deadline failure
+Signup retries for a pending address replace its record; for any other existing
+account they retain the opaque conflict response. Storage/deadline failure
 returns generic 503 without
 SQL details; resend retains opaque 204 for ordinary unknown-account/cooldown cases.
 
@@ -86,7 +119,7 @@ SQL details; resend retains opaque 204 for ordinary unknown-account/cooldown cas
 `--email-delivery` (`PERMESI_EMAIL_DELIVERY`) defaults to `outbox`: messages stay
 pending, no worker acknowledges delivery and no verification link is logged. For
 local development, `just signup-verify-url` explicitly reads the latest link from
-the local database. Do not expose this privileged inspection helper to clients.
+the local database; open it in the browser that signed up. Do not expose this privileged inspection helper to clients.
 Public production onboarding requires a configured mail transport and an actual
 mailbox verification; outbox acceptance alone never establishes mailbox control.
 
@@ -167,7 +200,7 @@ verified. Permesi does not issue a KYC or asset-ownership claim.
 
 ## Testing and limits
 
-PostgreSQL/HTTP integration tests in `services/permesi` cover reserved-domain denial, signup admission modes, disabled-account activation rejection, single-connection verification under rate limits, outbox lease claim/acknowledgement, and local TLS SMTP peers (certificate rejection, mandatory STARTTLS, and stalls). The isolated multi-replica scenario `authentication.registration_policy` exercises reserved-domain rejection, cross-replica verification, replay denial, and disabled-account protection.
+PostgreSQL/HTTP integration tests in `services/permesi` cover reserved-domain denial, signup admission modes, pending-record replacement and the browser binding (a link never activates a record registered from another browser), disabled-account activation rejection, single-connection verification under rate limits, outbox lease claim/acknowledgement, and local TLS SMTP peers (certificate rejection, mandatory STARTTLS, and stalls). The isolated multi-replica scenario `authentication.registration_policy` exercises reserved-domain rejection, cross-replica verification with the binding (and its refusal without it), replay denial, and disabled-account protection.
 
 External mail provider deliverability, DNS authentication records (SPF/DKIM/DMARC), and production SMTP tuning are operator responsibilities. Outbox mode remains the default until SMTP is explicitly configured.
 

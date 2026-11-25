@@ -75,14 +75,6 @@ pub(super) fn decode_base64_field(value: &str) -> Result<Vec<u8>, String> {
         .map_err(|_| "Invalid base64 payload".to_string())
 }
 
-/// Returns true if the database error is a unique constraint violation (SQLSTATE 23505).
-pub(super) fn is_unique_violation(err: &sqlx::Error) -> bool {
-    match err {
-        sqlx::Error::Database(db_err) => db_err.code().is_some_and(|code| code.as_ref() == "23505"),
-        _ => false,
-    }
-}
-
 /// Reads only the canonical address installed by the served transport-trust middleware.
 /// Public forwarding headers never authorize a throttling identity.
 pub(crate) fn extract_client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
@@ -111,8 +103,6 @@ mod tests {
         Engine,
         engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     };
-    use sqlx::error::{DatabaseError, ErrorKind};
-    use std::{borrow::Cow, error::Error as StdError, fmt};
 
     #[test]
     fn normalize_email_trims_and_lowercases() {
@@ -170,67 +160,12 @@ mod tests {
         assert_ne!(first, different);
     }
 
-    #[derive(Debug)]
-    struct TestDbError {
-        code: Option<&'static str>,
-    }
-
-    impl fmt::Display for TestDbError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "test database error")
-        }
-    }
-
-    impl StdError for TestDbError {}
-
-    impl DatabaseError for TestDbError {
-        fn message(&self) -> &'static str {
-            "test database error"
-        }
-
-        fn code(&self) -> Option<Cow<'_, str>> {
-            self.code.map(Cow::Borrowed)
-        }
-
-        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
-            self
-        }
-
-        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
-            self
-        }
-
-        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
-            self
-        }
-
-        fn kind(&self) -> ErrorKind {
-            ErrorKind::UniqueViolation
-        }
-    }
-
     #[test]
     fn extract_client_ip_rejects_raw_cloudflare() {
         let mut headers = HeaderMap::new();
         headers.insert("cf-connecting-ip", HeaderValue::from_static("1.1.1.1"));
         headers.insert("x-forwarded-for", HeaderValue::from_static("2.2.2.2"));
         assert_eq!(extract_client_ip(&headers), None);
-    }
-
-    #[test]
-    fn is_unique_violation_matches_sqlstate() {
-        let err = sqlx::Error::Database(Box::new(TestDbError {
-            code: Some("23505"),
-        }));
-        assert!(is_unique_violation(&err));
-
-        let err = sqlx::Error::Database(Box::new(TestDbError {
-            code: Some("99999"),
-        }));
-        assert!(!is_unique_violation(&err));
-
-        let err = sqlx::Error::RowNotFound;
-        assert!(!is_unique_violation(&err));
     }
 
     #[test]

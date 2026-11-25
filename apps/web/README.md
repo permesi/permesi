@@ -231,10 +231,10 @@ sequenceDiagram
   Web->>API: POST /v1/auth/opaque/signup/finish (registration_record)
   API->>API: Verify token (PASERK keyset)
   Note over API,DB: Single transaction
-  API->>DB: Insert user (pending_verification)
+  API->>DB: Insert user (pending_verification) or replace a pending record
   API->>DB: Insert verification token (hashed, TTL)
   API->>DB: Insert email_outbox row
-  API-->>Web: 201 generic response
+  API-->>Web: 201 generic response + signup-binding cookie
 
   Outbox->>DB: Poll pending emails
   Outbox->>Mail: Send verification email
@@ -244,10 +244,10 @@ sequenceDiagram
   User->>Web: Open verify link
   Web->>Genesis: Mint zero token (verify)
   Genesis-->>Web: Zero token
-  Web->>API: POST /v1/auth/verify-email
+  Web->>API: POST /v1/auth/verify-email (with signup-binding cookie)
   API->>API: Verify token (PASERK keyset)
-  API->>DB: Consume token + activate user
-  API-->>Web: 204
+  API->>DB: Check binding, consume token + activate user
+  API-->>Web: 204 (409 in a browser that did not sign up)
 
       opt Resend verification (optional)
       User->>Web: Request new link

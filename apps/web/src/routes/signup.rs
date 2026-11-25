@@ -128,7 +128,7 @@ fn SignupForm() -> impl IntoView {
                                             <div class="mt-4">
                                                 <Alert
                                                     kind=AlertKind::Success
-                                                    message="Check your email to verify your account.".to_string()
+                                                    message="Check your email to verify your account. Open the link in this browser.".to_string()
                                                 />
                                             </div>
                                         })

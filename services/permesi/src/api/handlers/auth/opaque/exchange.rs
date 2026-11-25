@@ -32,6 +32,7 @@ use uuid::Uuid;
 use super::super::state::OpaqueSuite;
 
 const KEY_LABEL: &[u8] = b"permesi/opaque-exchange/encryption-key/v2";
+const SIGNUP_BINDING_LABEL: &[u8] = b"permesi/signup-binding/mac-key/v1";
 
 /// Server-derived normalized account and dispatch-validated admission/deadline policy.
 pub(in crate::api::handlers::auth) struct Admission<'a> {
@@ -167,6 +168,31 @@ impl OpaqueState {
         let key = Zeroizing::new(<[u8; 32]>::from(mac.finalize().into_bytes()));
         XChaCha20Poly1305::new_from_slice(key.as_ref())
             .map_err(|_| anyhow!("OPAQUE state key initialization failed"))
+    }
+
+    /// Computes the signup binding: a MAC over the pending account and the exact
+    /// registration record it holds, under a key derived from the shared seed.
+    ///
+    /// Signup hands this value to the registering browser as a cookie, and email
+    /// verification activates the account only when the same value comes back. A
+    /// verification link therefore cannot activate a password registered from another
+    /// browser, and replacing the record invalidates the earlier binding. Every replica
+    /// derives the same value, so nothing is stored.
+    pub(in crate::api::handlers::auth) fn signup_binding(
+        &self,
+        user: Uuid,
+        record: &[u8],
+    ) -> Result<[u8; 32]> {
+        let mut derive =
+            <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(self.storage_seed.expose_secret())
+                .map_err(|_| anyhow!("signup binding key derivation failed"))?;
+        derive.update(SIGNUP_BINDING_LABEL);
+        let key = Zeroizing::new(<[u8; 32]>::from(derive.finalize().into_bytes()));
+        let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(key.as_ref())
+            .map_err(|_| anyhow!("signup binding key initialization failed"))?;
+        mac.update(user.as_bytes());
+        mac.update(record);
+        Ok(mac.finalize().into_bytes().into())
     }
 
     /// Bind the complete database snapshot and configured protocol identity into AEAD.

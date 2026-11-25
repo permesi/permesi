@@ -14,6 +14,7 @@
 use anyhow::{Context, Result, anyhow};
 use serde_json::json;
 use sqlx::{PgConnection, PgPool, Row};
+use subtle::ConstantTimeEq;
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -22,16 +23,30 @@ use super::{
     state::AuthConfig,
     utils::{
         build_verify_url, generate_session_token, generate_verification_token, hash_session_token,
-        hash_verification_token, is_unique_violation,
+        hash_verification_token,
     },
 };
 
 /// Outcome when attempting to create a new user + verification record.
 #[derive(Debug)]
 pub(super) enum SignupOutcome {
-    Created,
+    /// A pending account now holds the submitted record, either newly created or
+    /// replacing an earlier unverified signup. Carries the account for the browser binding.
+    Pending(Uuid),
+    /// The email belongs to an account that is no longer pending; nothing changed.
     Conflict,
     Rejected,
+}
+
+/// Outcome of presenting a verification link.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum VerificationOutcome {
+    Activated,
+    /// Unknown, expired, consumed or retired link, or an account that is not pending.
+    Invalid,
+    /// A live link presented without the binding of the browser that registered the
+    /// pending record. Nothing is consumed, so the right browser can still use it.
+    UnboundBrowser,
 }
 
 /// Outcome for a resend request (always 204 to avoid account probing).
@@ -83,6 +98,12 @@ pub(super) async fn lookup_login_record(pool: &PgPool, email: &str) -> Result<Op
 }
 
 /// Applies signup policy and commits the pending account, hashed verifier and outbox atomically.
+///
+/// A signup for an email whose account is still unverified replaces that account's
+/// registration record, retires its outstanding links and queued mail, and issues a fresh
+/// link. Nobody has proven control of the mailbox yet, so the earlier record carries no
+/// authority, and keeping it would let whoever registered first choose the password the
+/// mailbox owner later activates. An account that left the pending state is never touched.
 pub(super) async fn insert_user_and_verification(
     pool: &PgPool,
     email: &str,
@@ -99,10 +120,13 @@ pub(super) async fn insert_user_and_verification(
             .await
             .context("begin signup transaction")?;
 
+        // DO NOTHING keeps the transaction usable when the email is taken, so the
+        // pending-account replacement below runs under the same atomic unit.
         let query = r"
         INSERT INTO users
             (email, opaque_registration_record)
         VALUES ($1, $2)
+        ON CONFLICT (email) DO NOTHING
         RETURNING id
     ";
         let span = tracing::info_span!(
@@ -111,31 +135,80 @@ pub(super) async fn insert_user_and_verification(
             db.operation = "INSERT",
             db.statement = query
         );
-        let row = sqlx::query(query)
+        let created: Option<Uuid> = sqlx::query_scalar(query)
             .bind(email)
             .bind(opaque_record)
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .instrument(span)
-            .await;
+            .await
+            .context("failed to insert user")?;
 
-        let user_id: Uuid = match row {
-            Ok(row) => row.get("id"),
-            Err(err) => {
-                if is_unique_violation(&err) {
-                    let _ = tx.rollback().await;
-                    return Ok(SignupOutcome::Conflict);
-                }
-                return Err(err).context("failed to insert user");
-            }
+        let user_id = if let Some(user_id) = created {
+            user_id
+        } else {
+            let Some(user_id) = replace_pending_registration(&mut tx, email, opaque_record).await?
+            else {
+                tx.commit().await.context("commit signup conflict")?;
+                return Ok(SignupOutcome::Conflict);
+            };
+            user_id
         };
 
         let _token = insert_verification_records(&mut tx, user_id, email, config).await?;
 
         tx.commit().await.context("commit signup transaction")?;
 
-        Ok(SignupOutcome::Created)
+        Ok(SignupOutcome::Pending(user_id))
     })
     .await
+}
+
+/// Replaces the record of a still-pending account under the user-first lock shared with
+/// activation and resend, and retires every link and queued mail issued for the old record.
+/// Returns `None` when the email belongs to an account that is not pending.
+async fn replace_pending_registration(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    email: &str,
+    opaque_record: &[u8],
+) -> Result<Option<Uuid>> {
+    let row = sqlx::query(
+        "SELECT id, status::text AS status FROM users WHERE email=$1 FOR NO KEY UPDATE",
+    )
+    .bind(email)
+    .fetch_optional(&mut **tx)
+    .await
+    .context("failed to lock user for signup")?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let status: String = row.get("status");
+    if status != "pending_verification" {
+        return Ok(None);
+    }
+    let user_id: Uuid = row.get("id");
+    sqlx::query(
+        "UPDATE users SET opaque_registration_record=$2 WHERE id=$1 AND status='pending_verification'",
+    )
+    .bind(user_id)
+    .bind(opaque_record)
+    .execute(&mut **tx)
+    .await
+    .context("failed to replace pending registration record")?;
+    sqlx::query(
+        "UPDATE email_verification_tokens SET consumed_at=clock_timestamp() WHERE user_id=$1 AND consumed_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await
+    .context("failed to retire verification links")?;
+    sqlx::query(
+        "UPDATE email_outbox SET status='failed',payload_json='{}'::jsonb,last_error='superseded',claim_id=NULL,claim_expires_at=NULL WHERE to_email=$1 AND template='verify_email' AND status='pending'",
+    )
+    .bind(email)
+    .execute(&mut **tx)
+    .await
+    .context("failed to retire queued verification mail")?;
+    Ok(Some(user_id))
 }
 
 pub(super) async fn insert_verification_records(
@@ -686,36 +759,58 @@ pub(super) async fn delete_mfa_challenge_session(pool: &PgPool, token_hash: &[u8
 
 /// Activates only a pending account under identity-first locking; a token cannot undo suspension.
 /// Expiry is checked after lock acquisition, and every sibling verifier is retired atomically.
+///
+/// Mailbox control alone does not activate: `presented` must equal the signup binding of
+/// the pending account's current registration record, which only the browser that
+/// registered that record holds. A mismatch changes nothing and consumes nothing.
 pub(super) async fn consume_verification_token(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     token_hash: &[u8],
-) -> Result<bool> {
+    opaque: &super::state::OpaqueState,
+    presented: Option<&[u8]>,
+) -> Result<VerificationOutcome> {
     let user: Option<Uuid> =
         sqlx::query_scalar("SELECT user_id FROM email_verification_tokens WHERE token_hash=$1")
             .bind(token_hash)
             .fetch_optional(&mut **tx)
             .await?;
     let Some(user) = user else {
-        return Ok(false);
+        return Ok(VerificationOutcome::Invalid);
     };
-    let status: Option<String> =
-        sqlx::query_scalar("SELECT status::text FROM users WHERE id=$1 FOR NO KEY UPDATE")
-            .bind(user)
-            .fetch_optional(&mut **tx)
-            .await?;
-    if status.as_deref() != Some("pending_verification") {
-        return Ok(false);
+    let row = sqlx::query(
+        "SELECT status::text AS status, opaque_registration_record FROM users WHERE id=$1 FOR NO KEY UPDATE",
+    )
+    .bind(user)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(row) = row else {
+        return Ok(VerificationOutcome::Invalid);
+    };
+    let status: String = row.get("status");
+    if status != "pending_verification" {
+        return Ok(VerificationOutcome::Invalid);
+    }
+    let live: Option<i32> = sqlx::query_scalar("SELECT 1 FROM email_verification_tokens WHERE token_hash=$1 AND user_id=$2 AND consumed_at IS NULL AND expires_at>clock_timestamp()")
+        .bind(token_hash).bind(user).fetch_optional(&mut **tx).await?;
+    if live.is_none() {
+        return Ok(VerificationOutcome::Invalid);
+    }
+    let record: Vec<u8> = row.get("opaque_registration_record");
+    let expected = opaque.signup_binding(user, &record)?;
+    let bound = presented.is_some_and(|value| bool::from(value.ct_eq(&expected)));
+    if !bound {
+        return Ok(VerificationOutcome::UnboundBrowser);
     }
     let consumed = sqlx::query("UPDATE email_verification_tokens SET consumed_at=clock_timestamp() WHERE token_hash=$1 AND user_id=$2 AND consumed_at IS NULL AND expires_at>clock_timestamp()")
         .bind(token_hash).bind(user).execute(&mut **tx).await?;
     if consumed.rows_affected() != 1 {
-        return Ok(false);
+        return Ok(VerificationOutcome::Invalid);
     }
     sqlx::query("UPDATE users SET email_verified_at=clock_timestamp(),status='active' WHERE id=$1 AND status='pending_verification'")
         .bind(user).execute(&mut **tx).await?;
     sqlx::query("UPDATE email_verification_tokens SET consumed_at=clock_timestamp() WHERE user_id=$1 AND consumed_at IS NULL")
         .bind(user).execute(&mut **tx).await?;
-    Ok(true)
+    Ok(VerificationOutcome::Activated)
 }
 
 /// Resolves only the rate-limit bucket before a transaction; activation revalidates identity under lock.
@@ -838,7 +933,10 @@ mod tests {
 
     #[test]
     fn signup_outcome_debug_names() {
-        assert_eq!(format!("{:?}", SignupOutcome::Created), "Created");
+        assert_eq!(
+            format!("{:?}", SignupOutcome::Pending(Uuid::nil())),
+            format!("Pending({:?})", Uuid::nil())
+        );
         assert_eq!(format!("{:?}", SignupOutcome::Conflict), "Conflict");
     }
 

@@ -41,6 +41,7 @@ mod rate_limit;
 pub(crate) mod registration;
 pub(crate) mod session;
 mod session_kind;
+mod signup_binding;
 mod state;
 mod storage;
 pub(crate) mod types;

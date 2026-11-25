@@ -2684,7 +2684,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Rechecks signup admission independently; browser fields cannot activate the pending account.",
+        "summary": "Rechecks signup admission independently; browser fields cannot activate the pending account.\nSets the signup-binding cookie that email verification later requires.",
         "operationId": "opaque_signup_finish",
         "parameters": [
           {
@@ -3083,7 +3083,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Verify the email link by consuming the hashed token and activating the user.",
+        "summary": "Verify the email link by consuming the hashed token and activating the user.\nRequires the signup-binding cookie set by signup finish; a live link without it\nanswers 409 and stays usable.",
         "operationId": "verify_email",
         "parameters": [
           {
@@ -3112,6 +3112,16 @@
           },
           "400": {
             "description": "Invalid/expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Live link opened outside the browser that signed up",
             "content": {
               "application/json": {
                 "schema": {

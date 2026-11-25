@@ -235,14 +235,25 @@ impl Api {
 
     /// Send admission-protected account requests, retaining the original session for reauthentication.
     pub(crate) async fn auth_response(&self, path: &str, body: Value) -> Result<reqwest::Response> {
+        self.auth_response_as(path, body, self.cookie.expose_secret())
+            .await
+    }
+
+    /// Same request with an explicit cookie header, for flows bound to another browser state.
+    async fn auth_response_as(
+        &self,
+        path: &str,
+        body: Value,
+        cookie: &str,
+    ) -> Result<reqwest::Response> {
         let token = self.admission_token().await?;
         let mut request = self
             .client
             .post(format!("{}{path}", self.origin))
             .header("X-Permesi-Zero-Token", token.expose_secret())
             .json(&body);
-        if !self.cookie.expose_secret().is_empty() {
-            request = request.header(reqwest::header::COOKIE, self.cookie.expose_secret());
+        if !cookie.is_empty() {
+            request = request.header(reqwest::header::COOKIE, cookie);
         }
         request.send().await.safe("Account HTTP request failed.")
     }
@@ -280,6 +291,36 @@ impl Api {
                 .await
                 .safe("Invalid account registration response.")
         }
+    }
+}
+
+/// A pending signup's mailed link capability together with the binding cookie the
+/// registering browser received; activation needs both.
+pub(crate) struct Verification {
+    token: SecretString,
+    binding: SecretString,
+}
+
+impl Verification {
+    /// Opens the link in the browser that registered.
+    pub(crate) async fn open(&self, api: &Api) -> Result<reqwest::Response> {
+        api.auth_response_as(
+            "/v1/auth/verify-email",
+            json!({"token":self.token.expose_secret()}),
+            self.binding.expose_secret(),
+        )
+        .await
+    }
+
+    /// Opens the link in a browser that never registered, as a mailbox owner who did not
+    /// sign up (or an attacker holding only the link) would.
+    pub(crate) async fn open_elsewhere(&self, api: &Api) -> Result<reqwest::Response> {
+        api.auth_response_as(
+            "/v1/auth/verify-email",
+            json!({"token":self.token.expose_secret()}),
+            "",
+        )
+        .await
     }
 }
 
@@ -340,7 +381,7 @@ impl Actor {
         })
     }
     /// Registers a pending account and reads its capability only from the owned test outbox.
-    pub(crate) async fn pending_signup(api: &Api, pool: &PgPool) -> Result<(Self, SecretString)> {
+    pub(crate) async fn pending_signup(api: &Api, pool: &PgPool) -> Result<(Self, Verification)> {
         let email = format!("scenario-{}@example.test", Uuid::new_v4().simple());
         let password = random()?;
         let mut rng =
@@ -365,7 +406,20 @@ impl Actor {
             .state
             .finish(&mut rng, password.as_bytes(), response, params)
             .safe("Cannot finish OPAQUE registration.")?;
-        api.auth_post("/v1/auth/opaque/signup/finish", json!({"email":email,"registration_record":STANDARD.encode(finish.message.serialize())}), StatusCode::CREATED).await?;
+        let finished = api.auth_response("/v1/auth/opaque/signup/finish", json!({"email":email,"registration_record":STANDARD.encode(finish.message.serialize())})).await?;
+        check(
+            finished.status() == StatusCode::CREATED,
+            "OPAQUE signup finish returned an unexpected status.",
+        )?;
+        let binding = finished
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .filter_map(|value| value.split(';').next())
+            .find(|pair| pair.starts_with("permesi_signup="))
+            .map(str::to_owned)
+            .ok_or_else(|| Failure::assertion("Signup finish set no browser binding."))?;
         let outbox: String = sqlx::query_scalar("SELECT payload_json::text FROM email_outbox WHERE to_email=$1 ORDER BY created_at DESC LIMIT 1").bind(&email).fetch_one(pool).await.safe("Cannot read isolated verification outbox.")?;
         let outbox: Value =
             serde_json::from_str(&outbox).safe("Invalid isolated outbox payload.")?;
@@ -384,19 +438,20 @@ impl Actor {
                 email,
                 password: SecretString::from(password),
             },
-            SecretString::from(token),
+            Verification {
+                token: SecretString::from(token),
+                binding: SecretString::from(binding),
+            },
         ))
     }
 
     /// Verifies the mailbox capability through the real HTTP endpoint before any login.
     pub async fn signup(api: &Api, pool: &PgPool) -> Result<Self> {
-        let (actor, token) = Self::pending_signup(api, pool).await?;
-        api.auth_post(
-            "/v1/auth/verify-email",
-            json!({"token":token.expose_secret()}),
-            StatusCode::NO_CONTENT,
-        )
-        .await?;
+        let (actor, verification) = Self::pending_signup(api, pool).await?;
+        check(
+            verification.open(api).await?.status() == StatusCode::NO_CONTENT,
+            "Email verification returned an unexpected status.",
+        )?;
         Ok(actor)
     }
 

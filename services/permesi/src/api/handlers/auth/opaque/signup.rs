@@ -4,11 +4,17 @@
 //! registration flow. Both endpoints apply server-owned signup eligibility independently;
 //! finish atomically stores only a pending user, hashed verifier and protected email outbox.
 //! Admission is not proof of mailbox control, tenant membership or user consent.
+//!
+//! A signup for an address whose account is still unverified replaces that pending record,
+//! and finish binds the record to the registering browser with a cookie (see
+//! `signup_binding`). The mailed link activates the account only together with that
+//! cookie, so a link cannot turn on a password someone else registered for the address.
 
 use crate::api::handlers::{
     AdmissionVerifier,
     auth::{
         rate_limit::RateLimitAction,
+        signup_binding,
         state::{AuthState, OpaqueSuite},
         storage::{SignupOutcome, insert_user_and_verification},
         types::{
@@ -22,7 +28,7 @@ use crate::api::handlers::{
 use axum::{
     Json,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
 use base64::Engine;
@@ -148,6 +154,7 @@ pub async fn opaque_signup_start(
 }
 
 /// Rechecks signup admission independently; browser fields cannot activate the pending account.
+/// Sets the signup-binding cookie that email verification later requires.
 #[utoipa::path(
     post,
     path = "/v1/auth/opaque/signup/finish",
@@ -237,14 +244,38 @@ pub async fn opaque_signup_finish(
     let outcome =
         insert_user_and_verification(&pool, &email, &opaque_record, auth_state.config()).await;
 
-    // The response is intentionally vague to avoid account enumeration.
+    // The response is intentionally vague to avoid account enumeration: both outcomes
+    // answer 201 with a cookie of the same shape. Only a pending record gets its real
+    // binding; a taken address gets a decoy that matches nothing.
     let message = "If the account can be created, you'll receive a verification email.".to_string();
     match outcome {
-        Ok(SignupOutcome::Created | SignupOutcome::Conflict) => (
-            StatusCode::CREATED,
-            Json(OpaqueSignupFinishResponse { message }),
-        )
-            .into_response(),
+        Ok(outcome @ (SignupOutcome::Pending(_) | SignupOutcome::Conflict)) => {
+            let binding = match outcome {
+                SignupOutcome::Pending(user_id) => auth_state
+                    .opaque()
+                    .signup_binding(user_id, &opaque_record)
+                    .ok(),
+                _ => signup_binding::decoy().ok(),
+            };
+            let cookie = binding
+                .and_then(|binding| signup_binding::cookie(auth_state.config(), &binding).ok());
+            let Some(cookie) = cookie else {
+                error!("Signup binding unavailable");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(OpaqueSignupFinishResponse {
+                        message: "Signup failed".to_string(),
+                    }),
+                )
+                    .into_response();
+            };
+            (
+                StatusCode::CREATED,
+                [(SET_COOKIE, cookie)],
+                Json(OpaqueSignupFinishResponse { message }),
+            )
+                .into_response()
+        }
         Ok(SignupOutcome::Rejected) => (
             StatusCode::FORBIDDEN,
             "Registration not available".to_owned(),

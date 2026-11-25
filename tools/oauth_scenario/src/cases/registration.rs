@@ -6,7 +6,6 @@ use crate::{
     error::{Result, Safe as _, check},
 };
 use reqwest::StatusCode;
-use secrecy::ExposeSecret as _;
 use serde_json::json;
 
 /// Exercises reserved-domain rejection and verifier authority on independently routed processes.
@@ -50,23 +49,23 @@ pub async fn security(context: &mut Context<'_>) -> Result<()> {
     context.gateway.replica_a();
     let (actor, token) = Actor::pending_signup(&anonymous, context.pool).await?;
     context.gateway.replica_b();
-    let verified = anonymous
-        .auth_response(
-            "/v1/auth/verify-email",
-            json!({"token":token.expose_secret()}),
-        )
-        .await?;
+    let unbound = token.open_elsewhere(&anonymous).await?;
+    let pending: String = sqlx::query_scalar("SELECT status::text FROM users WHERE email=$1")
+        .bind(&actor.email)
+        .fetch_one(context.pool)
+        .await
+        .safe("Cannot inspect pending account state.")?;
+    check(
+        unbound.status() == StatusCode::CONFLICT && pending == "pending_verification",
+        "A link opened outside the registering browser activated the account.",
+    )?;
+    let verified = token.open(&anonymous).await?;
     check(
         verified.status() == StatusCode::NO_CONTENT,
         "Cross-replica verification did not activate the pending account.",
     )?;
     context.gateway.replica_c();
-    let replay = anonymous
-        .auth_response(
-            "/v1/auth/verify-email",
-            json!({"token":token.expose_secret()}),
-        )
-        .await?;
+    let replay = token.open(&anonymous).await?;
     check(
         replay.status() == StatusCode::BAD_REQUEST,
         "A different replica accepted a consumed verifier.",
@@ -78,12 +77,7 @@ pub async fn security(context: &mut Context<'_>) -> Result<()> {
         .await
         .safe("Cannot apply local account containment.")?;
     context.gateway.replica_a();
-    let response = anonymous
-        .auth_response(
-            "/v1/auth/verify-email",
-            json!({"token":token.expose_secret()}),
-        )
-        .await?;
+    let response = token.open(&anonymous).await?;
     check(
         response.status() == StatusCode::BAD_REQUEST,
         "Verification bypassed disabled account containment.",

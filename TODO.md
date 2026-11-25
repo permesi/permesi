@@ -6,7 +6,6 @@ Authoritative tracker for planned milestones, open security/stabilization findin
 
 Confirmed during the OpenBao 2.7 and PostgreSQL 19 stabilization and left open because each changes a trust boundary, default, or user-visible flow:
 
-- [ ] **Signup pre-registration:** An unverified signup stores the caller's OPAQUE record for any email, later signups keep that record, and the victim's click on a verification link activates the attacker's password. Bind activation to proof of the stored credential or allow a fresh signup to replace a pending record and retire its tokens. Add pending-account expiration.
 - [ ] **OpenBao HTTPS enforcement:** The OpenBao clients accept plain `http://` URLs for any host. Require HTTPS for non-loopback OpenBao URLs.
 - [ ] **Startup/error diagnostics hygiene:** Configurable AppRole login URL, RoleID, and upstream OpenBao error bodies (KV, TOTP, Transit) can reach logs/spans; startup argument structs derive `Debug` over SecretID, wrapped token, and DSN.
 - [ ] **Service DSN TLS enforcement:** `sqlx` defaults to `sslmode=prefer` (plaintext fallback, no verification). Require `verify-full` or `verify-ca` off loopback, matching the OpenTofu OpenBao-to-PostgreSQL configuration.

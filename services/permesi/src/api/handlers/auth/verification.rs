@@ -2,13 +2,15 @@
 //!
 //! Flow Overview: admission and shared limits precede a user-first transaction.
 //! Only a live single-use verifier activates a pending user; all sibling links retire.
+//! The link must arrive with the signup-binding cookie of the browser that registered
+//! the pending record (see `signup_binding`); without it nothing is consumed or activated.
 //! Resend serializes status/cooldown and enqueue against activation. Mailbox proof
 //! never overrides disabled state or supplies tenant/application authorization.
 
 use axum::{
     Json,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
 use sqlx::PgPool;
@@ -18,9 +20,10 @@ use tracing::error;
 use crate::api::handlers::AdmissionVerifier;
 
 use super::rate_limit::RateLimitAction;
+use super::signup_binding;
 use super::state::AuthState;
 use super::storage::{
-    ResendOutcome, consume_verification_token, enqueue_resend_verification,
+    ResendOutcome, VerificationOutcome, consume_verification_token, enqueue_resend_verification,
     lookup_email_by_token_hash,
 };
 use super::types::{ResendVerificationRequest, VerifyEmailRequest};
@@ -28,6 +31,8 @@ use super::utils::{extract_client_ip, hash_verification_token, normalize_email, 
 use super::zero_token::{require_zero_token, zero_token_error_response};
 
 /// Verify the email link by consuming the hashed token and activating the user.
+/// Requires the signup-binding cookie set by signup finish; a live link without it
+/// answers 409 and stays usable.
 #[utoipa::path(
     post,
     path = "/v1/auth/verify-email",
@@ -38,6 +43,7 @@ use super::zero_token::{require_zero_token, zero_token_error_response};
     responses(
         (status = 204, description = "Email verified"),
         (status = 400, description = "Invalid/expired token", body = String),
+        (status = 409, description = "Live link opened outside the browser that signed up", body = String),
         (status = 429, description = "Rate limited", body = String),
         (status = 503, description = "Verification storage unavailable", body = String)
     ),
@@ -78,6 +84,7 @@ pub async fn verify_email(
 
     // Only the hash is used for verification; delivery payloads stay in the protected outbox.
     let token_hash = hash_verification_token(token);
+    let binding = signup_binding::presented(&headers);
     let result =
         super::registration::bounded(auth_state.config().registration().timeout_ms, async {
             // Rate-limit before checking out a transaction: one-connection pools must progress.
@@ -93,16 +100,34 @@ pub async fn verify_email(
             let mut tx =
                 super::operations::begin(&pool, auth_state.config().registration().timeout_ms)
                     .await?;
-            if !consume_verification_token(&mut tx, &token_hash).await? {
-                return Ok(StatusCode::BAD_REQUEST);
+            match consume_verification_token(
+                &mut tx,
+                &token_hash,
+                auth_state.opaque(),
+                binding.as_deref(),
+            )
+            .await?
+            {
+                VerificationOutcome::Activated => {}
+                VerificationOutcome::Invalid => return Ok(StatusCode::BAD_REQUEST),
+                // Not an error state to persist: the link stays usable in the right browser.
+                VerificationOutcome::UnboundBrowser => return Ok(StatusCode::CONFLICT),
             }
             tx.commit().await?;
             Ok(StatusCode::NO_CONTENT)
         })
         .await;
     match result {
-        Ok(StatusCode::NO_CONTENT) => StatusCode::NO_CONTENT.into_response(),
+        Ok(StatusCode::NO_CONTENT) => match signup_binding::clear_cookie(auth_state.config()) {
+            Ok(cookie) => (StatusCode::NO_CONTENT, [(SET_COOKIE, cookie)]).into_response(),
+            Err(_) => StatusCode::NO_CONTENT.into_response(),
+        },
         Ok(StatusCode::BAD_REQUEST) => (StatusCode::BAD_REQUEST, "Invalid token").into_response(),
+        Ok(StatusCode::CONFLICT) => (
+            StatusCode::CONFLICT,
+            signup_binding::UNBOUND_BROWSER_MESSAGE,
+        )
+            .into_response(),
         Ok(status) => (status, "Verification unavailable").into_response(),
         Err(_) => {
             error!("Email verification storage unavailable");

@@ -130,6 +130,13 @@ The first release on OpenBao and PostgreSQL 19.
   accepted up to 2 MB of arbitrary JSON. They now require
   `Content-Type: application/json`, answer an oversized body with 413 after the
   usual session check, and no longer echo parser errors back to the caller.
+- A verification link no longer activates a password someone else registered for
+  the address. Signup finish sets an `HttpOnly` `permesi_signup` cookie bound to the
+  exact registration, and `POST /v1/auth/verify-email` activates the account only
+  when the link arrives with it; in any other browser the link answers 409 and stays
+  usable. A new signup for a still-unverified address replaces the pending
+  registration and retires its links. Users must open the link in the browser they
+  signed up with, and API clients must send both requests with credentials.
 - The services refuse HTTP redirects from OpenBao on every request, as the
   Kubernetes login already did. A followed redirect would have carried the
   service token, a wrapping token or the AppRole SecretID to the host it named.

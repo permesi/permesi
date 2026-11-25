@@ -35,12 +35,15 @@ pub async fn opaque_signup_start(
 
 /// Finishes OPAQUE signup by sending the registration record.
 /// Requires a zero-token header and must never log the record.
+/// Sent with credentials so the browser keeps the signup-binding cookie that the
+/// verification link needs.
 pub async fn opaque_signup_finish(
     request: &OpaqueSignupFinishRequest,
     zero_token: &str,
 ) -> Result<(), AppError> {
     let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
-    post_json_with_headers("/v1/auth/opaque/signup/finish", request, &headers).await
+    post_json_with_headers_with_credentials("/v1/auth/opaque/signup/finish", request, &headers)
+        .await
 }
 
 /// Starts OPAQUE login and returns the server response.
@@ -136,9 +139,11 @@ pub async fn opaque_password_finish(
 
 /// Verifies an email token after the user follows the link.
 /// Requires a zero-token header and must never log the token.
+/// Sent with credentials: the server activates the account only when the link arrives
+/// with the signup-binding cookie of the browser that registered.
 pub async fn verify_email(request: &VerifyEmailRequest, zero_token: &str) -> Result<(), AppError> {
     let headers = vec![("X-Permesi-Zero-Token".to_string(), zero_token.to_string())];
-    post_json_with_headers("/v1/auth/verify-email", request, &headers).await
+    post_json_with_headers_with_credentials("/v1/auth/verify-email", request, &headers).await
 }
 
 /// Requests a new verification email without leaking account existence.

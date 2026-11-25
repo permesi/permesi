@@ -17,7 +17,7 @@ async fn verification_never_reactivates_disabled_account() -> Result<()> {
         .execute(&db.pool)
         .await?;
     let mut tx = db.pool.begin().await?;
-    let accepted = consume_verification_token(&mut tx, &hash_verification_token(&token)).await?;
+    let accepted = consume_bound(&mut tx, &hash_verification_token(&token)).await?;
     tx.commit().await?;
     assert!(!accepted, "verification must not override disabled status");
     let protected: (String, bool) =
@@ -40,10 +40,10 @@ async fn verification_invalidates_sibling_links() -> Result<()> {
     let first = issue_verification_token(&db.pool, user, email, &config).await?;
     let second = issue_verification_token(&db.pool, user, email, &config).await?;
     let mut tx = db.pool.begin().await?;
-    assert!(consume_verification_token(&mut tx, &hash_verification_token(&first)).await?);
+    assert!(consume_bound(&mut tx, &hash_verification_token(&first)).await?);
     tx.commit().await?;
     let mut tx = db.pool.begin().await?;
-    assert!(!consume_verification_token(&mut tx, &hash_verification_token(&second)).await?);
+    assert!(!consume_bound(&mut tx, &hash_verification_token(&second)).await?);
     tx.commit().await?;
     Ok(())
 }
@@ -243,7 +243,7 @@ async fn verification_concurrent_sibling_links_have_one_winner() -> Result<()> {
     let second = issue_verification_token(&db.pool, user, email, &config).await?;
     let activate = async |hash: Vec<u8>| {
         let mut tx = super::super::operations::begin(&db.pool, 1000).await?;
-        let accepted = consume_verification_token(&mut tx, &hash).await?;
+        let accepted = consume_bound(&mut tx, &hash).await?;
         tx.commit().await?;
         anyhow::Ok(accepted)
     };
@@ -283,7 +283,7 @@ async fn verification_expiring_during_lock_wait_fails_closed() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(180)).await;
         holder.commit().await
     };
-    let (accepted, release) = tokio::join!(consume_verification_token(&mut waiter, &hash), release);
+    let (accepted, release) = tokio::join!(consume_bound(&mut waiter, &hash), release);
     release?;
     assert!(!accepted?);
     waiter.commit().await?;
@@ -358,6 +358,7 @@ async fn verification_succeeds_with_single_connection_pool() -> Result<()> {
     let zero = issue_zero_token(&key, &kid)?;
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("X-Permesi-Zero-Token", zero.parse()?);
+    headers.insert(COOKIE, signup_cookie(&db.pool, user).await?.parse()?);
     let response = super::super::verification::verify_email(
         headers,
         axum::extract::State(pool),
@@ -376,5 +377,105 @@ async fn verification_succeeds_with_single_connection_pool() -> Result<()> {
             .fetch_one(&db.pool)
             .await?;
     assert_eq!(state, ("active".into(), true));
+    Ok(())
+}
+
+/// Pre-registering somebody else's address, or re-registering it right after they do,
+/// never lets the mailbox owner's click activate the other party's password.
+#[tokio::test]
+async fn signup_link_activates_only_the_record_its_browser_registered() -> Result<()> {
+    let db = TestDb::new().await?.context("PostgreSQL is required")?;
+    let (admission, key, kid) = test_admission_context()?;
+    let zero = || issue_zero_token(&key, &kid);
+    let app = opaque_router(auth_state(), admission, db.pool.clone());
+    let email = "owner@example.com";
+    let record = || {
+        sqlx::query_as::<_, (Uuid, Vec<u8>, String)>(
+            "SELECT id,opaque_registration_record,status::text FROM users WHERE email=$1",
+        )
+        .bind(email)
+        .fetch_one(&db.pool)
+    };
+
+    // The attacker registers the owner's address first; the owner's own signup replaces it.
+    let attacker = run_opaque_signup(&app, email, b"attacker password", &zero()?, [41; 32]).await?;
+    let squatted_link = latest_verification_token(&db.pool, email).await?;
+    let (user, squatted_record, _) = record().await?;
+    let owner = run_opaque_signup(&app, email, b"owner password", &zero()?, [42; 32]).await?;
+    let (same_user, owner_record, status) = record().await?;
+    assert_eq!((same_user, status.as_str()), (user, "pending_verification"));
+    assert_ne!(owner_record, squatted_record);
+    assert_ne!(owner, attacker);
+    let retired: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM email_verification_tokens WHERE user_id=$1 AND consumed_at IS NULL),(SELECT count(*) FROM email_outbox WHERE to_email=$2 AND status='pending')",
+    )
+    .bind(user)
+    .bind(email)
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!(retired, (1, 1), "only the newest link and mail stay live");
+    // The superseded link is dead in every browser, including the attacker's.
+    for cookie in [Some(attacker.as_str()), Some(owner.as_str()), None] {
+        let response = open_verification_link(&app, &squatted_link, &zero()?, cookie).await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // The attacker registers again, so the newest mail in the owner's inbox now leads to
+    // the attacker's record. The owner opening it, in any browser the attacker does not
+    // control, activates nothing and does not burn the link.
+    let attacker = run_opaque_signup(&app, email, b"attacker password", &zero()?, [43; 32]).await?;
+    let hostile_link = latest_verification_token(&db.pool, email).await?;
+    let forged = format!("permesi_signup={}", URL_SAFE_NO_PAD.encode([9u8; 32]));
+    for cookie in [Some(owner.as_str()), Some(forged.as_str()), None] {
+        let response = open_verification_link(&app, &hostile_link, &zero()?, cookie).await?;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(response.headers().get(SET_COOKIE).is_none());
+    }
+    let (_, _, status) = record().await?;
+    assert_eq!(status, "pending_verification");
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM email_verification_tokens WHERE user_id=$1 AND consumed_at IS NULL",
+    )
+    .bind(user)
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!(live, 1, "a mismatched browser must not consume the link");
+    // The attacker holds the matching cookie but not the mailbox, so has no link to open.
+    assert_ne!(attacker, owner);
+
+    // The owner signs up once more and opens their own link in their own browser.
+    let owner = run_opaque_signup(&app, email, b"owner password", &zero()?, [44; 32]).await?;
+    let (_, final_record, _) = record().await?;
+    let own_link = latest_verification_token(&db.pool, email).await?;
+    let response = open_verification_link(&app, &hostile_link, &zero()?, Some(&attacker)).await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "superseded");
+    let response = open_verification_link(&app, &own_link, &zero()?, Some(&owner)).await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let cleared = response
+        .headers()
+        .get(SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .context("activation clears the binding cookie")?;
+    assert!(cleared.starts_with("permesi_signup=;") && cleared.contains("Max-Age=0"));
+    let (_, active_record, status) = record().await?;
+    assert_eq!(status, "active");
+    assert_eq!(
+        active_record, final_record,
+        "the owner's record is the active one"
+    );
+
+    // Once active, a further signup changes nothing and still answers with a cookie that
+    // matches no record, so the response does not reveal that the address is taken.
+    let decoy = run_opaque_signup(&app, email, b"attacker password", &zero()?, [45; 32]).await?;
+    let (_, after, status) = record().await?;
+    assert_eq!((after, status.as_str()), (final_record, "active"));
+    assert_ne!(decoy, signup_cookie(&db.pool, user).await?);
+    let mail: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM email_outbox WHERE to_email=$1 AND status='pending'",
+    )
+    .bind(email)
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!(mail, 1, "no mail is queued for an active account");
     Ok(())
 }
