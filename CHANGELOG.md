@@ -73,6 +73,10 @@ The first release on OpenBao and PostgreSQL 19.
 
 ### Changed
 
+- `just release` and the release workflow refuse to release a commit until
+  `permesi/permesi-helm`'s `main` contains the chart revision that sandbox CI
+  qualified with it, so a release can no longer pair new images with older
+  charts. Merge the chart repository's `sandbox` into its `main` first.
 - Genesis and Permesi reject excess public work before database and cryptographic
   operations. Session and OAuth traffic have a separate Permesi budget. Management paths use an independent bucket with the protocol limits, including requests that subsequently fail authentication.
 - Genesis database leases receive column-level privileges and connection limits.

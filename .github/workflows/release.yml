@@ -36,6 +36,7 @@ jobs:
       contents: read
       actions: read
       checks: read
+      statuses: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       rust: ${{ steps.rust.outputs.version }}
@@ -109,6 +110,14 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${version} from ${GITHUB_SHA} (CI OK passed)."
+
+      # The chart bump is built from permesi-helm's main. Sandbox CI recorded which chart
+      # revision these images were qualified with; refuse to release until main has it.
+      - name: Check the qualified chart revision is on permesi-helm main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-chart-guard.py "${GITHUB_SHA}"
 
   # One leg per CPU, each on a native runner: the musl archives, the Debian package and the
   # RPM package of that architecture. Keep the release's expected file set in step with this matrix.

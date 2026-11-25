@@ -164,6 +164,9 @@ release:
     set -euo pipefail
     git fetch --quiet origin develop
     sha="$(git rev-parse origin/develop)"
+    # Same check as the workflow's guard, before a run is even started: the charts these
+    # images were qualified with must already be on permesi-helm's main.
+    python3 "{{root}}/scripts/release-chart-guard.py" "${sha}"
     last="$(gh run list --workflow release.yml --branch develop --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')"
     gh workflow run release.yml --ref develop
     # The dispatched run is the first new one for this commit; never just "the latest".

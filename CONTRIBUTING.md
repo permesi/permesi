@@ -138,9 +138,17 @@ tested, and the workflow changes nothing in the repository:
 2. Verify that `cargo audit --deny unsound --deny yanked` passes.
 3. Merge `sandbox` into `develop` as a fast-forward and push. `CI OK` is a check
    on the commit, so the CI run that passed on `sandbox` already counts for the
-   release guard once `develop` points at the same commit, and you can run
-   `just release` at once.
-4. Run `just release`. It starts `.github/workflows/release.yml` on `develop`,
+   release guard once `develop` points at the same commit.
+4. Wait for `containment / record` on the same commit, then merge
+   `permesi/permesi-helm`'s `sandbox` into its `main`. Sandbox CI qualifies the
+   candidate images against the chart repository's `sandbox` and records the
+   chart revision as a `containment/<run>/<attempt>` status on the commit. The
+   release builds the chart bump from the chart repository's `main`, so the
+   guard (`scripts/release-chart-guard.py`, run by both `just release` and the
+   workflow) refuses to release until that `main` contains the recorded
+   revision. Merge shortly before releasing: until the bump lands, the chart
+   `main` carries the new charts with the previous release's images.
+5. Run `just release`. It starts `.github/workflows/release.yml` on `develop`,
    follows the run and, once it has succeeded and `develop`'s own Test & Build
    has finished, fast-forwards `main` to the released commit. `main` only allows
    the operator to push (the workflow's token cannot), and a protected branch
@@ -164,7 +172,8 @@ tested, and the workflow changes nothing in the repository:
 ```
 Release workflow (workflow_dispatch on develop)
  guard         develop only; the version is X.Y.Z, above the latest tag and untagged; both
-               OpenAPI specs carry it; main is an ancestor; `CI OK` passed on this commit
+               OpenAPI specs carry it; main is an ancestor; `CI OK` passed on this commit;
+               the chart revision qualified with it is on permesi-helm's main
  build         musl archives, Debian and RPM packages for x86_64 (amd64) and aarch64 (arm64),
                each on a native hosted runner, nothing from a cache
  frontend      the production web build, signed (checksums, cosign, build provenance)
