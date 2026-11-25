@@ -382,6 +382,51 @@ async fn rate_limiter_enforces_shared_ip_and_account_limits() -> Result<()> {
     Ok(())
 }
 
+/// A spent budget comes back when its fixed window ends, and only then: rejected attempts
+/// inside the window neither extend it nor reset the count. Sustained legitimate use at a
+/// pace under the limit is therefore never throttled across a window boundary.
+#[tokio::test]
+async fn rate_limiter_window_rollover_restores_the_budget_without_extending_it() -> Result<()> {
+    let db = TestDb::new()
+        .await?
+        .context("rate-limit rollover regression requires PostgreSQL")?;
+    let limiter = RateLimiter::postgres(
+        db.pool.clone(),
+        RateLimitConfig::new(1, 2, 2),
+        super::SubjectKey::derive(&[3u8; 32])?,
+    );
+    let attempt = || limiter.check_ip(Some("192.0.2.20"), RateLimitAction::Authorize);
+    let window = || {
+        sqlx::query_as::<_, (i64, jiff_sqlx::Timestamp)>(
+            "SELECT attempts,expires_at FROM auth_rate_limits WHERE action=$1",
+        )
+        .bind("authorize")
+        .fetch_one(&db.pool)
+    };
+
+    assert_eq!(attempt().await, RateLimitDecision::Allowed);
+    assert_eq!(attempt().await, RateLimitDecision::Allowed);
+    let (_, opened) = window().await?;
+    assert_eq!(attempt().await, RateLimitDecision::Limited);
+    assert_eq!(attempt().await, RateLimitDecision::Limited);
+    let (attempts, still) = window().await?;
+    assert_eq!(attempts, 4, "rejected attempts are still counted");
+    assert_eq!(
+        still.to_jiff(),
+        opened.to_jiff(),
+        "a rejected attempt must not extend the window"
+    );
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(attempt().await, RateLimitDecision::Allowed);
+    let (attempts, reopened) = window().await?;
+    assert_eq!(attempts, 1, "the new window starts a fresh count");
+    assert!(reopened.to_jiff() > opened.to_jiff());
+    assert_eq!(attempt().await, RateLimitDecision::Allowed);
+    assert_eq!(attempt().await, RateLimitDecision::Limited);
+    Ok(())
+}
+
 #[tokio::test]
 async fn login_mfa_resolution_fails_closed_on_storage_error() -> Result<()> {
     let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
