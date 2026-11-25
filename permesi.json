@@ -11,7 +11,7 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.5.2"
+    "version": "0.6.0"
   },
   "paths": {
     "/.well-known/openid-configuration": {
@@ -386,12 +386,11 @@
         "tags": [
           "health"
         ],
-        "summary": "Perform a detailed dependency health check.",
-        "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh Vault\nDB credentials.",
+        "summary": "Return coarse service status and build identity from local state.",
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "Database and admission PASERK endpoint are healthy",
+            "description": "Service available",
             "content": {
               "application/json": {
                 "schema": {
@@ -401,7 +400,7 @@
             }
           },
           "503": {
-            "description": "Database or admission PASERK endpoint is unhealthy",
+            "description": "Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -418,11 +417,11 @@
         "tags": [
           "oauth"
         ],
-        "summary": "Publishes cached public Vault key versions without using the authentication database.\nSingle-flight refresh and negative caching bound upstream reads; malformed keys fail closed.",
+        "summary": "Publishes cached public OpenBao key versions without using the authentication database.\nSingle-flight refresh and negative caching bound upstream reads; malformed keys fail closed.",
         "operationId": "jwks",
         "responses": {
           "200": {
-            "description": "Retained Vault RSA public signing versions",
+            "description": "Retained OpenBao RSA public signing versions",
             "content": {
               "application/json": {
                 "schema": {
@@ -459,8 +458,7 @@
         "tags": [
           "health"
         ],
-        "summary": "Report process liveness without checking external dependencies.",
-        "description": "This endpoint is suitable for liveness probes to avoid restart loops during\ntransient dependency outages.",
+        "summary": "Report process liveness independently of dependencies.",
         "operationId": "live",
         "responses": {
           "200": {
@@ -474,15 +472,14 @@
         "tags": [
           "health"
         ],
-        "summary": "Report readiness based on database and admission dependency health.",
-        "description": "Returns `503` when dependencies are unhealthy so orchestrators can stop\nrouting traffic to this instance.",
+        "summary": "Report whether this replica can receive traffic from the service.",
         "operationId": "ready",
         "responses": {
           "200": {
-            "description": "Service is ready to receive traffic"
+            "description": "Ready"
           },
           "503": {
-            "description": "Service dependencies are not ready",
+            "description": "Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1565,7 +1562,7 @@
             }
           },
           "503": {
-            "description": "Vault unavailable.",
+            "description": "OpenBao unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1645,7 +1642,7 @@
             }
           },
           "503": {
-            "description": "Vault unavailable.",
+            "description": "OpenBao unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2041,6 +2038,16 @@
               }
             }
           },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Terminal MFA challenge exhaustion (mfa_challenge_exhausted)",
             "content": {
@@ -2159,6 +2166,16 @@
           },
           "401": {
             "description": "Unauthorized or full session requires recent authentication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
             "content": {
               "application/json": {
                 "schema": {
@@ -2483,7 +2500,27 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session cookie.",
+            "description": "Missing or invalid session cookie, or recent authentication required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Rate-limit storage unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -2647,7 +2684,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Rechecks signup admission independently; browser fields cannot activate the pending account.",
+        "summary": "Rechecks signup admission independently; browser fields cannot activate the pending account.\nSets the signup-binding cookie that email verification later requires.",
         "operationId": "opaque_signup_finish",
         "parameters": [
           {
@@ -2858,6 +2895,16 @@
               }
             }
           },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited",
             "content": {
@@ -3036,7 +3083,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Verify the email link by consuming the hashed token and activating the user.",
+        "summary": "Verify the email link by consuming the hashed token and activating the user.\nRequires the signup-binding cookie set by signup finish; a live link without it\nanswers 409 and stays usable.",
         "operationId": "verify_email",
         "parameters": [
           {
@@ -3065,6 +3112,16 @@
           },
           "400": {
             "description": "Invalid/expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Live link opened outside the browser that signed up",
             "content": {
               "application/json": {
                 "schema": {
@@ -8188,7 +8245,7 @@
       "AdminBootstrapRequest": {
         "type": "object",
         "required": [
-          "vault_token"
+          "openbao_token"
         ],
         "properties": {
           "note": {
@@ -8197,7 +8254,7 @@
               "null"
             ]
           },
-          "vault_token": {
+          "openbao_token": {
             "type": "string"
           }
         },
@@ -8221,10 +8278,10 @@
       "AdminElevateRequest": {
         "type": "object",
         "required": [
-          "vault_token"
+          "openbao_token"
         ],
         "properties": {
-          "vault_token": {
+          "openbao_token": {
             "type": "string"
           }
         },
@@ -8249,18 +8306,18 @@
         "type": "object",
         "required": [
           "database",
-          "vault",
+          "openbao",
           "platform"
         ],
         "properties": {
           "database": {
             "$ref": "#/components/schemas/DatabaseStats"
           },
+          "openbao": {
+            "$ref": "#/components/schemas/OpenBaoStatus"
+          },
           "platform": {
             "$ref": "#/components/schemas/PlatformStats"
-          },
-          "vault": {
-            "$ref": "#/components/schemas/VaultStatus"
           }
         }
       },
@@ -8790,25 +8847,13 @@
         "type": "object",
         "required": [
           "commit",
-          "name",
-          "version",
-          "database",
-          "admission_keyset"
+          "status"
         ],
         "properties": {
-          "admission_keyset": {
-            "type": "string"
-          },
           "commit": {
             "type": "string"
           },
-          "database": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "version": {
+          "status": {
             "type": "string"
           }
         }
@@ -8873,7 +8918,7 @@
       },
       "Jwks": {
         "type": "object",
-        "description": "Public-only JSON Web Key Set; every retained Vault version is independently identifiable.",
+        "description": "Public-only JSON Web Key Set; every retained OpenBao version is independently identifiable.",
         "required": [
           "keys"
         ],
@@ -9205,6 +9250,25 @@
           }
         }
       },
+      "OpenBaoStatus": {
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "sealed"
+        ],
+        "properties": {
+          "sealed": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "OperatorReason": {
         "type": "string",
         "description": "Fixed audit reason; arbitrary text is excluded from operator history.",
@@ -9369,7 +9433,10 @@
           "auth_id": {
             "type": "string"
           },
-          "response": {}
+          "response": {
+            "type": "object",
+            "description": "`PublicKeyCredential` JSON returned by `navigator.credentials.get()`."
+          }
         },
         "additionalProperties": false
       },
@@ -9399,7 +9466,10 @@
           "reg_id": {
             "type": "string"
           },
-          "response": {}
+          "response": {
+            "type": "object",
+            "description": "`PublicKeyCredential` JSON returned by `navigator.credentials.create()`."
+          }
         },
         "additionalProperties": false
       },
@@ -10018,25 +10088,6 @@
         },
         "additionalProperties": false
       },
-      "VaultStatus": {
-        "type": "object",
-        "required": [
-          "status",
-          "version",
-          "sealed"
-        ],
-        "properties": {
-          "sealed": {
-            "type": "boolean"
-          },
-          "status": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        }
-      },
       "VerifyEmailRequest": {
         "type": "object",
         "required": [
@@ -10058,7 +10109,10 @@
           "auth_id": {
             "type": "string"
           },
-          "response": {}
+          "response": {
+            "type": "object",
+            "description": "`PublicKeyCredential` JSON returned by `navigator.credentials.get()`."
+          }
         }
       },
       "WebauthnAuthenticateStartResponse": {
@@ -10088,7 +10142,10 @@
           "reg_id": {
             "type": "string"
           },
-          "response": {}
+          "response": {
+            "type": "object",
+            "description": "`PublicKeyCredential` JSON returned by `navigator.credentials.create()`."
+          }
         }
       },
       "WebauthnRegisterStartResponse": {

@@ -11,33 +11,19 @@
       "name": "BSD-3-Clause",
       "identifier": "BSD-3-Clause"
     },
-    "version": "0.5.2"
+    "version": "0.6.0"
   },
   "paths": {
-    "/headers": {
-      "get": {
-        "tags": [
-          "headers"
-        ],
-        "operationId": "headers",
-        "responses": {
-          "200": {
-            "description": "headers"
-          }
-        }
-      }
-    },
     "/health": {
       "get": {
         "tags": [
           "health"
         ],
-        "summary": "Perform a detailed health check for genesis.",
-        "description": "When the database probe fails due to credential/auth errors, this handler\nrequests graceful shutdown so the supervisor can restart with fresh Vault\nDB credentials.",
+        "summary": "Return coarse service status and build identity from local state.",
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "Database connection is healthy",
+            "description": "Service available",
             "content": {
               "application/json": {
                 "schema": {
@@ -47,7 +33,7 @@
             }
           },
           "503": {
-            "description": "Database connection is unhealthy",
+            "description": "Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -64,7 +50,7 @@
         "tags": [
           "health"
         ],
-        "summary": "Report process liveness without checking external dependencies.",
+        "summary": "Report process liveness independently of dependencies.",
         "operationId": "live",
         "responses": {
           "200": {
@@ -87,6 +73,16 @@
                 "schema": {}
               }
             }
+          },
+          "429": {
+            "description": "Public work capacity exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -96,14 +92,14 @@
         "tags": [
           "health"
         ],
-        "summary": "Report readiness based on database connectivity.",
+        "summary": "Report whether this replica can receive traffic from the service.",
         "operationId": "ready",
         "responses": {
           "200": {
-            "description": "Service is ready to receive traffic"
+            "description": "Ready"
           },
           "503": {
-            "description": "Service dependencies are not ready",
+            "description": "Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -152,8 +148,28 @@
               }
             }
           },
+          "429": {
+            "description": "Public work capacity exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Error creating the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database credentials lost their privileges; the service is restarting",
             "content": {
               "application/json": {
                 "schema": {
@@ -202,21 +218,13 @@
         "type": "object",
         "required": [
           "commit",
-          "name",
-          "version",
-          "database"
+          "status"
         ],
         "properties": {
           "commit": {
             "type": "string"
           },
-          "database": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "version": {
+          "status": {
             "type": "string"
           }
         }
