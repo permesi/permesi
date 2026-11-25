@@ -5,7 +5,7 @@ This directory holds the engineering, security, protocol, and operational docume
 ## Getting Started
 
 - [Project Overview & Quick Start](../README.md) — Local development stack (`just start`), remote VM workflow, workspace layout, and common commands.
-- [Setup & Deployment Guide](../SETUP.md) — Production prerequisites (PostgreSQL 19 and OpenBao 2.7), database bootstrap, Terraform provisioning, systemd/Quadlet deployment, and initial operator bootstrap.
+- [Setup & Deployment Guide](../SETUP.md) — Production prerequisites (PostgreSQL 19 and OpenBao 2.7), database bootstrap, OpenTofu provisioning, systemd/Quadlet deployment, and initial operator bootstrap.
 - [Contributing Guide](../CONTRIBUTING.md) — Development workflow, required checks (`just test`, native/WASM Clippy, OpenAPI drift), commit rules, and release process.
 - [Changelog](../CHANGELOG.md) — Release history and operator-facing changes.
 - [Roadmap & Open Findings](../TODO.md) — Planned milestones and tracked security/engineering follow-ups.
@@ -48,8 +48,8 @@ This directory holds the engineering, security, protocol, and operational docume
 - [Genesis Service](../services/genesis/README.md) — Edge admission mint CLI flags, `/token` and `/paserk.json` routes, header capture, and daily partition rollover.
 - [Web Console](../apps/web/README.md) — Leptos CSR frontend layout, routes, OAuth/tenant UI conventions, Tailwind build, and Chromium browser tests.
 - [SQL Schemas & Bootstrap](../db/sql/README.md) — Canonical PostgreSQL 19 scripts, bootstrap order, and grant verification queries.
-- [OpenBao Operations](../openbao/README.md) — Local dev/persistent OpenBao setup, Terraform-provisioned resources, AppRole/Agent/Kubernetes auth, and transit key pruning.
-- [OpenBao Terraform Module](../openbao/contrib/terraform/README.md) — Production OpenBao provisioning, PKI/Agent templates, and systemd unit examples.
+- [OpenBao Operations](../openbao/README.md) — Local dev/persistent OpenBao setup, OpenTofu-provisioned resources, AppRole/Agent/Kubernetes auth, and transit key pruning.
+- [OpenBao OpenTofu Module](../openbao/contrib/opentofu/README.md) — Production OpenBao provisioning, encrypted state, PKI/Agent templates, and systemd unit examples.
 - [GitHub Actions Workflows](../.github/workflows/README.md) — CI/CD workflow architecture, runner selection, composite actions, and release recovery.
 - [Better Auth Interoperability Fixture](../tools/better_auth_interop/README.md) — Isolated Node 24 / Better Auth OIDC test fixture.
 - **OpenAPI Specifications**: [permesi.json](openapi/permesi.json) · [genesis.json](openapi/genesis.json) · [Published API Docs (Redoc)](https://permesi.github.io/permesi/)

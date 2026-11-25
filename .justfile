@@ -21,7 +21,7 @@ herdr_label := "permesi-dev"
 # Where published container ports listen, and the browser-facing HTTPS port.
 # PERMESI_BIND_ADDR defaults to loopback because Postgres uses trust auth and
 # openbao/keys.json holds the OpenBao root token; 0.0.0.0 restores LAN access. Host clients
-# hard-code loopback (BAO_ADDR, the DSNs, terraform), so no other address works.
+# hard-code loopback (BAO_ADDR, the DSNs, OpenTofu), so no other address works.
 # PERMESI_HTTPS_PORT is the HAProxy port the browser uses; every browser-facing URL
 # carries it when it is not 443, because CORS and WebAuthn compare origins including
 # the port. Over an SSH forward, use the same number on both ends.

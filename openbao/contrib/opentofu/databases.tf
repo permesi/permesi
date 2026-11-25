@@ -20,7 +20,8 @@ resource "vault_database_secret_backend_connection" "permesi" {
   postgresql {
     connection_url          = "postgresql://{{username}}:{{password}}@${var.database_host}:${var.database_port}/permesi?sslmode=${var.database_sslmode}"
     username                = var.permesi_database_username
-    password                = var.permesi_database_password
+    password_wo             = var.permesi_database_password
+    password_wo_version     = var.permesi_database_password_version
     max_connection_lifetime = 120
   }
 }
@@ -66,7 +67,8 @@ resource "vault_database_secret_backend_connection" "genesis" {
   postgresql {
     connection_url          = "postgresql://{{username}}:{{password}}@${var.database_host}:${var.database_port}/postgres?sslmode=${var.database_sslmode}"
     username                = var.genesis_database_username
-    password                = var.genesis_database_password
+    password_wo             = var.genesis_database_password
+    password_wo_version     = var.genesis_database_password_version
     max_connection_lifetime = 120
   }
 }

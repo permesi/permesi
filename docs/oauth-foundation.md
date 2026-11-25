@@ -360,7 +360,7 @@ previous statement policy afterwards so bulk consent revocation can finish. Thei
 individual lock waits retain the configured limit.
 
 `PERMESI_OIDC_SIGNING_KEY` / `--oidc-signing-key` selects a single transit key name,
-default `oidc-signing`, under the existing configured OpenBao transit mount. Terraform
+default `oidc-signing`, under the existing configured OpenBao transit mount. OpenTofu
 provisions a distinct nonexportable, nondeletable RSA-2048 key with 30-day automatic
 rotation. Runtime reads public key metadata and signs through transit, but cannot rotate, retire or export.
 Private key material stays in OpenBao. Startup fails if enabled OAuth cannot load a usable

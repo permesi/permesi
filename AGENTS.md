@@ -106,9 +106,10 @@ Container builds (local):
 - Add regression tests with every bug fix.
 - For security-sensitive changes, cover relevant malformed, missing, expired, replayed, mismatched, unauthorized and cross-tenant inputs. Assert the actual rejection and unchanged protected state; a skipped dependency, empty test filter or setup failure does not establish security coverage.
 
-## OpenBao Bootstrap (Terraform)
-- OpenBao bootstrap (policies, AppRole roles, transit keys, database engine) lives in `openbao/contrib/terraform` (see `openbao/contrib/terraform/README.md`).
-- Terraform state (`.terraform/`, `terraform.tfstate*`, `terraform.tfvars`) is local-only and should remain untracked.
+## OpenBao Bootstrap (OpenTofu)
+- OpenBao bootstrap (policies, AppRole roles, transit keys, database engine) lives in `openbao/contrib/opentofu`, applied with OpenTofu (`tofu`, see `openbao/contrib/opentofu/README.md`).
+- OpenTofu state (`.terraform/`, `terraform.tfstate*`, `terraform.tfvars`; OpenTofu keeps these names) is local-only, encrypted with an OpenBao Transit key, and must remain untracked. The provider lock file `.terraform.lock.hcl` is tracked; init with `-lockfile=readonly`.
+- Run `just openbao-tofu-test` after changing the module, and `just openbao-tofu-test-live` when the change affects what gets provisioned.
 
 ## OpenBao Connectivity & AppRole Usage
 - `--openbao-url` (or `PERMESI_OPENBAO_URL` / `GENESIS_OPENBAO_URL`) supports two modes:

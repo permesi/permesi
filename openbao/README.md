@@ -1,21 +1,21 @@
 # OpenBao (dev)
 
-Local dev OpenBao runs as the `permesi-openbao` container (pinned `docker.io/openbao/openbao:2.7.3`, on the `permesi-net` network) and is configured using **Terraform** from the host.
+Local dev OpenBao runs as the `permesi-openbao` container (pinned `docker.io/openbao/openbao:2.7.3`, on the `permesi-net` network) and is configured using **OpenTofu** from the host.
 
-- **Dev-only (in-memory)**: `just openbao` runs OpenBao in dev mode and configures it via Terraform.
-- **Persistent (recommended)**: `just openbao-persist-ready` runs OpenBao in server mode with `openbao/config.hcl` and configures it via Terraform.
+- **Dev-only (in-memory)**: `just openbao` runs OpenBao in dev mode and configures it via OpenTofu.
+- **Persistent (recommended)**: `just openbao-persist-ready` runs OpenBao in server mode with `openbao/config.hcl` and configures it via OpenTofu.
 
-The Terraform configuration in `openbao/contrib/terraform` provisions the auth + secrets engines that `services/permesi` and `services/genesis` expect (AppRole, transit, and database creds). `just start` uses the persistent path by default.
+The OpenTofu module in `openbao/contrib/opentofu` provisions the auth + secrets engines that `services/permesi` and `services/genesis` expect (AppRole, transit, and database creds). `just start` uses the persistent path by default.
 
 ## Prerequisites
 
-- **Terraform**: Required to provision the OpenBao instance.
+- **OpenTofu** (`tofu` 1.11 or later, pinned to 1.13 in `mise.toml`): Required to provision the OpenBao instance.
 - **Podman**: Required to run the OpenBao container.
 
 ## Quick start
 
 - Start Postgres: `just postgres` (creates the `genesis`/`permesi` databases, OpenBao root DB roles `openbao_genesis`/`openbao_permesi`, and runtime roles `genesis_runtime`/`permesi_runtime`)
-- Start persistent OpenBao + Terraform bootstrap: `just openbao-persist-ready` (also used by `just start`)
+- Start persistent OpenBao + OpenTofu bootstrap: `just openbao-persist-ready` (also used by `just start`)
 - Start dev-only OpenBao (no persistence): `just openbao`
 - Stop all dev services: `just stop`
 - Restart everything: `just restart`
@@ -23,19 +23,19 @@ The Terraform configuration in `openbao/contrib/terraform` provisions the auth +
 
 ## Dev-only OpenBao (no persistence)
 
-Use this when you do not need data to survive restarts. It starts in dev mode, auto-unseals, and wipes data when the container stops. The root token is fixed to `dev-root`. The AppRole IDs and **Operator Token** are retrieved from Terraform state.
+Use this when you do not need data to survive restarts. It starts in dev mode, auto-unseals, and wipes data when the container stops. The root token is fixed to `dev-root`. The AppRole IDs and **Operator Token** are retrieved from the OpenTofu state.
 
 ## Persistent dev OpenBao (recommended)
 
 The persistent mode keeps OpenBao data in a Podman volume (single-node Raft storage, see `openbao/config.hcl`) and stores init keys in a gitignored file. This is what `just start` uses. Both modes load `openbao/audit.hcl`, because OpenBao only accepts audit devices declared in its configuration.
 
-- Start + init + unseal + Terraform bootstrap: `just openbao-persist-ready` (also used by `just start`)
+- Start + init + unseal + OpenTofu bootstrap: `just openbao-persist-ready` (also used by `just start`)
 - Stop OpenBao: `just openbao-stop`
-- Reset data + keys + TF state (prompts): `just openbao-reset`
+- Reset data + keys + OpenTofu state (prompts): `just openbao-reset`
 - Keys file (keep safe): `openbao/keys.json` (gitignored)
 - Data volume: `permesi-openbao-data`
 
-To reset a persistent OpenBao, stop the container and remove the data volume plus `openbao/keys.json` and the Terraform state files.
+To reset a persistent OpenBao, stop the container and remove the data volume plus `openbao/keys.json` and the OpenTofu state files.
 
 Persistent bootstrapping outputs the AppRole `role_id` / `secret_id` and the **Operator Token** values to the terminal. They are also available in your environment if you use `just dev-envrc`.
 
@@ -44,15 +44,15 @@ Persistent bootstrapping outputs the AppRole `role_id` / `secret_id` and the **O
 To test the **Platform Operator** claim flow (bootstrapping the first admin or elevating privileges),
 you need an OpenBao token with the `permesi-operators` policy. The root token (`dev-root`) will **not** work.
 
-The Terraform setup provisions the policy, and the `just` recipes generate a long-lived (24h) token with this policy.
+The OpenTofu module provisions the policy, and the `just` recipes generate a long-lived (24h) token with this policy.
 
 - **Environment**: Available as `$PERMESI_OPERATOR_TOKEN` in your shell if you run `just dev-envrc` (or `just start`).
 
 Copy this token into the "OpenBao token" field at `/admin/claim` to become an operator.
 
-## What gets provisioned (via Terraform)
+## What gets provisioned (via OpenTofu)
 
-The resources are defined in `openbao/contrib/terraform/`:
+The resources are defined in `openbao/contrib/opentofu/`:
 
 - **AppRole auth**: mounted at `auth/approle`
   - Roles: `permesi`, `genesis`
@@ -62,6 +62,8 @@ The resources are defined in `openbao/contrib/terraform/`:
   - Key: `oidc-signing` (type `rsa-2048`, non-exportable, non-deletable)
 - **Transit (genesis)**: mounted at `transit/genesis`
   - Key: `genesis-signing` (type `ed25519`)
+- **Transit (OpenTofu state)**: mounted at `transit/opentofu`, created by `just openbao-tofu-apply` before the module runs
+  - Key: `permesi-state` (type `aes256-gcm96`), the state and plan encryption key; no service policy grants it
 - **PKI (TLS certificates)**: mounted at `pki-root` and `pki-int`
   - Runtime roles: `permesi-runtime`, `genesis-runtime`
   - Bootstrap roles: `permesi-bootstrap`, `genesis-bootstrap`
@@ -90,15 +92,24 @@ Note: Postgres roles/users are created **on-demand** when credentials are reques
 - Write dev exports into `.envrc`: `just openbao-envrc`
 - Write OpenBao exports plus local dev endpoints into `.envrc`: `just dev-envrc` (runs `direnv allow` if available)
 
-## Terraform usage
+## OpenTofu usage
 
-You can run Terraform manually if you need to inspect or modify the configuration:
+`just openbao-tofu-apply` (part of `just openbao-persist-ready` and `just openbao`) first creates the
+Transit key `transit/opentofu/keys/permesi-state` when it is missing. The module encrypts its state
+and saved plans with a data key from that key, so reading the state needs a token for this OpenBao;
+the key lives outside the module because a module cannot manage the key protecting its own state.
+A plaintext state left by Terraform is read once through an unencrypted fallback and rewritten
+encrypted, and its plaintext backup is removed. `just openbao-tofu-test` checks the module offline
+and `just openbao-tofu-test-live` provisions throwaway containers; neither touches the dev stack.
+
+To inspect or modify the configuration by hand:
 
 ```bash
-cd openbao/contrib/terraform
+cd openbao/contrib/opentofu
 export VAULT_ADDR=http://127.0.0.1:8200   # the hashicorp/vault provider reads VAULT_*
 export VAULT_TOKEN=$(jq -r .root_token ../../keys.json)
-terraform apply
+export BAO_ADDR=$VAULT_ADDR BAO_TOKEN=$VAULT_TOKEN   # the state key provider reads BAO_*
+tofu plan
 ```
 
 ## Transit key retention (optional)
@@ -154,8 +165,8 @@ Then pass that wrapping token to the service via `*_OPENBAO_WRAPPED_TOKEN`.
 ## Configuration knobs
 
 The `just` recipes read `OPENBAO_APPROLE_MOUNT` (default `approle`) when they mint SecretIDs. Everything
-else (database host, credentials, SSL mode and PKI URLs) is a Terraform variable; see
-`openbao/contrib/terraform/variables.tf`. In local dev the database host defaults to the
+else (database host, credentials, SSL mode and PKI URLs) is an OpenTofu variable; see
+`openbao/contrib/opentofu/variables.tf`. In local dev the database host defaults to the
 `postgres-permesi` container on the shared `permesi-net` network.
 
 ## Production readiness checklist

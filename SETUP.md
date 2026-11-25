@@ -6,7 +6,7 @@ This guide describes how to set up the Permesi IAM stack. It remains agnostic of
 
 - **Postgres 19**: The primary data store.
 - **OpenBao**: Used for secret storage and cryptographic operations (Transit engine).
-- **Terraform**: Required to provision and configure the OpenBao instance.
+- **OpenTofu** (1.11 or later; 1.13 is tested): Required to provision and configure the OpenBao instance.
 - **Container Runtime**: Podman, to run the pre-built service images.
 - **Web Server**: (Nginx, HAProxy, or similar) To serve the static frontend assets.
 
@@ -65,7 +65,7 @@ PostgreSQL 19 warns at login when a role's password expires within `password_exp
     psql "postgres://<admin>@<host>:5432/postgres" -v ON_ERROR_STOP=1 -f db/sql/check.sql
     ```
 
-6.  **Verify OpenBao DB connectivity** (after Terraform applies):
+6.  **Verify OpenBao DB connectivity** (after OpenTofu applies):
 
     ```sh
     export BAO_ADDR="https://openbao.example.com:8200"
@@ -145,30 +145,30 @@ the OpenBao root and runtime roles. It is destructive and cannot be undone.
 
 ---
 
-## 4. OpenBao Configuration (Terraform)
+## 4. OpenBao Configuration (OpenTofu)
 
-OpenBao is central to the security of the stack. We provide a **Terraform** configuration in `openbao/contrib/terraform` that automates the setup of secret engines, transit keys, policies, cert-auth roles, and the OpenBao-managed PKI hierarchy for future service certificates.
+OpenBao is central to the security of the stack. We provide an **OpenTofu** module in `openbao/contrib/opentofu` that automates the setup of secret engines, transit keys, policies, cert-auth roles, and the OpenBao-managed PKI hierarchy for future service certificates. It is the recommended way to keep the configuration consistent, reproducible, and easy to maintain.
 
-Using Terraform is the recommended way to ensure your configuration is consistent, reproducible, and easy to maintain.
+The module writes its state only encrypted. The data key comes from a Transit key on the same OpenBao, `transit/opentofu/keys/permesi-state`, which the module cannot manage itself, so create it once before the first apply. The PostgreSQL root passwords are write-only: they reach OpenBao but never the state or a saved plan.
 
-### Running Terraform
+### Running OpenTofu
 ```bash
-cd openbao/contrib/terraform
-# The API-compatible hashicorp/vault provider reads VAULT_ADDR and VAULT_TOKEN.
-terraform init
-terraform apply
+cd openbao/contrib/opentofu
+# The API-compatible hashicorp/vault provider reads VAULT_*; the state key provider reads BAO_*.
+export VAULT_ADDR="https://openbao.example.com:8200" VAULT_TOKEN="your-root-token"
+export BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$VAULT_TOKEN"
+bao secrets enable -path=transit/opentofu transit
+bao write -f transit/opentofu/keys/permesi-state type=aes256-gcm96
+tofu init -lockfile=readonly
+tofu apply
 ```
+
+The provider lock file is committed, so `-lockfile=readonly` installs exactly the reviewed provider builds. Losing the Transit key makes the state unreadable; it is backed up with OpenBao itself, and the module's [README](openbao/contrib/opentofu/README.md#state-encryption) covers recovery, other key providers and migrating an existing Terraform state.
 
 Refer to [openbao/README.md](openbao/README.md) for provisioned resources and its [production readiness checklist](openbao/README.md#production-readiness-checklist) (HA failover, auto-unseal, backups/restore drills, and renewal alerts).
 
-### Terraform tests
-Terraform tests run in the module directory and validate the PKI + cert-auth wiring at plan time:
-
-```bash
-cd openbao/contrib/terraform
-terraform init
-terraform test
-```
+### OpenTofu tests
+`just openbao-tofu-test` checks formatting, validates the module and runs `tofu test` against mocked providers, so the plan-time assertions on PKI, cert auth, database TLS, write-only passwords and quota paths need no server. `just openbao-tofu-test-live` provisions throwaway OpenBao and PostgreSQL containers from zero and checks every engine the services use, including the refusals between Permesi and Genesis, that neither service can use the state key, and a re-apply after OpenBao rotates the root passwords.
 
 ### Cert auth sanity check (CLI)
 
@@ -189,7 +189,7 @@ Repeat with the Genesis bootstrap certificate and the `genesis-agent` role.
 
 Use OpenBao Agent as a sidecar to authenticate via cert auth and render templates. This removes the
 need for a local proxy and lets you generate TLS material from a single config. The minimal agent
-configs in `openbao/contrib/terraform/README.md` already include cert-auth and TLS templates.
+configs in `openbao/contrib/opentofu/README.md` already include cert-auth and TLS templates.
 
 Keep the agent running continuously so it can renew the cert-auth token and re-issue TLS
 certificates before the 24h TTL expires. If the agent stops long enough for the runtime certs or
@@ -288,7 +288,7 @@ Notes:
 
 ### Manual Configuration Recipe (Reference)
 
-If you cannot use Terraform, this section provides the manual steps to configure an equivalent OpenBao instance.
+If you cannot use OpenTofu, this section provides the manual steps to configure an equivalent OpenBao instance.
 
 ### A. Enable Secret Engines and Auth Methods
 ```bash
@@ -370,7 +370,7 @@ EOF
 Create cert-auth roles for the OpenBao Agent bootstrap certificates so the agent can authenticate
 and render templates (TLS material, wrapped tokens, or other secrets as needed). The roles should
 use `permesi-pki-issue-only` and `genesis-pki-issue-only` policies with `allowed_dns_sans` that
-match the bootstrap certificates. Mirror the configuration in `openbao/contrib/terraform/auth_cert.tf`.
+match the bootstrap certificates. Mirror the configuration in `openbao/contrib/opentofu/auth_cert.tf`.
 
 At minimum, enable cert auth and add two roles bound to the intermediate CA chain and DNS SANs:
 

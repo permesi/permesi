@@ -16,10 +16,12 @@ variable "permesi_database_username" {
   default = "openbao_permesi"
 }
 
-# Permesi Postgres root password for OpenBao to connect with
+# Permesi Postgres root password for OpenBao to connect with. Write-only: it
+# reaches OpenBao but never the state or a saved plan.
 variable "permesi_database_password" {
   type      = string
   sensitive = true
+  ephemeral = true
 }
 
 # Genesis Postgres root user for OpenBao to connect with
@@ -28,10 +30,37 @@ variable "genesis_database_username" {
   default = "openbao_genesis"
 }
 
-# Genesis Postgres root password for OpenBao to connect with
+# Genesis Postgres root password for OpenBao to connect with. Write-only: it
+# reaches OpenBao but never the state or a saved plan.
 variable "genesis_database_password" {
   type      = string
   sensitive = true
+  ephemeral = true
+}
+
+# OpenBao rotates each root password every day, so the passwords above only
+# bootstrap a connection. A password is sent when its version changes: raise one
+# after resetting that root password in PostgreSQL. The versions are separate
+# because OpenBao verifies a connection whenever its password is sent, so a
+# shared one would push the other service's stale password and fail. State from
+# before write-only passwords has version 0; keep 0 there if OpenBao has already
+# rotated, for the same reason.
+variable "permesi_database_password_version" {
+  type    = number
+  default = 1
+  validation {
+    condition     = var.permesi_database_password_version >= 0 && var.permesi_database_password_version == floor(var.permesi_database_password_version)
+    error_message = "permesi_database_password_version must be a non-negative integer."
+  }
+}
+
+variable "genesis_database_password_version" {
+  type    = number
+  default = 1
+  validation {
+    condition     = var.genesis_database_password_version >= 0 && var.genesis_database_password_version == floor(var.genesis_database_password_version)
+    error_message = "genesis_database_password_version must be a non-negative integer."
+  }
 }
 
 # SSL mode for OpenBao's privileged DB connections. Verified TLS is the default so

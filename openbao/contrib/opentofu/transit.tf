@@ -12,7 +12,7 @@ removed {
 
   lifecycle {
     # The legacy key is retired explicitly after operators have reviewed
-    # backups and rollback requirements; see README.md. Terraform must not
+    # backups and rollback requirements; see README.md. OpenTofu must not
     # turn an ordinary configuration apply into irreversible key deletion.
     destroy = false
   }

@@ -1,9 +1,9 @@
 # Local/dev example only.
 #
 # This file is intentionally named `terraform.tfvars.example` so it is not
-# picked up automatically by Terraform or checked into state. For real usage,
-# prefer `TF_VAR_*` environment variables (see README.md) or create your own
-# local `terraform.tfvars` (gitignored).
+# picked up automatically by OpenTofu. For real usage, prefer `TF_VAR_*`
+# environment variables (see README.md) or create your own local
+# `terraform.tfvars` (gitignored).
 
 database_host               = "postgres-permesi"
 # For TLS, use "require", "verify-ca", or "verify-full" (recommended for production).

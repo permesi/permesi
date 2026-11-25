@@ -902,7 +902,7 @@ mux-stop:
 alias tmux-stop := mux-stop
 
 # Only this checkout's disposable state: the current major's cluster, its logs,
-# the OpenBao volume/keys/Terraform state and the generated certificates. Data
+# the OpenBao volume/keys/OpenTofu state and the generated certificates. Data
 # directories of other PostgreSQL majors under db/data are left alone.
 [doc("Stop everything and delete the disposable dev state (asks before deleting OpenBao data)")]
 reset: stop
@@ -954,8 +954,9 @@ status:
   for spec in "genesis https://genesis.permesi.localhost:8000/health" "permesi https://api.permesi.localhost:8001/health"; do
     name="${spec%% *}"; url="${spec#* }"
     body="$(curl -s --max-time 3 --cacert "{{root}}/certs/${name}/ca.pem" "$url" 2>/dev/null)"
-    if [[ -n "$body" ]] && [[ "$(jq -r '.database // empty' <<<"$body" 2>/dev/null)" == "ok" ]]; then
-      ok "${name} $(jq -r '.version' <<<"$body") database=ok"
+    # Public health reports only status and commit; database checks stay internal.
+    if [[ -n "$body" ]] && [[ "$(jq -r '.status // empty' <<<"$body" 2>/dev/null)" == "ok" ]]; then
+      ok "${name} ok, commit $(jq -r '.commit // "unknown"' <<<"$body" | cut -c1-12)"
     else
       fail "${name} is not healthy at ${url} (just ${name}, or just logs ${name})"
     fi
@@ -1033,11 +1034,11 @@ doctor:
   else
     fail "podman missing: install it with your package manager (rootless)"
   fi
-  if have terraform; then
-    tv="$(terraform version -json 2>/dev/null | jq -r '.terraform_version // empty')"
-    if [[ -n "$tv" ]] && is-at-least 1.7 "$tv"; then ok "terraform ${tv}"; else fail "terraform ${tv:-unknown} is older than 1.7 (openbao/contrib/terraform requires >= 1.7)"; fi
+  if have tofu; then
+    tv="$(tofu version -json 2>/dev/null | jq -r '.terraform_version // empty')"
+    if [[ -n "$tv" ]] && is-at-least 1.11 "$tv"; then ok "tofu ${tv}"; else fail "tofu ${tv:-unknown} is older than 1.11 (openbao/contrib/opentofu requires >= 1.11)"; fi
   else
-    fail "terraform missing: ${hint_install}"
+    fail "tofu (OpenTofu) missing: ${hint_install}"
   fi
   if have cargo && cargo watch --version >/dev/null 2>&1; then
     ok "cargo-watch"

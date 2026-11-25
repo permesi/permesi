@@ -22,6 +22,14 @@ The first release on OpenBao and PostgreSQL 19.
   rollout. Remove the previous `--admission-paserk-url` and `--admission-paserk-ca-path` options. Genesis signs with the explicitly activated Transit version.
 - Public health responses contain `status` and `commit`. Genesis has removed
   the request-header echo endpoint.
+- OpenBao is provisioned with OpenTofu 1.11 or later (1.13 is tested) instead of
+  Terraform. The module moved from `openbao/contrib/terraform` to
+  `openbao/contrib/opentofu`, and the `openbao-tf-apply` and `openbao-tf-env`
+  recipes are now `openbao-tofu-apply` and `openbao-tofu-env`. Before the first
+  apply, create the Transit key `transit/opentofu/keys/permesi-state`, which
+  encrypts the state. An existing Terraform state stays in the old directory and
+  must be moved, then migrated once through an unencrypted fallback, as the module
+  README describes; `just openbao-tofu-apply` does both for the development state.
 
 ### Added
 
@@ -30,7 +38,7 @@ The first release on OpenBao and PostgreSQL 19.
 
 - Secrets, Transit signing and encryption, PKI and dynamic database credentials
   come from OpenBao 2.7, through AppRole, OpenBao Agent or Kubernetes
-  authentication. Terraform provisioning lives in `openbao/contrib/terraform`.
+  authentication. OpenTofu provisioning lives in `openbao/contrib/opentofu`.
 - PostgreSQL 19 is the supported and tested server version, in development, CI
   and the test fixtures.
 - `just status` reports container, PostgreSQL, OpenBao and service health for
@@ -50,6 +58,17 @@ The first release on OpenBao and PostgreSQL 19.
 - Tests that run against a real OpenBao: rejected, replayed, revoked and expired
   credentials, policy denials, signature verification across key rotation, an
   unreachable server, recovery after a restart, and a token reaching its max TTL.
+- The OpenTofu state and saved plans are encrypted with a data key from an
+  OpenBao Transit key, so reading them needs an OpenBao token. The PostgreSQL
+  root passwords are write-only and never reach the state or a plan;
+  `permesi_database_password_version` and `genesis_database_password_version`
+  re-send one after a deliberate reset.
+- The provider lock file is committed and installed with `-lockfile=readonly`.
+- `just openbao-tofu-test` checks the module offline against mocked providers,
+  and `just openbao-tofu-test-live` provisions throwaway OpenBao and PostgreSQL
+  containers from zero and checks every engine the services use, including the
+  refusals between Permesi and Genesis and a re-apply after OpenBao rotates the
+  root passwords.
 - This changelog.
 
 ### Changed
@@ -71,7 +90,12 @@ The first release on OpenBao and PostgreSQL 19.
 
 ### Fixed
 
-- On a fresh OpenBao installation, Terraform creates the root issuer before signing the intermediate used by Genesis certificate login and its quota.
+- On a fresh OpenBao installation, the module creates the root issuer before signing the intermediate used by Genesis certificate login and its quota.
+- Every apply replaced the Genesis AppRole and cert-auth rate quotas, briefly
+  leaving those login paths without a limit, because OpenBao stores the auth
+  path with a trailing slash.
+- `just status` reported healthy services as down after the public health
+  response was reduced to `status` and `commit`.
 
 - `genesis_tokens_rollover` failed once a token had been issued before that day's
   partition existed, so no partition was created and nothing was expired.

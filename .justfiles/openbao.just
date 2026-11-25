@@ -20,9 +20,11 @@ openbao: _openbao-keys-guard openbao-stop setup-network
   set -euo pipefail
 
   # Ensure clean slate for ephemeral dev
-  rm -rf {{root}}/openbao/contrib/terraform/.terraform \
-         {{root}}/openbao/contrib/terraform/terraform.tfstate \
-         {{root}}/openbao/contrib/terraform/terraform.tfstate.backup
+  rm -rf {{root}}/openbao/contrib/opentofu/.terraform \
+         {{root}}/openbao/contrib/opentofu/terraform.tfstate \
+         {{root}}/openbao/contrib/opentofu/terraform.tfstate.backup \
+         {{root}}/openbao/contrib/terraform/{.terraform,.terraform.lock.hcl,terraform.tfstate,terraform.tfstate.backup}
+  rmdir {{root}}/openbao/contrib/terraform 2>/dev/null || true
 
   if [[ -n "$(podman ps -q --filter 'name=^{{openbao_ctr}}$')" ]]; then
     echo "openbao already running"
@@ -39,7 +41,7 @@ openbao: _openbao-keys-guard openbao-stop setup-network
     -e BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200 \
     {{openbao_image}}
 
-  # Create a temporary keys file for openbao-tf-apply to consume
+  # Create a temporary keys file for openbao-tofu-apply to consume
   mkdir -p {{root}}/openbao
   echo '{"root_token": "dev-root"}' > {{root}}/openbao/keys.json
 
@@ -47,12 +49,12 @@ openbao: _openbao-keys-guard openbao-stop setup-network
   just openbao-wait
 
   # Dev mode pre-mounts a KV engine at secret/, which shadows the secret/permesi
-  # mount Terraform creates.
+  # mount OpenTofu creates.
   podman exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=dev-root \
     {{openbao_ctr}} bao secrets disable secret >/dev/null
 
-  echo "Applying Terraform configuration..."
-  just openbao-tf-apply
+  echo "Applying OpenTofu configuration..."
+  just openbao-tofu-apply
 
 openbao-persist: setup-network
   #!/usr/bin/env zsh
@@ -144,7 +146,13 @@ openbao-unseal:
   echo "OpenBao unsealed."
 
 
-openbao-tf-apply:
+# Provision OpenBao with OpenTofu. State is only written encrypted, under a data
+# key from the Transit key transit/opentofu/permesi-state on this same OpenBao, so
+# that key is created here first (OpenTofu cannot manage the key protecting its
+# own state). A state still under the pre-OpenTofu path openbao/contrib/terraform
+# is moved here first; a plaintext state is then read once through an unencrypted
+# fallback, rewritten encrypted, and every plaintext leftover removed.
+openbao-tofu-apply:
   #!/usr/bin/env zsh
   set -euo pipefail
   keys="{{root}}/openbao/keys.json"
@@ -152,58 +160,152 @@ openbao-tf-apply:
     echo "Missing ${keys}. Run: just openbao-init" >&2
     exit 1
   fi
-  if ! command -v terraform >/dev/null 2>&1; then
-      echo "❌ Terraform not found. Install terraform to use this recipe." >&2
+  for tool in tofu bao; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "❌ ${tool} not found. Run: mise install (see just doctor)" >&2
       exit 1
-  fi
+    fi
+  done
 
   token="$(jq -r '.root_token' "$keys")"
-  cd {{root}}/openbao/contrib/terraform
+  cd {{root}}/openbao/contrib/opentofu
+  # This recipe owns the encryption configuration: an inherited override could
+  # point the state at another key or write it unencrypted.
+  unset TF_ENCRYPTION
 
-    # The hashicorp/vault provider speaks OpenBao's API but only reads VAULT_* variables.
-    export VAULT_ADDR="http://127.0.0.1:8200"
-    export VAULT_TOKEN="$token"
-    export TF_VAR_database_host="${TF_VAR_database_host:-postgres-permesi}"
-    # The local Postgres container has no TLS; the module default is verify-full.
-    export TF_VAR_database_sslmode="${TF_VAR_database_sslmode:-disable}"
-    export TF_VAR_permesi_database_password="${TF_VAR_permesi_database_password:-openbao_permesi}"
-    export TF_VAR_genesis_database_password="${TF_VAR_genesis_database_password:-openbao_genesis}"
-
-    echo "Resource initialization (terraform init)..."
-    terraform init >/dev/null
-
-    # The plan for ~40 resources drowns the startup output; keep it for failures.
-    echo "Applying Terraform configuration..."
-    tf_log="$(mktemp)"
-    trap 'rm -f "$tf_log"' EXIT
-    if ! terraform apply -auto-approve -input=false -no-color >"$tf_log" 2>&1; then
-      cat "$tf_log" >&2
-      echo "❌ terraform apply failed." >&2
+  # Checkouts from before the move keep their untracked state at the old path.
+  # Applying without it would start from an empty state against a provisioned
+  # OpenBao, so it is moved here; two states are a conflict for a person to settle.
+  legacy="{{root}}/openbao/contrib/terraform"
+  if [[ -f "$legacy/terraform.tfstate" ]]; then
+    if [[ -e terraform.tfstate ]]; then
+      echo "❌ Both ${legacy}/terraform.tfstate and ${PWD}/terraform.tfstate exist." >&2
+      echo "   Keep the state that matches this OpenBao and remove the other." >&2
       exit 1
     fi
-    rg -N '^Apply complete' "$tf_log" || true
-
-    # Only initialize a new authority. CAS zero makes concurrent setup fail closed.
-    if ! BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$token" bao kv get -mount=secret/permesi admission-authority >/dev/null 2>&1; then
-      BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$token" {{root}}/scripts/admission-authority initialize 1
-    fi
-    echo "✅ OpenBao configured via Terraform."
-    echo "🔑 Operator token: in .envrc as PERMESI_OPERATOR_TOKEN, or mint one with: just operator-token"
-
-openbao-tf-env:
-  #!/usr/bin/env zsh
-  set -euo pipefail
-  cd {{root}}/openbao/contrib/terraform
-
-  if [[ ! -f "terraform.tfstate" ]]; then
-      echo "❌ No Terraform state found. Run: just openbao-tf-apply" >&2
-      exit 1
+    echo "Moving the Terraform state from ${legacy}..."
+    mv "$legacy/terraform.tfstate" terraform.tfstate
   fi
 
-  # Extract values from Terraform output
-  vals=$(terraform output -json)
-  permesi_role_id=$(echo "$vals" | jq -r '.permesi_role_id.value')
-  genesis_role_id=$(echo "$vals" | jq -r '.genesis_role_id.value')
+  # The hashicorp/vault provider reads VAULT_*; the OpenBao state key provider and
+  # the bao CLI read BAO_*.
+  export VAULT_ADDR="http://127.0.0.1:8200" VAULT_TOKEN="$token"
+  export BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$token"
+  export TF_VAR_database_host="${TF_VAR_database_host:-postgres-permesi}"
+  # The local Postgres container has no TLS; the module default is verify-full.
+  export TF_VAR_database_sslmode="${TF_VAR_database_sslmode:-disable}"
+  export TF_VAR_permesi_database_password="${TF_VAR_permesi_database_password:-openbao_permesi}"
+  export TF_VAR_genesis_database_password="${TF_VAR_genesis_database_password:-openbao_genesis}"
+
+  if ! bao secrets list -format=json | jq -e 'has("transit/opentofu/")' >/dev/null; then
+    bao secrets enable -path=transit/opentofu -description="OpenTofu state encryption" transit >/dev/null
+  fi
+  if ! bao read transit/opentofu/keys/permesi-state >/dev/null 2>&1; then
+    bao write -f transit/opentofu/keys/permesi-state type=aes256-gcm96 >/dev/null
+  fi
+
+  plaintext() { [[ -f "$1" ]] && jq -e 'has("encrypted_data") | not' "$1" >/dev/null 2>&1; }
+  if plaintext terraform.tfstate; then
+    echo "Encrypting the existing plaintext state..."
+    # This block replaces the module's state block, so it repeats the method.
+    export TF_ENCRYPTION='method "unencrypted" "migrate" {}
+  state {
+    method = method.aes_gcm.state
+    fallback {
+      method = method.unencrypted.migrate
+    }
+  }'
+  fi
+
+  # The committed lock file pins provider checksums; init must not change it.
+  echo "Resource initialization (tofu init)..."
+  tofu init -input=false -lockfile=readonly >/dev/null
+
+  # The plan for ~40 resources drowns the startup output; keep it for failures.
+  echo "Applying OpenTofu configuration..."
+  tf_log="$(mktemp)"
+  trap 'rm -f "$tf_log"' EXIT
+  if ! tofu apply -auto-approve -input=false -no-color >"$tf_log" 2>&1; then
+    cat "$tf_log" >&2
+    echo "❌ tofu apply failed." >&2
+    exit 1
+  fi
+  rg -N '^Apply complete' "$tf_log" || true
+  for f in terraform.tfstate terraform.tfstate.backup; do
+    if plaintext "$f"; then
+      if [[ "$f" == terraform.tfstate ]]; then
+        echo "❌ ${f} is still plaintext after apply." >&2
+        exit 1
+      fi
+      rm -f "$f"
+    fi
+  done
+  if [[ -d "$legacy" ]]; then
+    rm -rf "$legacy/.terraform" "$legacy/.terraform.lock.hcl" "$legacy/terraform.tfstate.backup"
+    if ! rmdir "$legacy" 2>/dev/null; then
+      echo "⚠️  ${legacy} still holds files OpenTofu no longer reads (a terraform.tfvars?); move or delete them." >&2
+    fi
+  fi
+
+  # Only initialize a new authority. CAS zero makes concurrent setup fail closed.
+  if ! bao kv get -mount=secret/permesi admission-authority >/dev/null 2>&1; then
+    {{root}}/scripts/admission-authority initialize 1
+  fi
+  echo "✅ OpenBao configured via OpenTofu."
+  echo "🔑 Operator token: in .envrc as PERMESI_OPERATOR_TOKEN, or mint one with: just operator-token"
+
+# Offline checks of the OpenTofu module: formatting, validation and `tofu test`
+# against mocked providers. No OpenBao server, token or state is involved; the
+# backend (and with it the state key provider) is skipped.
+[doc("Check the OpenTofu module offline: fmt, validate and tofu test with mocked providers")]
+openbao-tofu-test:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  # Only the tracked module: a local terraform.tfvars, TF_VAR_* or TF_CLI_ARGS*
+  # would otherwise change what the assertions see.
+  unset VAULT_ADDR VAULT_TOKEN BAO_ADDR BAO_TOKEN TF_ENCRYPTION
+  unset -m 'TF_VAR_*' 'TF_CLI_ARGS*' || true  # status 1 when nothing matches
+  module={{root}}/openbao/contrib/opentofu
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
+  # Tracked and new files, never ignored ones (local tfvars, state, .terraform).
+  git -C "$module" ls-files -z --cached --others --exclude-standard -- . \
+    | (cd "$module" && tar --null -T - -cf -) | tar -xf - -C "$work"
+  if [[ -d "$module/.terraform/providers" ]]; then
+    mkdir "$work/.terraform"
+    ln -s "$module/.terraform/providers" "$work/.terraform/providers"
+  fi
+  # -chdir keeps this checkout as the working directory, so mise resolves tofu.
+  cd "$module"
+  tofu -chdir="$work" fmt -check -recursive -diff
+  tofu -chdir="$work" init -backend=false -input=false -lockfile=readonly >/dev/null
+  tofu -chdir="$work" validate -no-color
+  tofu -chdir="$work" test -no-color
+
+# Live checks on throwaway containers (never the dev stack): the Genesis quotas and
+# their PKI prerequisites, then a full provisioning from zero against PostgreSQL
+# with password auth, exercising every engine and the refusals between services.
+[doc("Provision throwaway OpenBao/PostgreSQL containers with OpenTofu and verify them")]
+openbao-tofu-test-live:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  for image in {{openbao_image}} {{postgres_image}}; do
+    podman image exists "$image" || podman pull -q "$image" >/dev/null
+  done
+  digest="$(podman image inspect --format '{{{{.Digest}}' {{openbao_image}})"
+  tests={{root}}/openbao/contrib/opentofu/tests
+  python3 -I "$tests/live_quotas.py" "{{openbao_image}}"@"${digest}"
+  python3 -I "$tests/live_provision.py" {{openbao_image}} {{postgres_image}}
+
+openbao-tofu-env:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  cd {{root}}/openbao/contrib/opentofu
+
+  if [[ ! -f "terraform.tfstate" ]]; then
+      echo "❌ No OpenTofu state found. Run: just openbao-tofu-apply" >&2
+      exit 1
+  fi
 
   openbao_addr="http://127.0.0.1:8200"
   approle_mount="${OPENBAO_APPROLE_MOUNT:-approle}"
@@ -218,6 +320,12 @@ openbao-tf-env:
       echo "❌ Missing BAO_TOKEN (or {{root}}/openbao/keys.json) to generate AppRole SecretIDs." >&2
       exit 1
   fi
+
+  # Reading the encrypted state needs the Transit data key. A state without the
+  # role IDs (a failed first apply) must not become "null" in .envrc.
+  vals=$(env -u TF_ENCRYPTION BAO_ADDR="$openbao_addr" BAO_TOKEN="$token" tofu output -json)
+  permesi_role_id=$(echo "$vals" | jq -er '.permesi_role_id.value')
+  genesis_role_id=$(echo "$vals" | jq -er '.genesis_role_id.value')
 
   permesi_secret_id="$(
     podman exec \
@@ -261,14 +369,14 @@ openbao-tf-env:
     "export PERMESI_OPENBAO_ROLE_ID=\"${permesi_role_id}\"" \
     "export PERMESI_OPENBAO_SECRET_ID=\"${permesi_secret_id}\""
 
-openbao-persist-ready: openbao-persist openbao-init openbao-unseal openbao-tf-apply
+openbao-persist-ready: openbao-persist openbao-init openbao-unseal openbao-tofu-apply
 
 openbao-env:
   #!/usr/bin/env zsh
   set -e
-  # If we have Terraform state, prefer the Terraform env generator
-  if [[ -f "{{root}}/openbao/contrib/terraform/terraform.tfstate" ]]; then
-      just openbao-tf-env
+  # If we have OpenTofu state, prefer the OpenTofu env generator
+  if [[ -f "{{root}}/openbao/contrib/opentofu/terraform.tfstate" ]]; then
+      just openbao-tofu-env
       exit 0
   fi
 
@@ -454,7 +562,7 @@ openbao-stop:
 openbao-reset: openbao-stop
   #!/usr/bin/env zsh
   set -euo pipefail
-  echo "This will delete the persistent OpenBao volume, keys file, and Terraform state."
+  echo "This will delete the persistent OpenBao volume, keys file, and OpenTofu state."
   printf "Type 'delete' to continue: "
   read -r confirm
   if [[ "$confirm" != "delete" ]]; then
@@ -473,8 +581,10 @@ openbao-reset: openbao-stop
   fi
 
   rm -f {{root}}/openbao/keys.json
-  rm -rf {{root}}/openbao/contrib/terraform/.terraform \
-         {{root}}/openbao/contrib/terraform/.terraform.lock.hcl \
-         {{root}}/openbao/contrib/terraform/terraform.tfstate \
-         {{root}}/openbao/contrib/terraform/terraform.tfstate.backup
-  echo "OpenBao keys and Terraform state removed."
+  # The provider lock file is tracked and stays.
+  rm -rf {{root}}/openbao/contrib/opentofu/.terraform \
+         {{root}}/openbao/contrib/opentofu/terraform.tfstate \
+         {{root}}/openbao/contrib/opentofu/terraform.tfstate.backup \
+         {{root}}/openbao/contrib/terraform/{.terraform,.terraform.lock.hcl,terraform.tfstate,terraform.tfstate.backup}
+  rmdir {{root}}/openbao/contrib/terraform 2>/dev/null || true
+  echo "OpenBao keys and OpenTofu state removed."

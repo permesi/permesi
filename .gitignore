@@ -41,9 +41,8 @@ certs/
 config/haproxy/*.pem
 config/haproxy/*.key
 
-# Terraform
+# OpenTofu (the provider lock file .terraform.lock.hcl is tracked)
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.tfvars

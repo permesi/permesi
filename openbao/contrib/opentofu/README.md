@@ -1,17 +1,43 @@
-# Permesi OpenBao Configuration with Terraform
+# Permesi OpenBao Configuration with OpenTofu
 
-This Terraform module provides a production-ready configuration for OpenBao to support the Permesi and Genesis services.
+This OpenTofu module provides a production-ready configuration for OpenBao to support the Permesi and Genesis services.
 
 ## Features
 
 - **AppRole**: Configures roles for both `permesi` and `genesis`.
 - **Transit**: Sets up the TOTP protection key (`totp`) and admission token signing key (`genesis-signing`).
 - **KV Store**: Generates and stores the persistent OPAQUE seed and MFA recovery pepper under `secret/permesi/config`.
-- **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the OpenBao root database credentials.
+- **Database Engine**: Configures dynamic Postgres credentials for both services, including lease renewals that extend the Postgres role expiration and automated rotation of the OpenBao root database credentials. The root passwords are write-only attributes from ephemeral variables, so they never reach the state or a saved plan.
 - **Policies**: Implements least-privilege policies for services and operators.
 - **PKI (TLS certificates)**: Establishes a root + intermediate PKI hierarchy, service-scoped issuance roles, and cert-auth roles for OpenBao Agent-based certificate delivery. Runtime certificates are server-only (`client_flag = false`); only the longer-lived bootstrap certificates carry `ClientAuth` and can log in to cert auth.
 
-Terraform state is sensitive in this module. It can contain values such as the Postgres root passwords and the generated OPAQUE seed. Use an encrypted remote backend (or tightly lock down local state files), and never commit `.tfstate` files or variable files containing secrets.
+## State encryption
+
+The state still holds sensitive values: the generated OPAQUE seed and MFA recovery pepper, AppRole role IDs and the PKI certificates. The module therefore declares OpenTofu state encryption in `main.tf`: every state and saved-plan write is AES-GCM encrypted under a data key from the OpenBao Transit key `transit/opentofu/keys/permesi-state`, fetched with `BAO_ADDR` and `BAO_TOKEN` (the key provider also accepts `VAULT_TOKEN`). Without a token that may use that key, `tofu plan`, `output` and `show` fail instead of reading the state. Saved plans are `enforced`, so a plan is never written in the clear.
+
+The key must exist before the first `tofu init`, and the module does not manage it, because a module cannot manage the key that protects its own state. Create it once with `bao secrets enable -path=transit/opentofu transit` and `bao write -f transit/opentofu/keys/permesi-state type=aes256-gcm96`; `just openbao-tofu-apply` does this in development. Grant the operator who runs OpenTofu `update` on `transit/opentofu/datakey/plaintext/permesi-state` and `transit/opentofu/decrypt/permesi-state`, and nothing else on that mount. No service policy grants it.
+
+Losing the Transit key makes the state unrecoverable, so it is covered by the same backups and restore drills as OpenBao. The state only describes that OpenBao, so losing both together loses nothing you could still use. To keep the state key outside the OpenBao it configures (another OpenBao, a cloud KMS or a PBKDF2 passphrase), set `TF_ENCRYPTION`: its blocks override the ones in `main.tf` with the same name, and a `state` block given there must repeat `method`. Keep never committing `.tfstate` files or variable files that contain secrets.
+
+**Migrating an existing Terraform state.** OpenTofu reads a local `terraform.tfstate` written by Terraform, but the module used to live in `openbao/contrib/terraform`, and its untracked state stays there after the move. Applying without it would start from an empty state against an OpenBao that is already provisioned. Create the state key first (above), then move the state and run both `init` and the first `apply` with a one-time unencrypted fallback, because `init` already reads the state:
+
+```bash
+mv ../terraform/terraform.tfstate terraform.tfstate
+export TF_ENCRYPTION='method "unencrypted" "migrate" {}
+state {
+  method = method.aes_gcm.state
+  fallback {
+    method = method.unencrypted.migrate
+  }
+}'
+tofu init -lockfile=readonly
+tofu apply
+unset TF_ENCRYPTION
+```
+
+The apply writes the state back encrypted. Then delete every plaintext leftover: `terraform.tfstate.backup` here if `jq 'has("encrypted_data")' terraform.tfstate.backup` prints `false` (it holds the previous unencrypted state), and `../terraform/terraform.tfstate.backup`, `../terraform/.terraform` and the old directory itself. `just openbao-tofu-apply` does all of this in development, and refuses to choose when both directories hold a state.
+
+The first apply also moves the root passwords to write-only attributes. OpenBao verifies a connection whenever its password is sent, so if it has already rotated a root password, sending the stale bootstrap password fails that apply without changing anything. In that case add `-var permesi_database_password_version=0` and/or `-var genesis_database_password_version=0` for each rotated connection, and keep that value. Raise a connection's version only after resetting its root password in PostgreSQL; the versions are separate so that recovering one service does not resend the other's stale password.
 
 ## Usage
 
@@ -19,16 +45,17 @@ Terraform state is sensitive in this module. It can contain values such as the P
    ```bash
    export VAULT_ADDR="https://your-openbao:8200"
    export VAULT_TOKEN="your-root-token"
+   export BAO_ADDR="$VAULT_ADDR" BAO_TOKEN="$VAULT_TOKEN"
    ```
 
-   This module uses the API-compatible `hashicorp/vault` provider, which keeps its `vault_*` resource names and reads `VAULT_ADDR`/`VAULT_TOKEN` rather than the `BAO_*` variables of the `bao` CLI. Use a real TLS certificate and keep TLS verification enabled. For private PKI, set `VAULT_CACERT` (or `VAULT_CAPATH`) instead of disabling verification.
+   This module uses the API-compatible `hashicorp/vault` provider, which keeps its `vault_*` resource names and reads `VAULT_ADDR`/`VAULT_TOKEN` rather than the `BAO_*` variables of the `bao` CLI. The state encryption key provider reads `BAO_ADDR`/`BAO_TOKEN`. Use a real TLS certificate and keep TLS verification enabled. For private PKI, set `VAULT_CACERT` (or `VAULT_CAPATH`) instead of disabling verification.
 
 2. **Configure Variables**:
    You can provide required variables in two ways:
 
    This module is security-sensitive. In production, keep OpenBao TLS verification enabled, use Postgres TLS (`database_sslmode = "verify-full"` or `"verify-ca"`) and ensure OpenBao trusts the database CA. For service authentication, AppRole SecretIDs are single-use with a 1-hour TTL (`secret_id_num_uses = 1`, `secret_id_ttl = 3600` in `approle.tf`), so ensure your automation can mint fresh SecretIDs (or tune `approle.tf` to match your rotation process).
 
-   For PKI, set the issuing/CRL URLs to routable endpoints served by OpenBao. The defaults in `variables.tf` and `terraform.tfvars.example` are placeholders (`*.example.invalid`) and must be overridden for real deployments. The PKI hierarchy uses ECDSA P-256 by default to keep interoperability strong with HAProxy and Cloudflare. If you want to move to Ed25519 later, update the PKI key parameters in `openbao/contrib/terraform/pki.tf` only after confirming downstream compatibility.
+   For PKI, set the issuing/CRL URLs to routable endpoints served by OpenBao. The defaults in `variables.tf` and `terraform.tfvars.example` are placeholders (`*.example.invalid`) and must be overridden for real deployments. The PKI hierarchy uses ECDSA P-256 by default to keep interoperability strong with HAProxy and Cloudflare. If you want to move to Ed25519 later, update the PKI key parameters in `openbao/contrib/opentofu/pki.tf` only after confirming downstream compatibility.
 
    For the database secrets engine, OpenBao needs a dedicated Postgres "root" user per connection. Those users should be non-superuser roles with `LOGIN` + `CREATEROLE`, be able to terminate sessions during revocation (`pg_signal_backend`), and own the target database objects they grant privileges on. Local dev uses `db/sql/00_init.sql` to create `openbao_permesi` and `openbao_genesis` with these properties. The file ships with a `change-me` placeholder password; for production, edit it (or use it as a template) to set strong, unique passwords before running it as a superuser.
 
@@ -61,11 +88,13 @@ Terraform state is sensitive in this module. It can contain values such as the P
    pki_int_crl_distribution_points_url = "https://openbao.example.invalid/v1/pki-int/crl"
    ```
 
-3. **Initialize and Apply**:
+3. **Initialize and Apply** (after creating the state key, see [State encryption](#state-encryption)):
    ```bash
-   terraform init
-   terraform apply
+   tofu init -lockfile=readonly
+   tofu apply
    ```
+
+   `.terraform.lock.hcl` is committed with checksums for every platform, and `-lockfile=readonly` refuses any provider build that does not match it. After changing a provider version, run `tofu init -upgrade` and commit the updated lock file.
 
 4. **OpenBao audit device**:
    OpenBao does not allow audit devices to be enabled through the API, so this module does not
@@ -76,12 +105,12 @@ Terraform state is sensitive in this module. It can contain values such as the P
 ## Post-Deployment
 
 ### 1. Retrieve Service Credentials
-Terraform outputs the `RoleID` for both services. To complete the configuration, generate a `SecretID` for each role.
+OpenTofu outputs the `RoleID` for both services. To complete the configuration, generate a `SecretID` for each role.
 
 For production, prefer response-wrapped SecretIDs (short-lived wrapping tokens) so you never have to handle the raw SecretID in logs or shells:
 
 ```bash
-# Get permesi RoleID (or check terraform output)
+# Get permesi RoleID (or check tofu output)
 bao read auth/approle/role/permesi/role-id
 
 # Generate permesi SecretID as a wrapped token (recommended)
@@ -111,7 +140,7 @@ bao kv get secret/permesi/config
 
 The former `transit/permesi/keys/users` key belonged to the retired reversible
 password flow. The Permesi application policy no longer permits access to that
-key, and Terraform deliberately leaves deletion as a separate operator action:
+key, and OpenTofu deliberately leaves deletion as a separate operator action:
 an ordinary configuration apply must not make old backups or rollback data
 irreversibly unreadable.
 
@@ -323,11 +352,9 @@ For reboot safety, keep the bootstrap cert/key on persistent disk and rotate the
 In practice, automate bootstrap re-issuance (for example with a systemd timer), atomically replace the bootstrap files, and restart or reload the OpenBao Agent. This prevents outages when a VM reboots after the previous bootstrap certificate has expired.
 
 ## Tests
-Terraform tests in `openbao/contrib/terraform/tests` validate the PKI and cert-auth wiring at plan time. Run them from this directory with:
-```bash
-terraform init
-terraform test
-```
+`just openbao-tofu-test` runs `tofu fmt -check`, `tofu validate` and the plan-time assertions in `tests/pki.tftest.hcl`: PKI and cert-auth wiring, verified database TLS by default, write-only root passwords and the stored form of the auth quota paths. The test mocks both providers and initializes without a backend, so it needs no OpenBao server, token or state key.
+
+`just openbao-tofu-test-live` runs `tests/live_quotas.py` and `tests/live_provision.py` against throwaway Podman containers, never the dev stack. The second provisions OpenBao (with TLS) and PostgreSQL (with password authentication) from zero. It checks that the state and a saved plan are encrypted, that the state holds no root password and cannot be read without a token, and that the next plan is empty. It then checks, for each service, AppRole login, the configuration secret, dynamic database credentials, its Transit keys, its runtime and bootstrap PKI roles and cert-auth login, and that the other service's credentials, keys, names and cert-auth role, as well as the OpenTofu state key, are refused. It ends by letting OpenBao rotate both root passwords and checking that a further plan and apply change nothing.
 
 ### OIDC public signing-key lifecycle
 
@@ -344,7 +371,7 @@ key/mount requires matching provisioning and policy changes. Deploying token exc
 ### Admission authority and eviction
 
 Core operators own the KV v2 record `secret/permesi/data/admission-authority`.
-Terraform provisions read access. The record itself lives outside Terraform
+OpenTofu provisions read access. The record itself lives outside OpenTofu
 and the Helm release. Restrict write, delete, undelete, metadata and mount
 administration to the core operator boundary. Route the reader to authoritative
 core storage. Restoring an older OpenBao backup requires restoring the current
@@ -388,6 +415,6 @@ budgeted path. Existing isolated endpoints require equivalent constraints.
 
 The fresh-bootstrap regression applies the six Genesis quotas and their
 prerequisites to an empty disposable OpenBao. It verifies the stored paths,
-auth roles, rate and interval. Run `python3 tests/live_quotas.py IMAGE@sha256:DIGEST`
-from this directory with Podman and Terraform. Intermediate signing depends on
+auth roles, rate and interval. `just openbao-tofu-test-live` runs it with the
+pinned OpenBao image by digest, using Podman and OpenTofu. Intermediate signing depends on
 the generated root issuer, including during a targeted quota apply.

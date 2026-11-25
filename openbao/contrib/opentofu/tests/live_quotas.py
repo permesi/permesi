@@ -21,10 +21,10 @@ def main():
     if not re.fullmatch(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}", image):
         parser.error("an immutable OpenBao image is required")
     module = Path(__file__).resolve().parents[1]
-    name = "permesi-quota-test-" + uuid.uuid4().hex[:12]
+    name = "permesi-test-quotas-" + uuid.uuid4().hex[:12]
     token = secrets.token_hex(32)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("TF_", "VAULT_", "BAO_"))}
-    env.update({"BAO_DEV_ROOT_TOKEN_ID": token, "VAULT_TOKEN": token,
+    env.update({"BAO_DEV_ROOT_TOKEN_ID": token, "VAULT_TOKEN": token, "BAO_TOKEN": token,
            "TF_VAR_genesis_database_password": secrets.token_hex(16),
            "TF_VAR_permesi_database_password": secrets.token_hex(16)})
     with tempfile.TemporaryDirectory(prefix="permesi-quotas-") as directory:
@@ -33,11 +33,6 @@ def main():
             shutil.copy(source, work / source.name)
         shutil.copytree(module / "policies", work / "policies")
         providers = module / ".terraform/providers"
-        if providers.is_dir():
-            (work / ".terraform").mkdir()
-            (work / ".terraform/providers").symlink_to(providers, target_is_directory=True)
-        else:
-            subprocess.run(["terraform", "init", "-lockfile=readonly", "-input=false"], cwd=work, env=env, check=True)
         subprocess.run(["podman", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::8200",
                         "-e", "BAO_DEV_ROOT_TOKEN_ID", image, "server", "-dev", "-dev-listen-address=0.0.0.0:8200"],
                        env=env, check=True, stdout=subprocess.DEVNULL)
@@ -52,7 +47,18 @@ def main():
                     if attempt == 39:
                         raise
                     time.sleep(.25)
-            subprocess.run(["terraform", "apply", "-target=vault_quota_rate_limit.genesis", "-auto-approve",
+            env["BAO_ADDR"] = env["VAULT_ADDR"]
+            # The module only writes encrypted state, under this Transit key.
+            for path, body in [("sys/mounts/transit/opentofu", {"type": "transit"}),
+                               ("transit/opentofu/keys/permesi-state", {"type": "aes256-gcm96"})]:
+                urlopen(Request(env["VAULT_ADDR"] + "/v1/" + path, data=json.dumps(body).encode(), method="POST",
+                                headers={"X-Vault-Token": token}), timeout=5).close()
+            if providers.is_dir():
+                (work / ".terraform").mkdir()
+                (work / ".terraform/providers").symlink_to(providers, target_is_directory=True)
+            subprocess.run(["tofu", "init", "-lockfile=readonly", "-input=false"], cwd=work, env=env, check=True,
+                           stdout=subprocess.DEVNULL)
+            subprocess.run(["tofu", "apply", "-target=vault_quota_rate_limit.genesis", "-auto-approve",
                             "-input=false"], env=env, cwd=work, check=True, stdout=subprocess.DEVNULL)
             expected = {"signing": ("transit/genesis/sign/genesis-signing", ""),
                         "credentials": ("database/creds/genesis", ""), "pki": ("pki-int/issue/genesis-runtime", ""),

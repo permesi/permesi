@@ -1,3 +1,8 @@
+# Plan-time assertions against mocked providers: no OpenBao server or token is
+# needed, so `just openbao-tofu-test` runs anywhere OpenTofu is installed.
+mock_provider "vault" {}
+mock_provider "random" {}
+
 variables {
   permesi_database_password = "test-only"
   genesis_database_password = "test-only"
@@ -9,6 +14,16 @@ run "pki_roles_and_cert_auth" {
   assert {
     condition     = var.database_sslmode == "verify-full" && strcontains(vault_database_secret_backend_connection.permesi.postgresql[0].connection_url, "sslmode=verify-full") && strcontains(vault_database_secret_backend_connection.genesis.postgresql[0].connection_url, "sslmode=verify-full")
     error_message = "Database connections must default to verified TLS."
+  }
+
+  assert {
+    condition     = alltrue([for c in [vault_database_secret_backend_connection.permesi, vault_database_secret_backend_connection.genesis] : c.postgresql[0].password == null && c.postgresql[0].password_wo_version == 1])
+    error_message = "Database root passwords must be write-only, sent once on a fresh install."
+  }
+
+  assert {
+    condition     = alltrue([for k in ["cert", "approle"] : endswith(vault_quota_rate_limit.genesis[k].path, "/")])
+    error_message = "Auth quota paths must match the trailing slash OpenBao stores, or every apply replaces them."
   }
 
   assert {

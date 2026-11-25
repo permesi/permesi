@@ -49,7 +49,7 @@ This repository is a Rust workspace (2024 edition) with a single shared version 
 - `crates/test_support`: Disposable PostgreSQL 19 and OpenBao 2.7 integration test fixtures
 - `tools/oauth_scenario`: Standalone multi-replica OAuth/HA integration runner ([docs](docs/oauth-scenarios.md))
 
-SQL schemas and bootstrap scripts live in `db/sql/` ([README](db/sql/README.md)); OpenBao Terraform provisioning lives in `openbao/contrib/terraform/` ([README](openbao/contrib/terraform/README.md)); OpenAPI contracts live in `docs/openapi/`.
+SQL schemas and bootstrap scripts live in `db/sql/` ([README](db/sql/README.md)); OpenBao OpenTofu provisioning lives in `openbao/contrib/opentofu/` ([README](openbao/contrib/opentofu/README.md)); OpenAPI contracts live in `docs/openapi/`.
 
 ## Quick Start (Full Local Stack)
 
@@ -57,7 +57,7 @@ SQL schemas and bootstrap scripts live in `db/sql/` ([README](db/sql/README.md))
 
 - **System:** `zsh` (required by the justfile), `podman`, `jq`, `curl`, `xh`, `ripgrep` (`rg`), and [`herdr`](https://herdr.dev) (or `tmux` as fallback)
 - **Languages:** `rust` (stable) with `cargo-watch`, `node` (LTS, for Tailwind CSS builds)
-- **Infrastructure:** `just`, `terraform` (v1.7+), `openbao` (`bao` CLI), `mkcert`, `direnv`
+- **Infrastructure:** `just`, `tofu` ([OpenTofu](https://opentofu.org) v1.11+), `openbao` (`bao` CLI), `mkcert`, `direnv`
 
 ```bash
 # 1. Clone the repository
@@ -146,7 +146,7 @@ Supported connectivity modes (`PERMESI_OPENBAO_URL` / `GENESIS_OPENBAO_URL`):
 2. **TCP AppRole Mode:** `https://...` with `--openbao-role-id` and `--openbao-secret-id` (or single-use `--openbao-wrapped-token`).
 3. **Native Kubernetes Mode (opt-in):** `--openbao-auth-method kubernetes` with `--openbao-kubernetes-role` and a projected ServiceAccount token.
 
-See [openbao/README.md](openbao/README.md#production-readiness-checklist) and [SETUP.md](SETUP.md) for Terraform provisioning, production HA readiness, and lease renewal behavior.
+See [openbao/README.md](openbao/README.md#production-readiness-checklist) and [SETUP.md](SETUP.md) for OpenTofu provisioning, production HA readiness, and lease renewal behavior.
 
 ## Build, Testing & Containers
 
