@@ -76,7 +76,6 @@ http = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls-ring"], optional = true }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"], optional = true }
-reqwest = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -112,6 +111,7 @@ built = { workspace = true, features = ["git2"] }
 git2.workspace = true
 
 [dev-dependencies]
+reqwest = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["full"] }
 hyper-util = { workspace = true }

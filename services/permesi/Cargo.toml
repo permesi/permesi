@@ -110,7 +110,6 @@ time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots"], optional = true }
-tower = { workspace = true }
 tower-http = { workspace = true, features = [
     "trace",
     "propagate-header",
@@ -137,6 +136,7 @@ hmac = { workspace = true }
 service_utils = { workspace = true }
 
 [dev-dependencies]
+tower = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 base32 = "0.5.1"
 serde_cbor_2 = "0.13.0"
