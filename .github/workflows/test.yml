@@ -134,12 +134,13 @@ jobs:
 
   opentofu:
     name: OpenTofu Module
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || inputs.runner || vars.CI_RUNNER || 'self-hosted' }}
+    # Hosted, like the OpenAPI drift job: setup-opentofu unpacks the release with
+    # unzip, which the self-hosted runner image does not ship.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: ./.github/actions/pre-clean-workspace
 
       # The release's SHA256SUMS is verified by the action; the version matches mise.toml.
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
