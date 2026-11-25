@@ -194,8 +194,10 @@ openbao-tofu-apply:
   export TF_VAR_database_host="${TF_VAR_database_host:-postgres-permesi}"
   # The local Postgres container has no TLS; the module default is verify-full.
   export TF_VAR_database_sslmode="${TF_VAR_database_sslmode:-disable}"
-  export TF_VAR_permesi_database_password="${TF_VAR_permesi_database_password:-openbao_permesi}"
-  export TF_VAR_genesis_database_password="${TF_VAR_genesis_database_password:-openbao_genesis}"
+  # The bootstrap passwords db/sql/00_init.sql gives the OpenBao root users. Dev
+  # PostgreSQL trusts every connection, so a mismatch here would go unnoticed.
+  export TF_VAR_permesi_database_password="${TF_VAR_permesi_database_password:-change-me}"
+  export TF_VAR_genesis_database_password="${TF_VAR_genesis_database_password:-change-me}"
 
   if ! bao secrets list -format=json | jq -e 'has("transit/opentofu/")' >/dev/null; then
     bao secrets enable -path=transit/opentofu -description="OpenTofu state encryption" transit >/dev/null
