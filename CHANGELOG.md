@@ -11,6 +11,17 @@ This file records what an operator, integrator or contributor needs to know
 about a release. The GitHub release for each tag lists every commit and carries
 the signed artifacts.
 
+## [Unreleased]
+
+### Changed
+
+- The release qualifies the image digests it has just built with both containment
+  profiles before it creates the tag, the GitHub release or the version tags.
+  Until now only the sandbox candidates of the same commit ran the full suite. A
+  failed qualification leaves nothing published except the untagged
+  `:sha-<commit>` images, and the release can be dispatched again. This adds
+  about 20 minutes to a release.
+
 ## [0.6.0] - 2026-11-25
 
 The first release on OpenBao and PostgreSQL 19.

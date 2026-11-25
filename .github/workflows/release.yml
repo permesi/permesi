@@ -507,13 +507,31 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
+  # Sandbox CI qualified candidate images built from this commit; the images above are a
+  # fresh build of it. Run both containment profiles against exactly these digests, with
+  # the charts on permesi-helm's main that the bump will be built from, before the tag
+  # exists. Every publishing job below waits for `release`, so a failure here leaves only
+  # the untagged `:sha-<commit>` images behind and the release can be dispatched again.
+  qualify:
+    name: Qualify the release images
+    needs: [guard, images]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-qualify.yml
+    with:
+      app_sha: ${{ github.sha }}
+      permesi_digest: ${{ needs.images.outputs.permesi_digest }}
+      genesis_digest: ${{ needs.images.outputs.genesis_digest }}
+      web_digest: ${{ needs.images.outputs.web_digest }}
+
   # The GitHub release gets exactly the built files and no others. Publishing creates the
   # tag at the tested commit.
   release:
     name: GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [guard, build, web-dist, images]
+    needs: [guard, build, web-dist, images, qualify]
     permissions:
       contents: write
       id-token: write

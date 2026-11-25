@@ -179,6 +179,8 @@ Release workflow (workflow_dispatch on develop)
  frontend      the production web build, signed (checksums, cosign, build provenance)
  images        permesi, genesis and web, pushed only as `:sha-<commit>`, keylessly signed
                and OCI-attested
+ qualify       both containment profiles against exactly those image digests, with the
+               charts on permesi-helm's main; nothing below runs unless it passes
  release       exact file set checked, SHA256SUMS, build-provenance attestation, the GitHub
                release (this creates the tag at the tested commit) and a final check that
                the tag and the assets are right

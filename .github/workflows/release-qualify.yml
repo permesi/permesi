@@ -1,0 +1,219 @@
+name: Qualify published images
+
+# Runs the chart repository's containment suite against image digests that were already
+# pushed to GHCR, so the images that ship are the images that were qualified. The release
+# calls it after pushing by digest and before anything is tagged, released or deployed.
+# It can also be started by hand against any published digests, for example the
+# `:develop` images, to try the mechanism without releasing.
+#
+# Flow: resolve one chart revision; pull each digest into an OCI archive under the
+# candidate name the suite already loads, checking every digest on the way; build the
+# rollback core as sandbox qualification does; run both profiles from that chart
+# revision; then require that the fixture recorded exactly these image digests and a
+# passing outcome. Nothing here has write access to the repository, packages or releases.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_sha:
+        description: Full commit the images were built from (their binaries embed it)
+        required: true
+        type: string
+      permesi_digest:
+        description: ghcr.io/permesi/permesi digest (sha256:...)
+        required: true
+        type: string
+      genesis_digest:
+        description: ghcr.io/permesi/genesis digest (sha256:...)
+        required: true
+        type: string
+      web_digest:
+        description: ghcr.io/permesi/web digest (sha256:...)
+        required: true
+        type: string
+      chart_ref:
+        description: permesi-helm branch or commit to qualify with; resolved once to a SHA
+        required: false
+        type: string
+        default: main
+  workflow_call:
+    inputs:
+      app_sha:
+        description: Full commit the images were built from (their binaries embed it)
+        required: true
+        type: string
+      permesi_digest:
+        description: ghcr.io/permesi/permesi digest (sha256:...)
+        required: true
+        type: string
+      genesis_digest:
+        description: ghcr.io/permesi/genesis digest (sha256:...)
+        required: true
+        type: string
+      web_digest:
+        description: ghcr.io/permesi/web digest (sha256:...)
+        required: true
+        type: string
+      chart_ref:
+        description: permesi-helm branch or commit to qualify with; resolved once to a SHA
+        required: false
+        type: string
+        default: main
+    outputs:
+      chart_sha:
+        description: Chart revision both profiles ran
+        value: ${{ jobs.resolve.outputs.chart_sha }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resolve:
+    name: Resolve the chart revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      chart_sha: ${{ steps.chart.outputs.sha }}
+    steps:
+      - id: chart
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SHA: ${{ inputs.app_sha }}
+          CHART_REF: ${{ inputs.chart_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::app_sha must be a full commit"; exit 1; }
+          [[ "$CHART_REF" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "::error::unexpected chart_ref"; exit 1; }
+          sha="$(gh api "repos/permesi/permesi-helm/commits/$CHART_REF" --jq .sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Qualifying with permesi-helm $sha ($CHART_REF)."
+
+  archive:
+    name: Archive the published images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      platform_digests: ${{ steps.pull.outputs.platform_digests }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: pull
+        name: Pull each digest into a verified OCI archive
+        env:
+          APP_SHA: ${{ inputs.app_sha }}
+          PERMESI_DIGEST: ${{ inputs.permesi_digest }}
+          GENESIS_DIGEST: ${{ inputs.genesis_digest }}
+          WEB_DIGEST: ${{ inputs.web_digest }}
+        run: |
+          set -euo pipefail
+          mkdir candidates
+          python3 scripts/release-image-archive.py --app-sha "$APP_SHA" --destination candidates \
+            --image "permesi=ghcr.io/permesi/permesi@$PERMESI_DIGEST" \
+            --image "genesis=ghcr.io/permesi/genesis@$GENESIS_DIGEST" \
+            --image "web=ghcr.io/permesi/web@$WEB_DIGEST" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: upload
+        with:
+          name: published-oci-${{ inputs.app_sha }}-${{ github.run_attempt }}
+          path: candidates/*.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  rollback:
+    name: Build the rollback core
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      rollback_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: permesi/permesi-helm
+          ref: ${{ needs.resolve.outputs.chart_sha }}
+          path: chart
+          persist-credentials: false
+      - name: Select the rollback baseline
+        run: jq -r '"PREVIOUS_SHA=" + .revision' chart/scripts/ci/rollback-baseline.json >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: permesi/permesi
+          ref: ${{ env.PREVIOUS_SHA }}
+          path: previous
+          persist-credentials: false
+      - uses: ./previous/.github/actions/rust-toolchain
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: ./previous/.github/actions/ensure-musl-toolchain
+      # Same build as the chart repository's containment-source action; that action also
+      # resolves a sandbox artifact, which a published-image run does not have.
+      - name: Build the previous core
+        working-directory: previous
+        env:
+          BUILD_GIT_COMMIT_HASH: ${{ env.PREVIOUS_SHA }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p permesi --features telemetry
+          mkdir -p dist-bin
+          cp target/x86_64-unknown-linux-musl/release/permesi dist-bin/
+          image="localhost/permesi-candidate/permesi:$PREVIOUS_SHA"
+          podman build --format oci -f services/permesi/Dockerfile -t "$image" .
+          podman save --format oci-archive -o "$RUNNER_TEMP/previous-permesi.tar" "$image"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: upload
+        with:
+          name: published-rollback-core-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/previous-permesi.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  qualify:
+    name: Qualify (${{ matrix.profile }})
+    needs: [resolve, archive, rollback]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [shared, isolated]
+    env:
+      APP_SHA: ${{ inputs.app_sha }}
+      ARTIFACT_ID: ${{ needs.archive.outputs.artifact_id }}
+      ARTIFACT_DIGEST: ${{ needs.archive.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: permesi/permesi-helm
+          ref: ${{ needs.resolve.outputs.chart_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/containment-profile
+        with:
+          rollback-id: ${{ needs.rollback.outputs.rollback_id }}
+          profile: ${{ matrix.profile }}
+      # The suite ran whatever the fixture recorded; prove that was these digests and that
+      # it finished with a pass, independently of the suite's own exit status.
+      - name: Require the qualified digests and a passing record
+        env:
+          PLATFORM_DIGESTS: ${{ needs.archive.outputs.platform_digests }}
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, os, pathlib
+          fixture = pathlib.Path(os.environ["RUNNER_TEMP"]) / "fixture"
+          expected = json.loads(os.environ["PLATFORM_DIGESTS"])
+          lock = json.loads((fixture / "scripts/quickstart/lock.json").read_text())
+          record = json.loads((fixture / "qualification.json").read_text())
+          ran = {svc: lock["images"][svc]["digest"] for svc in ("permesi", "genesis", "web")}
+          if ran != expected:
+              raise SystemExit(f"qualified digests {ran} differ from the published images {expected}")
+          if lock.get("appRevision") != os.environ["APP_SHA"]:
+              raise SystemExit("fixture application revision differs from the published images' commit")
+          if record.get("outcome") != "passed":
+              raise SystemExit(f"qualification outcome is {record.get('outcome')!r}, not passed")
+          print("Qualified the published digests:", json.dumps(ran, sort_keys=True))
+          EOF
