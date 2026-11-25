@@ -96,7 +96,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
-      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_digest: ${{ steps.digest.outputs.value }}
       platform_digests: ${{ steps.pull.outputs.platform_digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -123,6 +123,15 @@ jobs:
           path: candidates/*.tar
           if-no-files-found: error
           retention-days: 7
+      # The upload reports bare hex; the suite's download check wants the registry form.
+      - id: digest
+        env:
+          RAW: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          value="sha256:${RAW#sha256:}"
+          [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "value=$value" >> "$GITHUB_OUTPUT"
 
   rollback:
     name: Build the rollback core
