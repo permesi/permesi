@@ -24,6 +24,13 @@ the signed artifacts.
   `permesi-helm`'s `main` is still the chart revision the images were qualified
   with. This adds about 20 minutes to a release.
 
+### Security
+
+- The manual OpenBao policies in `SETUP.md` limit `sys/leases/renew` to each
+  service's own database leases, as the OpenTofu module already did; the earlier
+  example let a service token renew any lease. The live provisioning test now
+  asserts that a service can renew its own lease and nothing else.
+
 ## [0.6.0] - 2026-11-25
 
 The first release on OpenBao and PostgreSQL 19.

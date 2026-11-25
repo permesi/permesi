@@ -344,7 +344,14 @@ path "transit/permesi/datakey/plaintext/totp" { capabilities = ["update"] }
 path "secret/permesi/data/config"   { capabilities = ["read"] }
 path "database/creds/permesi"        { capabilities = ["read"] }
 path "auth/token/renew-self"         { capabilities = ["update"] }
-path "sys/leases/renew"              { capabilities = ["update"] }
+path "sys/leases/renew" {
+  capabilities = ["update"]
+  required_parameters = ["lease_id"]
+  allowed_parameters = {
+    "lease_id"  = ["database/creds/permesi/*"]
+    "increment" = []
+  }
+}
 EOF
 ```
 
@@ -355,7 +362,14 @@ path "transit/genesis/sign/genesis-signing" { capabilities = ["update"] }
 path "transit/genesis/keys/genesis-signing" { capabilities = ["read"] }
 path "database/creds/genesis"               { capabilities = ["read"] }
 path "auth/token/renew-self"                { capabilities = ["update"] }
-path "sys/leases/renew"                     { capabilities = ["update"] }
+path "sys/leases/renew" {
+  capabilities = ["update"]
+  required_parameters = ["lease_id"]
+  allowed_parameters = {
+    "lease_id"  = ["database/creds/genesis/*"]
+    "increment" = []
+  }
+}
 EOF
 ```
 

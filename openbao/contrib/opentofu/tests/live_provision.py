@@ -168,10 +168,27 @@ def main():
             len(base64.b64decode(data.get(k, ""))) == 32 for k in ("opaque_server_seed", "mfa_recovery_pepper")))
         check("genesis cannot read the permesi config", bao.call("GET", "secret/permesi/data/config", token=tokens["genesis"])[0] == 403)
 
+        leases = {}
         for svc, db in (("permesi", "permesi"), ("genesis", "genesis")):
             st, creds = bao.call("GET", f"database/creds/{svc}", token=tokens[svc])
             ok = st == 200 and psql_login(creds["data"]["username"], creds["data"]["password"], db)
             check(f"{svc} dynamic database credentials log in to {db}", ok, str(st))
+            leases[svc] = creds.get("lease_id", "") if st == 200 else ""
+        # A stolen service token must not be able to keep another service's database
+        # identity alive, nor any other lease: renewal is limited to its own role's leases.
+        for svc, other in (("permesi", "genesis"), ("genesis", "permesi")):
+            own = bao.call("POST", "sys/leases/renew", token=tokens[svc], body={"lease_id": leases[svc], "increment": 60})[0]
+            check(f"{svc} renews its own database lease", own == 200, str(own))
+            denied = [bao.call("POST", "sys/leases/renew", token=tokens[svc], body=body)[0] for body in (
+                {"lease_id": leases[other]},
+                {"lease_id": f"database/creds/{other}/anything"},
+                {"lease_id": f"auth/approle/login/{svc}"},
+                {"increment": 60},
+                {"lease_id": leases[svc], "unexpected": "x"})]
+            check(f"{svc} cannot renew the {other} lease, another kind of lease, or pass other parameters",
+                  denied == [403] * 5, str(denied))
+            path_form = bao.call("POST", f"sys/leases/renew/{leases[other]}", token=tokens[svc])[0]
+            check(f"{svc} cannot renew the {other} lease through the path form", path_form == 403, str(path_form))
         check("permesi cannot mint genesis database credentials", bao.call("GET", "database/creds/genesis", token=tokens["permesi"])[0] == 403)
         check("genesis cannot mint permesi database credentials", bao.call("GET", "database/creds/permesi", token=tokens["genesis"])[0] == 403)
         for svc in ("permesi", "genesis"):
