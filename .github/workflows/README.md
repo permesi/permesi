@@ -65,7 +65,7 @@ before interpreting queue or wall-time differences as a speedup.
   retry groups: Permesi (`-p permesi`) and Other workspace components
   (`--workspace --exclude permesi`), which automatically includes new workspace members.
   Each runs default library/binary tests followed by its complete all-feature suite,
-  including integration targets and doctests. `max-parallel: 1` bounds container pressure;
+  including integration targets and doctests. The two groups run side by side on separate runner VMs, with eight test threads each;
   `fail-fast: false` preserves the other group's result after a failure. A failed group
   can be rerun without repeating the successful group. Each configuration has a separate
   `--no-run --timings` compilation step and group-specific HTML timing artifacts, uploaded
@@ -147,8 +147,8 @@ before interpreting queue or wall-time differences as a speedup.
   and harness subprocesses; runner and service identities must match exactly before
   infrastructure startup. Self-reported labels do not replace same-run artifact trust.
   Executable code and build identity remain intact. Source is never
-  replaced by an artifact from another branch or workflow. The matrix remains sequential
-  to bound local fixture pressure. Each matrix member runs all current full-suite cases,
+  replaced by an artifact from another branch or workflow. The two topologies run side by side
+  on separate runner VMs. Each matrix member runs all current full-suite cases,
   recovery unit tests and harness checks, including rolling
   replacements, backend loss and SIGKILL recovery of a replacement process. Sanitized
   report artifact names include the replica count. Harness failures identify the
@@ -300,6 +300,9 @@ Helm sandbox commit. Both containment profiles use its immutable artifact ID,
 archive checksum and manifest digests. A repository-scoped success status links
 to the tested pair after both profiles pass. The release dispatch uses its
 existing event. Sandbox runs use disposable clusters and GitHub Actions artifact
-storage. After the application gates pass, CI resolves the Helm sandbox head, checks
+storage. Builds, scenarios, browser tests and this qualification start alongside the
+tests rather than after them; `CI OK` still needs every job, the publishing jobs
+wait for the tests, and `containment / record` writes the status only when `CI OK`,
+coverage and both profiles passed. As soon as the candidate images exist, CI resolves the Helm sandbox head, checks
 out that commit and uses its source and
 profile actions for every qualification step.

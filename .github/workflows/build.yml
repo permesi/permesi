@@ -26,10 +26,12 @@ jobs:
     uses: ./.github/workflows/coverage.yml
     secrets: inherit
 
+  # The builds, scenarios and browser tests start with the tests instead of after them:
+  # the three runners sit idle otherwise. `CI OK` still needs every one of them, and the
+  # jobs that publish (`deploy-frontend`, `package`) wait for the tests explicitly.
   build:
     name: Build
     runs-on: ${{ matrix.os }}
-    needs: test
 
     strategy:
       matrix:
@@ -77,7 +79,6 @@ jobs:
   frontend-build:
     name: Build Frontend
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
-    needs: test
     permissions:
       contents: read
     steps:
@@ -163,7 +164,7 @@ jobs:
   # not overwrite the signed production build.
   deploy-frontend:
     name: Deploy Frontend
-    needs: frontend-build
+    needs: [test, frontend-build]
     if: github.ref_name != 'main' && github.ref_name != 'sandbox'
     uses: ./.github/workflows/frontend.yml
     permissions:
@@ -174,7 +175,6 @@ jobs:
 
   scenario-build:
     name: Build scenario binaries
-    needs: test
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -207,7 +207,7 @@ jobs:
 
   oauth-scenarios:
     name: OAuth scenarios (${{ matrix.replicas }} replicas)
-    needs: [test, frontend-build, scenario-build]
+    needs: [frontend-build, scenario-build]
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     timeout-minutes: 30
     env:
@@ -215,8 +215,8 @@ jobs:
     strategy:
       fail-fast: false
       # Each topology runs several local PostgreSQL/OpenBao/service stacks, and the
-      # harness starts two more stacks concurrently. Share the host sequentially.
-      max-parallel: 1
+      # harness starts two more stacks concurrently. A runner VM takes one job of this
+      # repository at a time, so the two topologies run side by side on separate VMs.
       matrix:
         replicas: [3, 5]
     steps:
@@ -286,7 +286,7 @@ jobs:
 
   browser-tests:
     name: Browser tests
-    needs: [test, frontend-build]
+    needs: [frontend-build]
     # Use a fresh host for browser profiles and the preinstalled Chromium-compatible browser.
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -364,7 +364,7 @@ jobs:
 
   package:
     name: Package GHCR
-    needs: [build, frontend-build]
+    needs: [test, build, frontend-build]
     if: github.ref_name == 'develop'
     runs-on: ${{ vars.CI_RUNNER || 'self-hosted' }}
     permissions:
@@ -453,14 +453,45 @@ jobs:
             fi
           done
 
+  # Chart qualification takes about 50 minutes, so it starts as soon as the candidate
+  # images exist and runs alongside the tests. Its result only counts through
+  # `containment-record`, which also needs `CI OK` and coverage.
   containment:
     if: github.repository == 'permesi/permesi' && github.ref == 'refs/heads/sandbox'
-    needs: [ci-ok, coverage, sandbox-images]
+    needs: [sandbox-images]
     permissions:
       contents: read
       actions: read
-      statuses: write
     uses: ./.github/workflows/containment.yml
     with:
       artifact_id: ${{ needs.sandbox-images.outputs.artifact_id }}
       artifact_digest: ${{ needs.sandbox-images.outputs.artifact_digest }}
+
+  # The release guard reads this status. It is written only when every gate of this run
+  # passed and both sandbox branches still point at the qualified pair; the chart
+  # revision was resolved when qualification started, so a chart push since then leaves
+  # this run unrecorded and the chart repository's own containment qualifies the new pair.
+  containment-record:
+    name: containment / record
+    if: github.repository == 'permesi/permesi' && github.ref == 'refs/heads/sandbox'
+    needs: [ci-ok, coverage, containment]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Record the successful pair on the triggering commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SHA: ${{ needs.containment.outputs.app_sha }}
+          HELM_SHA: ${{ needs.containment.outputs.helm_sha }}
+          ARTIFACT_ID: ${{ needs.containment.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$APP_SHA" == "$GITHUB_SHA" && "$HELM_SHA" =~ ^[0-9a-f]{40}$ && "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$(gh api repos/permesi/permesi/git/ref/heads/sandbox --jq .object.sha)" == "$APP_SHA" ]]
+          [[ "$(gh api repos/permesi/permesi-helm/git/ref/heads/sandbox --jq .object.sha)" == "$HELM_SHA" ]]
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context="containment/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            -f description="Helm $HELM_SHA, OCI artifact $ARTIFACT_ID" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" >/dev/null

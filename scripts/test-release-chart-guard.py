@@ -102,10 +102,9 @@ class Wiring(unittest.TestCase):
         self.assertLess(guard, recipe.index("gh workflow run release.yml"))
 
     def test_the_recorded_status_format_is_the_one_the_guard_reads(self):
-        record = (ROOT / ".github/workflows/containment.yml").read_text()
+        record = (ROOT / ".github/workflows/build.yml").read_text().split("\n  containment-record:\n", 1)[1]
         self.assertIn('context="containment/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"', record)
-        self.assertIn('counterpart="Helm $HELM_SHA"', record)
-        self.assertIn('description="$counterpart, OCI artifact $ARTIFACT_ID"', record)
+        self.assertIn('description="Helm $HELM_SHA, OCI artifact $ARTIFACT_ID"', record)
 
 
 if __name__ == "__main__":

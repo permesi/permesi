@@ -73,6 +73,11 @@ The first release on OpenBao and PostgreSQL 19.
 
 ### Changed
 
+- Sandbox CI runs its builds, OAuth scenarios, browser tests and chart
+  qualification alongside the tests instead of after them, so a full run no
+  longer waits for each stage in turn. `CI OK` still requires every job, and
+  the qualification status is recorded only when `CI OK` passed as well. A chart
+  push during an application run now leaves that run unrecorded.
 - `just release` and the release workflow refuse to release a commit until
   `permesi/permesi-helm`'s `main` contains the chart revision that sandbox CI
   qualified with it, so a release can no longer pair new images with older
