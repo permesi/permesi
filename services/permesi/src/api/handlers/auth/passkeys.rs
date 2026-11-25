@@ -25,12 +25,12 @@ use crate::api::handlers::{
         utils::extract_client_ip,
         zero_token::{require_zero_token, zero_token_error_response},
     },
+    webauthn_payload_status,
 };
 use crate::webauthn::{PasskeyCredential, PasskeyService, deserialize_passkey, serialize_passkey};
 use axum::{
     Json,
-    body::Bytes,
-    extract::{Extension, State},
+    extract::{Extension, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
 };
@@ -43,7 +43,6 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 use webauthn_rs::prelude::{AuthenticationResult, Passkey, PublicKeyCredential};
 
-const MAX_WEBAUTHN_JSON_BYTES: usize = 32 * 1024;
 type HandlerError = Box<axum::response::Response>;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -59,7 +58,9 @@ pub struct PasskeyLoginStartResponse {
 #[serde(deny_unknown_fields)]
 pub struct PasskeyLoginFinishRequest {
     pub auth_id: String,
-    pub response: serde_json::Value,
+    /// `PublicKeyCredential` JSON returned by `navigator.credentials.get()`.
+    #[schema(value_type = Object)]
+    pub response: PublicKeyCredential,
 }
 
 #[utoipa::path(
@@ -157,6 +158,7 @@ pub async fn passkey_login_start(
         (status = 204, description = "Passkey login finished"),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Unauthorized"),
+        (status = 413, description = "Payload too large"),
         (status = 429, description = "Rate limited")
     ),
     tag = "auth"
@@ -169,12 +171,18 @@ pub async fn passkey_login_finish(
     auth_state: State<Arc<AuthState>>,
     admission: State<Arc<AdmissionVerifier>>,
     passkey_service: State<Arc<PasskeyService>>,
-    body: Bytes,
+    payload: Result<Json<PasskeyLoginFinishRequest>, JsonRejection>,
 ) -> impl IntoResponse {
     let request_id = request_id.to_string();
-    let request = match parse_passkey_finish(&body) {
-        Ok(parsed) => parsed,
-        Err(response) => return *response,
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(rejection) => {
+            return (
+                webauthn_payload_status(&rejection),
+                "Invalid WebAuthn response",
+            )
+                .into_response();
+        }
     };
 
     let client_ip = extract_client_ip(&headers);
@@ -213,23 +221,12 @@ pub async fn passkey_login_finish(
             .into_response();
     };
 
-    let auth_response: PublicKeyCredential = match serde_json::from_value(request.response) {
-        Ok(res) => res,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Invalid WebAuthn response: {err}"),
-            )
-                .into_response();
-        }
-    };
-
     let (user_id, auth_result, mut guard) = match verify_passkey_assertion(
         &pool,
         &passkey_service,
         auth_id,
         &origin,
-        auth_response,
+        request.response,
         &request_id,
         auth_state.config().opaque_exchange_timeout_ms(),
     )
@@ -527,20 +524,6 @@ async fn issue_session_for_user(
                 .into_response()
         }
     }
-}
-
-fn parse_passkey_finish(
-    body: &Bytes,
-) -> Result<PasskeyLoginFinishRequest, Box<axum::response::Response>> {
-    if body.len() > MAX_WEBAUTHN_JSON_BYTES {
-        return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response()));
-    }
-
-    let request: PasskeyLoginFinishRequest = serde_json::from_slice(body).map_err(|_| {
-        Box::new((StatusCode::BAD_REQUEST, "Invalid WebAuthn response").into_response())
-    })?;
-
-    Ok(request)
 }
 
 fn extract_origin(

@@ -7,8 +7,7 @@
 use crate::api::timestamp::rfc3339;
 use axum::{
     Json,
-    body::Bytes,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -31,11 +30,10 @@ use super::{
         principal::require_auth,
         session::extract_session_token,
     },
-    verify_token,
+    verify_token, webauthn_payload_status,
 };
 use crate::webauthn::{PasskeyRegistrationError, PasskeyRepo, PasskeyService, serialize_passkey};
 
-const MAX_WEBAUTHN_JSON_BYTES: usize = 32 * 1024;
 const ZERO_TOKEN_HEADER: &str = "x-permesi-zero-token";
 type HandlerError = Box<axum::response::Response>;
 
@@ -59,7 +57,9 @@ pub struct PasskeyRegisterOptionsResponse {
 #[serde(deny_unknown_fields)]
 pub struct PasskeyRegisterFinishRequest {
     pub reg_id: String,
-    pub response: serde_json::Value,
+    /// `PublicKeyCredential` JSON returned by `navigator.credentials.create()`.
+    #[schema(value_type = Object)]
+    pub response: RegisterPublicKeyCredential,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -224,7 +224,7 @@ pub async fn register_finish(
     auth_state: State<Arc<AuthState>>,
     admission: State<Arc<AdmissionVerifier>>,
     passkey_service: State<Arc<PasskeyService>>,
-    body: Bytes,
+    payload: Result<Json<PasskeyRegisterFinishRequest>, JsonRejection>,
 ) -> impl IntoResponse {
     let context = match load_register_finish_context(
         &headers,
@@ -233,7 +233,7 @@ pub async fn register_finish(
         &auth_state,
         &admission,
         &passkey_service,
-        &body,
+        payload,
     )
     .await
     {
@@ -528,7 +528,7 @@ async fn load_register_finish_context(
     auth_state: &AuthState,
     admission: &AdmissionVerifier,
     passkey_service: &PasskeyService,
-    body: &Bytes,
+    payload: Result<Json<PasskeyRegisterFinishRequest>, JsonRejection>,
 ) -> Result<RegisterFinishContext, HandlerError> {
     let principal = match require_auth(headers, pool).await {
         Ok(principal) => principal,
@@ -545,7 +545,7 @@ async fn load_register_finish_context(
         "passkey register finish requested"
     );
 
-    let (reg_id, reg_response) = parse_register_finish(body)?;
+    let (reg_id, reg_response) = parse_register_finish(payload)?;
 
     if let Err(response) = enforce_rate_limits(headers, auth_state, &principal.email).await {
         warn!(
@@ -582,26 +582,20 @@ async fn load_register_finish_context(
     })
 }
 
+/// Unpacks the extracted finish body after the session and recent-auth checks, so an
+/// unauthenticated caller still gets 401 before any 400 or 413 about the body.
 fn parse_register_finish(
-    body: &Bytes,
+    payload: Result<Json<PasskeyRegisterFinishRequest>, JsonRejection>,
 ) -> Result<(Uuid, RegisterPublicKeyCredential), HandlerError> {
-    if body.len() > MAX_WEBAUTHN_JSON_BYTES {
-        return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response()));
-    }
-
-    let request: PasskeyRegisterFinishRequest = serde_json::from_slice(body)
-        .map_err(|_| Box::new((StatusCode::BAD_REQUEST, "Invalid payload").into_response()))?;
+    let Json(request) = payload.map_err(|rejection| {
+        Box::new((webauthn_payload_status(&rejection), "Invalid payload").into_response())
+    })?;
 
     let reg_id = Uuid::parse_str(request.reg_id.trim()).map_err(|_| {
         Box::new((StatusCode::BAD_REQUEST, "Invalid registration ID").into_response())
     })?;
 
-    let reg_response: RegisterPublicKeyCredential = serde_json::from_value(request.response)
-        .map_err(|_| {
-            Box::new((StatusCode::BAD_REQUEST, "Invalid WebAuthn response").into_response())
-        })?;
-
-    Ok((reg_id, reg_response))
+    Ok((reg_id, request.response))
 }
 
 /// Persists a verified credential and audit in the current-session lifecycle transaction.

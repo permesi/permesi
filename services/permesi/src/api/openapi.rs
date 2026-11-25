@@ -1,5 +1,8 @@
-use super::handlers::{auth, authorize, health, me, me_webauthn, orgs, token, userinfo, users};
+use super::handlers::{
+    MAX_WEBAUTHN_JSON_BYTES, auth, authorize, health, me, me_webauthn, orgs, token, userinfo, users,
+};
 use super::state::AppState;
+use axum::extract::DefaultBodyLimit;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::{Contact, InfoBuilder, License, OpenApiBuilder, Tag};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -29,7 +32,7 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(auth::opaque::login::opaque_login_start))
         .routes(routes!(auth::opaque::login::opaque_login_finish))
         .routes(routes!(auth::passkeys::passkey_login_start))
-        .routes(routes!(auth::passkeys::passkey_login_finish))
+        .merge(webauthn_finish_routes())
         .routes(routes!(auth::opaque::reauth::opaque_reauth_start))
         .routes(routes!(auth::opaque::reauth::opaque_reauth_finish))
         .routes(routes!(auth::opaque::password::opaque_password_start))
@@ -39,9 +42,7 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(auth::mfa::totp_enroll_finish))
         .routes(routes!(auth::mfa::totp_verify))
         .routes(routes!(auth::mfa::webauthn::register_start))
-        .routes(routes!(auth::mfa::webauthn::register_finish))
         .routes(routes!(auth::mfa::webauthn::authenticate_start))
-        .routes(routes!(auth::mfa::webauthn::authenticate_finish))
         .routes(routes!(auth::verification::verify_email))
         .routes(routes!(auth::verification::resend_verification))
         .routes(routes!(auth::session::session))
@@ -64,7 +65,6 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(me::list_security_keys))
         .routes(routes!(auth::mfa::webauthn::delete_key))
         .routes(routes!(me_webauthn::register_options))
-        .routes(routes!(me_webauthn::register_finish))
         .routes(routes!(me_webauthn::list_credentials))
         .routes(routes!(me_webauthn::delete_credential))
         .routes(routes!(me::regenerate_recovery_codes))
@@ -133,6 +133,18 @@ pub(crate) fn api_router() -> OpenApiRouter<AppState> {
 }
 
 /// Keep account and designation lifecycle routes in the generated live contract.
+/// The `WebAuthn` finish endpoints take the browser credential through the `Json`
+/// extractor, so the body is capped here before any parsing; the handlers map the
+/// rejection to 413 or 400 at their usual place in the authorization order.
+fn webauthn_finish_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(auth::passkeys::passkey_login_finish))
+        .routes(routes!(auth::mfa::webauthn::register_finish))
+        .routes(routes!(auth::mfa::webauthn::authenticate_finish))
+        .routes(routes!(me_webauthn::register_finish))
+        .layer(DefaultBodyLimit::max(MAX_WEBAUTHN_JSON_BYTES))
+}
+
 fn user_lifecycle_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(users::lifecycle::suspend))

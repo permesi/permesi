@@ -737,6 +737,7 @@ async fn webauthn_http_login_commits_authority_and_rejects_replay_or_disabled_us
         Request::builder()
             .method("POST")
             .uri("/finish")
+            .header(CONTENT_TYPE, "application/json")
             .header("Origin", ORIGIN)
             .header("X-Permesi-Zero-Token", &zero)
             .body(Body::from(body.clone()))
@@ -798,6 +799,7 @@ async fn webauthn_http_login_commits_authority_and_rejects_replay_or_disabled_us
             Request::builder()
                 .method("POST")
                 .uri("/finish")
+                .header(CONTENT_TYPE, "application/json")
                 .header("Origin", ORIGIN)
                 .header("X-Permesi-Zero-Token", &zero)
                 .body(Body::from(serde_json::to_vec(
@@ -870,6 +872,7 @@ async fn webauthn_http_passkey_mfa_storage_failure_returns_unavailable_and_rolls
             Request::builder()
                 .method("POST")
                 .uri("/finish")
+                .header(CONTENT_TYPE, "application/json")
                 .header("Origin", ORIGIN)
                 .header("X-Permesi-Zero-Token", &zero)
                 .body(Body::from(serde_json::to_vec(
@@ -915,6 +918,7 @@ async fn webauthn_http_passkey_mfa_storage_failure_returns_unavailable_and_rolls
             Request::builder()
                 .method("POST")
                 .uri("/finish")
+                .header(CONTENT_TYPE, "application/json")
                 .header("Origin", ORIGIN)
                 .header("X-Permesi-Zero-Token", &zero)
                 .body(Body::from(serde_json::to_vec(
@@ -1053,6 +1057,80 @@ async fn webauthn_malformed_finish_exhausts_shared_challenge() -> Result<()> {
         .fetch_one(&db.pool)
         .await?;
     assert_eq!(sessions, 0);
+    Ok(())
+}
+
+/// The served router caps the session-bound `WebAuthn` finish bodies at 32 KiB, but only
+/// after the session check: callers without a session still get 401, and an oversized
+/// MFA proof spends a challenge attempt like any other malformed proof.
+#[tokio::test]
+async fn webauthn_finish_body_cap_applies_after_session_checks() -> Result<()> {
+    use crate::api::{
+        handlers::{MAX_WEBAUTHN_JSON_BYTES, auth::storage},
+        state::AppState,
+    };
+    let db = TestDb::new()
+        .await?
+        .context("WebAuthn body cap regression requires a container runtime")?;
+    let challenged = insert_test_user(&db.pool).await?;
+    let challenge = storage::insert_mfa_challenge_session(&db.pool, challenged, 300).await?;
+    let enrolling = insert_test_user(&db.pool).await?;
+    super::super::mfa::storage::upsert_mfa_state(
+        &db.pool,
+        enrolling,
+        super::super::mfa::MfaState::RequiredUnenrolled,
+        None,
+    )
+    .await?;
+    let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, enrolling, 300).await?;
+    let full_user = insert_test_user(&db.pool).await?;
+    let full = storage::insert_session(&db.pool, full_user, 300).await?;
+    let app = crate::api::build_router(AppState::for_tests(db.pool.clone())?)?;
+
+    let padding = "A".repeat(MAX_WEBAUTHN_JSON_BYTES);
+    let oversized = serde_json::to_vec(&json!({
+        "auth_id": Uuid::new_v4(),
+        "reg_id": Uuid::new_v4(),
+        "label": "key",
+        "response": {"id": padding},
+    }))?;
+    let post = |path: &str, session: Option<&str>| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("Origin", ORIGIN)
+            .header(CONTENT_TYPE, "application/json");
+        if let Some(token) = session {
+            request = request.header(COOKIE, format!("permesi_session={token}"));
+        }
+        request.body(Body::from(oversized.clone()))
+    };
+    let routes = [
+        (
+            "/v1/auth/mfa/webauthn/authenticate/finish",
+            challenge.as_str(),
+        ),
+        ("/v1/auth/mfa/webauthn/register/finish", bootstrap.as_str()),
+        ("/v1/me/webauthn/register/finish", full.as_str()),
+    ];
+    for (path, session) in routes {
+        let anonymous = app.clone().oneshot(post(path, None)?).await?;
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let authenticated = app.clone().oneshot(post(path, Some(session))?).await?;
+        assert_eq!(
+            authenticated.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{path}"
+        );
+    }
+
+    let attempts: i32 = sqlx::query_scalar(
+        "SELECT failed_attempts FROM user_mfa_challenge_sessions WHERE session_hash=$1",
+    )
+    .bind(hash_session_token(&challenge))
+    .fetch_one(&db.pool)
+    .await?;
+    assert_eq!(attempts, 1);
     Ok(())
 }
 
@@ -1417,6 +1495,7 @@ async fn webauthn_http_concurrent_logins_do_not_starve_the_issuance_pool() -> Re
         let request = Request::builder()
             .method("POST")
             .uri("/finish")
+            .header(CONTENT_TYPE, "application/json")
             .header("Origin", ORIGIN)
             .header("X-Permesi-Zero-Token", &zero)
             .body(Body::from(serde_json::to_vec(
@@ -1508,6 +1587,7 @@ async fn webauthn_http_login_cutoff_rechecks_consumed_proof_after_identity_wait(
                 Request::builder()
                     .method("POST")
                     .uri("/finish")
+                    .header(CONTENT_TYPE, "application/json")
                     .header("Origin", ORIGIN)
                     .header("X-Permesi-Zero-Token", zero)
                     .body(Body::from(serde_json::to_vec(

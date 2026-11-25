@@ -17,11 +17,12 @@ use crate::{
         utils::extract_client_ip,
         utils::hash_session_token,
     },
+    api::handlers::webauthn_payload_status,
     webauthn::{SecurityKeyRepo, SecurityKeyService, VerifiedKey},
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -125,7 +126,8 @@ pub async fn register_start(
         (status = 503, description = "Authentication storage unavailable"),
         (status = 204, description = "Security key registered successfully"),
         (status = 400, description = "Invalid registration response"),
-        (status = 401, description = "Unauthorized or full session requires recent authentication")
+        (status = 401, description = "Unauthorized or full session requires recent authentication"),
+        (status = 413, description = "Payload too large")
     ),
     tag = "auth"
 )]
@@ -134,15 +136,22 @@ pub async fn register_finish(
     pool: State<PgPool>,
     auth_state: State<Arc<AuthState>>,
     webauthn_service: State<Arc<SecurityKeyService>>,
-    payload: Option<Json<WebauthnRegisterFinishRequest>>,
+    payload: Result<Json<WebauthnRegisterFinishRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let principal = match require_any_auth(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
 
-    let Some(Json(request)) = payload else {
-        return (StatusCode::BAD_REQUEST, "Missing payload").into_response();
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(rejection) => {
+            return (
+                webauthn_payload_status(&rejection),
+                "Invalid WebAuthn response",
+            )
+                .into_response();
+        }
     };
 
     let Ok(reg_id) = Uuid::parse_str(&request.reg_id) else {
@@ -158,24 +167,13 @@ pub async fn register_finish(
         Err(response) => return *response,
     };
 
-    let reg_response: RegisterPublicKeyCredential = match serde_json::from_value(request.response) {
-        Ok(res) => res,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Invalid WebAuthn response: {err}"),
-            )
-                .into_response();
-        }
-    };
-
     let client_ip = extract_client_ip(&headers);
 
     match webauthn_service
         .verify_registration(
             reg_id,
             &origin,
-            reg_response,
+            request.response,
             principal.user_id,
             &session_hash,
         )
@@ -319,6 +317,7 @@ pub async fn authenticate_start(
         (status = 204, description = "Authentication successful"),
         (status = 400, description = "Invalid authentication response"),
         (status = 401, description = "Unauthorized"),
+        (status = 413, description = "Payload too large"),
         (status = 429, description = "Terminal MFA challenge exhaustion (mfa_challenge_exhausted)")
     ),
     tag = "auth"
@@ -328,25 +327,25 @@ pub async fn authenticate_finish(
     pool: State<PgPool>,
     auth_state: State<Arc<AuthState>>,
     webauthn_service: State<Arc<SecurityKeyService>>,
-    payload: Result<
-        Json<WebauthnAuthenticateFinishRequest>,
-        axum::extract::rejection::JsonRejection,
-    >,
+    payload: Result<Json<WebauthnAuthenticateFinishRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let principal = match require_mfa_challenge(&headers, &pool).await {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
 
-    let Ok(Json(request)) = payload else {
-        return super::reject_challenge(
-            &pool,
-            &headers,
-            principal.user_id,
-            &auth_state,
-            StatusCode::BAD_REQUEST,
-        )
-        .await;
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(rejection) => {
+            return super::reject_challenge(
+                &pool,
+                &headers,
+                principal.user_id,
+                &auth_state,
+                webauthn_payload_status(&rejection),
+            )
+            .await;
+        }
     };
 
     let Ok(auth_id) = Uuid::parse_str(&request.auth_id) else {
@@ -375,27 +374,13 @@ pub async fn authenticate_finish(
         .await;
     };
 
-    let auth_response: PublicKeyCredential = match serde_json::from_value(request.response) {
-        Ok(res) => res,
-        Err(_) => {
-            return super::reject_challenge(
-                &pool,
-                &headers,
-                principal.user_id,
-                &auth_state,
-                StatusCode::BAD_REQUEST,
-            )
-            .await;
-        }
-    };
-
     let client_ip = extract_client_ip(&headers);
 
     match webauthn_service
         .auth_finish(
             auth_id,
             &origin,
-            auth_response,
+            request.response,
             principal.user_id,
             &session_hash,
         )

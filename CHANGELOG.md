@@ -124,6 +124,12 @@ The first release on OpenBao and PostgreSQL 19.
   runtime key cannot obtain the service's OpenBao token; only the bootstrap
   certificates authenticate to cert auth.
 - OpenBao connects to PostgreSQL over verified TLS unless told otherwise.
+- The four WebAuthn finish endpoints (passkey login, passkey registration and the
+  MFA security-key register and authenticate) parse the browser credential straight
+  into its typed form and share one 32 KiB body cap; the MFA endpoints previously
+  accepted up to 2 MB of arbitrary JSON. They now require
+  `Content-Type: application/json`, answer an oversized body with 413 after the
+  usual session check, and no longer echo parser errors back to the caller.
 - Findings from the stabilization review that remain open are listed in
   `TODO.md`.
 

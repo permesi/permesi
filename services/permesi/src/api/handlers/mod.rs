@@ -23,6 +23,25 @@ use std::{
 use tokio::sync::RwLock;
 use tracing::{debug, instrument, warn};
 
+/// Body cap for the `WebAuthn` finish endpoints, enforced by the route layer in
+/// `api::openapi::webauthn_finish_routes` before any JSON is parsed. A browser credential,
+/// attestation included, is a few KiB; anything larger is refused with 413.
+pub(crate) const MAX_WEBAUTHN_JSON_BYTES: usize = 32 * 1024;
+
+/// Status for a `WebAuthn` finish body the `Json` extractor refused: 413 when it exceeded
+/// [`MAX_WEBAUTHN_JSON_BYTES`], otherwise 400 (wrong content type, malformed JSON or a
+/// credential that does not match the `webauthn-rs` types). The serde error stays out of
+/// the response because it can quote attacker-supplied input.
+pub(crate) fn webauthn_payload_status(
+    rejection: &axum::extract::rejection::JsonRejection,
+) -> axum::http::StatusCode {
+    if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        axum::http::StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        axum::http::StatusCode::BAD_REQUEST
+    }
+}
+
 const MIN_TOKEN_TTL_SECONDS: i64 = 60;
 const MAX_TOKEN_TTL_SECONDS: i64 = 180;
 const ADMISSION_ACTION: &str = "admission";

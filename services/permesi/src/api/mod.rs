@@ -738,6 +738,46 @@ mod tests {
         Ok(())
     }
 
+    /// Passkey login parses its body before any other check, so the served router's
+    /// `WebAuthn` body cap and credential typing are observable without a database.
+    #[tokio::test]
+    async fn served_router_caps_and_types_passkey_finish_bodies() -> Result<()> {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let finish = |content_type: Option<&str>, body: Vec<u8>| {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/auth/passkey/login/finish");
+            if let Some(value) = content_type {
+                request = request.header("content-type", value);
+            }
+            request.body(axum::body::Body::from(body))
+        };
+        let padding = "A".repeat(super::handlers::MAX_WEBAUTHN_JSON_BYTES);
+        let oversized =
+            serde_json::to_vec(&serde_json::json!({"auth_id": "x", "response": {"id": padding}}))?;
+        let response = served_app()?
+            .oneshot(finish(Some("application/json"), oversized)?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // A body the old `Bytes` handler accepted without a content type is now refused.
+        let untyped = br#"{"auth_id":"x","response":{}}"#.to_vec();
+        let response = served_app()?.oneshot(finish(None, untyped)?).await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // A credential that does not fit the webauthn-rs type is a plain 400 that does not
+        // quote the attacker-supplied value back.
+        let hostile = br#"{"auth_id":"x","response":{"id":"<script>","rawId":7}}"#.to_vec();
+        let response = served_app()?
+            .oneshot(finish(Some("application/json"), hostile)?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let envelope = error_envelope(response).await?;
+        assert_eq!(envelope.error.message, "Invalid WebAuthn response");
+        Ok(())
+    }
+
     /// Public saturation must leave authenticated management and session checks reachable.
     #[tokio::test]
     async fn public_saturation_preserves_session_management_and_health() -> Result<()> {

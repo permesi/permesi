@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 
 use super::session_kind::SessionKind;
 
@@ -130,7 +131,9 @@ pub struct WebauthnRegisterStartResponse {
 pub struct WebauthnRegisterFinishRequest {
     pub reg_id: String,
     pub label: String,
-    pub response: serde_json::Value,
+    /// `PublicKeyCredential` JSON returned by `navigator.credentials.create()`.
+    #[schema(value_type = Object)]
+    pub response: RegisterPublicKeyCredential,
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
@@ -142,7 +145,9 @@ pub struct WebauthnAuthenticateStartResponse {
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct WebauthnAuthenticateFinishRequest {
     pub auth_id: String,
-    pub response: serde_json::Value,
+    /// `PublicKeyCredential` JSON returned by `navigator.credentials.get()`.
+    #[schema(value_type = Object)]
+    pub response: PublicKeyCredential,
 }
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
