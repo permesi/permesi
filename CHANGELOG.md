@@ -11,7 +11,7 @@ This file records what an operator, integrator or contributor needs to know
 about a release. The GitHub release for each tag lists every commit and carries
 the signed artifacts.
 
-## [0.6.0] - 2026-11-22
+## [0.6.0] - 2026-11-25
 
 The first release on OpenBao and PostgreSQL 19.
 
