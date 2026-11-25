@@ -422,21 +422,6 @@ jobs:
             ${CONTAINER_TOOL} push "${image}:develop"
           done
 
-  # TEMPORARY: trial of release-qualify.yml against the released 0.6.0 image digests
-  # (3aecaf9), which are OCI indexes. A new workflow cannot be dispatched by hand until it
-  # is on the default branch. Removed again once the trial has run; not part of `CI OK`.
-  qualify-published-trial:
-    if: github.ref_name == 'sandbox'
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/release-qualify.yml
-    with:
-      app_sha: 3aecaf97ddfcc5d06f78644e44d605a1de4718dd
-      permesi_digest: sha256:2a0098959e21b7019622a9d47d14ce014f9b53b19e09c8acee7b4f998e8f6720
-      genesis_digest: sha256:2a8b649f3bd17536932b3af9a18b6bcf7861c80f2f6332e75def3a77295b58d8
-      web_digest: sha256:741bcbec18f4e3abd14d8cb57d846604c285ffc5d3796077acf560fe20c7c0cf
-
   # One aggregate check for branch protection and the release flow: it passes only
   # when every test and build job succeeded, so the required check never depends on
   # job or matrix names. Coverage and the deploy/package side effects are not gates.
