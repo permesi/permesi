@@ -188,7 +188,13 @@ const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
 /// libpq and sqlx accept `?password=...` and an unencoded `&` or `;` in a password
 /// turns part of it into a name or into the value of another parameter. Only
 /// `postgres://` and `postgresql://` URLs are shown at all: without the `//` the whole
-/// rest of the string parses as an opaque path.
+/// rest of the string parses as an opaque path. A value that holds whitespace or a
+/// control character is not shown either, because a URL parser silently removes tabs
+/// and line breaks and would join text from another line to the database name.
+///
+/// The limit of this function: plain text standing where a host, a database name or the
+/// value of a known setting belongs is shown as that. No check can tell a database name
+/// from a token made of the same characters.
 #[must_use]
 pub fn loggable_dsn(dsn: &str) -> String {
     const UNSHOWN: &str = "invalid-dsn";
@@ -202,7 +208,10 @@ pub fn loggable_dsn(dsn: &str) -> String {
         dsn.get(..prefix.len())
             .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
     });
-    let Some(parsed) = url::Url::parse(dsn).ok().filter(|_| authority) else {
+    let clean = !dsn
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control());
+    let Some(parsed) = url::Url::parse(dsn).ok().filter(|_| authority && clean) else {
         return UNSHOWN.to_string();
     };
     let port = parsed
@@ -355,6 +364,12 @@ mod tests {
             "host=db password=dsn-password",
             "dsn-password",
             "",
+            // A parser drops tabs and line breaks and would join the next line to the name.
+            "postgres://db.internal/permesi\ndsn-password",
+            "postgres://db.internal/permesi\tdsn-password",
+            "postgres://db.internal/permesi dsn-password",
+            " postgres://app:dsn-password@db.internal/permesi",
+            "postgres://db.internal/permesi?sslmode=require\u{0}dsn-password",
         ] {
             assert_eq!(loggable_dsn(dsn), "invalid-dsn", "{dsn}");
         }

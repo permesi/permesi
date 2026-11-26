@@ -47,7 +47,9 @@ the signed artifacts.
   the database DSN without its userinfo and with every query parameter that is
   not a known setting replaced by one `REDACTED` marker. A value that is not an
   `http(s)` address, an Agent socket path or a `postgres://` URL is not printed at
-  all, and a path that holds anything but plain path characters is left out. The
+  all (an address appears as `<address not shown>`, a DSN as `invalid-dsn`), nor
+  is one that holds whitespace or a control character, and a path that holds
+  anything but plain path characters is left out. The
   AppRole login and token unwrap no longer record the address or RoleID on a
   span, a login error no longer names the full request URL, and formatting the
   startup arguments, the OpenBao options or the transport with `Debug` prints

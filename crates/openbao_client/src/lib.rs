@@ -50,21 +50,40 @@ fn openbao_error_message(json_response: &Value) -> &str {
 /// address can carry proxy credentials or a token there, and a path holding anything
 /// else is dropped too: a `/` or `\` typed before the `@` ends the authority early and
 /// moves the credentials into the path. An Agent socket, written as an absolute path or
-/// as `unix://` and an absolute path, is shown up to the first `?`, `#` or `;`. Anything
-/// else is not echoed at all: a mistyped address or a secret pasted into the wrong
-/// setting still parses as a URL of some scheme. Every log line, span field, `Debug`
-/// output and error that names an OpenBao address goes through this function.
+/// as `unix://` and an absolute path, is cut at the first `?`, `#` or `;` and shown only
+/// if what remains is made of plain path characters. Anything else is not echoed at
+/// all, including any value that holds whitespace or a control character: a URL parser
+/// silently removes tabs and line breaks, which would join text from another line to
+/// the path, and a line break in a socket path would forge a log line. A mistyped
+/// address or a secret pasted into the wrong setting still parses as a URL of some
+/// scheme, so nothing of another scheme is shown either. Every log line, span field,
+/// `Debug` output and error that names an OpenBao address goes through this function.
 ///
-/// What stands where a host belongs is shown as the host; no check can tell a host name
-/// from other text placed there.
+/// The limit of this function: plain text standing where a host or a path belongs is
+/// shown as the host or the path. No check can tell a mount name from a token made of
+/// the same characters.
 #[must_use]
 pub fn loggable_url(url: &str) -> String {
-    const UNSHOWN: &str = "<unparseable URL>";
+    const UNSHOWN: &str = "<address not shown>";
+    let plain = |text: &str| {
+        text.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte))
+    };
+    if url
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return UNSHOWN.to_string();
+    }
     let socket = url.strip_prefix("unix://").unwrap_or(url);
     if socket.starts_with('/') && !socket.starts_with("//") {
         let path = socket.split(['?', '#', ';']).next().unwrap_or_default();
         let shown = url.len() - socket.len() + path.len();
-        return url.get(..shown).unwrap_or(UNSHOWN).to_string();
+        return url
+            .get(..shown)
+            .filter(|_| plain(path))
+            .unwrap_or(UNSHOWN)
+            .to_string();
     }
     let Ok(parsed) = Url::parse(url) else {
         return UNSHOWN.to_string();
@@ -76,9 +95,8 @@ pub fn loggable_url(url: &str) -> String {
     let port = parsed
         .port()
         .map_or_else(String::new, |port| format!(":{port}"));
-    let plain = |byte: u8| byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte);
     let path = Some(parsed.path())
-        .filter(|path| path.bytes().all(plain))
+        .filter(|path| plain(path))
         .unwrap_or_default();
     format!("{}://{host}{port}{path}", parsed.scheme())
 }
@@ -456,7 +474,7 @@ mod tests {
             "http://openbao.example/v1/auth/custom/login"
         );
         for opaque in ["not a url with secret", "", "//secret@host"] {
-            assert_eq!(loggable_url(opaque), "<unparseable URL>");
+            assert_eq!(loggable_url(opaque), "<address not shown>");
         }
         // An Agent socket in either spelling, never with what follows the path.
         for (given, shown) in [
@@ -494,8 +512,22 @@ mod tests {
             "unix:secret",
             "file:///etc/secret-path",
             "https://",
+            // Whitespace and control characters: a parser drops tabs and line breaks and
+            // would join the next line to the path; in a socket path they forge a line.
+            "https://openbao.internal:8200/v1\nnext-line-secret",
+            "https://openbao.internal:8200/v1\tafter-tab-secret",
+            "https://openbao.internal:8200/v1 after-space-secret",
+            " https://proxy-user:lead-space-secret@openbao.internal:8200/",
+            "/run/openbao/agent.sock\nforged-line-secret",
+            "unix:///run/openbao/agent.sock after-space-secret",
+            "/run/openbao/agent.sock\u{0}nul-secret",
+            // A socket path is shown only if it is made of plain path characters.
+            "/run/openbao/agent.sock%3Fencoded-secret",
+            "/run/openbao/agent.sock@at-secret",
+            "/run/openbao/agent.sock:colon-secret",
+            "UNIX:///run/openbao/agent.sock?case-secret",
         ] {
-            assert_eq!(loggable_url(opaque), "<unparseable URL>", "{opaque}");
+            assert_eq!(loggable_url(opaque), "<address not shown>", "{opaque}");
         }
         // A `/` or `\` before the `@` ends the authority early and moves the credentials
         // into the path, and path parameters can carry a token. Such a path is not shown.
