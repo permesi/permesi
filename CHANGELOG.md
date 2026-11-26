@@ -13,6 +13,14 @@ the signed artifacts.
 
 ## [Unreleased]
 
+### Changed
+
+- Every push to `develop` now starts `Qualify published images` against the
+  `:develop` images it has just pushed, with both containment profiles and the
+  charts on `permesi-helm`'s `main`. It is a separate run of about 25 minutes and
+  does not gate `Test & Build` or the release; it keeps the path the release
+  depends on exercised between releases.
+
 ## [0.6.1] - 2026-11-26
 
 ### Changed

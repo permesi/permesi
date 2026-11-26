@@ -98,7 +98,9 @@ before interpreting queue or wall-time differences as a speedup.
 - **`build.yml`**: Compiles the Rust services and builds the Leptos frontend. The frontend build clears the
   `apps/web/dist` output and runs a full `cargo clean -p permesi_web` so self-hosted runners do not
   reuse stale build artifacts when deploying Cloudflare Pages. On the `develop` branch it also packages and
-  pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`.
+  pushes `ghcr.io/permesi/permesi:develop`, `ghcr.io/permesi/genesis:develop`, and `ghcr.io/permesi/web:develop`,
+  then starts `release-qualify.yml` against those three digests as a run of its own (`Qualify published images`),
+  so a failure there is visible without changing the result of `Test & Build`.
   On `sandbox`, CI keeps candidate OCI images as workflow artifacts. Pages, GHCR and external coverage uploads are disabled.
   Frontend deployments from ordinary CI are previews only: `main` still builds and tests the frontend,
   but only `release.yml` publishes the signed release build to the production `main` Pages branch.

@@ -370,6 +370,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      permesi_digest: ${{ steps.push.outputs.permesi_digest }}
+      genesis_digest: ${{ steps.push.outputs.genesis_digest }}
+      web_digest: ${{ steps.push.outputs.web_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -404,7 +408,10 @@ jobs:
           name: image-binaries
           path: dist-bin
 
+      # The digests are read back from the registry, as the release does, so the
+      # qualification below runs against exactly what `:develop` now names.
       - name: Build & Push images
+        id: push
         shell: bash
         run: |-
           set -euo pipefail
@@ -421,6 +428,55 @@ jobs:
               .
             ${CONTAINER_TOOL} push "${image}:develop"
           done
+          resolve_digest() {
+            local image="ghcr.io/permesi/$1:develop" digest="" attempt
+            for attempt in {1..12}; do
+              if ${CONTAINER_TOOL} pull "${image}" >/dev/null 2>&1; then
+                digest="$(${CONTAINER_TOOL} image inspect "${image}" --format '{{join .RepoDigests "\n"}}' \
+                  | awk -F@ '/^ghcr.io\/permesi\/'"$1"'@sha256:/ { print $2; exit }')"
+              fi
+              if [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s\n' "${digest}"
+                return 0
+              fi
+              echo "Waiting for ${image} to become pullable (${attempt}/12)..." >&2
+              sleep 10
+            done
+            echo "Timed out waiting for ${image} to become pullable from GHCR." >&2
+            return 1
+          }
+          for service in permesi genesis web; do
+            echo "${service}_digest=$(resolve_digest "${service}")" >> "$GITHUB_OUTPUT"
+          done
+
+  # Start the release's image qualification against the `:develop` images just pushed, so
+  # the path a release depends on is exercised on every develop push and not only on
+  # release day. It is dispatched as a run of its own: it takes about 25 minutes on
+  # hosted runners, and a failure there shows as a failed `Qualify published images` run
+  # without changing the result of this workflow, which `just release` waits for before
+  # it moves `main`. The digests are checked here because they become workflow inputs.
+  qualify-develop:
+    name: Start qualification of the develop images
+    needs: [package]
+    if: github.repository == 'permesi/permesi' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Qualify published images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PERMESI_DIGEST: ${{ needs.package.outputs.permesi_digest }}
+          GENESIS_DIGEST: ${{ needs.package.outputs.genesis_digest }}
+          WEB_DIGEST: ${{ needs.package.outputs.web_digest }}
+        run: |
+          set -euo pipefail
+          for digest in "$PERMESI_DIGEST" "$GENESIS_DIGEST" "$WEB_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::a develop image has no digest"; exit 1; }
+          done
+          gh workflow run release-qualify.yml --repo "$GITHUB_REPOSITORY" --ref develop \
+            -f app_sha="$GITHUB_SHA" -f permesi_digest="$PERMESI_DIGEST" \
+            -f genesis_digest="$GENESIS_DIGEST" -f web_digest="$WEB_DIGEST"
 
   # One aggregate check for branch protection and the release flow: it passes only
   # when every test and build job succeeded, so the required check never depends on
