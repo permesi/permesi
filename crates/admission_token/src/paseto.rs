@@ -28,6 +28,11 @@ pub struct AdmissionTokenFooter {
     pub kid: String,
 }
 
+/// The most clock skew a verifier may tolerate on `iat`, whatever it is configured with.
+/// It is half the 60 second minimum token lifetime, so the allowance can never make a
+/// token usable for a meaningful time before its signer's clock says it was issued.
+pub const MAX_IAT_LEEWAY_SECONDS: i64 = 30;
+
 /// Options for verifying v4.public Admission Tokens.
 pub struct VerificationOptions<'a> {
     pub expected_issuer: &'a str,
@@ -38,7 +43,9 @@ pub struct VerificationOptions<'a> {
     pub max_ttl_seconds: i64,
     /// How far into the verifier's future `iat` may lie, to absorb clock skew between
     /// the signer and the verifier. It never extends validity: `exp` and the lifetime
-    /// bounds are checked without it. Negative values count as zero.
+    /// bounds are checked without it. Negative values count as zero and values above
+    /// [`MAX_IAT_LEEWAY_SECONDS`] count as that maximum, so the ceiling holds for every
+    /// caller and not only for those that validated their configuration.
     pub iat_leeway_seconds: i64,
 }
 
@@ -163,7 +170,7 @@ fn validate_claims(
     // already present: the token still needs a valid signature and an unexpired `exp`.
     let latest_iat = options
         .now_unix_seconds
-        .saturating_add(options.iat_leeway_seconds.max(0));
+        .saturating_add(options.iat_leeway_seconds.clamp(0, MAX_IAT_LEEWAY_SECONDS));
     if iat > latest_iat {
         return Err(Error::InvalidIat);
     }
@@ -348,6 +355,28 @@ mod tests {
         for ignored in [-1, i64::MIN] {
             assert!(matches!(
                 verify(&ahead, NOW, ignored),
+                Err(Error::InvalidIat)
+            ));
+        }
+        // The ceiling is enforced here, for callers that never validated their setting: a
+        // token dated just past it is refused however large the allowance asked for.
+        let at_ceiling = token(
+            NOW + MAX_IAT_LEEWAY_SECONDS,
+            NOW + MAX_IAT_LEEWAY_SECONDS + 120,
+        )?;
+        let past_ceiling = token(
+            NOW + MAX_IAT_LEEWAY_SECONDS + 1,
+            NOW + MAX_IAT_LEEWAY_SECONDS + 121,
+        )?;
+        for asked in [
+            MAX_IAT_LEEWAY_SECONDS,
+            MAX_IAT_LEEWAY_SECONDS + 1,
+            3_600,
+            i64::MAX,
+        ] {
+            verify(&at_ceiling, NOW, asked)?;
+            assert!(matches!(
+                verify(&past_ceiling, NOW, asked),
                 Err(Error::InvalidIat)
             ));
         }

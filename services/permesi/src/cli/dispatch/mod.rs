@@ -233,7 +233,7 @@ fn admission_iat_leeway(matches: &clap::ArgMatches) -> Result<i64> {
         .get_one::<i64>("admission-iat-leeway-seconds")
         .context("missing admission issue-time leeway")?;
     anyhow::ensure!(
-        (0..=30).contains(&leeway),
+        (0..=admission_token::MAX_IAT_LEEWAY_SECONDS).contains(&leeway),
         "admission issue-time leeway must be between 0 and 30 seconds"
     );
     Ok(leeway)
@@ -424,8 +424,8 @@ mod tests {
         Ok(())
     }
 
-    /// The clock-skew allowance defaults to five seconds and is bounded twice, so it can
-    /// never approach the 60 second minimum lifetime of an admission token.
+    /// The clock-skew allowance defaults to five seconds and is bounded by clap and again
+    /// by dispatch, and the value dispatch hands to the server is the one that was given.
     #[test]
     fn admission_iat_leeway_defaults_and_rejects_out_of_range_values() -> Result<()> {
         temp_env::with_vars(
@@ -444,14 +444,20 @@ mod tests {
                     "--openbao-secret-id",
                     "secret",
                 ];
+                let dispatched = |matches: &clap::ArgMatches| -> Result<i64> {
+                    let Action::Server(args) = handler(matches)?;
+                    Ok(args.admission_iat_leeway)
+                };
                 let matches = crate::cli::commands::new().try_get_matches_from(base)?;
                 assert_eq!(admission_iat_leeway(&matches)?, 5);
-                for (value, expected) in [("0", 0), ("30", 30)] {
+                assert_eq!(dispatched(&matches)?, 5);
+                for (value, expected) in [("0", 0), ("7", 7), ("30", 30)] {
                     let matches = crate::cli::commands::new().try_get_matches_from(
                         base.into_iter()
                             .chain(["--admission-iat-leeway-seconds", value]),
                     )?;
                     assert_eq!(admission_iat_leeway(&matches)?, expected);
+                    assert_eq!(dispatched(&matches)?, expected);
                 }
                 for value in ["-1", "31", "60", "abc"] {
                     assert!(
@@ -475,6 +481,7 @@ mod tests {
                                 .chain(["--admission-iat-leeway-seconds", value]),
                         )?;
                     assert!(admission_iat_leeway(&matches).is_err(), "{value}");
+                    assert!(handler(&matches).is_err(), "{value}");
                 }
                 Ok(())
             },

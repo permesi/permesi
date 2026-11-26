@@ -381,102 +381,146 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
         let keyset = keyset_for_signing_key(&signing_key)?;
         let now = now_unix_seconds();
-        // `build_claims` dates the token one second before its argument.
-        let ahead = build_claims(now.saturating_add(4), "skewed")?;
-        let far_ahead = build_claims(now.saturating_add(40), "far")?;
+        // `build_claims` dates the token one second before its argument. The verifier
+        // reads the real clock, so the three tokens sit seconds away from the bounds they
+        // probe (the exact boundary is tested with a fixed clock in `admission_token`):
+        // one inside a ten second allowance, one outside it but inside the ceiling of
+        // thirty, so a verifier that applied the ceiling instead of its own setting
+        // would wrongly accept it, and one beyond every allowance.
+        let inside = build_claims(now.saturating_add(7), "inside")?;
+        let outside = build_claims(now.saturating_add(21), "outside")?;
+        let beyond = build_claims(now.saturating_add(61), "beyond")?;
         let sign = |claims| sign_token(claims, &keyset.active_kid, &signing_key);
-        let (ahead, far_ahead) = (sign(&ahead)?, sign(&far_ahead)?);
+        let (inside, outside, beyond) = (sign(&inside)?, sign(&outside)?, sign(&beyond)?);
 
-        let strict =
-            AdmissionVerifier::new(keyset.clone(), ISSUER.to_string(), AUDIENCE.to_string());
-        assert!(verify_token_claims(&strict, &ahead).await.is_none());
-        let tolerant = AdmissionVerifier::new(keyset, ISSUER.to_string(), AUDIENCE.to_string())
-            .with_iat_leeway(5);
-        assert!(verify_token_claims(&tolerant, &ahead).await.is_some());
-        assert!(verify_token_claims(&tolerant, &far_ahead).await.is_none());
+        let verifier = |leeway| {
+            AdmissionVerifier::new(keyset.clone(), ISSUER.to_string(), AUDIENCE.to_string())
+                .with_iat_leeway(leeway)
+        };
+        let strict = verifier(0);
+        assert!(verify_token_claims(&strict, &inside).await.is_none());
+        let tolerant = verifier(10);
+        assert!(verify_token_claims(&tolerant, &inside).await.is_some());
+        assert!(verify_token_claims(&tolerant, &outside).await.is_none());
+        let widest = verifier(admission_token::MAX_IAT_LEEWAY_SECONDS);
+        assert!(verify_token_claims(&widest, &outside).await.is_some());
+        // A setting that escaped validation cannot exceed the ceiling.
+        for unvalidated in [3_600, i64::MAX] {
+            assert!(
+                verify_token_claims(&verifier(unvalidated), &beyond)
+                    .await
+                    .is_none()
+            );
+        }
         Ok(())
     }
 
-    /// A token's `kid` and claims are attacker-chosen until its signature verifies, so a
-    /// rejected token must leave nothing of itself in the logs, at any level.
+    /// The running verifier keeps the allowance it was started with.
     #[tokio::test]
-    async fn admission_rejection_logs_nothing_from_the_unverified_token()
-    -> Result<(), AdmissionError> {
-        use std::sync::{Arc, Mutex};
-        use tracing::instrument::WithSubscriber;
-
-        #[derive(Clone)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Sink {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0
-                    .lock()
-                    .map_err(|_| std::io::Error::other("capture poisoned"))?
-                    .extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+    async fn admission_verifier_starts_with_the_configured_iat_leeway() -> anyhow::Result<()> {
+        // Nothing listens here; the background reader only fails to refresh.
+        let url = "http://127.0.0.1:1";
+        let transport = openbao_client::OpenBaoTransport::from_target(
+            crate::APP_USER_AGENT,
+            openbao_client::OpenBaoTarget::parse(url)?,
+        )?;
+        let globals = crate::cli::globals::GlobalArgs::new(url.to_string(), transport);
+        for leeway in [0, 7, 30] {
+            let verifier = AdmissionVerifier::start(
+                &globals,
+                "secret/permesi",
+                Duration::from_secs(60),
+                Duration::from_secs(120),
+                ISSUER.to_string(),
+                AUDIENCE.to_string(),
+                leeway,
+            );
+            assert_eq!(verifier.iat_leeway_seconds, leeway);
         }
+        Ok(())
+    }
 
+    /// A token's `kid` and claims are attacker-chosen until its signature verifies, and a
+    /// rejected token is still a credential someone presented. Whatever stage rejects it
+    /// (parsing, the footer, the key lookup, the signature, or a claim of a correctly
+    /// signed token), nothing of the token may reach the logs, at any level.
+    #[tokio::test]
+    async fn admission_rejection_logs_nothing_from_the_unverified_token() -> anyhow::Result<()> {
         let trusted = SigningKey::from_bytes(&[7u8; 32]);
-        let verifier = AdmissionVerifier::new(
-            keyset_for_signing_key(&trusted)?,
-            ISSUER.to_string(),
-            AUDIENCE.to_string(),
-        );
+        let keyset = keyset_for_signing_key(&trusted)?;
+        let verifier =
+            AdmissionVerifier::new(keyset.clone(), ISSUER.to_string(), AUDIENCE.to_string());
         let attacker = SigningKey::from_bytes(&[9u8; 32]);
-        let claims = build_claims(now_unix_seconds(), "attacker-chosen-subject")?;
-        let unknown_kid = "attacker-chosen-kid";
-        let token = sign_token(&claims, unknown_kid, &attacker)?;
+        let now = now_unix_seconds();
+        let hostile = |jti: &str| -> anyhow::Result<AdmissionTokenClaims> {
+            let mut claims = build_claims(now, jti)?;
+            claims.sub = Some("attacker-chosen-subject".to_string());
+            Ok(claims)
+        };
 
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let sink = Sink(captured.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .with_writer(move || sink.clone())
-            .finish();
-        let observed = captured.clone();
-        let accepted = async {
-            // Tests in other threads reach the same log callsite without a subscriber, and
-            // a callsite's cached interest is whatever was computed when it was registered.
-            // A registration racing with this subscriber can cache "never"; recompute and
-            // repeat until the rejection is seen, so the test never passes on silence.
-            let mut accepted = false;
-            for _ in 0..200 {
-                tracing::callsite::rebuild_interest_cache();
-                accepted |= verify_token(&verifier, &token).await;
-                accepted |= verify_token_claims(&verifier, &token).await.is_some();
-                let seen = observed.lock().is_ok_and(|bytes| {
-                    String::from_utf8_lossy(&bytes).contains("admission verification")
-                });
-                if seen {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        // Rejected at the key lookup, before any signature check.
+        let unknown_kid = sign_token(
+            &hostile("jti-unknown-kid")?,
+            "attacker-chosen-kid",
+            &attacker,
+        )?;
+        // Rejected at the signature: the public `kid` of the trusted key, a foreign signature.
+        let forged = sign_token(&hostile("jti-forged")?, &keyset.active_kid, &attacker)?;
+        // Correctly signed, rejected on a claim.
+        let mut wrong_audience = hostile("jti-wrong-audience")?;
+        wrong_audience.aud = "audience-of-another-service".to_string();
+        let wrong_audience = sign_token(&wrong_audience, &keyset.active_kid, &trusted)?;
+        let expired = sign_token(
+            &build_claims(now.saturating_sub(1_000), "jti-expired")?,
+            &keyset.active_kid,
+            &trusted,
+        )?;
+        // Rejected while parsing: no footer, and text that is not a token at all.
+        let footerless = forged
+            .rsplit_once('.')
+            .map(|(head, _)| head.to_string())
+            .context("token has a footer")?;
+        let garbage = "v4.public.malformed-token-sentinel.malformed-footer-sentinel".to_string();
+        let tokens = [
+            unknown_kid,
+            forged,
+            wrong_audience,
+            expired,
+            footerless,
+            garbage,
+        ];
+
+        let accepted = std::sync::atomic::AtomicBool::new(false);
+        let logs = test_support::logs::capture_until("admission verification", || async {
+            for token in &tokens {
+                let admitted = verify_token(&verifier, token).await
+                    || verify_token_claims(&verifier, token).await.is_some();
+                accepted.fetch_or(admitted, std::sync::atomic::Ordering::Relaxed);
             }
-            accepted
-        }
-        .with_subscriber(subscriber)
-        .await;
-        assert!(!accepted);
+        })
+        .await?;
+        assert!(!accepted.into_inner(), "a hostile token was admitted");
 
-        let logs = String::from_utf8_lossy(
-            &captured
-                .lock()
-                .map_err(|_| AdmissionError::InvalidSignature)?,
-        )
-        .into_owned();
-        assert!(
-            logs.contains("admission verification"),
-            "the rejection itself is logged"
-        );
-        for leaked in [unknown_kid, "attacker-chosen-subject", token.as_str()] {
+        let mut leaks: Vec<&str> = vec![
+            "attacker-chosen-kid",
+            "attacker-chosen-subject",
+            "audience-of-another-service",
+            "malformed-token-sentinel",
+            "malformed-footer-sentinel",
+            "jti-unknown-kid",
+            "jti-forged",
+            "jti-wrong-audience",
+            "jti-expired",
+        ];
+        // The token itself and each of its encoded parts (payload, footer).
+        for token in &tokens {
+            leaks.push(token);
+            leaks.extend(token.split('.').skip(2).filter(|part| part.len() >= 16));
+        }
+        for leaked in leaks {
             assert!(
                 !logs.contains(leaked),
-                "log carries unverified token material"
+                "log carries unverified token material: {leaked}"
             );
         }
         Ok(())
