@@ -73,7 +73,10 @@ impl GlobalArgs {
 impl std::fmt::Debug for GlobalArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlobalArgs")
-            .field("openbao_url", &self.openbao_url)
+            .field(
+                "openbao_url",
+                &openbao_client::loggable_url(&self.openbao_url),
+            )
             .field("openbao_transport", &self.openbao_transport)
             .field("openbao_token", &"***")
             .field(
@@ -104,5 +107,29 @@ mod tests {
         let args = GlobalArgs::new(vurl, transport);
         assert_eq!(args.openbao_url, "https://localhost:8200");
         assert_eq!(args.openbao_token.expose_secret(), "");
+    }
+
+    /// The globals are formatted at `DEBUG` on every start. The OpenBao address may carry
+    /// proxy credentials or a token, and none of it, nor a token or password, may show.
+    #[test]
+    fn global_args_debug_output_names_no_credential() {
+        let url = "https://proxy-user:proxy-password@openbao.internal:8200/?proxy_token=query-token-value";
+        let target = OpenBaoTarget::parse(url).unwrap();
+        let transport = OpenBaoTransport::from_target("test", target).unwrap();
+        let mut args = GlobalArgs::new(url.to_string(), transport);
+        args.set_token(SecretString::from("client-token-value".to_string()));
+        args.openbao_db_password = SecretString::from("database-password-value".to_string());
+        let shown = format!("{args:?} {args:#?}");
+        assert!(shown.contains("https://openbao.internal:8200/"));
+        for secret in [
+            "proxy-user",
+            "proxy-password",
+            "query-token-value",
+            "proxy_token",
+            "client-token-value",
+            "database-password-value",
+        ] {
+            assert!(!shown.contains(secret), "{secret}");
+        }
     }
 }

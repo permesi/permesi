@@ -15,6 +15,7 @@ anyhow = { workspace = true }
 axum = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }

@@ -1,5 +1,6 @@
 mod container;
 pub mod genesis;
+pub mod logs;
 pub mod openbao;
 pub mod postgres;
 pub mod runtime;

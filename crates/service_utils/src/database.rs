@@ -165,6 +165,48 @@ impl PoolConfig {
 }
 
 /// One-line summary for startup logs.
+/// DSN query parameters whose values are settings. Every other value is hidden.
+const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
+    "application_name",
+    "connect_timeout",
+    "dbname",
+    "host",
+    "port",
+    "sslmode",
+];
+
+/// A database DSN reduced to what is safe in a log.
+///
+/// The userinfo password is replaced, and so is the value of every query parameter that
+/// is not a known setting: libpq and sqlx both accept `?password=...`, and a parameter
+/// this code does not know is treated as a secret. A value that is not a URL is not
+/// echoed at all.
+#[must_use]
+pub fn loggable_dsn(dsn: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(dsn) else {
+        return "invalid-dsn".to_string();
+    };
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("REDACTED"));
+    }
+    if parsed.query().is_some() {
+        let shown: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(key, value)| {
+                let value = if LOGGABLE_DSN_PARAMETERS.contains(&key.as_ref()) {
+                    value.into_owned()
+                } else {
+                    "REDACTED".to_string()
+                };
+                (key.into_owned(), value)
+            })
+            .collect();
+        parsed.query_pairs_mut().clear().extend_pairs(shown);
+    }
+    parsed.set_fragment(None);
+    parsed.to_string()
+}
+
 impl fmt::Display for PoolConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -194,7 +236,28 @@ pub async fn close(pool: &PgPool) {
 
 #[cfg(test)]
 mod tests {
-    use super::PoolConfig;
+    use super::{PoolConfig, loggable_dsn};
+
+    /// libpq and sqlx accept the password in the userinfo or as a query parameter; a
+    /// logged DSN shows neither, and hides any parameter it does not know to be a setting.
+    #[test]
+    fn loggable_dsn_hides_passwords_in_userinfo_and_query() {
+        assert_eq!(
+            loggable_dsn("postgres://app:userinfo-pw@db.internal:5432/permesi?sslmode=verify-full"),
+            "postgres://app:REDACTED@db.internal:5432/permesi?sslmode=verify-full"
+        );
+        let shown = loggable_dsn(
+            "postgres://db.internal/permesi?user=app&password=query-pw&sslpassword=key-pw&unknown=opaque-value&sslmode=require#frag-value",
+        );
+        assert_eq!(
+            shown,
+            "postgres://db.internal/permesi?user=REDACTED&password=REDACTED&sslpassword=REDACTED&unknown=REDACTED&sslmode=require"
+        );
+        for secret in ["query-pw", "key-pw", "opaque-value", "frag-value"] {
+            assert!(!shown.contains(secret), "{secret}");
+        }
+        assert_eq!(loggable_dsn("host=db password=keyword-pw"), "invalid-dsn");
+    }
     use std::time::Duration;
 
     fn config(

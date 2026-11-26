@@ -5,11 +5,15 @@ pub mod step_up;
 
 use crate::APP_USER_AGENT;
 use anyhow::Result;
-use tracing::instrument;
 
 pub use openbao_client::{OpenBaoMode, OpenBaoTarget, OpenBaoTransport};
 
-#[instrument]
+// The functions below add no span of their own. An attribute that recorded their
+// arguments would put the operator-supplied address, with any userinfo or query string,
+// and the `RoleID` on a span that is printed with every event inside it and exported to
+// the trace collector. `openbao_client` opens the spans, with the address reduced to what
+// is safe to show.
+
 /// # Errors
 /// Returns an error if `url` cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
@@ -32,7 +36,6 @@ pub fn approle_login_url(url: &str) -> Result<String> {
 /// bao write -wrap-ttl=300s -f auth/approle/role/permesi/secret-id
 /// # Errors
 /// Returns an error if the OpenBao request fails, OpenBao returns a non-success status, or the response is missing expected fields.
-#[instrument(skip(token))]
 pub async fn unwrap(url: &str, token: &str) -> Result<String> {
     openbao_client::unwrap(APP_USER_AGENT, url, token).await
 }
@@ -42,7 +45,6 @@ pub async fn unwrap(url: &str, token: &str) -> Result<String> {
 /// bao write -f auth/approle/role/permesi/secret-id
 /// # Errors
 /// Returns an error if the OpenBao request fails, OpenBao returns a non-success status, or the response is missing expected fields.
-#[instrument(skip(sid))]
 pub async fn approle_login(url: &str, sid: &str, rid: &str) -> Result<(String, u64)> {
     openbao_client::approle_login(APP_USER_AGENT, url, sid, rid).await
 }
@@ -58,6 +60,49 @@ mod tests {
 
     fn can_bind_localhost() -> bool {
         TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
+    /// The service calls OpenBao through these functions with the operator's address and
+    /// credentials. Nothing they or the client beneath them log, and no span field, may
+    /// carry the address's userinfo or query string, the `RoleID`, the `SecretID` or the
+    /// wrapped token.
+    #[tokio::test]
+    async fn login_and_unwrap_keep_credentials_out_of_logs_and_spans() -> Result<()> {
+        if !can_bind_localhost() {
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(json!({"errors": ["permission denied"]})),
+            )
+            .mount(&server)
+            .await;
+        let address = server.address();
+        let origin =
+            format!("http://proxy-user:proxy-password@{address}/?proxy_token=query-token-value");
+        let login = format!(
+            "http://proxy-user:proxy-password@{address}/v1/auth/approle/login?proxy_token=query-token-value"
+        );
+        let logs = test_support::logs::capture_until("openbao.approle_login", || async {
+            let _ = endpoint_url(&origin, "/v1/sys/health");
+            let _ = approle_login(&login, "secret-id-value", "role-id-value").await;
+            let _ = unwrap(&origin, "wrapped-token-value").await;
+        })
+        .await?;
+        assert!(logs.contains("openbao.unwrap"));
+        for secret in [
+            "proxy-user",
+            "proxy-password",
+            "query-token-value",
+            "proxy_token",
+            "role-id-value",
+            "secret-id-value",
+            "wrapped-token-value",
+        ] {
+            assert!(!logs.contains(secret), "{secret}");
+        }
+        Ok(())
     }
 
     #[test]

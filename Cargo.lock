@@ -5244,6 +5244,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "ulid",
+ "url",
  "utoipa",
  "uuid",
  "wiremock",
@@ -5749,6 +5750,8 @@ dependencies = [
  "sqlx",
  "testcontainers",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

@@ -39,10 +39,27 @@ pub enum OpenBaoMode {
     AgentProxy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum OpenBaoTarget {
     Tcp { base_url: String },
     AgentProxy { socket_path: PathBuf },
+}
+
+/// The base URL is operator-supplied and can carry userinfo or a query string, so it is
+/// formatted without them.
+impl std::fmt::Debug for OpenBaoTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp { base_url } => f
+                .debug_struct("Tcp")
+                .field("base_url", &crate::loggable_url(base_url))
+                .finish(),
+            Self::AgentProxy { socket_path } => f
+                .debug_struct("AgentProxy")
+                .field("socket_path", socket_path)
+                .finish(),
+        }
+    }
 }
 
 impl OpenBaoTarget {
@@ -440,7 +457,7 @@ impl std::fmt::Debug for OpenBaoTransport {
             OpenBaoTransportInner::Tcp { base_url, .. } => f
                 .debug_struct("OpenBaoTransport")
                 .field("mode", &OpenBaoMode::Tcp)
-                .field("base_url", base_url)
+                .field("base_url", &crate::loggable_url(base_url))
                 .field("user_agent", &self.user_agent)
                 .finish(),
             OpenBaoTransportInner::AgentProxy { socket_path, .. } => f
@@ -477,6 +494,28 @@ fn check_socket_accessibility(path: &Path) -> Result<()> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::{OpenBaoMode, OpenBaoTarget};
+
+    /// A target and a transport are formatted in startup diagnostics; the operator-supplied
+    /// base URL must appear without its userinfo and query string.
+    #[test]
+    fn target_and_transport_debug_output_drop_address_credentials() -> anyhow::Result<()> {
+        let url = "https://proxy-user:proxy-password@openbao.internal:8200/?proxy_token=query-token-value";
+        let target = OpenBaoTarget::parse(url)?;
+        let transport = super::OpenBaoTransport::from_target("test", target.clone())?;
+        let shown = format!("{target:?} {target:#?} {transport:?} {transport:#?}");
+        assert!(shown.contains("https://openbao.internal:8200/"));
+        for secret in [
+            "proxy-user",
+            "proxy-password",
+            "query-token-value",
+            "proxy_token",
+        ] {
+            assert!(!shown.contains(secret), "{secret}");
+        }
+        let socket = OpenBaoTarget::parse("unix:///run/openbao/agent.sock")?;
+        assert!(format!("{socket:?}").contains("/run/openbao/agent.sock"));
+        Ok(())
+    }
 
     #[test]
     fn openbao_target_parses_tcp() {

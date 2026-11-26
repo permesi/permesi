@@ -8,7 +8,7 @@ pub const ARG_OPENBAO_KV_MOUNT: &str = "openbao-kv-mount";
 pub const ARG_OPENBAO_KV_PATH: &str = "openbao-kv-path";
 pub const ARG_OPENBAO_TRANSIT_MOUNT: &str = "openbao-transit-mount";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Options {
     pub url: String,
     pub role_id: Option<String>,
@@ -17,6 +17,22 @@ pub struct Options {
     pub kv_mount: String,
     pub kv_path: String,
     pub transit_mount: String,
+}
+
+/// Formats the address without userinfo or query string and the three credentials only as
+/// present or absent, so parsed arguments can appear in a diagnostic without leaking.
+impl std::fmt::Debug for Options {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("url", &openbao_client::loggable_url(&self.url))
+            .field("role_id_set", &self.role_id.is_some())
+            .field("secret_id_set", &self.secret_id.is_some())
+            .field("wrapped_token_set", &self.wrapped_token.is_some())
+            .field("kv_mount", &self.kv_mount)
+            .field("kv_path", &self.kv_path)
+            .field("transit_mount", &self.transit_mount)
+            .finish()
+    }
 }
 
 impl Options {
@@ -108,4 +124,39 @@ pub fn with_args(command: Command) -> Command {
                 .args([ARG_OPENBAO_ROLE_ID, ARG_OPENBAO_SECRET_ID, ARG_OPENBAO_WRAPPED_TOKEN])
                 .multiple(true),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Options;
+
+    #[test]
+    fn options_debug_output_names_no_credential() {
+        let options = Options {
+            url: "https://proxy-user:proxy-password@openbao.internal:8200/?proxy_token=query-token-value"
+                .to_string(),
+            role_id: Some("role-id-value".to_string()),
+            secret_id: Some("secret-id-value".to_string()),
+            wrapped_token: Some("wrapped-token-value".to_string()),
+            kv_mount: "secret/permesi".to_string(),
+            kv_path: "config".to_string(),
+            transit_mount: "transit/permesi".to_string(),
+        };
+        let shown = format!("{options:?} {options:#?}");
+        assert!(
+            shown.contains("https://openbao.internal:8200/")
+                && shown.contains("secret_id_set: true")
+        );
+        for secret in [
+            "proxy-user",
+            "proxy-password",
+            "query-token-value",
+            "proxy_token",
+            "role-id-value",
+            "secret-id-value",
+            "wrapped-token-value",
+        ] {
+            assert!(!shown.contains(secret), "{secret}");
+        }
+    }
 }

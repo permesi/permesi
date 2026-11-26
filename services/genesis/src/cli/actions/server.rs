@@ -115,6 +115,9 @@ pub async fn execute(args: Args) -> Result<()> {
     .await
 }
 
+/// Logs the effective configuration once at startup. Addresses are reduced to what is
+/// safe to show and credentials appear only as "set" or not: this block is written at
+/// `INFO` on every start and is the line operators most often paste into a ticket.
 fn log_startup_args(args: &Args) {
     let mode = match args.openbao_target {
         openbao::OpenBaoTarget::Tcp { .. } => "Direct Access (TCP)",
@@ -127,9 +130,12 @@ fn log_startup_args(args: &Args) {
     };
     let entries = [
         ("listen", listen_addr),
-        ("dsn", redact_dsn(&args.dsn)),
+        ("dsn", service_utils::database::loggable_dsn(&args.dsn)),
         ("db_pool", args.db_pool.to_string()),
-        ("openbao_url", args.openbao_url.clone()),
+        (
+            "openbao_url",
+            openbao_client::loggable_url(&args.openbao_url),
+        ),
         ("openbao_mode", mode.to_string()),
         (
             "openbao_auth_method",
@@ -143,10 +149,8 @@ fn log_startup_args(args: &Args) {
             .to_string(),
         ),
         (
-            "openbao_role_id",
-            args.openbao_role_id
-                .clone()
-                .unwrap_or_else(|| "n/a".to_string()),
+            "openbao_role_id_set",
+            args.openbao_role_id.is_some().to_string(),
         ),
         (
             "openbao_secret_id_set",
@@ -164,18 +168,6 @@ fn log_startup_args(args: &Args) {
         ),
     ];
     log_entries("Startup configuration", &entries);
-}
-
-fn redact_dsn(dsn: &str) -> String {
-    match Url::parse(dsn) {
-        Ok(mut parsed) => {
-            if parsed.password().is_some() {
-                let _ = parsed.set_password(Some("REDACTED"));
-            }
-            parsed.to_string()
-        }
-        Err(_) => "invalid-dsn".to_string(),
-    }
 }
 
 fn log_entries(title: &str, entries: &[(&str, String)]) {
@@ -218,3 +210,83 @@ const GENESIS_BANNER: &str = r"
    *  *  *
  *   * *   *
    *     *";
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, log_startup_args};
+    use crate::openbao::OpenBaoTarget;
+    use service_utils::database::PoolConfig;
+    use std::time::Duration;
+
+    fn args_with_credentials() -> anyhow::Result<Args> {
+        let openbao_url =
+            "https://bao-user:bao-password@openbao.internal:8200/?bao_token=bao-query-value";
+        Ok(Args {
+            signing_version: 1,
+            public_limits: service_utils::work_limit::Limits::new(20, 20, 5)?,
+            port: 8080,
+            socket_path: None,
+            dsn: "postgres://dsn-user:dsn-password@db.internal:5432/genesis?password=dsn-query-password"
+                .to_string(),
+            db_pool: PoolConfig::new(
+                10,
+                2,
+                Duration::from_secs(3),
+                Duration::from_mins(10),
+                Duration::from_mins(30),
+            )?,
+            openbao_url: openbao_url.to_string(),
+            openbao_target: OpenBaoTarget::parse(openbao_url)?,
+            openbao_kubernetes: None,
+            openbao_role_id: Some("role-id-value".to_string()),
+            openbao_secret_id: Some("secret-id-value".to_string()),
+            openbao_wrapped_token: Some("wrapped-token-value".to_string()),
+            openbao_transit_mount: "transit/genesis".to_string(),
+            tls_pem_bundle: None,
+        })
+    }
+
+    const CREDENTIALS: [&str; 9] = [
+        "dsn-password",
+        "dsn-query-password",
+        "bao-user",
+        "bao-password",
+        "bao-query-value",
+        "bao_token",
+        "role-id-value",
+        "secret-id-value",
+        "wrapped-token-value",
+    ];
+
+    /// Startup arguments are sometimes formatted in diagnostics and test output; none of
+    /// their credentials may come out, directly or through the enclosing action.
+    #[test]
+    fn args_debug_output_names_no_credential() -> anyhow::Result<()> {
+        let args = args_with_credentials()?;
+        let direct = format!("{args:?}");
+        let shown = format!("{direct} {:#?}", crate::cli::actions::Action::Server(args));
+        for secret in CREDENTIALS.into_iter().chain(["dsn-user", "db.internal"]) {
+            assert!(!shown.contains(secret), "{secret}");
+        }
+        assert!(shown.contains("port: 8080") && shown.contains(".."));
+        Ok(())
+    }
+
+    /// The startup block is written at `INFO` on every start. It shows where the service
+    /// connects, never a credential.
+    #[tokio::test]
+    async fn startup_log_names_no_credential() -> anyhow::Result<()> {
+        let args = args_with_credentials()?;
+        let logs = test_support::logs::capture_until("Startup configuration", || async {
+            log_startup_args(&args);
+        })
+        .await?;
+        assert!(logs.contains("https://openbao.internal:8200"));
+        assert!(logs.contains("db.internal:5432/genesis"));
+        assert!(logs.contains("openbao_role_id_set"));
+        for secret in CREDENTIALS {
+            assert!(!logs.contains(secret), "{secret}");
+        }
+        Ok(())
+    }
+}

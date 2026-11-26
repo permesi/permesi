@@ -221,6 +221,9 @@ fn build_app_config(args: &Args, openbao_addr: String) -> api::AppConfig {
     }
 }
 
+/// Logs the effective configuration once at startup. Addresses are reduced to what is
+/// safe to show and credentials appear only as "set" or not: this block is written at
+/// `INFO` on every start and is the line operators most often paste into a ticket.
 fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &str) {
     let mode = match args.openbao_target {
         openbao_client::OpenBaoTarget::Tcp { .. } => "Direct Access (TCP)",
@@ -235,10 +238,13 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &st
 
     let mut entries = vec![
         ("listen", listen_addr),
-        ("dsn", redact_dsn(&args.dsn)),
+        ("dsn", service_utils::database::loggable_dsn(&args.dsn)),
         ("db_pool", args.db_pool.to_string()),
-        ("openbao_url", args.openbao_url.clone()),
-        ("openbao_addr", openbao_addr.to_string()),
+        (
+            "openbao_url",
+            openbao_client::loggable_url(&args.openbao_url),
+        ),
+        ("openbao_addr", openbao_client::loggable_url(openbao_addr)),
         ("openbao_mode", mode.to_string()),
         (
             "openbao_auth_method",
@@ -252,10 +258,8 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &st
             .to_string(),
         ),
         (
-            "openbao_role_id",
-            args.openbao_role_id
-                .clone()
-                .unwrap_or_else(|| "n/a".to_string()),
+            "openbao_role_id_set",
+            args.openbao_role_id.is_some().to_string(),
         ),
         (
             "openbao_secret_id_set",
@@ -351,18 +355,6 @@ fn auth_startup_entries(args: &Args) -> [(&'static str, String); 9] {
             args.platform_recent_auth_seconds.to_string(),
         ),
     ]
-}
-
-fn redact_dsn(dsn: &str) -> String {
-    match Url::parse(dsn) {
-        Ok(mut parsed) => {
-            if parsed.password().is_some() {
-                let _ = parsed.set_password(Some("REDACTED"));
-            }
-            parsed.to_string()
-        }
-        Err(_) => "invalid-dsn".to_string(),
-    }
 }
 
 fn log_entries(title: &str, entries: &[(&str, String)]) {
@@ -462,6 +454,47 @@ mod tests {
             assert!(!shown.contains(secret), "{secret}");
         }
         assert!(shown.contains("port: 8080") && shown.contains(".."));
+        Ok(())
+    }
+
+    /// The startup block is written at `INFO` on every start. It shows where the service
+    /// connects, never a credential: not the DSN password in either position, not the
+    /// address's userinfo or query string, and not the `RoleID`.
+    #[tokio::test]
+    async fn startup_log_names_no_credential() -> anyhow::Result<()> {
+        let mut args = default_args()?;
+        args.dsn =
+            "postgres://dsn-user:dsn-password@db.internal:5432/permesi?password=dsn-query-password"
+                .to_string();
+        args.openbao_url =
+            "https://bao-user:bao-password@openbao.internal:8200/?bao_token=bao-query-value"
+                .to_string();
+        args.openbao_role_id = Some("role-id-value".to_string());
+        args.openbao_secret_id = Some("secret-id-value".to_string());
+        args.openbao_wrapped_token = Some("wrapped-token-value".to_string());
+        let logs = test_support::logs::capture_until("Startup configuration", || async {
+            // Both the resolved address and the fallback used when it cannot be resolved.
+            let resolved = openbao_base_url(&args.openbao_url).unwrap_or_default();
+            log_startup_args(&args, "issuer", "audience", &resolved);
+            log_startup_args(&args, "issuer", "audience", &args.openbao_url);
+        })
+        .await?;
+        assert!(logs.contains("https://openbao.internal:8200"));
+        assert!(logs.contains("db.internal:5432/permesi"));
+        assert!(logs.contains("openbao_role_id_set"));
+        for secret in [
+            "dsn-password",
+            "dsn-query-password",
+            "bao-user",
+            "bao-password",
+            "bao-query-value",
+            "bao_token",
+            "role-id-value",
+            "secret-id-value",
+            "wrapped-token-value",
+        ] {
+            assert!(!logs.contains(secret), "{secret}");
+        }
         Ok(())
     }
 

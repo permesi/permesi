@@ -41,9 +41,18 @@ fn openbao_error_message(json_response: &Value) -> &str {
         .unwrap_or("")
 }
 
-/// The part of a URL that is safe in diagnostics: scheme, host, port and path. Userinfo,
-/// query and fragment are dropped, and an unparseable value is not echoed at all.
-fn loggable_url(url: &str) -> String {
+/// The part of an OpenBao address that is safe in diagnostics.
+///
+/// For a URL that is scheme, host, port and path: userinfo, query and fragment are
+/// dropped, because an operator-supplied address can carry proxy credentials or a token
+/// there. An absolute path is an Agent socket and is returned as it is. Anything else is
+/// not echoed at all. Every log line, span field, `Debug` output and error that names an
+/// OpenBao address goes through this function.
+#[must_use]
+pub fn loggable_url(url: &str) -> String {
+    if url.starts_with('/') && !url.starts_with("//") {
+        return url.to_string();
+    }
     let Ok(parsed) = Url::parse(url) else {
         return "<unparseable URL>".to_string();
     };
@@ -184,7 +193,8 @@ pub async fn approle_login(
     });
 
     // The login URL is operator-supplied and may carry userinfo or a query string, and the
-    // RoleID is half of the credential: neither goes into a log line or a span.
+    // RoleID is half of the credential: neither goes into a log line, a span or an error.
+    // A transport error would name the full request URL, so it is stripped of it.
     let span = info_span!(
         "openbao.approle_login",
         http.method = "POST",
@@ -195,11 +205,12 @@ pub async fn approle_login(
         .json(&login_payload)
         .send()
         .instrument(span)
-        .await?;
+        .await
+        .map_err(reqwest::Error::without_url)?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let json_response: Value = response.json().await?;
+        let json_response: Value = response.json().await.map_err(reqwest::Error::without_url)?;
 
         return Err(anyhow!(
             "{} - {}, {}",
@@ -209,7 +220,7 @@ pub async fn approle_login(
         ));
     }
 
-    let json_response: Value = response.json().await?;
+    let json_response: Value = response.json().await.map_err(reqwest::Error::without_url)?;
     let token = json_response
         .get("auth")
         .and_then(|v| v.get("client_token"))
@@ -427,6 +438,80 @@ mod tests {
         for opaque in ["not a url with secret", "", "//secret@host"] {
             assert_eq!(loggable_url(opaque), "<unparseable URL>");
         }
+        assert_eq!(
+            loggable_url("/run/openbao/agent.sock"),
+            "/run/openbao/agent.sock"
+        );
+        assert_eq!(
+            loggable_url("unix:///run/openbao/agent.sock"),
+            "unix:///run/openbao/agent.sock"
+        );
+    }
+
+    /// The login address and the `RoleID` are operator secrets. Whether the login is
+    /// accepted, refused or never connects, nothing of them may reach a log line, a span
+    /// field or the returned error.
+    #[tokio::test]
+    async fn approle_login_keeps_the_address_secrets_and_role_id_out_of_diagnostics() -> Result<()>
+    {
+        if !can_bind_localhost() {
+            return Ok(());
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .and(body_json(
+                json!({"role_id": "role-id-value", "secret_id": "good"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"auth": {"client_token": "issued-token-value", "lease_duration": 60}}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(json!({"errors": ["permission denied"]})),
+            )
+            .mount(&server)
+            .await;
+        let address = server.address();
+        let login = format!(
+            "http://proxy-user:proxy-password@{address}/v1/auth/approle/login?proxy_token=query-token-value"
+        );
+        // Nothing listens on port 1, so this one fails in the transport.
+        let unreachable = "http://proxy-user:proxy-password@127.0.0.1:1/v1/auth/approle/login?proxy_token=query-token-value";
+
+        let errors = std::sync::Mutex::new(Vec::new());
+        let logs = test_support::logs::capture_until("openbao.approle_login", || async {
+            let accepted = approle_login(USER_AGENT, &login, "good", "role-id-value").await;
+            let refused = approle_login(USER_AGENT, &login, "bad-secret-id", "role-id-value").await;
+            let failed = approle_login(USER_AGENT, unreachable, "good", "role-id-value").await;
+            if let Ok(mut seen) = errors.lock() {
+                seen.push((accepted.is_ok(), format!("{refused:?} {failed:?}")));
+            }
+        })
+        .await?;
+
+        let seen = errors.lock().map_err(|_| anyhow!("poisoned"))?;
+        assert!(!seen.is_empty() && seen.iter().all(|(accepted, _)| *accepted));
+        let errors: String = seen.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(errors.contains("403") && errors.contains("/v1/auth/approle/login"));
+        assert!(logs.contains(&format!("http://{address}/v1/auth/approle/login")));
+        for (place, text) in [("logs", &logs), ("errors", &errors)] {
+            for secret in [
+                "proxy-user",
+                "proxy-password",
+                "query-token-value",
+                "proxy_token",
+                "role-id-value",
+                "bad-secret-id",
+                "issued-token-value",
+            ] {
+                assert!(!text.contains(secret), "{secret} appears in {place}");
+            }
+        }
+        Ok(())
     }
 
     #[test]
