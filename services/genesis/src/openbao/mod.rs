@@ -3,8 +3,7 @@ pub mod renew;
 pub mod transit;
 
 use crate::APP_USER_AGENT;
-use anyhow::{Result, anyhow};
-use url::Url;
+use anyhow::Result;
 
 pub use openbao_client::{OpenBaoMode, OpenBaoTarget, OpenBaoTransport};
 
@@ -28,20 +27,12 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
 /// # Errors
 /// Returns an error if the URL cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn approle_login_url(url: &str) -> Result<String> {
-    let parsed = Url::parse(url)?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(anyhow!(
-            "Error parsing URL: unsupported scheme {}",
-            parsed.scheme()
-        ));
-    }
-    if parsed.host_str().is_none_or(str::is_empty) {
-        return Err(anyhow!("Error parsing URL: no host specified"));
-    }
+    // Built first so that an explicit login URL passes the same address checks.
+    let standard = endpoint_url(url, "/v1/auth/approle/login")?;
     if url.contains("/v1/auth/approle/login") {
         return Ok(url.to_string());
     }
-    endpoint_url(url, "/v1/auth/approle/login")
+    Ok(standard)
 }
 
 /// Unwrap a wrapped OpenBao client token

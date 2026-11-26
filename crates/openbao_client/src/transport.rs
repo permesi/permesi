@@ -65,9 +65,11 @@ impl std::fmt::Debug for OpenBaoTarget {
 impl OpenBaoTarget {
     /// Parse `OPENBAO_URL` into a TCP base URL or unix socket path.
     /// # Errors
-    /// Returns an error if the value does not start with http(s)://, unix://, or /.
+    /// Returns an error if the value does not start with http(s)://, unix://, or /, or
+    /// if an http(s) address has no usable host or holds whitespace inside it.
     pub fn parse(raw: &str) -> Result<Self> {
         if raw.starts_with("http://") || raw.starts_with("https://") {
+            crate::parse_http_address(raw)?;
             return Ok(Self::Tcp {
                 base_url: raw.to_string(),
             });
@@ -207,6 +209,9 @@ impl OpenBaoTransport {
     }
 
     /// Build a display URL for logging and error messages.
+    ///
+    /// In Agent mode the request is addressed by the socket path itself, so the socket
+    /// is shown here only as [`loggable_socket`] allows.
     /// # Errors
     /// Returns an error if the path is invalid or the base URL cannot be parsed.
     pub fn endpoint_url(&self, path: &str) -> Result<String> {
@@ -216,7 +221,7 @@ impl OpenBaoTransport {
         match &*self.inner {
             OpenBaoTransportInner::Tcp { base_url, .. } => crate::endpoint_url(base_url, path),
             OpenBaoTransportInner::AgentProxy { socket_path, .. } => {
-                Ok(format!("unix://{}{}", socket_path.display(), path))
+                Ok(format!("unix://{}{}", loggable_socket(socket_path), path))
             }
         }
     }
@@ -341,7 +346,7 @@ impl OpenBaoTransport {
                     let response = client.request(request).await.map_err(|e| {
                         anyhow!(
                             "hyper request error: {e}. Check permissions for socket: {}",
-                            socket_path.display()
+                            loggable_socket(socket_path)
                         )
                     })?;
                     let status = response.status();
@@ -532,6 +537,61 @@ mod tests {
         assert!(shown.contains("/run/openbao/absent.sock") && refused.contains("not accessible"));
         assert!(!shown.contains("query-token-value") && !shown.contains("proxy_token"));
         Ok(())
+    }
+
+    /// A file can exist under a name that carries a query string, and the transport then
+    /// starts. Its display URL and the error for a request that cannot connect show the
+    /// socket path only as far as it is shown anywhere else.
+    #[tokio::test]
+    async fn agent_transport_shows_no_text_appended_to_the_socket_path() -> anyhow::Result<()> {
+        let directory =
+            std::env::temp_dir().join(format!("permesi-socket-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        let named = directory.join("agent.sock?proxy_token=query-token-value");
+        std::fs::write(&named, b"")?;
+        let outcome = async {
+            let target = OpenBaoTarget::parse(&format!("unix://{}", named.display()))?;
+            let transport = OpenBaoTransport::from_target("test", target)?;
+            let display = transport.endpoint_url("/v1/sys/health")?;
+            let refused = transport
+                .request_json(reqwest::Method::GET, "/v1/sys/health", None, None)
+                .await
+                .err()
+                .map_or_else(String::new, |error| format!("{error:#}"));
+            anyhow::Ok(format!("{display} {refused}"))
+        }
+        .await;
+        std::fs::remove_dir_all(&directory)?;
+        let shown = outcome?;
+        assert!(shown.contains("agent.sock/v1/sys/health"), "{shown}");
+        assert!(shown.contains("Check permissions for socket"), "{shown}");
+        assert!(
+            !shown.contains("query-token-value") && !shown.contains("proxy_token"),
+            "{shown}"
+        );
+        Ok(())
+    }
+
+    /// An http(s) address is checked when the setting is parsed, so one that would join
+    /// text into the host stops the service at startup and is never logged in pieces.
+    #[test]
+    fn openbao_target_refuses_an_address_with_whitespace_inside_or_a_host_that_is_none() {
+        for address in [
+            "https://openbao.internal\nnext-line-secret",
+            "https://openbao.internal;token=host-secret",
+            "https://",
+        ] {
+            let refused = OpenBaoTarget::parse(address)
+                .err()
+                .map(|error| format!("{error:#}"));
+            assert!(
+                refused
+                    .as_ref()
+                    .is_some_and(|error| !error.contains("secret")),
+                "{address:?}: {refused:?}"
+            );
+        }
+        assert!(OpenBaoTarget::parse("https://openbao.internal:8200\n").is_ok());
     }
 
     #[test]

@@ -77,26 +77,30 @@ pub fn with_args(command: Command) -> Command {
                 .long(ARG_OPENBAO_URL)
                 .help("OpenBao URL: an origin (http(s)://host[:port]) is completed to the standard AppRole login path; any other URL is used as-is. Also accepts a unix socket path (unix:///path or /path)")
                 .env("PERMESI_OPENBAO_URL")
+                .hide_env_values(true)
                 .required(true),
         )
         .arg(
             Arg::new(ARG_OPENBAO_ROLE_ID)
                 .long(ARG_OPENBAO_ROLE_ID)
                 .help("OpenBao role id (Required for TCP mode)")
-                .env("PERMESI_OPENBAO_ROLE_ID"),
+                .env("PERMESI_OPENBAO_ROLE_ID")
+                .hide_env_values(true),
         )
         .arg(
             Arg::new(ARG_OPENBAO_SECRET_ID)
                 .long(ARG_OPENBAO_SECRET_ID)
                 .help("OpenBao secret id (Required for TCP mode unless using wrapped token)")
                 .env("PERMESI_OPENBAO_SECRET_ID")
+                .hide_env_values(true)
                 .conflicts_with(ARG_OPENBAO_WRAPPED_TOKEN),
         )
         .arg(
             Arg::new(ARG_OPENBAO_WRAPPED_TOKEN)
                 .long(ARG_OPENBAO_WRAPPED_TOKEN)
                 .help("OpenBao wrapped token (TCP mode only)")
-                .env("PERMESI_OPENBAO_WRAPPED_TOKEN"),
+                .env("PERMESI_OPENBAO_WRAPPED_TOKEN")
+                .hide_env_values(true),
         )
         .arg(
             Arg::new(ARG_OPENBAO_KV_MOUNT)

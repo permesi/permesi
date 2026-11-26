@@ -285,6 +285,7 @@ pub fn new() -> Command {
                     "Database connection string. Username/password are injected from OpenBao DB creds, so they are not required in the DSN.",
                 )
                 .env("PERMESI_DSN")
+                .hide_env_values(true)
                 .required(true),
         );
 
@@ -430,6 +431,28 @@ fn oauth_args(command: Command) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--help` prints the current value of an environment-backed argument unless the
+    /// argument hides it, and these five hold a credential or an address that can carry one.
+    #[test]
+    fn help_shows_no_value_of_a_credential_bearing_argument() {
+        let command = new();
+        for name in [
+            "dsn",
+            "openbao-url",
+            "openbao-role-id",
+            "openbao-secret-id",
+            "openbao-wrapped-token",
+        ] {
+            let argument = command
+                .get_arguments()
+                .find(|argument| argument.get_id() == name);
+            assert!(
+                argument.is_some_and(clap::Arg::is_hide_env_values_set),
+                "{name} would print its environment value in --help"
+            );
+        }
+    }
 
     #[test]
     fn test_new() {

@@ -7,19 +7,22 @@ pub fn with_args(command: Command) -> Command {
                 .long("openbao-url")
                 .help("OpenBao base URL (http(s)://host:port) or unix socket path (unix:///path or /path)")
                 .env("GENESIS_OPENBAO_URL")
+                .hide_env_values(true)
                 .required(true),
         )
         .arg(
             Arg::new("openbao-role-id")
                 .long("openbao-role-id")
                 .help("OpenBao role id (Required for TCP mode)")
-                .env("GENESIS_OPENBAO_ROLE_ID"),
+                .env("GENESIS_OPENBAO_ROLE_ID")
+                .hide_env_values(true),
         )
         .arg(
             Arg::new("openbao-secret-id")
                 .long("openbao-secret-id")
                 .help("OpenBao secret id (Required for TCP mode unless using wrapped token)")
                 .env("GENESIS_OPENBAO_SECRET_ID")
+                .hide_env_values(true)
                 .conflicts_with("openbao-wrapped-token"),
         )
         .arg(
@@ -27,6 +30,7 @@ pub fn with_args(command: Command) -> Command {
                 .long("openbao-wrapped-token")
                 .help("OpenBao wrapped token (TCP mode only)")
                 .env("GENESIS_OPENBAO_WRAPPED_TOKEN")
+                .hide_env_values(true)
         )
         .arg(
             Arg::new("openbao-transit-mount")

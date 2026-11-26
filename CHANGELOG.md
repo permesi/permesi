@@ -48,13 +48,25 @@ the signed artifacts.
   not a known setting replaced by one `REDACTED` marker. A value that is not an
   `http(s)` address, an Agent socket path or a `postgres://` URL is not printed at
   all (an address appears as `<address not shown>`, a DSN as `invalid-dsn`), nor
-  is one that holds whitespace or a control character, and a path that holds
-  anything but plain path characters is left out. The
+  is one whose host is not a host name or IP address or that holds anything but
+  printable ASCII inside it, and a path that holds anything but plain path
+  characters is left out. A database name that is not one plain segment shows as
+  `REDACTED`, and `sslmode`, `port` and `connect_timeout` are shown only with a
+  value they can take. The
   AppRole login and token unwrap no longer record the address or RoleID on a
   span, a login error no longer names the full request URL, and formatting the
   startup arguments, the OpenBao options or the transport with `Debug` prints
   none of them. Anything that read `openbao_role_id` from the startup log has to
   stop doing so.
+- `permesi --help` and `genesis --help` no longer print the current values of
+  the DSN, the OpenBao address, the RoleID, the SecretID and the wrapped token
+  when those are set in the environment.
+- Both services refuse at startup an `http(s)` OpenBao address whose host is not
+  a host name or IP address, or that has whitespace or a control character inside
+  it, instead of connecting to whatever the URL parser made of it. Whitespace
+  around the address is still ignored. The error for a rejected address no longer
+  repeats its scheme, and an Agent socket path with text appended to it is no
+  longer shown in request spans or connection errors.
 - The manual OpenBao recipe in `SETUP.md` now writes the policy files the OpenTofu
   module applies instead of repeating them. The copies had drifted: they let a
   service token renew any lease, let Genesis sign without a pinned key version,

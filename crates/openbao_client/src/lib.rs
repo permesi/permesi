@@ -51,13 +51,17 @@ fn openbao_error_message(json_response: &Value) -> &str {
 /// else is dropped too: a `/` or `\` typed before the `@` ends the authority early and
 /// moves the credentials into the path. An Agent socket, written as an absolute path or
 /// as `unix://` and an absolute path, is cut at the first `?`, `#` or `;` and shown only
-/// if what remains is made of plain path characters. Anything else is not echoed at
-/// all, including any value that holds whitespace or a control character: a URL parser
-/// silently removes tabs and line breaks, which would join text from another line to
-/// the path, and a line break in a socket path would forge a log line. A mistyped
-/// address or a secret pasted into the wrong setting still parses as a URL of some
-/// scheme, so nothing of another scheme is shown either. Every log line, span field,
-/// `Debug` output and error that names an OpenBao address goes through this function.
+/// if what remains is made of plain path characters. The host has to be an IP literal
+/// or made of host name characters: the parser accepts `;`, `&` and `=` in a host and
+/// decodes `%3B` into them, so `host;token=...` would otherwise be shown whole.
+/// Anything else is not echoed at all, including any value that holds a character
+/// other than printable ASCII once the whitespace around it is trimmed: a URL parser
+/// silently removes tabs, line breaks and invisible format characters, which would
+/// join text from another line to the host or the path, and a line break in a socket
+/// path would forge a log line. A mistyped address or a secret pasted into the wrong
+/// setting still parses as a URL of some scheme, so nothing of another scheme is shown
+/// either. Every log line, span field, `Debug` output and error that names an OpenBao
+/// address goes through this function.
 ///
 /// The limit of this function: plain text standing where a host or a path belongs is
 /// shown as the host or the path. No check can tell a mount name from a token made of
@@ -65,40 +69,91 @@ fn openbao_error_message(json_response: &Value) -> &str {
 #[must_use]
 pub fn loggable_url(url: &str) -> String {
     const UNSHOWN: &str = "<address not shown>";
-    let plain = |text: &str| {
+    let plain = |text: &str, extra: &[u8]| {
         text.bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte))
+            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
     };
-    if url
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control())
-    {
+    let url = url.trim();
+    if !url.bytes().all(|byte| byte.is_ascii_graphic()) {
         return UNSHOWN.to_string();
     }
     let socket = url.strip_prefix("unix://").unwrap_or(url);
     if socket.starts_with('/') && !socket.starts_with("//") {
+        // `@` names a systemd template instance in a socket path; a path has no userinfo.
         let path = socket.split(['?', '#', ';']).next().unwrap_or_default();
         let shown = url.len() - socket.len() + path.len();
         return url
             .get(..shown)
-            .filter(|_| plain(path))
+            .filter(|_| plain(path, b"/-_.~@"))
             .unwrap_or(UNSHOWN)
             .to_string();
     }
-    let Ok(parsed) = Url::parse(url) else {
+    let Some((parsed, host)) = Url::parse(url)
+        .ok()
+        .filter(|parsed| matches!(parsed.scheme(), "http" | "https"))
+        .and_then(|parsed| {
+            let host = host_name(&parsed)?;
+            Some((parsed, host))
+        })
+    else {
         return UNSHOWN.to_string();
     };
-    let host = parsed.host_str().unwrap_or_default();
-    if !matches!(parsed.scheme(), "http" | "https") || host.is_empty() {
-        return UNSHOWN.to_string();
-    }
     let port = parsed
         .port()
         .map_or_else(String::new, |port| format!(":{port}"));
     let path = Some(parsed.path())
-        .filter(|path| plain(path))
+        .filter(|path| plain(path, b"/-_.~"))
         .unwrap_or_default();
     format!("{}://{host}{port}{path}", parsed.scheme())
+}
+
+/// The host of a parsed address, if it is an IP literal or made of host name characters.
+///
+/// The URL parser accepts more than that in an `http` host, among it `;`, `&`, `=` and
+/// `,`, so text appended to the host without a `/` stays part of it. No host that
+/// resolves contains those characters, which makes refusing them safe for both the
+/// address the services connect to and the one they show.
+fn host_name(parsed: &Url) -> Option<String> {
+    match parsed.host()? {
+        url::Host::Domain(name) => Some(name)
+            .filter(|name| !name.is_empty())
+            .filter(|name| {
+                name.bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+            })
+            .map(str::to_string),
+        literal => Some(literal.to_string()),
+    }
+}
+
+/// Parse an operator-supplied OpenBao address that requests are sent to.
+///
+/// Only `http` and `https` are accepted, the host has to pass [`host_name`], and an
+/// address with whitespace or a control character inside it is refused instead of
+/// being repaired: the URL parser would drop a tab or line break and join the text
+/// around it into one host. The error never repeats any part of the address.
+fn parse_http_address(url: &str) -> Result<(Url, String)> {
+    if url
+        .trim()
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err(anyhow!(
+            "Error parsing URL: whitespace or control character inside the address"
+        ));
+    }
+    let parsed = Url::parse(url)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!(
+            "Error parsing URL: unsupported scheme, expected http or https"
+        ));
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(anyhow!("Error parsing URL: no host specified"));
+    }
+    let host = host_name(&parsed)
+        .ok_or_else(|| anyhow!("Error parsing URL: the host is not a host name or IP address"))?;
+    Ok((parsed, host))
 }
 
 /// Bounded like the transport so a stalled OpenBao cannot hang startup login.
@@ -113,30 +168,24 @@ fn client(user_agent: &str) -> Result<Client> {
 
 /// Construct a full OpenBao endpoint URL from a base URL and path.
 ///
+/// The result holds the scheme, host and port of `url` and nothing else of it, each
+/// checked by [`parse_http_address`], so it is safe to show in spans and errors as long
+/// as `path` is.
+///
 /// # Errors
 /// Returns an error if `url` cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
-    let url = Url::parse(url)?;
+    let (url, host) = parse_http_address(url)?;
 
     let scheme = url.scheme();
 
-    let host = url
-        .host()
-        .ok_or_else(|| anyhow!("Error parsing URL: no host specified"))?
-        .to_owned();
-
-    let port = match url.port() {
-        Some(p) => p,
-        None => match scheme {
-            "http" => 80,
-            "https" => 443,
-            _ => return Err(anyhow!("Error parsing URL: unsupported scheme {scheme}")),
-        },
-    };
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("Error parsing URL: no port specified"))?;
 
     let endpoint_url = format!("{scheme}://{host}:{port}{path}");
 
-    debug!("endpoint URL: {}", endpoint_url);
+    debug!("endpoint URL: {}", loggable_url(&endpoint_url));
 
     Ok(endpoint_url)
 }
@@ -152,16 +201,7 @@ pub fn endpoint_url(url: &str, path: &str) -> Result<String> {
 /// # Errors
 /// Returns an error if the URL cannot be parsed, has no host, or uses an unsupported scheme.
 pub fn approle_login_url(url: &str) -> Result<String> {
-    let parsed = Url::parse(url)?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(anyhow!(
-            "Error parsing URL: unsupported scheme {}",
-            parsed.scheme()
-        ));
-    }
-    if parsed.host_str().is_none_or(str::is_empty) {
-        return Err(anyhow!("Error parsing URL: no host specified"));
-    }
+    let (parsed, _) = parse_http_address(url)?;
     let path = parsed.path();
     let is_origin = (path.is_empty() || path == "/") && parsed.query().is_none();
     if is_origin {
@@ -499,6 +539,17 @@ mod tests {
                 "/run/openbao/agent.sock;semi_token=semi-sock-secret",
                 "/run/openbao/agent.sock",
             ),
+            // A systemd template instance, and the whitespace a secret file ends with.
+            (
+                "/run/openbao@permesi/agent.sock\n",
+                "/run/openbao@permesi/agent.sock",
+            ),
+            (
+                " https://proxy-user:proxy-password@openbao.internal:8200/\n",
+                "https://openbao.internal:8200/",
+            ),
+            ("https://[::1]:8200/v1", "https://[::1]:8200/v1"),
+            ("http://127.0.0.1:8200", "http://127.0.0.1:8200/"),
         ] {
             assert_eq!(loggable_url(given), shown);
         }
@@ -517,13 +568,11 @@ mod tests {
             "https://openbao.internal:8200/v1\nnext-line-secret",
             "https://openbao.internal:8200/v1\tafter-tab-secret",
             "https://openbao.internal:8200/v1 after-space-secret",
-            " https://proxy-user:lead-space-secret@openbao.internal:8200/",
             "/run/openbao/agent.sock\nforged-line-secret",
             "unix:///run/openbao/agent.sock after-space-secret",
             "/run/openbao/agent.sock\u{0}nul-secret",
             // A socket path is shown only if it is made of plain path characters.
             "/run/openbao/agent.sock%3Fencoded-secret",
-            "/run/openbao/agent.sock@at-secret",
             "/run/openbao/agent.sock:colon-secret",
             "UNIX:///run/openbao/agent.sock?case-secret",
         ] {
@@ -562,6 +611,70 @@ mod tests {
             loggable_url("https:proxy-user:proxy-password@openbao.example:8200"),
             "https://openbao.example:8200/"
         );
+    }
+
+    /// The parser accepts `;`, `&`, `=` and `,` in a host, decodes the escaped ones into
+    /// it, and removes an invisible format character, joining what follows to the host.
+    /// Nothing of such an address is shown.
+    #[test]
+    fn loggable_url_shows_nothing_of_a_host_that_is_not_a_host_name() {
+        for opaque in [
+            "https://openbao.internal;token=host-secret/v1/auth/approle/login",
+            "https://proxy-user:proxy-pass@openbao.internal;token=host-secret",
+            "https://openbao.internal&token=host-secret/v1/auth/approle/login",
+            "https://openbao.internal,host-secret",
+            "https://openbao.internal=host-secret",
+            "https://openbao.internal%3Btoken%3Dhost-secret",
+            "https://openbao.internal%26token%3Dhost-secret",
+            "https://openbao.internal\u{200b}host-secret:8200/v1",
+            "https://openbao.internal\u{ad}host-secret:8200/v1",
+        ] {
+            assert_eq!(loggable_url(opaque), "<address not shown>", "{opaque}");
+        }
+    }
+
+    /// The address requests are sent to is refused, not repaired, when it could put text
+    /// from elsewhere into the host, and the refusal repeats nothing of the address: a
+    /// token typed before a `:port` parses as the scheme.
+    #[test]
+    fn endpoint_url_refuses_an_address_it_cannot_show_and_echoes_none_of_it() -> Result<()> {
+        for address in [
+            "https://openbao.internal\nnext-line-secret",
+            "http://127.0.0.1\tnext-line-secret.invalid",
+            "https://openbao.internal next-line-secret",
+            "https://openbao.internal;token=host-secret",
+            "https://openbao.internal&token=host-secret:8200",
+            "https://openbao.internal%3Btoken%3Dhost-secret",
+            "hvs.scheme-secret:8200",
+            "hvs.scheme-secret://openbao.internal:8200",
+            "ftp://openbao.internal:21",
+        ] {
+            for refused in [
+                endpoint_url(address, "/v1/sys/health"),
+                approle_login_url(address),
+            ] {
+                let Err(error) = refused else {
+                    anyhow::bail!("{address:?} was accepted");
+                };
+                let error = format!("{error:#}");
+                assert!(!error.contains("secret"), "{address:?}: {error}");
+                assert!(!error.contains("ftp"), "{address:?}: {error}");
+            }
+        }
+        // Whitespace around an address is not part of it, and an IP literal is a host.
+        assert_eq!(
+            endpoint_url("https://openbao.internal:8200\n", "/v1/sys/health")?,
+            "https://openbao.internal:8200/v1/sys/health"
+        );
+        assert_eq!(
+            endpoint_url("https://[::1]:8200", "/v1/sys/health")?,
+            "https://[::1]:8200/v1/sys/health"
+        );
+        assert_eq!(
+            endpoint_url("http://127.0.0.1", "/v1/sys/health")?,
+            "http://127.0.0.1:80/v1/sys/health"
+        );
+        Ok(())
     }
 
     /// The login address and the `RoleID` are operator secrets. Whether the login is

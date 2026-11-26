@@ -164,7 +164,6 @@ impl PoolConfig {
     }
 }
 
-/// One-line summary for startup logs.
 /// DSN query parameters whose values are settings. Any other parameter is hidden whole.
 const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
     "application_name",
@@ -175,22 +174,37 @@ const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
     "sslmode",
 ];
 
+/// The values `sslmode` can take; any other value is hidden with the unknown parameters.
+const LOGGABLE_SSL_MODES: [&str; 6] = [
+    "disable",
+    "allow",
+    "prefer",
+    "require",
+    "verify-ca",
+    "verify-full",
+];
+
 /// A database DSN reduced to what is safe in a log: scheme, host, port, database name
 /// and the query parameters that are known settings.
 ///
 /// The result is rebuilt from parts that passed a check, never copied from the input.
 /// The userinfo is dropped: the services replace it with credentials from OpenBao before
-/// connecting, and a secret placed there by mistake must not be printed. The database
-/// name is shown only as a single segment of plain characters, because a `/` or `?`
-/// typed before the `@` ends the authority early and moves the password into the path
-/// or a query key. A query parameter is shown only if its name is a known setting and
-/// its value is plain; the rest, names included, become one `REDACTED` marker, since
-/// libpq and sqlx accept `?password=...` and an unencoded `&` or `;` in a password
-/// turns part of it into a name or into the value of another parameter. Only
-/// `postgres://` and `postgresql://` URLs are shown at all: without the `//` the whole
-/// rest of the string parses as an opaque path. A value that holds whitespace or a
-/// control character is not shown either, because a URL parser silently removes tabs
-/// and line breaks and would join text from another line to the database name.
+/// connecting, and a secret placed there by mistake must not be printed. The host has
+/// to be an IP literal or made of host name characters: in a `postgres` URL the parser
+/// keeps `;`, `&`, `=`, `,` and percent-escapes in the host as written, so
+/// `host;password=...` would otherwise be shown whole. The database name is shown only
+/// as a single segment of plain characters, because a `/` or `?` typed before the `@`
+/// ends the authority early and moves the password into the path or a query key; a
+/// name that is anything else becomes `REDACTED`. A query parameter is shown only if
+/// its name is a known setting and its value is plain, a keyword for `sslmode` and
+/// digits for `port` and `connect_timeout`; the rest, names included, become one
+/// `REDACTED` marker, since libpq and sqlx accept `?password=...` and an unencoded `&`
+/// or `;` in a password turns part of it into a name or into the value of another
+/// parameter. Only `postgres://` and `postgresql://` URLs are shown at all: without the
+/// `//` the whole rest of the string parses as an opaque path. A value that holds a
+/// character other than printable ASCII, once the whitespace around it is trimmed, is
+/// not shown either, because a URL parser silently removes tabs and line breaks and
+/// would join text from another line to the database name.
 ///
 /// The limit of this function: plain text standing where a host, a database name or the
 /// value of a known setting belongs is shown as that. No check can tell a database name
@@ -204,27 +218,38 @@ pub fn loggable_dsn(dsn: &str) -> String {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
     };
+    let dsn = dsn.trim();
     let authority = ["postgres://", "postgresql://"].iter().any(|prefix| {
         dsn.get(..prefix.len())
             .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
     });
-    let clean = !dsn
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control());
+    let clean = dsn.bytes().all(|byte| byte.is_ascii_graphic());
     let Some(parsed) = url::Url::parse(dsn).ok().filter(|_| authority && clean) else {
         return UNSHOWN.to_string();
+    };
+    // A socket DSN has no host. Bracketed IPv6 is the only literal this scheme parses.
+    let host = match parsed.host() {
+        None => String::new(),
+        Some(url::Host::Domain(name)) if name.is_empty() || plain(name, b"-_.") => name.to_string(),
+        Some(url::Host::Domain(_)) => return UNSHOWN.to_string(),
+        Some(literal) => literal.to_string(),
     };
     let port = parsed
         .port()
         .map_or_else(String::new, |port| format!(":{port}"));
-    let database = Some(parsed.path().strip_prefix('/').unwrap_or_default())
-        .filter(|name| plain(name, b"-_."))
-        .map_or_else(String::new, |name| format!("/{name}"));
+    let database = match parsed.path().strip_prefix('/').unwrap_or_default() {
+        "" => String::new(),
+        name if plain(name, b"-_.") => format!("/{name}"),
+        _ => "/REDACTED".to_string(),
+    };
+    let shown = |key: &str, value: &str| match key {
+        "sslmode" => LOGGABLE_SSL_MODES.contains(&value),
+        "port" | "connect_timeout" => plain(value, b""),
+        _ => LOGGABLE_DSN_PARAMETERS.contains(&key) && plain(value, b"-_./"),
+    };
     let mut pairs: Vec<String> = parsed
         .query_pairs()
-        .filter(|(key, value)| {
-            LOGGABLE_DSN_PARAMETERS.contains(&key.as_ref()) && plain(value, b"-_./")
-        })
+        .filter(|(key, value)| shown(key, value))
         .map(|(key, value)| format!("{key}={value}"))
         .collect();
     if parsed.query_pairs().count() > pairs.len() {
@@ -235,13 +260,10 @@ pub fn loggable_dsn(dsn: &str) -> String {
     } else {
         format!("?{}", pairs.join("&"))
     };
-    format!(
-        "{}://{}{port}{database}{query}",
-        parsed.scheme(),
-        parsed.host_str().unwrap_or_default()
-    )
+    format!("{}://{host}{port}{database}{query}", parsed.scheme())
 }
 
+/// One-line summary for startup logs.
 impl fmt::Display for PoolConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -296,8 +318,70 @@ mod tests {
                 "postgres:///permesi?host=/var/run/postgresql",
             ),
             ("postgres://db.internal", "postgres://db.internal"),
+            (
+                "postgres://[::1]:5432/permesi?connect_timeout=5&port=5433",
+                "postgres://[::1]:5432/permesi?connect_timeout=5&port=5433",
+            ),
+            // Whitespace around the value, as a secret file ending in a newline gives it,
+            // is not part of the DSN.
+            (
+                " postgres://app:userinfo-pw@db.internal/permesi\n",
+                "postgres://db.internal/permesi",
+            ),
+            // A database name that is not one plain segment is marked, not left out, so
+            // the line does not read as a DSN that names no database.
+            (
+                "postgres://db.internal/permesi/",
+                "postgres://db.internal/REDACTED",
+            ),
         ] {
             assert_eq!(loggable_dsn(dsn), shown, "{dsn}");
+        }
+    }
+
+    /// In a `postgres` URL the parser keeps `;`, `&`, `=`, `,` and percent-escapes in the
+    /// host as written, and sqlx accepts every one of these. Nothing of such a value is
+    /// shown; neither is one holding a character the parser would silently remove.
+    #[test]
+    fn loggable_dsn_shows_nothing_of_a_host_that_is_not_a_host_name() {
+        for dsn in [
+            "postgres://db.internal;password=host-secret",
+            "postgres://app:userinfo-pw@db.internal;password=host-secret/permesi",
+            "postgres://db.internal&sslmode=require&password=host-secret",
+            "postgres://db.internal,password=host-secret/permesi",
+            "postgres://db.internal=host-secret/permesi",
+            "postgres://user%3Ahost-secret%40db.internal:5432/permesi",
+            "postgres://db.internal%3Fpassword=host-secret",
+            "postgres://db.internal%2Fpermesi%3Fpassword=host-secret",
+            "postgres://db.internal%23host-secret",
+            "postgres://db.internal\u{200b}host-secret/permesi",
+            "postgres://db.internal\u{ad}host-secret/permesi",
+        ] {
+            assert_eq!(loggable_dsn(dsn), "invalid-dsn", "{dsn}");
+        }
+    }
+
+    /// A known setting is shown only with a value that setting can take, so a secret
+    /// placed in one is hidden with the unknown parameters.
+    #[test]
+    fn loggable_dsn_shows_a_known_setting_only_with_a_value_it_can_take() {
+        for (dsn, shown) in [
+            (
+                "postgres://db.internal/permesi?sslmode=sslmode-secret",
+                "postgres://db.internal/permesi?REDACTED",
+            ),
+            (
+                "postgres://db.internal/permesi?port=port-secret&connect_timeout=timeout-secret",
+                "postgres://db.internal/permesi?REDACTED",
+            ),
+            (
+                "postgres://db.internal/permesi?sslmode=disable&port=5433",
+                "postgres://db.internal/permesi?sslmode=disable&port=5433",
+            ),
+        ] {
+            let logged = loggable_dsn(dsn);
+            assert_eq!(logged, shown, "{dsn}");
+            assert!(!logged.contains("secret"), "{dsn}");
         }
     }
 
@@ -329,11 +413,11 @@ mod tests {
             // A `/` or `?` before the `@` ends the authority early.
             (
                 "postgres://app/slash-in-userinfo-secret@db.internal:5432/permesi",
-                "postgres://app",
+                "postgres://app/REDACTED",
             ),
             (
                 "postgres://app:5432/slash-after-digits-secret@db.internal:5432/permesi",
-                "postgres://app:5432",
+                "postgres://app:5432/REDACTED",
             ),
             (
                 "postgres://app:5432?qmark-after-digits-secret@db.internal:5432/permesi",
@@ -341,7 +425,7 @@ mod tests {
             ),
             (
                 "postgres://db.internal/permesi;path_token=matrix-secret",
-                "postgres://db.internal",
+                "postgres://db.internal/REDACTED",
             ),
         ] {
             let logged = loggable_dsn(dsn);
@@ -368,7 +452,6 @@ mod tests {
             "postgres://db.internal/permesi\ndsn-password",
             "postgres://db.internal/permesi\tdsn-password",
             "postgres://db.internal/permesi dsn-password",
-            " postgres://app:dsn-password@db.internal/permesi",
             "postgres://db.internal/permesi?sslmode=require\u{0}dsn-password",
         ] {
             assert_eq!(loggable_dsn(dsn), "invalid-dsn", "{dsn}");
