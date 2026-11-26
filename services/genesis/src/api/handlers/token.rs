@@ -142,6 +142,22 @@ fn parse_client_uuid(client_id: &str) -> Result<Uuid, (StatusCode, String)> {
     })
 }
 
+/// Longest `User-Agent` kept with a token record. The header is caller-controlled and is
+/// stored only for audit, so the rest is dropped instead of filling the table.
+const MAX_STORED_USER_AGENT_CHARS: usize = 512;
+
+/// Accept a country header only as a two-character code and store it upper-cased: an
+/// ISO 3166-1 alpha-2 code, or an edge marker such as `XX` (unknown) or `T1` (Tor).
+/// The header is caller-controlled when Genesis is reachable without the edge that sets
+/// it, and the column is `CHAR(2)`; any other value is treated as absent, as an invalid
+/// address is, instead of failing the insert and the request with it.
+fn country_code(value: &str) -> Option<String> {
+    (value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .then(|| value.to_ascii_uppercase())
+}
+
+/// Audit metadata for a token, taken from request headers and never trusted for a
+/// decision. Malformed or oversized values are dropped or shortened, never rejected.
 fn extract_metadata(headers: &HeaderMap) -> RequestMetadata {
     let ip_header =
         env::var("GENESIS_IP_HEADER").unwrap_or_else(|_| "CF-Connecting-IP".to_string());
@@ -152,11 +168,11 @@ fn extract_metadata(headers: &HeaderMap) -> RequestMetadata {
     let country = headers
         .get(country_header)
         .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+        .and_then(country_code);
     let user_agent = headers
         .get("User-Agent")
         .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+        .map(|value| value.chars().take(MAX_STORED_USER_AGENT_CHARS).collect());
 
     RequestMetadata {
         ip_address,
@@ -394,6 +410,53 @@ mod tests {
             parsed,
             Err((StatusCode::BAD_REQUEST, msg)) if msg == "Invalid Client ID format"
         ));
+    }
+
+    /// The country and user agent come from the caller. Whatever they hold, the values
+    /// handed to the insert fit the columns, so a hostile header cannot fail the request.
+    #[test]
+    fn extract_metadata_bounds_caller_controlled_values() {
+        temp_env::with_vars(
+            [
+                ("GENESIS_IP_HEADER", None::<&str>),
+                ("GENESIS_COUNTRY_HEADER", None::<&str>),
+            ],
+            || {
+                for (sent, stored) in [
+                    ("US", Some("US")),
+                    ("us", Some("US")),
+                    ("T1", Some("T1")),
+                    ("XX", Some("XX")),
+                    ("USA", None),
+                    ("U", None),
+                    ("", None),
+                    ("U ", None),
+                    ("'\"", None),
+                    ("United States of America", None),
+                ] {
+                    let mut headers = HeaderMap::new();
+                    headers.insert("CF-IPCountry", HeaderValue::from_static(sent));
+                    let metadata = extract_metadata(&headers);
+                    assert_eq!(metadata.country.as_deref(), stored, "{sent:?}");
+                }
+                let mut headers = HeaderMap::new();
+                let long = "a".repeat(8_000);
+                headers.insert(
+                    "User-Agent",
+                    HeaderValue::from_str(&long)
+                        .ok()
+                        .unwrap_or_else(|| HeaderValue::from_static("")),
+                );
+                let stored = extract_metadata(&headers).user_agent.unwrap_or_default();
+                assert_eq!(stored.len(), MAX_STORED_USER_AGENT_CHARS);
+                let mut headers = HeaderMap::new();
+                headers.insert("User-Agent", HeaderValue::from_static("curl/8.5.0"));
+                assert_eq!(
+                    extract_metadata(&headers).user_agent.as_deref(),
+                    Some("curl/8.5.0")
+                );
+            },
+        );
     }
 
     #[test]
