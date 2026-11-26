@@ -13,6 +13,8 @@ the signed artifacts.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-26
+
 ### Changed
 
 - The release qualifies the image digests it has just built with both containment
@@ -223,4 +225,5 @@ The first release on OpenBao and PostgreSQL 19.
 - Findings from the stabilization review that remain open are listed in
   `TODO.md`.
 
+[0.6.1]: https://github.com/permesi/permesi/releases/tag/0.6.1
 [0.6.0]: https://github.com/permesi/permesi/releases/tag/0.6.0

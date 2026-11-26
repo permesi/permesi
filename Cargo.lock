@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admission_token"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "genesis"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3464,7 +3464,7 @@ dependencies = [
 
 [[package]]
 name = "openbao_client"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3827,7 +3827,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permesi"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "admission_token",
  "anyhow",
@@ -3900,7 +3900,7 @@ dependencies = [
 
 [[package]]
 name = "permesi-oauth-scenario"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "argon2 0.6.0",
  "axum",
@@ -3936,7 +3936,7 @@ dependencies = [
 
 [[package]]
 name = "permesi_web"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "argon2 0.6.0",
  "base64 0.23.1",
@@ -5222,7 +5222,7 @@ dependencies = [
 
 [[package]]
 name = "service_utils"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -5741,7 +5741,7 @@ dependencies = [
 
 [[package]]
 name = "test_support"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "reqwest",
