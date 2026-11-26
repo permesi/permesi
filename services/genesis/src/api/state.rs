@@ -6,7 +6,10 @@
 //! handlers extract only the parts they use (`State<PgPool>`, ...). Per-request
 //! values such as the `RequestId` remain request extensions.
 
-use crate::{api::admission::AdmissionSigner, openbao::renew::ShutdownSignal};
+use crate::{
+    api::{admission::AdmissionSigner, peer::RequestMetadataPolicy},
+    openbao::renew::ShutdownSignal,
+};
 use axum::extract::FromRef;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -22,6 +25,8 @@ pub struct AppState {
     pub observation: service_utils::health::Observation,
     /// Admission token signer (OpenBao transit) and PASERK keyset source.
     pub admission: Arc<AdmissionSigner>,
+    /// Which peers may supply the forwarded client address and country.
+    pub metadata: Arc<RequestMetadataPolicy>,
     /// Fail-closed shutdown channel used by readiness probes.
     pub shutdown: mpsc::UnboundedSender<ShutdownSignal>,
     /// Shared PostgreSQL pool.

@@ -126,6 +126,46 @@ fn work_limits(
     )
 }
 
+/// The issuer and audience written into every admission token, rechecked after clap: an
+/// empty or padded value would produce tokens Permesi can never accept.
+fn admission_identity(matches: &clap::ArgMatches) -> Result<(String, String)> {
+    let value = |name: &str| {
+        let value = matches
+            .get_one::<String>(name)
+            .cloned()
+            .with_context(|| format!("missing required argument: --{name}"))?;
+        anyhow::ensure!(
+            !value.is_empty() && value.trim() == value,
+            "--{name} must not be empty or padded with whitespace"
+        );
+        Ok(value)
+    };
+    Ok((value("admission-issuer")?, value("admission-audience")?))
+}
+
+/// Which peers may supply forwarded client metadata. Trusting the Unix socket peer is
+/// refused without a Unix socket: on TCP it would name no peer and silently do nothing.
+fn request_metadata(matches: &clap::ArgMatches) -> Result<crate::api::peer::RequestMetadataPolicy> {
+    let header = |name: &str| {
+        matches
+            .get_one::<String>(name)
+            .with_context(|| format!("missing required argument: --{name}"))
+    };
+    let trust_unix_proxy = matches.get_flag("trust-unix-proxy");
+    anyhow::ensure!(
+        !trust_unix_proxy || matches.get_one::<String>("socket-path").is_some(),
+        "--trust-unix-proxy requires --socket-path"
+    );
+    crate::api::peer::RequestMetadataPolicy::new(
+        header("client-ip-header")?,
+        header("client-country-header")?,
+        matches
+            .get_many::<sqlx::types::ipnetwork::IpNetwork>("trusted-proxy")
+            .map_or_else(Vec::new, |ranges| ranges.copied().collect()),
+        trust_unix_proxy,
+    )
+}
+
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
 pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
@@ -163,8 +203,12 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .copied()
         .filter(|version| *version > 0)
         .context("expected a positive admission signing version")?;
+    let (admission_issuer, admission_audience) = admission_identity(matches)?;
     Ok(Action::Server(Args {
         signing_version,
+        admission_issuer,
+        admission_audience,
+        metadata: request_metadata(matches)?,
         public_limits: work_limits(matches, "public")?,
 
         port,
@@ -210,6 +254,141 @@ mod tests {
         if let Ok(Action::Server(args)) = action {
             assert_eq!(args.openbao_transit_mount, "transit/genesis");
         }
+    }
+
+    const BASE: [&str; 11] = [
+        "genesis",
+        "--dsn",
+        "postgres://",
+        "--tls-pem-bundle",
+        "bundle",
+        "--openbao-url",
+        "http://openbao:8200",
+        "--openbao-role-id",
+        "role",
+        "--openbao-secret-id",
+        "secret",
+    ];
+
+    fn dispatch(extra: &[&str]) -> anyhow::Result<Args> {
+        let matches = crate::cli::commands::new()
+            .try_get_matches_from(BASE.iter().chain(extra))
+            .map_err(|error| anyhow::anyhow!("{}", error.kind()))?;
+        let Action::Server(args) = handler(&matches)?;
+        Ok(args)
+    }
+
+    /// The four settings Genesis used to read from the environment at request time are
+    /// CLI configuration now: defaults, overrides and refusals all happen at startup.
+    #[test]
+    fn admission_identity_and_client_metadata_are_cli_settings() -> anyhow::Result<()> {
+        temp_env::with_vars(
+            [
+                ("GENESIS_ADMISSION_ISS", None::<&str>),
+                ("GENESIS_ADMISSION_AUD", None),
+                ("GENESIS_IP_HEADER", None),
+                ("GENESIS_COUNTRY_HEADER", None),
+                ("GENESIS_TRUSTED_PROXIES", None),
+                ("GENESIS_TRUST_UNIX_PROXY", None),
+                ("GENESIS_SOCKET_PATH", None),
+            ],
+            || {
+                let defaults = dispatch(&[])?;
+                assert_eq!(defaults.admission_issuer, "https://genesis.permesi.dev");
+                assert_eq!(defaults.admission_audience, "permesi");
+                assert_eq!(
+                    defaults.metadata.summary(),
+                    "address=cf-connecting-ip country=cf-ipcountry trusted_proxies=none trust_unix_proxy=false"
+                );
+
+                let set = dispatch(&[
+                    "--admission-issuer",
+                    "https://genesis.example.test",
+                    "--admission-audience",
+                    "core",
+                    "--client-ip-header",
+                    "X-Real-IP",
+                    "--client-country-header",
+                    "X-Country",
+                    "--trusted-proxy",
+                    "192.0.2.0/24,2001:db8::/32",
+                ])?;
+                assert_eq!(set.admission_issuer, "https://genesis.example.test");
+                assert_eq!(set.admission_audience, "core");
+                assert_eq!(
+                    set.metadata.summary(),
+                    "address=x-real-ip country=x-country trusted_proxies=192.0.2.0/24,2001:db8::/32 trust_unix_proxy=false"
+                );
+
+                for refused in [
+                    &["--admission-issuer", ""][..],
+                    &["--admission-audience", " permesi"],
+                    &["--client-ip-header", "bad name"],
+                    &["--client-country-header", ""],
+                    &["--trusted-proxy", "attacker.example"],
+                    &["--trusted-proxy", "192.0.2.0/33"],
+                    // Meaningless on a TCP listener, so it is not accepted there.
+                    &["--trust-unix-proxy"],
+                ] {
+                    assert!(dispatch(refused).is_err(), "{refused:?}");
+                }
+                anyhow::Ok(())
+            },
+        )?;
+
+        // The environment names operators already use keep working.
+        temp_env::with_vars(
+            [
+                ("GENESIS_ADMISSION_ISS", Some("https://edge.example.test")),
+                ("GENESIS_ADMISSION_AUD", Some("iam")),
+                ("GENESIS_IP_HEADER", Some("X-Client-IP")),
+                ("GENESIS_COUNTRY_HEADER", Some("X-Client-Country")),
+                ("GENESIS_TRUSTED_PROXIES", Some("10.0.0.0/8")),
+                ("GENESIS_TRUST_UNIX_PROXY", None),
+                ("GENESIS_SOCKET_PATH", None),
+            ],
+            || {
+                let args = dispatch(&[])?;
+                assert_eq!(args.admission_issuer, "https://edge.example.test");
+                assert_eq!(args.admission_audience, "iam");
+                assert_eq!(
+                    args.metadata.summary(),
+                    "address=x-client-ip country=x-client-country trusted_proxies=10.0.0.0/8 trust_unix_proxy=false"
+                );
+                anyhow::Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn unix_proxy_trust_is_accepted_with_a_unix_socket() -> anyhow::Result<()> {
+        // A developer shell can export the TCP listener's settings, which conflict with
+        // a Unix socket; the test supplies everything it needs itself.
+        temp_env::with_vars_unset(
+            [
+                "GENESIS_TLS_PEM_BUNDLE",
+                "GENESIS_PORT",
+                "GENESIS_OPENBAO_ROLE_ID",
+                "GENESIS_OPENBAO_SECRET_ID",
+                "GENESIS_OPENBAO_WRAPPED_TOKEN",
+                "GENESIS_OPENBAO_AUTH_METHOD",
+            ],
+            || {
+                let matches = crate::cli::commands::new().try_get_matches_from([
+                    "genesis",
+                    "--dsn",
+                    "postgres://",
+                    "--socket-path",
+                    "/run/genesis/genesis.sock",
+                    "--openbao-url",
+                    "/run/openbao/agent.sock",
+                    "--trust-unix-proxy",
+                ])?;
+                let Action::Server(args) = handler(&matches)?;
+                assert!(args.metadata.summary().ends_with("trust_unix_proxy=true"));
+                Ok(())
+            },
+        )
     }
 
     #[test]

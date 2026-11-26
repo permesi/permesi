@@ -21,6 +21,21 @@ the signed artifacts.
   does not gate `Test & Build` or the release; it keeps the path the release
   depends on exercised between releases.
 
+### Security
+
+- Genesis takes the client address and country for a token's audit record from the
+  edge headers only when the request comes from a trusted proxy
+  (`--trusted-proxy`, `GENESIS_TRUSTED_PROXIES`, comma-separated CIDRs; or
+  `--trust-unix-proxy` when it listens on a Unix socket). Until now any peer could
+  send `CF-Connecting-IP` and `CF-IPCountry` and have them recorded. From a peer
+  that is not trusted the record now holds the address of the connection itself
+  and no country. **No proxy is trusted by default**: a deployment behind an edge
+  or ingress has to set the proxy ranges, or every record shows the proxy's
+  address. The issuer, audience and the two header names are now CLI settings
+  (`--admission-issuer`, `--admission-audience`, `--client-ip-header`,
+  `--client-country-header`) validated at startup; their environment names are
+  unchanged.
+
 ## [0.6.1] - 2026-11-26
 
 ### Changed

@@ -169,18 +169,30 @@ Signing key configuration (required):
 
 Claim defaults (optional):
 
-- `GENESIS_ADMISSION_ISS` (default: `https://genesis.permesi.dev`) — `iss` (“issuer”): the identity/URL that `permesi` expects minted the token.
-- `GENESIS_ADMISSION_AUD` (default: `permesi`) — `aud` (“audience”): who the token is intended for (usually the service name); `permesi` must match this.
+- `--admission-issuer` / `GENESIS_ADMISSION_ISS` (default: `https://genesis.permesi.dev`) — `iss` (“issuer”): the identity/URL that `permesi` expects minted the token.
+- `--admission-audience` / `GENESIS_ADMISSION_AUD` (default: `permesi`) — `aud` (“audience”): who the token is intended for (usually the service name); `permesi` must match this.
 - `iat` / `exp` are RFC3339 timestamps in the PASETO payload.
 - `kid` format: PASERK public key ID (`k4.pid...`), embedded in the PASETO footer.
 - `GENESIS_TRANSIT_MOUNT` (default: `transit/genesis`) — OpenBao Transit mount used for signing/PASERK.
 
 ### Header Capture
 
-`GET /token` captures request metadata (IP/country/UA). Header selection is currently controlled via:
+`GET /token` stores request metadata (address, country, user agent) with the token for
+audit. It never decides a request. The address and country arrive in headers, and a
+header is only as trustworthy as its sender, so Genesis reads them only from a peer it
+was told to trust:
 
-- `GENESIS_IP_HEADER` (defaults to Cloudflare `CF-Connecting-IP`)
-- `GENESIS_COUNTRY_HEADER` (defaults to Cloudflare `CF-IPCountry`)
+- `--client-ip-header` / `GENESIS_IP_HEADER` (default: Cloudflare `CF-Connecting-IP`)
+- `--client-country-header` / `GENESIS_COUNTRY_HEADER` (default: Cloudflare `CF-IPCountry`)
+- `--trusted-proxy` / `GENESIS_TRUSTED_PROXIES` — comma-separated CIDRs of the proxies
+  that overwrite those headers. Empty by default.
+- `--trust-unix-proxy` / `GENESIS_TRUST_UNIX_PROXY` — accept the headers from the
+  same-host proxy when Genesis listens on a Unix socket (`--socket-path`).
+
+From any other peer the headers are ignored: the record holds the address of the
+connection itself and no country. Set the proxy ranges to the edge or ingress that
+fronts Genesis, and make that hop overwrite the address header, not append to it; a
+request carrying the header twice is recorded under the proxy's address.
 
 ## Database & Retention
 

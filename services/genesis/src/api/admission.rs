@@ -73,16 +73,17 @@ pub struct PaserkSnapshot {
 }
 
 impl AdmissionSigner {
-    /// Initialize the admission signer using OpenBao transit and environment defaults.
+    /// Initialize the admission signer using OpenBao transit. The issuer and audience
+    /// are the validated CLI settings and go into every token unchanged.
     ///
     /// # Errors
     /// Returns an error if PASERK refresh fails.
-    pub async fn new(globals: &GlobalArgs, signing_version: u32) -> Result<Self> {
-        let issuer = std::env::var("GENESIS_ADMISSION_ISS")
-            .unwrap_or_else(|_| "https://genesis.permesi.dev".to_string());
-        let audience =
-            std::env::var("GENESIS_ADMISSION_AUD").unwrap_or_else(|_| "permesi".to_string());
-
+    pub async fn new(
+        globals: &GlobalArgs,
+        signing_version: u32,
+        issuer: String,
+        audience: String,
+    ) -> Result<Self> {
         let transit_mount = globals.openbao_transit_mount.clone();
 
         let openbao_transport = globals.openbao_transport.clone();

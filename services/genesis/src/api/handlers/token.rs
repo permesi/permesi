@@ -13,12 +13,18 @@ use axum::{
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgDatabaseError};
-use std::{env, future::Future, net::IpAddr, pin::Pin, sync::Arc};
+use std::{future::Future, net::IpAddr, pin::Pin, sync::Arc};
 use tracing::{Instrument, debug, error, info_span, instrument};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::{api::admission::AdmissionSigner, openbao::renew::ShutdownSignal};
+use crate::{
+    api::{
+        admission::AdmissionSigner,
+        peer::{Peer, RequestMetadataPolicy},
+    },
+    openbao::renew::ShutdownSignal,
+};
 use tokio::sync::mpsc;
 
 pub const TOKEN_EXPIRATION: i64 = 120; // 2 minutes
@@ -90,11 +96,13 @@ impl AdmissionSignerLike for AdmissionSigner {
     ),
     tag = "token",
 )]
-#[instrument(skip(pool, admission, shutdown, headers, query))]
+#[instrument(skip(pool, admission, shutdown, policy, peer, headers, query))]
 pub async fn token(
     State(pool): State<PgPool>,
     State(admission): State<Arc<AdmissionSigner>>,
     State(shutdown): State<mpsc::UnboundedSender<ShutdownSignal>>,
+    State(policy): State<Arc<RequestMetadataPolicy>>,
+    peer: Peer,
     headers: HeaderMap,
     query: Result<Query<ClientArgs>, QueryRejection>,
 ) -> TokenResponse {
@@ -103,7 +111,7 @@ pub async fn token(
 
     debug!("Client UUID: {}", client_uuid);
 
-    let metadata = extract_metadata(&headers);
+    let metadata = extract_metadata(&policy, peer, &headers);
 
     // get client id from the payload
     let client_id = fetch_client_id(&pool, &shutdown, client_uuid).await?;
@@ -156,19 +164,17 @@ fn country_code(value: &str) -> Option<String> {
         .then(|| value.to_ascii_uppercase())
 }
 
-/// Audit metadata for a token, taken from request headers and never trusted for a
-/// decision. Malformed or oversized values are dropped or shortened, never rejected.
-fn extract_metadata(headers: &HeaderMap) -> RequestMetadata {
-    let ip_header =
-        env::var("GENESIS_IP_HEADER").unwrap_or_else(|_| "CF-Connecting-IP".to_string());
-    let country_header =
-        env::var("GENESIS_COUNTRY_HEADER").unwrap_or_else(|_| "CF-IPCountry".to_string());
-
-    let ip_address = ip_from_headers(&ip_header, headers);
-    let country = headers
-        .get(country_header)
-        .and_then(|value| value.to_str().ok())
-        .and_then(country_code);
+/// Audit metadata for a token, never trusted for a decision. The address and country
+/// headers count only when `policy` trusts the transport peer that sent them; from any
+/// other peer the peer's own address is recorded and no country. Malformed or oversized
+/// values are dropped or shortened, never rejected.
+fn extract_metadata(
+    policy: &RequestMetadataPolicy,
+    peer: Peer,
+    headers: &HeaderMap,
+) -> RequestMetadata {
+    let ip_address = policy.client_address(peer, headers);
+    let country = policy.client_country(peer, headers).and_then(country_code);
     let user_agent = headers
         .get("User-Agent")
         .and_then(|value| value.to_str().ok())
@@ -179,13 +185,6 @@ fn extract_metadata(headers: &HeaderMap) -> RequestMetadata {
         country,
         user_agent,
     }
-}
-
-fn ip_from_headers(header: &str, headers: &HeaderMap) -> Option<IpAddr> {
-    headers
-        .get(header)
-        .and_then(|hv| hv.to_str().ok())
-        .and_then(|s| s.parse::<IpAddr>().ok())
 }
 
 async fn fetch_client_id(
@@ -345,7 +344,6 @@ mod tests {
     use axum::http::Uri;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
     use std::time::Duration;
-    use temp_env;
 
     #[test]
     fn token_serializes_without_expires() -> Result<(), serde_json::Error> {
@@ -355,22 +353,6 @@ mod tests {
         let value = serde_json::to_value(token)?;
         assert_eq!(value, serde_json::json!({ "token": "test-token" }));
         Ok(())
-    }
-
-    #[test]
-    fn ip_from_headers_parses_valid_ip() {
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Client-IP", HeaderValue::from_static("203.0.113.10"));
-        let ip = ip_from_headers("X-Client-IP", &headers);
-        assert_eq!(ip, Some(IpAddr::from([203, 0, 113, 10])));
-    }
-
-    #[test]
-    fn ip_from_headers_rejects_invalid_ip() {
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Client-IP", HeaderValue::from_static("not-an-ip"));
-        let ip = ip_from_headers("X-Client-IP", &headers);
-        assert!(ip.is_none());
     }
 
     #[test]
@@ -412,134 +394,99 @@ mod tests {
         ));
     }
 
+    fn default_policy(proxies: &[&str]) -> anyhow::Result<RequestMetadataPolicy> {
+        RequestMetadataPolicy::new(
+            "CF-Connecting-IP",
+            "CF-IPCountry",
+            proxies
+                .iter()
+                .map(|range| range.parse())
+                .collect::<Result<_, _>>()?,
+            false,
+        )
+    }
+
+    fn peer(address: &str) -> anyhow::Result<Peer> {
+        Ok(Peer {
+            address: Some(address.parse()?),
+            unix: false,
+        })
+    }
+
     /// The country and user agent come from the caller. Whatever they hold, the values
     /// handed to the insert fit the columns, so a hostile header cannot fail the request.
     #[test]
-    fn extract_metadata_bounds_caller_controlled_values() {
-        temp_env::with_vars(
-            [
-                ("GENESIS_IP_HEADER", None::<&str>),
-                ("GENESIS_COUNTRY_HEADER", None::<&str>),
-            ],
-            || {
-                for (sent, stored) in [
-                    ("US", Some("US")),
-                    ("us", Some("US")),
-                    ("T1", Some("T1")),
-                    ("XX", Some("XX")),
-                    ("USA", None),
-                    ("U", None),
-                    ("", None),
-                    ("U ", None),
-                    ("'\"", None),
-                    ("United States of America", None),
-                ] {
-                    let mut headers = HeaderMap::new();
-                    headers.insert("CF-IPCountry", HeaderValue::from_static(sent));
-                    let metadata = extract_metadata(&headers);
-                    assert_eq!(metadata.country.as_deref(), stored, "{sent:?}");
-                }
-                let mut headers = HeaderMap::new();
-                let long = "a".repeat(8_000);
-                headers.insert(
-                    "User-Agent",
-                    HeaderValue::from_str(&long)
-                        .ok()
-                        .unwrap_or_else(|| HeaderValue::from_static("")),
-                );
-                let stored = extract_metadata(&headers).user_agent.unwrap_or_default();
-                assert_eq!(stored.len(), MAX_STORED_USER_AGENT_CHARS);
-                let mut headers = HeaderMap::new();
-                headers.insert("User-Agent", HeaderValue::from_static("curl/8.5.0"));
-                assert_eq!(
-                    extract_metadata(&headers).user_agent.as_deref(),
-                    Some("curl/8.5.0")
-                );
-            },
+    fn extract_metadata_bounds_caller_controlled_values() -> anyhow::Result<()> {
+        let policy = default_policy(&["192.0.2.0/24"])?;
+        let proxy = peer("192.0.2.10")?;
+        for (sent, stored) in [
+            ("US", Some("US")),
+            ("us", Some("US")),
+            ("T1", Some("T1")),
+            ("XX", Some("XX")),
+            ("USA", None),
+            ("U", None),
+            ("", None),
+            ("U ", None),
+            ("'\"", None),
+            ("United States of America", None),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("CF-IPCountry", HeaderValue::from_static(sent));
+            let metadata = extract_metadata(&policy, proxy, &headers);
+            assert_eq!(metadata.country.as_deref(), stored, "{sent:?}");
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert("User-Agent", HeaderValue::from_str(&"a".repeat(8_000))?);
+        let stored = extract_metadata(&policy, proxy, &headers)
+            .user_agent
+            .unwrap_or_default();
+        assert_eq!(stored.len(), MAX_STORED_USER_AGENT_CHARS);
+        let mut headers = HeaderMap::new();
+        headers.insert("User-Agent", HeaderValue::from_static("curl/8.5.0"));
+        assert_eq!(
+            extract_metadata(&policy, proxy, &headers)
+                .user_agent
+                .as_deref(),
+            Some("curl/8.5.0")
         );
+        Ok(())
     }
 
     #[test]
-    fn extract_metadata_uses_default_headers() {
-        temp_env::with_vars(
-            [
-                ("GENESIS_IP_HEADER", None::<String>),
-                ("GENESIS_COUNTRY_HEADER", None::<String>),
-            ],
-            || {
-                let mut headers = HeaderMap::new();
-                headers.insert("CF-Connecting-IP", HeaderValue::from_static("203.0.113.10"));
-                headers.insert("CF-IPCountry", HeaderValue::from_static("US"));
-                headers.insert("User-Agent", HeaderValue::from_static("agent"));
+    fn extract_metadata_takes_forwarded_values_from_a_trusted_proxy() -> anyhow::Result<()> {
+        let mut headers = HeaderMap::new();
+        headers.insert("CF-Connecting-IP", HeaderValue::from_static("203.0.113.10"));
+        headers.insert("CF-IPCountry", HeaderValue::from_static("US"));
+        headers.insert("User-Agent", HeaderValue::from_static("agent"));
 
-                let metadata = extract_metadata(&headers);
-                assert_eq!(metadata.ip_address, Some(IpAddr::from([203, 0, 113, 10])));
-                assert_eq!(metadata.country.as_deref(), Some("US"));
-                assert_eq!(metadata.user_agent.as_deref(), Some("agent"));
-            },
+        let metadata = extract_metadata(
+            &default_policy(&["192.0.2.0/24"])?,
+            peer("192.0.2.10")?,
+            &headers,
         );
+        assert_eq!(metadata.ip_address, Some(IpAddr::from([203, 0, 113, 10])));
+        assert_eq!(metadata.country.as_deref(), Some("US"));
+        assert_eq!(metadata.user_agent.as_deref(), Some("agent"));
+        Ok(())
     }
 
+    /// A caller that reaches Genesis without the edge sends the same headers the edge
+    /// would. The audit record then holds the caller's own address and no country.
     #[test]
-    fn extract_metadata_respects_env_override() {
-        temp_env::with_vars(
-            [
-                ("GENESIS_IP_HEADER", Some("X-Client-IP")),
-                ("GENESIS_COUNTRY_HEADER", Some("X-Client-Country")),
-            ],
-            || {
-                let mut headers = HeaderMap::new();
-                headers.insert("X-Client-IP", HeaderValue::from_static("198.51.100.5"));
-                headers.insert("X-Client-Country", HeaderValue::from_static("BR"));
-                headers.insert("User-Agent", HeaderValue::from_static("agent"));
+    fn extract_metadata_ignores_forwarded_values_from_any_other_peer() -> anyhow::Result<()> {
+        let mut headers = HeaderMap::new();
+        headers.insert("CF-Connecting-IP", HeaderValue::from_static("203.0.113.10"));
+        headers.insert("CF-IPCountry", HeaderValue::from_static("US"));
+        headers.insert("User-Agent", HeaderValue::from_static("agent"));
 
-                let metadata = extract_metadata(&headers);
-                assert_eq!(metadata.ip_address, Some(IpAddr::from([198, 51, 100, 5])));
-                assert_eq!(metadata.country.as_deref(), Some("BR"));
-                assert_eq!(metadata.user_agent.as_deref(), Some("agent"));
-            },
-        );
-    }
-
-    #[test]
-    fn extract_metadata_overrides_ip_only() {
-        temp_env::with_vars(
-            [
-                ("GENESIS_IP_HEADER", Some("X-Real-IP")),
-                ("GENESIS_COUNTRY_HEADER", None::<&str>),
-            ],
-            || {
-                let mut headers = HeaderMap::new();
-                headers.insert("X-Real-IP", HeaderValue::from_static("192.0.2.55"));
-                headers.insert("CF-IPCountry", HeaderValue::from_static("CA"));
-
-                let metadata = extract_metadata(&headers);
-                assert_eq!(metadata.ip_address, Some(IpAddr::from([192, 0, 2, 55])));
-                assert_eq!(metadata.country.as_deref(), Some("CA"));
-            },
-        );
-    }
-
-    #[test]
-    fn extract_metadata_overrides_country_only() {
-        temp_env::with_vars(
-            [
-                ("GENESIS_IP_HEADER", None::<&str>),
-                ("GENESIS_COUNTRY_HEADER", Some("X-Geo-Country")),
-            ],
-            || {
-                let mut headers = HeaderMap::new();
-                headers.insert(
-                    "CF-Connecting-IP",
-                    HeaderValue::from_static("198.51.100.25"),
-                );
-                headers.insert("X-Geo-Country", HeaderValue::from_static("DE"));
-
-                let metadata = extract_metadata(&headers);
-                assert_eq!(metadata.ip_address, Some(IpAddr::from([198, 51, 100, 25])));
-                assert_eq!(metadata.country.as_deref(), Some("DE"));
-            },
-        );
+        for policy in [default_policy(&[])?, default_policy(&["192.0.2.0/24"])?] {
+            let metadata = extract_metadata(&policy, peer("198.51.100.66")?, &headers);
+            assert_eq!(metadata.ip_address, Some(IpAddr::from([198, 51, 100, 66])));
+            assert_eq!(metadata.country, None);
+            assert_eq!(metadata.user_agent.as_deref(), Some("agent"));
+        }
+        Ok(())
     }
 
     fn unreachable_pool() -> PgPool {

@@ -147,6 +147,7 @@ fn spawn_genesis(config: &TestConfig, tls: &TestTlsPaths) -> Result<ChildGuard> 
     // Clear conflicting env vars that might leak from the host
     command.env_remove("GENESIS_OPENBAO_SECRET_ID");
     command.env_remove("GENESIS_OPENBAO_WRAPPED_TOKEN");
+    command.env_remove("GENESIS_TRUSTED_PROXIES");
 
     let child = command
         .args([
@@ -288,8 +289,12 @@ async fn wait_for_exit(
 }
 
 async fn request_token(client: &reqwest::Client, base: &str, client_id: &str) -> Result<String> {
+    // What an edge would send. The test client is not a trusted proxy, so neither value
+    // may reach the audit record.
     let response = client
         .get(format!("{base}/token?client_id={client_id}"))
+        .header("CF-Connecting-IP", "203.0.113.77")
+        .header("CF-IPCountry", "ZZ")
         .send()
         .await
         .context("Failed to request /token")?
@@ -383,6 +388,23 @@ async fn token_endpoint_mints_and_persists() -> Result<()> {
         stored_uuid == Some(expected_uuid),
         "Token row missing or mismatched: {stored_uuid:?}"
     );
+
+    // The request carried forged edge headers from a peer that is not a trusted proxy:
+    // the audit record holds the transport peer and no country.
+    let (address, country): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT host(ip_address), country::text FROM tokens WHERE id = $1")
+            .bind(token_id)
+            .fetch_one(&pool)
+            .await
+            .context("Failed to query token metadata")?;
+    let peer = address
+        .as_deref()
+        .and_then(|value| value.parse::<std::net::IpAddr>().ok());
+    ensure!(
+        peer.is_some_and(|peer| peer.is_loopback()),
+        "recorded address {address:?} is not the transport peer"
+    );
+    ensure!(country.is_none(), "recorded country {country:?} was forged");
 
     let _ = sqlx::query("DELETE FROM tokens WHERE id = $1")
         .bind(token_id)

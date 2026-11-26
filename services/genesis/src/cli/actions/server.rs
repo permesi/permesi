@@ -7,6 +7,9 @@ use url::Url;
 
 pub struct Args {
     pub signing_version: u32,
+    pub admission_issuer: String,
+    pub admission_audience: String,
+    pub metadata: api::peer::RequestMetadataPolicy,
     pub public_limits: service_utils::work_limit::Limits,
 
     pub port: u16,
@@ -108,8 +111,13 @@ pub async fn execute(args: Args) -> Result<()> {
         args.socket_path,
         dsn.to_string(),
         args.db_pool,
-        args.public_limits,
-        args.signing_version,
+        api::Settings {
+            public_limits: args.public_limits,
+            signing_version: args.signing_version,
+            admission_issuer: args.admission_issuer,
+            admission_audience: args.admission_audience,
+            metadata: args.metadata,
+        },
         &globals,
     )
     .await
@@ -166,6 +174,9 @@ fn log_startup_args(args: &Args) {
                 .clone()
                 .unwrap_or_else(|| "none".to_string()),
         ),
+        ("admission_issuer", args.admission_issuer.clone()),
+        ("admission_audience", args.admission_audience.clone()),
+        ("client_metadata", args.metadata.summary()),
     ];
     log_entries("Startup configuration", &entries);
 }
@@ -223,6 +234,14 @@ mod tests {
             "https://bao-user:bao-password@openbao.internal:8200/?bao_token=bao-query-value";
         Ok(Args {
             signing_version: 1,
+            admission_issuer: "https://genesis.permesi.dev".to_string(),
+            admission_audience: "permesi".to_string(),
+            metadata: crate::api::peer::RequestMetadataPolicy::new(
+                "CF-Connecting-IP",
+                "CF-IPCountry",
+                Vec::new(),
+                false,
+            )?,
             public_limits: service_utils::work_limit::Limits::new(20, 20, 5)?,
             port: 8080,
             socket_path: None,

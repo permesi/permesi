@@ -40,6 +40,82 @@ fn with_native_openbao_args(command: Command) -> Command {
             .help("JWT file read at login; prefer an audience-scoped projected token"))
 }
 
+pub const DEFAULT_ADMISSION_ISSUER: &str = "https://genesis.permesi.dev";
+pub const DEFAULT_ADMISSION_AUDIENCE: &str = "permesi";
+pub const DEFAULT_CLIENT_IP_HEADER: &str = "CF-Connecting-IP";
+pub const DEFAULT_CLIENT_COUNTRY_HEADER: &str = "CF-IPCountry";
+
+/// Accept only a value that can name an HTTP header.
+fn header_name(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("header name is empty".to_string());
+    }
+    axum::http::HeaderName::try_from(value)
+        .map(|_| value.to_string())
+        .map_err(|_| "not a valid HTTP header name".to_string())
+}
+
+/// The `iss` and `aud` of every admission token. Permesi has to be started with the
+/// same pair, or it rejects the tokens.
+fn with_admission_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("admission-issuer")
+                .long("admission-issuer")
+                .env("GENESIS_ADMISSION_ISS")
+                .default_value(DEFAULT_ADMISSION_ISSUER)
+                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .help("Issuer (iss) written into admission tokens; must match Permesi"),
+        )
+        .arg(
+            Arg::new("admission-audience")
+                .long("admission-audience")
+                .env("GENESIS_ADMISSION_AUD")
+                .default_value(DEFAULT_ADMISSION_AUDIENCE)
+                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .help("Audience (aud) written into admission tokens; must match Permesi"),
+        )
+}
+
+/// Where the audit record's client address and country come from. The headers are read
+/// only from a trusted proxy; with none configured the transport peer is recorded.
+fn with_client_metadata_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("client-ip-header")
+                .long("client-ip-header")
+                .env("GENESIS_IP_HEADER")
+                .default_value(DEFAULT_CLIENT_IP_HEADER)
+                .value_parser(header_name)
+                .help("Header a trusted proxy overwrites with the client address"),
+        )
+        .arg(
+            Arg::new("client-country-header")
+                .long("client-country-header")
+                .env("GENESIS_COUNTRY_HEADER")
+                .default_value(DEFAULT_CLIENT_COUNTRY_HEADER)
+                .value_parser(header_name)
+                .help("Header a trusted proxy sets to the client's two-character country code"),
+        )
+        .arg(
+            Arg::new("trusted-proxy")
+                .long("trusted-proxy")
+                .env("GENESIS_TRUSTED_PROXIES")
+                .value_delimiter(',')
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(sqlx::types::ipnetwork::IpNetwork))
+                .help("Proxy CIDRs allowed to supply the client address and country headers"),
+        )
+        .arg(
+            Arg::new("trust-unix-proxy")
+                .long("trust-unix-proxy")
+                .env("GENESIS_TRUST_UNIX_PROXY")
+                .action(clap::ArgAction::SetTrue)
+                .help("Accept those headers from the same-host proxy on the Unix socket"),
+        )
+}
+
 #[must_use]
 pub fn new() -> Command {
     let styles = Styles::styled()
@@ -95,6 +171,8 @@ pub fn new() -> Command {
             .value_parser(clap::value_parser!(u32).range(1..))
             .help("Published Transit version to use for new admission signatures"),
     );
+    let command = with_admission_args(command);
+    let command = with_client_metadata_args(command);
     let command = openbao::with_args(command);
     let command = with_native_openbao_args(command);
     let command = tls::with_args(command);

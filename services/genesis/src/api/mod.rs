@@ -38,6 +38,7 @@ use utoipa_axum::router::OpenApiRouter;
 mod admission;
 mod handlers;
 mod openapi;
+pub mod peer;
 mod state;
 
 pub use openapi::openapi;
@@ -51,6 +52,21 @@ pub fn router() -> OpenApiRouter<AppState> {
     openapi::api_router()
 }
 
+/// What the routes need beyond the listener and the database: all of it validated CLI
+/// configuration, none of it read from the environment at request time.
+pub struct Settings {
+    /// Budget for the public `/token` and `/paserk.json` routes.
+    pub public_limits: service_utils::work_limit::Limits,
+    /// Published Transit version that signs new admission tokens.
+    pub signing_version: u32,
+    /// `iss` of every admission token.
+    pub admission_issuer: String,
+    /// `aud` of every admission token.
+    pub admission_audience: String,
+    /// Which peers may supply the forwarded client address and country.
+    pub metadata: peer::RequestMetadataPolicy,
+}
+
 /// Initialize and start the Genesis server.
 ///
 /// # Errors
@@ -61,10 +77,16 @@ pub async fn new(
     socket_path: Option<String>,
     dsn: String,
     pool_config: PoolConfig,
-    public_limits: service_utils::work_limit::Limits,
-    signing_version: u32,
+    settings: Settings,
     globals: &GlobalArgs,
 ) -> Result<()> {
+    let Settings {
+        public_limits,
+        signing_version,
+        admission_issuer,
+        admission_audience,
+        metadata,
+    } = settings;
     // Renew bao token, gracefully shutdown if failed
     let (shutdown_tx, rx) = mpsc::unbounded_channel();
 
@@ -72,7 +94,15 @@ pub async fn new(
 
     let pool = pool_config.connect(&dsn, env!("CARGO_PKG_NAME")).await?;
 
-    let admission = Arc::new(admission::AdmissionSigner::new(globals, signing_version).await?);
+    let admission = Arc::new(
+        admission::AdmissionSigner::new(
+            globals,
+            signing_version,
+            admission_issuer,
+            admission_audience,
+        )
+        .await?,
+    );
 
     let signer = Arc::clone(&admission);
     let observation =
@@ -85,6 +115,7 @@ pub async fn new(
 
         observation,
         admission,
+        metadata: Arc::new(metadata),
         shutdown: shutdown_tx,
         pool: pool.clone(),
     });
@@ -181,6 +212,9 @@ async fn serve_socket(
     let drain_started = CancellationToken::new();
 
     info!("Listening on unix:{}", path.display());
+    // The marker tells the metadata policy this request came through the socket, whose
+    // only possible peer is a same-host process allowed to open it.
+    let app = app.layer(axum::Extension(peer::UnixPeer));
     let socket_server = axum::serve(listener, app).with_graceful_shutdown({
         let shutdown_reason = shutdown_reason.clone();
         let drain_started = drain_started.clone();
@@ -255,7 +289,8 @@ async fn serve_tls(
     axum_server::from_tcp_rustls(listener, tls_config)
         .context("Failed to configure TLS server from pre-bound TCP listener")?
         .handle(handle)
-        .serve(app.into_make_service())
+        // The peer address decides whether forwarded metadata is accepted.
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await?;
 
     if let Some(signal) = shutdown_reason.lock().await.take() {
