@@ -401,9 +401,11 @@ named here are the ones a hand-made equivalent most easily gets wrong.
   a SecretID works once and expires within the hour.
 - **Database engine** (`databases.tf`): the connections, and the roles whose creation
   statements grant each dynamic user only its service's runtime role (section 3).
-- **Rate-limit quotas** (`quotas.tf`): six `genesis-*` quotas on the paths the
-  internet-facing Genesis can drive: signing, database credentials, both PKI issue
-  paths and its two login roles.
+- **Rate-limit quotas** (`quotas.tf`): six `genesis-*` quotas on the Genesis edge
+  paths: signing, database credentials, the runtime PKI role its Agent issues from,
+  the bootstrap PKI role an operator issues from, and its two login roles. The
+  quotas limit those paths; they grant nothing. Neither Genesis nor its Agent may
+  issue bootstrap certificates.
 
 ---
 

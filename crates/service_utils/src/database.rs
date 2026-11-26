@@ -165,7 +165,7 @@ impl PoolConfig {
 }
 
 /// One-line summary for startup logs.
-/// DSN query parameters whose values are settings. Every other value is hidden.
+/// DSN query parameters whose values are settings. Any other parameter is hidden whole.
 const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
     "application_name",
     "connect_timeout",
@@ -175,45 +175,62 @@ const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
     "sslmode",
 ];
 
-/// A database DSN reduced to what is safe in a log: scheme, host, port, database and the
-/// query parameters that are known settings.
+/// A database DSN reduced to what is safe in a log: scheme, host, port, database name
+/// and the query parameters that are known settings.
 ///
-/// The userinfo is dropped whole. The services replace it with credentials from OpenBao
-/// before connecting, so whatever an operator put there is not what connects, and a
-/// secret placed there by mistake must not be printed. The value of every query
-/// parameter that is not a known setting is hidden: libpq and sqlx both accept
-/// `?password=...`. Only `postgres://` and `postgresql://` URLs are shown at all. Without
-/// the `//` the rest of the string, password included, parses as an opaque path, and a
-/// value of another scheme is not a DSN, so neither is echoed.
+/// The result is rebuilt from parts that passed a check, never copied from the input.
+/// The userinfo is dropped: the services replace it with credentials from OpenBao before
+/// connecting, and a secret placed there by mistake must not be printed. The database
+/// name is shown only as a single segment of plain characters, because a `/` or `?`
+/// typed before the `@` ends the authority early and moves the password into the path
+/// or a query key. A query parameter is shown only if its name is a known setting and
+/// its value is plain; the rest, names included, become one `REDACTED` marker, since
+/// libpq and sqlx accept `?password=...` and an unencoded `&` or `;` in a password
+/// turns part of it into a name or into the value of another parameter. Only
+/// `postgres://` and `postgresql://` URLs are shown at all: without the `//` the whole
+/// rest of the string parses as an opaque path.
 #[must_use]
 pub fn loggable_dsn(dsn: &str) -> String {
     const UNSHOWN: &str = "invalid-dsn";
+    let plain = |text: &str, extra: &[u8]| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
+    };
     let authority = ["postgres://", "postgresql://"].iter().any(|prefix| {
         dsn.get(..prefix.len())
             .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
     });
-    let Some(mut parsed) = url::Url::parse(dsn).ok().filter(|_| authority) else {
+    let Some(parsed) = url::Url::parse(dsn).ok().filter(|_| authority) else {
         return UNSHOWN.to_string();
     };
-    if parsed.set_username("").is_err() || parsed.set_password(None).is_err() {
-        return UNSHOWN.to_string();
+    let port = parsed
+        .port()
+        .map_or_else(String::new, |port| format!(":{port}"));
+    let database = Some(parsed.path().strip_prefix('/').unwrap_or_default())
+        .filter(|name| plain(name, b"-_."))
+        .map_or_else(String::new, |name| format!("/{name}"));
+    let mut pairs: Vec<String> = parsed
+        .query_pairs()
+        .filter(|(key, value)| {
+            LOGGABLE_DSN_PARAMETERS.contains(&key.as_ref()) && plain(value, b"-_./")
+        })
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    if parsed.query_pairs().count() > pairs.len() {
+        pairs.push("REDACTED".to_string());
     }
-    if parsed.query().is_some() {
-        let shown: Vec<(String, String)> = parsed
-            .query_pairs()
-            .map(|(key, value)| {
-                let value = if LOGGABLE_DSN_PARAMETERS.contains(&key.as_ref()) {
-                    value.into_owned()
-                } else {
-                    "REDACTED".to_string()
-                };
-                (key.into_owned(), value)
-            })
-            .collect();
-        parsed.query_pairs_mut().clear().extend_pairs(shown);
-    }
-    parsed.set_fragment(None);
-    parsed.to_string()
+    let query = if pairs.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", pairs.join("&"))
+    };
+    format!(
+        "{}://{}{port}{database}{query}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or_default()
+    )
 }
 
 impl fmt::Display for PoolConfig {
@@ -252,23 +269,75 @@ mod tests {
     /// logged DSN shows neither, and hides any parameter it does not know to be a setting.
     #[test]
     fn loggable_dsn_hides_passwords_in_userinfo_and_query() {
-        assert_eq!(
-            loggable_dsn("postgres://app:userinfo-pw@db.internal:5432/permesi?sslmode=verify-full"),
-            "postgres://db.internal:5432/permesi?sslmode=verify-full"
-        );
-        assert_eq!(
-            loggable_dsn("PostgreSQL://lone-userinfo-secret@db.internal/permesi"),
-            "postgresql://db.internal/permesi"
-        );
-        let shown = loggable_dsn(
-            "postgres://db.internal/permesi?user=app&password=query-pw&sslpassword=key-pw&unknown=opaque-value&sslmode=require#frag-value",
-        );
-        assert_eq!(
-            shown,
-            "postgres://db.internal/permesi?user=REDACTED&password=REDACTED&sslpassword=REDACTED&unknown=REDACTED&sslmode=require"
-        );
-        for secret in ["query-pw", "key-pw", "opaque-value", "frag-value"] {
-            assert!(!shown.contains(secret), "{secret}");
+        for (dsn, shown) in [
+            (
+                "postgres://app:userinfo-pw@db.internal:5432/permesi?sslmode=verify-full",
+                "postgres://db.internal:5432/permesi?sslmode=verify-full",
+            ),
+            (
+                "PostgreSQL://lone-userinfo-secret@db.internal/permesi",
+                "postgresql://db.internal/permesi",
+            ),
+            (
+                "postgres://db.internal/permesi?user=app&password=query-pw&sslpassword=key-pw&unknown=opaque-value&sslmode=require#frag-value",
+                "postgres://db.internal/permesi?sslmode=require&REDACTED",
+            ),
+            (
+                "postgres:///permesi?host=/var/run/postgresql",
+                "postgres:///permesi?host=/var/run/postgresql",
+            ),
+            ("postgres://db.internal", "postgres://db.internal"),
+        ] {
+            assert_eq!(loggable_dsn(dsn), shown, "{dsn}");
+        }
+    }
+
+    /// Each of these is accepted by sqlx or is a plausible slip, and each moves part of a
+    /// secret to where a URL parser reports a path, a parameter name or the value of a
+    /// harmless parameter. The logged form is rebuilt from checked parts, so none shows.
+    #[test]
+    fn loggable_dsn_shows_no_secret_that_slipped_out_of_the_userinfo_or_a_value() {
+        for (dsn, shown) in [
+            // An unencoded `&` in a password makes its tail a parameter name.
+            (
+                "postgres://db.internal:5432/permesi?password=first-half&second-half-secret",
+                "postgres://db.internal:5432/permesi?REDACTED",
+            ),
+            // A bare secret after `?`.
+            (
+                "postgres://db.internal:5432/permesi?bare-secret",
+                "postgres://db.internal:5432/permesi?REDACTED",
+            ),
+            // `;` as a separator, and a conninfo string inside a known parameter.
+            (
+                "postgres://db.internal:5432/permesi?sslmode=verify-full;password=semi-secret-pw",
+                "postgres://db.internal:5432/permesi?REDACTED",
+            ),
+            (
+                "postgres://db.internal:5432/permesi?dbname=permesi%20password=conninfo-secret-pw",
+                "postgres://db.internal:5432/permesi?REDACTED",
+            ),
+            // A `/` or `?` before the `@` ends the authority early.
+            (
+                "postgres://app/slash-in-userinfo-secret@db.internal:5432/permesi",
+                "postgres://app",
+            ),
+            (
+                "postgres://app:5432/slash-after-digits-secret@db.internal:5432/permesi",
+                "postgres://app:5432",
+            ),
+            (
+                "postgres://app:5432?qmark-after-digits-secret@db.internal:5432/permesi",
+                "postgres://app:5432?REDACTED",
+            ),
+            (
+                "postgres://db.internal/permesi;path_token=matrix-secret",
+                "postgres://db.internal",
+            ),
+        ] {
+            let logged = loggable_dsn(dsn);
+            assert_eq!(logged, shown, "{dsn}");
+            assert!(!logged.contains("secret"), "{dsn}");
         }
     }
 

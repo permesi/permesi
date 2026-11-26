@@ -43,20 +43,26 @@ fn openbao_error_message(json_response: &Value) -> &str {
 
 /// The part of an OpenBao address that is safe in diagnostics.
 ///
-/// Only the two forms an address can take are shown. An `http` or `https` URL with a
-/// host is reduced to scheme, host, port and path: userinfo, query and fragment are
-/// dropped, because an operator-supplied address can carry proxy credentials or a token
-/// there. An Agent socket, written as an absolute path or as `unix://` and an absolute
-/// path, is shown up to the first `?` or `#`. Anything else is not echoed at all: a
-/// mistyped address or a secret pasted into the wrong setting still parses as a URL of
-/// some scheme, and would otherwise be printed whole. Every log line, span field, `Debug`
+/// Only the two forms an address can take are shown, and each is rebuilt from parts that
+/// passed a check, never copied. An `http` or `https` URL with a host is reduced to
+/// scheme, host and port, followed by its path only when the path is made of plain path
+/// characters. Userinfo, query and fragment are dropped, because an operator-supplied
+/// address can carry proxy credentials or a token there, and a path holding anything
+/// else is dropped too: a `/` or `\` typed before the `@` ends the authority early and
+/// moves the credentials into the path. An Agent socket, written as an absolute path or
+/// as `unix://` and an absolute path, is shown up to the first `?`, `#` or `;`. Anything
+/// else is not echoed at all: a mistyped address or a secret pasted into the wrong
+/// setting still parses as a URL of some scheme. Every log line, span field, `Debug`
 /// output and error that names an OpenBao address goes through this function.
+///
+/// What stands where a host belongs is shown as the host; no check can tell a host name
+/// from other text placed there.
 #[must_use]
 pub fn loggable_url(url: &str) -> String {
     const UNSHOWN: &str = "<unparseable URL>";
     let socket = url.strip_prefix("unix://").unwrap_or(url);
     if socket.starts_with('/') && !socket.starts_with("//") {
-        let path = socket.split(['?', '#']).next().unwrap_or_default();
+        let path = socket.split(['?', '#', ';']).next().unwrap_or_default();
         let shown = url.len() - socket.len() + path.len();
         return url.get(..shown).unwrap_or(UNSHOWN).to_string();
     }
@@ -70,7 +76,11 @@ pub fn loggable_url(url: &str) -> String {
     let port = parsed
         .port()
         .map_or_else(String::new, |port| format!(":{port}"));
-    format!("{}://{host}{port}{}", parsed.scheme(), parsed.path())
+    let plain = |byte: u8| byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte);
+    let path = Some(parsed.path())
+        .filter(|path| path.bytes().all(plain))
+        .unwrap_or_default();
+    format!("{}://{host}{port}{path}", parsed.scheme())
 }
 
 /// Bounded like the transport so a stalled OpenBao cannot hang startup login.
@@ -467,6 +477,10 @@ mod tests {
                 "/run/openbao/agent.sock#secret-fragment",
                 "/run/openbao/agent.sock",
             ),
+            (
+                "/run/openbao/agent.sock;semi_token=semi-sock-secret",
+                "/run/openbao/agent.sock",
+            ),
         ] {
             assert_eq!(loggable_url(given), shown);
         }
@@ -482,6 +496,34 @@ mod tests {
             "https://",
         ] {
             assert_eq!(loggable_url(opaque), "<unparseable URL>", "{opaque}");
+        }
+        // A `/` or `\` before the `@` ends the authority early and moves the credentials
+        // into the path, and path parameters can carry a token. Such a path is not shown.
+        for (given, shown) in [
+            (
+                "https://corp\\bao-user:backslash-secret@openbao.internal:8200/v1/auth/approle/login",
+                "https://corp",
+            ),
+            (
+                "https://bao-user:8200/slash-port-secret@openbao.internal:8200",
+                "https://bao-user:8200",
+            ),
+            (
+                "https://bao-user/slash-secret@openbao.internal:8200",
+                "https://bao-user",
+            ),
+            (
+                "https://openbao.internal:8200/v1/auth/approle/login;matrix_token=matrix-secret",
+                "https://openbao.internal:8200",
+            ),
+            (
+                "https://openbao.internal:8200/v1/auth/approle/login%3Ftoken=encoded-secret",
+                "https://openbao.internal:8200",
+            ),
+        ] {
+            let logged = loggable_url(given);
+            assert_eq!(logged, shown, "{given}");
+            assert!(!logged.contains("secret"), "{given}");
         }
         // A special scheme written without `//` still names a host, and only the host.
         assert_eq!(

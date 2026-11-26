@@ -44,9 +44,10 @@ the signed artifacts.
 - Startup diagnostics no longer carry OpenBao or database credentials. The
   startup configuration block shows `openbao_role_id_set` in place of the AppRole
   RoleID, shows the OpenBao address without userinfo or query string, and shows
-  the database DSN without its userinfo and with the value of any query parameter
-  that is not a known setting hidden. A value that is not an `http(s)` address, an
-  Agent socket path or a `postgres://` URL is not printed at all. The
+  the database DSN without its userinfo and with every query parameter that is
+  not a known setting replaced by one `REDACTED` marker. A value that is not an
+  `http(s)` address, an Agent socket path or a `postgres://` URL is not printed at
+  all, and a path that holds anything but plain path characters is left out. The
   AppRole login and token unwrap no longer record the address or RoleID on a
   span, a login error no longer names the full request URL, and formatting the
   startup arguments, the OpenBao options or the transport with `Debug` prints
