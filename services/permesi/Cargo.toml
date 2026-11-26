@@ -89,7 +89,6 @@ rand_core = { workspace = true }
 regex = "1.13"
 rsa = "0.9.10"
 subtle = "2.6"
-reqwest = { workspace = true }
 rustls = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
@@ -136,6 +135,7 @@ hmac = { workspace = true }
 service_utils = { workspace = true }
 
 [dev-dependencies]
+reqwest = { workspace = true }
 tower = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 base32 = "0.5.1"

@@ -31,6 +31,10 @@ the signed artifacts.
   `PERMESI_ADMISSION_IAT_LEEWAY_SECONDS`, 0 to 30). A Genesis host whose clock ran
   slightly ahead previously had every fresh token rejected. The allowance applies
   to the issue time only; expiry and the lifetime bounds are unchanged.
+- Genesis no longer answers `500` to a token request whose country header is not a
+  two-character code. The header is stored for audit only; a value of any other
+  shape is now ignored, as an unparseable client address already was, and a
+  stored `User-Agent` is cut to 512 characters.
 
 ### Security
 
@@ -46,10 +50,16 @@ the signed artifacts.
   startup arguments, the OpenBao options or the transport with `Debug` prints
   none of them. Anything that read `openbao_role_id` from the startup log has to
   stop doing so.
-- The manual OpenBao policies in `SETUP.md` limit `sys/leases/renew` to each
-  service's own database leases, as the OpenTofu module already did; the earlier
-  example let a service token renew any lease. The live provisioning test now
-  asserts that a service can renew its own lease and nothing else.
+- The manual OpenBao recipe in `SETUP.md` now writes the policy files the OpenTofu
+  module applies instead of repeating them. The copies had drifted: they let a
+  service token renew any lease, let Genesis sign without a pinned key version,
+  left Permesi unable to read the admission authority or use its OIDC signing
+  key, set the Genesis signing key to rotate by itself, and gave the Agent
+  certificate roles policies that do not exist. If you configured OpenBao by hand
+  from the earlier text, apply section D and E again and remove
+  `auto_rotate_period` from `transit/genesis/keys/genesis-signing`. The live
+  provisioning test now asserts that a service can renew its own lease and
+  nothing else.
 
 ## [0.6.0] - 2026-11-25
 

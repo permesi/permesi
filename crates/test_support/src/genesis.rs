@@ -148,6 +148,9 @@ pub async fn configure_genesis_openbao(
     })
 }
 
+/// Mirrors `openbao/contrib/opentofu/policies/genesis-policy.hcl` for the fixture's mounts,
+/// including the limit of lease renewal to this service's own database leases, so the
+/// service is tested under the constraints it runs with.
 fn genesis_policy(transit_mount: &str) -> String {
     format!(
         r#"path "{transit_mount}/keys/{TRANSIT_KEY_NAME}" {{
@@ -164,6 +167,11 @@ path "auth/token/renew-self" {{
 }}
 path "sys/leases/renew" {{
   capabilities = ["update"]
+  required_parameters = ["lease_id"]
+  allowed_parameters = {{
+    "lease_id"  = ["database/creds/{ROLE_NAME}/*"]
+    "increment" = []
+  }}
 }}
 "#
     )

@@ -95,7 +95,7 @@ Key invariants:
 | MFA recovery codes | Keyed hash | Peppered with `mfa_recovery_pepper` from OpenBao KV v2. |
 | OAuth confidential client secrets | Salted Argon2id PHC (`19456` KiB, 2 iterations, parallelism 1 default) | Canonical `pcs.<uuid>.<base64url>` issued once; verified with bounded worker permits. |
 | OAuth access & OIDC ID tokens | RS256 (`RSA-2048`, SHA-256 / PKCS#1 v1.5) | Signed in OpenBao Transit (`transit/permesi/keys/oidc-signing`); public versions published at `/jwks.json` with RFC 7638 `kid`. |
-| Authorization codes, refresh tokens & email tokens | 256-bit OS-random values | Only SHA-256 hashes persist in token tables; `email_outbox.payload_json` stores the verification link for delivery (delivered rows currently retain `payload_json` until cleaned up; see [TODO.md](../TODO.md)). |
+| Authorization codes, refresh tokens & email tokens | 256-bit OS-random values | Only SHA-256 hashes persist in token tables; `email_outbox.payload_json` stores the verification link only while a delivery can still need it; the payload is erased in the statement that marks the row delivered or abandoned. |
 
 ## Tenant Model & Authority Separation
 

@@ -202,7 +202,7 @@ async fn replace_pending_registration(
     .await
     .context("failed to retire verification links")?;
     sqlx::query(
-        "UPDATE email_outbox SET status='failed',payload_json='{}'::jsonb,last_error='superseded',claim_id=NULL,claim_expires_at=NULL WHERE to_email=$1 AND template='verify_email' AND status='pending'",
+        "UPDATE email_outbox SET status='failed',payload_json = '{}'::jsonb,last_error='superseded',claim_id=NULL,claim_expires_at=NULL WHERE to_email=$1 AND template='verify_email' AND status='pending'",
     )
     .bind(email)
     .execute(&mut **tx)

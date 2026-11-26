@@ -201,6 +201,11 @@ path "auth/token/renew-self" {
 }
 path "sys/leases/renew" {
   capabilities = ["update"]
+  required_parameters = ["lease_id"]
+  allowed_parameters = {
+    "lease_id"  = ["database/creds/permesi/*"]
+    "increment" = []
+  }
 }
 path "transit/permesi/datakey/plaintext/totp" {
   capabilities = ["update"]

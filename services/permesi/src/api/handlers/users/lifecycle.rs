@@ -253,7 +253,7 @@ async fn retire_authority(connection: &mut PgConnection, user: Uuid) -> Result<(
         "DELETE FROM webauthn_exchanges WHERE user_id=$1",
         "DELETE FROM totp_credentials WHERE user_id=$1 AND confirmed_at IS NULL",
         "UPDATE email_verification_tokens SET consumed_at=clock_timestamp() WHERE user_id=$1 AND consumed_at IS NULL",
-        "UPDATE email_outbox SET status='failed',payload_json='{}'::jsonb,last_error='account_unavailable',claim_id=NULL,claim_expires_at=NULL WHERE to_email=(SELECT email FROM users WHERE id=$1) AND template='verify_email' AND status='pending'",
+        "UPDATE email_outbox SET status='failed',payload_json = '{}'::jsonb,last_error='account_unavailable',claim_id=NULL,claim_expires_at=NULL WHERE to_email=(SELECT email FROM users WHERE id=$1) AND template='verify_email' AND status='pending'",
     ] {
         sqlx::query(query)
             .bind(user)

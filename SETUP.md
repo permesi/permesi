@@ -307,16 +307,22 @@ bao secrets enable database
 ```
 
 ### B. Configure Transit Keys
-Permesi uses ChaCha20-Poly1305 to protect TOTP data-encryption keys, while Genesis uses Ed25519 for signing admission tokens.
+Permesi uses ChaCha20-Poly1305 to protect TOTP data-encryption keys and RSA-2048 to sign
+OAuth and OIDC tokens, while Genesis uses Ed25519 for signing admission tokens. These
+match `openbao/contrib/opentofu/transit.tf`.
 
 ```bash
 # Permesi TOTP protection key
 bao write transit/permesi/keys/totp type=chacha20-poly1305
 bao write transit/permesi/keys/totp/config auto_rotate_period=30d
 
-# Genesis admission signing key
+# Permesi OAuth/OIDC signing key; earlier versions stay published for verification
+bao write transit/permesi/keys/oidc-signing type=rsa-2048 exportable=false allow_plaintext_backup=false
+bao write transit/permesi/keys/oidc-signing/config auto_rotate_period=30d deletion_allowed=false
+
+# Genesis admission signing key. It is not rotated automatically: an operator stages,
+# publishes and activates each version through the admission authority described above.
 bao write transit/genesis/keys/genesis-signing type=ed25519
-bao write transit/genesis/keys/genesis-signing/config auto_rotate_period=30d
 ```
 
 ### C. Configure OPAQUE Seed
@@ -331,75 +337,48 @@ $ bao kv put secret/permesi/config opaque_server_seed="$SEED" mfa_recovery_peppe
 ```
 
 ### D. Define Service Policies
-Create the following policies to grant the services the minimum required permissions.
+The policies are the files the OpenTofu module applies. Write them from the repository
+instead of copying their contents, so a manual install cannot drift from what the
+services are tested against. Each service policy limits lease renewal to the service's
+own database leases, and the Genesis policy pins the parameters of a signing request.
 
-**`permesi` policy:**
 ```bash
-bao policy write permesi - <<EOF
-path "auth/token/lookup-self" { capabilities = ["read"] }
-path "transit/permesi/encrypt/totp" { capabilities = ["update"] }
-path "transit/permesi/decrypt/totp" { capabilities = ["update"] }
-path "transit/permesi/keys/totp"    { capabilities = ["read"] }
-path "transit/permesi/datakey/plaintext/totp" { capabilities = ["update"] }
-path "secret/permesi/data/config"   { capabilities = ["read"] }
-path "database/creds/permesi"        { capabilities = ["read"] }
-path "auth/token/renew-self"         { capabilities = ["update"] }
-path "sys/leases/renew" {
-  capabilities = ["update"]
-  required_parameters = ["lease_id"]
-  allowed_parameters = {
-    "lease_id"  = ["database/creds/permesi/*"]
-    "increment" = []
-  }
-}
-EOF
+cd openbao/contrib/opentofu/policies
+bao policy write permesi permesi-policy.hcl
+bao policy write genesis genesis-policy.hcl
+bao policy write permesi-agent permesi-agent.hcl
+bao policy write genesis-agent genesis-agent.hcl
+bao policy write permesi-operators operator-policy.hcl
 ```
 
-**`genesis` policy:**
-```bash
-bao policy write genesis - <<EOF
-path "transit/genesis/sign/genesis-signing" { capabilities = ["update"] }
-path "transit/genesis/keys/genesis-signing" { capabilities = ["read"] }
-path "database/creds/genesis"               { capabilities = ["read"] }
-path "auth/token/renew-self"                { capabilities = ["update"] }
-path "sys/leases/renew" {
-  capabilities = ["update"]
-  required_parameters = ["lease_id"]
-  allowed_parameters = {
-    "lease_id"  = ["database/creds/genesis/*"]
-    "increment" = []
-  }
-}
-EOF
-```
-
-**`permesi-operators` policy:**
-```bash
-bao policy write permesi-operators - <<EOF
-path "auth/token/lookup-self" { capabilities = ["read"] }
-EOF
-```
+The `permesi` policy reads the admission authority record at
+`secret/permesi/data/admission-authority`. Create it before starting Permesi with
+`scripts/admission-authority initialize 1`, as described above; until it exists Permesi rejects
+every admission token.
 
 ### E. Cert Auth Setup
-Create cert-auth roles for the OpenBao Agent bootstrap certificates so the agent can authenticate
-and render templates (TLS material, wrapped tokens, or other secrets as needed). The roles should
-use `permesi-pki-issue-only` and `genesis-pki-issue-only` policies with `allowed_dns_sans` that
-match the bootstrap certificates. Mirror the configuration in `openbao/contrib/opentofu/auth_cert.tf`.
-
-At minimum, enable cert auth and add two roles bound to the intermediate CA chain and DNS SANs:
+Create cert-auth roles for the OpenBao Agent bootstrap certificates so the agent can
+authenticate, issue the service's TLS material and proxy the service's own requests. Each
+role carries the agent policy and the service policy, and not the `default` policy,
+mirroring `openbao/contrib/opentofu/auth_cert.tf`. The DNS SANs must match the bootstrap
+certificates.
 
 ```bash
 bao auth enable cert
 
 bao write auth/cert/certs/permesi-agent \
   display_name="permesi-agent" \
-  policies="permesi-pki-issue-only" \
+  token_policies="permesi-agent,permesi" \
+  token_no_default_policy=true \
+  token_ttl=3600 token_max_ttl=14400 \
   certificate=@/path/to/pki-int.pem \
   allowed_dns_sans="api.permesi.localhost"
 
 bao write auth/cert/certs/genesis-agent \
   display_name="genesis-agent" \
-  policies="genesis-pki-issue-only" \
+  token_policies="genesis-agent,genesis" \
+  token_no_default_policy=true \
+  token_ttl=3600 token_max_ttl=14400 \
   certificate=@/path/to/pki-int.pem \
   allowed_dns_sans="genesis.permesi.localhost"
 ```
