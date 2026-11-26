@@ -15,6 +15,8 @@ pub const ARG_DB_MIN_CONNECTIONS: &str = "db-min-connections";
 pub const ARG_DB_ACQUIRE_TIMEOUT_MS: &str = "db-acquire-timeout-ms";
 pub const ARG_DB_IDLE_TIMEOUT_SECONDS: &str = "db-idle-timeout-seconds";
 pub const ARG_DB_MAX_LIFETIME_SECONDS: &str = "db-max-lifetime-seconds";
+pub const ARG_DB_STATEMENT_TIMEOUT_MS: &str = "db-statement-timeout-ms";
+pub const ARG_DB_LOCK_TIMEOUT_MS: &str = "db-lock-timeout-ms";
 
 /// Build the validated pool configuration from parsed flags.
 ///
@@ -41,6 +43,12 @@ pub fn parse(matches: &ArgMatches) -> Result<PoolConfig> {
         Duration::from_secs(amount(ARG_DB_IDLE_TIMEOUT_SECONDS)?),
         Duration::from_secs(amount(ARG_DB_MAX_LIFETIME_SECONDS)?),
     )
+    .and_then(|config| {
+        config.with_session_timeouts(
+            Duration::from_millis(amount(ARG_DB_STATEMENT_TIMEOUT_MS)?),
+            Duration::from_millis(amount(ARG_DB_LOCK_TIMEOUT_MS)?),
+        )
+    })
     .context("invalid database pool settings (--db-*)")
 }
 
@@ -87,6 +95,22 @@ pub fn with_args(command: Command) -> Command {
                 .default_value("1800")
                 .value_parser(value_parser!(u64).range(60..=86_400)),
         )
+        .arg(
+            Arg::new(ARG_DB_STATEMENT_TIMEOUT_MS)
+                .long(ARG_DB_STATEMENT_TIMEOUT_MS)
+                .help("Longest any SQL statement may run on a pooled connection, in milliseconds")
+                .env("PERMESI_DB_STATEMENT_TIMEOUT_MS")
+                .default_value("30000")
+                .value_parser(value_parser!(u64).range(100..=600_000)),
+        )
+        .arg(
+            Arg::new(ARG_DB_LOCK_TIMEOUT_MS)
+                .long(ARG_DB_LOCK_TIMEOUT_MS)
+                .help("Longest a statement may wait for a lock, in milliseconds; at most the statement timeout")
+                .env("PERMESI_DB_LOCK_TIMEOUT_MS")
+                .default_value("5000")
+                .value_parser(value_parser!(u64).range(100..=60_000)),
+        )
 }
 
 #[cfg(test)]
@@ -108,6 +132,47 @@ mod tests {
         assert_eq!(config.acquire_timeout(), Duration::from_secs(3));
         assert_eq!(config.idle_timeout(), Duration::from_mins(10));
         assert_eq!(config.max_lifetime(), Duration::from_mins(30));
+        assert_eq!(config.statement_timeout(), Duration::from_secs(30));
+        assert_eq!(config.lock_timeout(), Duration::from_secs(5));
+        Ok(())
+    }
+
+    /// Both session timeouts are bounded, cannot be switched off with zero, and the
+    /// lock wait may not outlast the statement it belongs to.
+    #[test]
+    fn database_session_timeouts_are_bounded_and_ordered() -> anyhow::Result<()> {
+        let matches = command().try_get_matches_from([
+            "test",
+            "--db-statement-timeout-ms",
+            "2000",
+            "--db-lock-timeout-ms",
+            "500",
+        ])?;
+        let config = parse(&matches)?;
+        assert_eq!(config.statement_timeout(), Duration::from_secs(2));
+        assert_eq!(config.lock_timeout(), Duration::from_millis(500));
+
+        for refused in [
+            ["--db-statement-timeout-ms", "0"],
+            ["--db-statement-timeout-ms", "600001"],
+            ["--db-lock-timeout-ms", "0"],
+            ["--db-lock-timeout-ms", "60001"],
+        ] {
+            assert!(
+                command()
+                    .try_get_matches_from(["test"].into_iter().chain(refused))
+                    .is_err(),
+                "{refused:?}"
+            );
+        }
+        let inverted = command().try_get_matches_from([
+            "test",
+            "--db-statement-timeout-ms",
+            "1000",
+            "--db-lock-timeout-ms",
+            "2000",
+        ])?;
+        assert!(parse(&inverted).is_err());
         Ok(())
     }
 

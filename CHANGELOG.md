@@ -21,6 +21,15 @@ the signed artifacts.
   does not gate `Test & Build` or the release; it keeps the path the release
   depends on exercised between releases.
 
+- Every pooled PostgreSQL connection of both services now starts with a
+  `statement_timeout` of 30 s and a `lock_timeout` of 5 s
+  (`--db-statement-timeout-ms`, `--db-lock-timeout-ms`, and the matching
+  `PERMESI_DB_*` and `GENESIS_DB_*` variables). PostgreSQL's default is no limit, so
+  a hung statement or a lock that was never released held a pool connection until
+  something else gave up. A statement past the limit now fails with SQLSTATE
+  `57014`, a lock wait with `55P03`. Transactions that set their own deadline with
+  `SET LOCAL` are unaffected. Neither limit can be set to zero.
+
 ### Security
 
 - Genesis takes the client address and country for a token's audit record from the

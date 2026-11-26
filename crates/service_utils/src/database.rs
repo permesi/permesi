@@ -20,6 +20,14 @@
 //! dependency upgrade cannot silently change pool behavior. Connections carry an
 //! `application_name` so they can be told apart in `pg_stat_activity`.
 //!
+//! Every connection also starts with a `statement_timeout` and a `lock_timeout`.
+//! PostgreSQL's own default for both is no limit, so a statement that hangs, or one
+//! queued behind a lock nobody releases, would hold its pool connection until
+//! something else gave up. The pool sets both right after connecting, which covers
+//! reconnects and every code path that never thought about a deadline. A transaction
+//! that needs a different bound sets its own with `SET LOCAL`; that still overrides the
+//! session value for that transaction only.
+//!
 //! Flow Overview: [`begin`] acquires a connection in the caller, then completes
 //! BEGIN in an owned task. Cancelling the caller cannot interrupt `SQLx` before it
 //! tracks the server transaction. An abandoned task result drops the tracked
@@ -40,6 +48,14 @@ const ACQUIRE_TIMEOUT_MAX: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT_MIN: Duration = Duration::from_secs(10);
 const MAX_LIFETIME_MIN: Duration = Duration::from_mins(1);
 const MAX_LIFETIME_MAX: Duration = Duration::from_hours(24);
+
+/// Session `statement_timeout` both services start from (`--db-statement-timeout-ms`).
+pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Session `lock_timeout` both services start from (`--db-lock-timeout-ms`).
+pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_TIMEOUT_MIN: Duration = Duration::from_millis(100);
+const STATEMENT_TIMEOUT_MAX: Duration = Duration::from_mins(10);
+const LOCK_TIMEOUT_MAX: Duration = Duration::from_mins(1);
 
 /// Longest wait for pooled connections to close during shutdown.
 pub const POOL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -70,6 +86,8 @@ pub struct PoolConfig {
     acquire_timeout: Duration,
     idle_timeout: Duration,
     max_lifetime: Duration,
+    statement_timeout: Duration,
+    lock_timeout: Duration,
 }
 
 impl PoolConfig {
@@ -107,7 +125,34 @@ impl PoolConfig {
             acquire_timeout,
             idle_timeout,
             max_lifetime,
+            statement_timeout: DEFAULT_STATEMENT_TIMEOUT,
+            lock_timeout: DEFAULT_LOCK_TIMEOUT,
         })
+    }
+
+    /// Replace the session timeouts every pooled connection starts with.
+    ///
+    /// # Errors
+    /// Returns an error when a value is outside its range or the lock timeout exceeds
+    /// the statement timeout, which would let the statement limit fire first and hide
+    /// that the wait was for a lock. Neither can be switched off.
+    pub fn with_session_timeouts(
+        mut self,
+        statement_timeout: Duration,
+        lock_timeout: Duration,
+    ) -> Result<Self> {
+        if !(SESSION_TIMEOUT_MIN..=STATEMENT_TIMEOUT_MAX).contains(&statement_timeout) {
+            bail!("statement timeout must be between 100 ms and 10 min");
+        }
+        if !(SESSION_TIMEOUT_MIN..=LOCK_TIMEOUT_MAX).contains(&lock_timeout) {
+            bail!("lock timeout must be between 100 ms and 60 s");
+        }
+        if lock_timeout > statement_timeout {
+            bail!("lock timeout must not exceed the statement timeout");
+        }
+        self.statement_timeout = statement_timeout;
+        self.lock_timeout = lock_timeout;
+        Ok(self)
     }
 
     #[must_use]
@@ -135,9 +180,26 @@ impl PoolConfig {
         self.max_lifetime
     }
 
+    #[must_use]
+    pub const fn statement_timeout(&self) -> Duration {
+        self.statement_timeout
+    }
+
+    #[must_use]
+    pub const fn lock_timeout(&self) -> Duration {
+        self.lock_timeout
+    }
+
     /// Translate this configuration into sqlx pool options, setting every option.
+    ///
+    /// The session timeouts are applied in the pool's `after_connect` hook, not as
+    /// startup parameters: a connection pooler in front of PostgreSQL commonly refuses
+    /// the `options` startup parameter, and the hook also runs for every reconnect. A
+    /// connection whose timeouts could not be set is not handed out.
     #[must_use]
     pub fn pool_options(&self) -> PgPoolOptions {
+        let statement = format!("{}ms", self.statement_timeout.as_millis());
+        let lock = format!("{}ms", self.lock_timeout.as_millis());
         PgPoolOptions::new()
             .max_connections(self.max_connections)
             .min_connections(self.min_connections)
@@ -145,6 +207,20 @@ impl PoolConfig {
             .idle_timeout(self.idle_timeout)
             .max_lifetime(self.max_lifetime)
             .test_before_acquire(true)
+            .after_connect(move |connection, _metadata| {
+                let (statement, lock) = (statement.clone(), lock.clone());
+                Box::pin(async move {
+                    sqlx::query(
+                        "SELECT set_config('statement_timeout', $1, false), \
+                         set_config('lock_timeout', $2, false)",
+                    )
+                    .bind(statement)
+                    .bind(lock)
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+                })
+            })
     }
 
     /// Connect a pool whose connections report `application_name` to PostgreSQL.
@@ -268,12 +344,14 @@ impl fmt::Display for PoolConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "max={} min={} acquire={}ms idle={}s lifetime={}s",
+            "max={} min={} acquire={}ms idle={}s lifetime={}s statement={}ms lock={}ms",
             self.max_connections,
             self.min_connections,
             self.acquire_timeout.as_millis(),
             self.idle_timeout.as_secs(),
-            self.max_lifetime.as_secs()
+            self.max_lifetime.as_secs(),
+            self.statement_timeout.as_millis(),
+            self.lock_timeout.as_millis()
         )
     }
 }
@@ -495,6 +573,43 @@ mod tests {
         assert!(config(10, 2, 3_000, 9, 1_800).is_err());
         assert!(config(10, 2, 3_000, 1_800, 1_800).is_err());
         assert!(config(10, 2, 3_000, 1_799, 1_800).is_ok());
+    }
+
+    /// The session timeouts have defaults, are bounded on both sides, cannot be turned
+    /// off, and keep the lock wait within the statement limit.
+    #[test]
+    fn session_timeouts_default_and_are_validated() -> anyhow::Result<()> {
+        let config = config(10, 2, 3_000, 600, 1_800)?;
+        assert_eq!(config.statement_timeout(), Duration::from_secs(30));
+        assert_eq!(config.lock_timeout(), Duration::from_secs(5));
+        assert_eq!(
+            config.to_string(),
+            "max=10 min=2 acquire=3000ms idle=600s lifetime=1800s statement=30000ms lock=5000ms"
+        );
+
+        let set = config.with_session_timeouts(Duration::from_secs(2), Duration::from_secs(2))?;
+        assert_eq!(set.statement_timeout(), Duration::from_secs(2));
+        assert_eq!(set.lock_timeout(), Duration::from_secs(2));
+
+        for (statement_ms, lock_ms) in [
+            (0, 5_000),
+            (99, 99),
+            (600_001, 5_000),
+            (30_000, 0),
+            (30_000, 60_001),
+            (1_000, 1_001),
+        ] {
+            assert!(
+                config
+                    .with_session_timeouts(
+                        Duration::from_millis(statement_ms),
+                        Duration::from_millis(lock_ms)
+                    )
+                    .is_err(),
+                "{statement_ms}/{lock_ms}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

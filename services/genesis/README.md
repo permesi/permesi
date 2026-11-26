@@ -88,6 +88,8 @@ PostgreSQL pool (also CLI flags):
 - `--db-acquire-timeout-ms` / `GENESIS_DB_ACQUIRE_TIMEOUT_MS` (default `3000`, range 100-30000)
 - `--db-idle-timeout-seconds` / `GENESIS_DB_IDLE_TIMEOUT_SECONDS` (default `600`, at least 10 and below the lifetime)
 - `--db-max-lifetime-seconds` / `GENESIS_DB_MAX_LIFETIME_SECONDS` (default `1800`, range 60-86400)
+- `--db-statement-timeout-ms` / `GENESIS_DB_STATEMENT_TIMEOUT_MS` (default `30000`, range 100-600000): session `statement_timeout` of every pooled connection
+- `--db-lock-timeout-ms` / `GENESIS_DB_LOCK_TIMEOUT_MS` (default `5000`, range 100-60000, at most the statement timeout): session `lock_timeout` of every pooled connection
 
 The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`genesis`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the OpenBao-issued username and password are fixed for the life of the process, and a new database lease means a restart.
 
