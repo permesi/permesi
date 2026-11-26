@@ -44,12 +44,29 @@ const DEFAULT_RECENT_AUTH_SECONDS: i64 = 3600; // 1 hour
 const DEFAULT_OPENBAO_POLICY: &str = "permesi-operators";
 const MAX_BODY_BYTES: usize = 8 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AdminConfig {
     openbao_addr: String,
     openbao_policy: String,
     admin_ttl_seconds: i64,
     recent_auth_seconds: i64,
+}
+
+/// The address is the operator-supplied one when it could not be reduced to an origin,
+/// so it is formatted without userinfo or query string. This type is nested in the
+/// application state, whose `Debug` output would otherwise carry it.
+impl std::fmt::Debug for AdminConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminConfig")
+            .field(
+                "openbao_addr",
+                &openbao_client::loggable_url(&self.openbao_addr),
+            )
+            .field("openbao_policy", &self.openbao_policy)
+            .field("admin_ttl_seconds", &self.admin_ttl_seconds)
+            .field("recent_auth_seconds", &self.recent_auth_seconds)
+            .finish()
+    }
 }
 
 impl AdminConfig {

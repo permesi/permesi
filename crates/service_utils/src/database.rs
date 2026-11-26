@@ -175,19 +175,28 @@ const LOGGABLE_DSN_PARAMETERS: [&str; 6] = [
     "sslmode",
 ];
 
-/// A database DSN reduced to what is safe in a log.
+/// A database DSN reduced to what is safe in a log: scheme, host, port, database and the
+/// query parameters that are known settings.
 ///
-/// The userinfo password is replaced, and so is the value of every query parameter that
-/// is not a known setting: libpq and sqlx both accept `?password=...`, and a parameter
-/// this code does not know is treated as a secret. A value that is not a URL is not
-/// echoed at all.
+/// The userinfo is dropped whole. The services replace it with credentials from OpenBao
+/// before connecting, so whatever an operator put there is not what connects, and a
+/// secret placed there by mistake must not be printed. The value of every query
+/// parameter that is not a known setting is hidden: libpq and sqlx both accept
+/// `?password=...`. Only `postgres://` and `postgresql://` URLs are shown at all. Without
+/// the `//` the rest of the string, password included, parses as an opaque path, and a
+/// value of another scheme is not a DSN, so neither is echoed.
 #[must_use]
 pub fn loggable_dsn(dsn: &str) -> String {
-    let Ok(mut parsed) = url::Url::parse(dsn) else {
-        return "invalid-dsn".to_string();
+    const UNSHOWN: &str = "invalid-dsn";
+    let authority = ["postgres://", "postgresql://"].iter().any(|prefix| {
+        dsn.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    });
+    let Some(mut parsed) = url::Url::parse(dsn).ok().filter(|_| authority) else {
+        return UNSHOWN.to_string();
     };
-    if parsed.password().is_some() {
-        let _ = parsed.set_password(Some("REDACTED"));
+    if parsed.set_username("").is_err() || parsed.set_password(None).is_err() {
+        return UNSHOWN.to_string();
     }
     if parsed.query().is_some() {
         let shown: Vec<(String, String)> = parsed
@@ -237,6 +246,7 @@ pub async fn close(pool: &PgPool) {
 #[cfg(test)]
 mod tests {
     use super::{PoolConfig, loggable_dsn};
+    use std::time::Duration;
 
     /// libpq and sqlx accept the password in the userinfo or as a query parameter; a
     /// logged DSN shows neither, and hides any parameter it does not know to be a setting.
@@ -244,7 +254,11 @@ mod tests {
     fn loggable_dsn_hides_passwords_in_userinfo_and_query() {
         assert_eq!(
             loggable_dsn("postgres://app:userinfo-pw@db.internal:5432/permesi?sslmode=verify-full"),
-            "postgres://app:REDACTED@db.internal:5432/permesi?sslmode=verify-full"
+            "postgres://db.internal:5432/permesi?sslmode=verify-full"
+        );
+        assert_eq!(
+            loggable_dsn("PostgreSQL://lone-userinfo-secret@db.internal/permesi"),
+            "postgresql://db.internal/permesi"
         );
         let shown = loggable_dsn(
             "postgres://db.internal/permesi?user=app&password=query-pw&sslpassword=key-pw&unknown=opaque-value&sslmode=require#frag-value",
@@ -256,9 +270,26 @@ mod tests {
         for secret in ["query-pw", "key-pw", "opaque-value", "frag-value"] {
             assert!(!shown.contains(secret), "{secret}");
         }
-        assert_eq!(loggable_dsn("host=db password=keyword-pw"), "invalid-dsn");
     }
-    use std::time::Duration;
+
+    /// sqlx accepts a DSN written without `//`, and anything with a colon parses as a URL
+    /// of some scheme. In both the secret sits where no URL accessor reports a password,
+    /// so nothing of such a value is shown.
+    #[test]
+    fn loggable_dsn_shows_nothing_of_a_value_that_is_not_a_postgres_url() {
+        for dsn in [
+            "postgres:app:dsn-password@db.internal:5432/permesi",
+            "postgres:/app:dsn-password@db.internal:5432/permesi",
+            "postgresql:dsn-password",
+            "vault:v1:dsn-password",
+            "https://app:dsn-password@db.internal/permesi",
+            "host=db password=dsn-password",
+            "dsn-password",
+            "",
+        ] {
+            assert_eq!(loggable_dsn(dsn), "invalid-dsn", "{dsn}");
+        }
+    }
 
     fn config(
         max: u32,

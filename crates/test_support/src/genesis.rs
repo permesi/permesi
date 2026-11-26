@@ -149,8 +149,9 @@ pub async fn configure_genesis_openbao(
 }
 
 /// Mirrors `openbao/contrib/opentofu/policies/genesis-policy.hcl` for the fixture's mounts,
-/// including the limit of lease renewal to this service's own database leases, so the
-/// service is tested under the constraints it runs with.
+/// including the pinned parameters of a signing request and the limit of lease renewal
+/// to this service's own database leases, so the service is tested under the constraints
+/// it runs with. It omits `auth/token/lookup-self`, which the fixture's login does not use.
 fn genesis_policy(transit_mount: &str) -> String {
     format!(
         r#"path "{transit_mount}/keys/{TRANSIT_KEY_NAME}" {{
@@ -158,6 +159,11 @@ fn genesis_policy(transit_mount: &str) -> String {
 }}
 path "{transit_mount}/sign/{TRANSIT_KEY_NAME}" {{
   capabilities = ["update"]
+  required_parameters = ["input", "key_version"]
+  allowed_parameters = {{
+    "input"       = []
+    "key_version" = []
+  }}
 }}
 path "database/creds/{ROLE_NAME}" {{
   capabilities = ["read"]

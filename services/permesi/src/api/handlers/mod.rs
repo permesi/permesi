@@ -134,6 +134,12 @@ impl AdmissionVerifier {
         }
     }
 
+    /// The clock-skew allowance this verifier was started with.
+    #[cfg(test)]
+    pub(crate) fn iat_leeway_seconds(&self) -> i64 {
+        self.iat_leeway_seconds
+    }
+
     /// The same verifier with a clock-skew allowance, as the server configures it.
     #[cfg(test)]
     pub fn with_iat_leeway(mut self, seconds: i64) -> Self {
@@ -411,31 +417,6 @@ mod tests {
                     .await
                     .is_none()
             );
-        }
-        Ok(())
-    }
-
-    /// The running verifier keeps the allowance it was started with.
-    #[tokio::test]
-    async fn admission_verifier_starts_with_the_configured_iat_leeway() -> anyhow::Result<()> {
-        // Nothing listens here; the background reader only fails to refresh.
-        let url = "http://127.0.0.1:1";
-        let transport = openbao_client::OpenBaoTransport::from_target(
-            crate::APP_USER_AGENT,
-            openbao_client::OpenBaoTarget::parse(url)?,
-        )?;
-        let globals = crate::cli::globals::GlobalArgs::new(url.to_string(), transport);
-        for leeway in [0, 7, 30] {
-            let verifier = AdmissionVerifier::start(
-                &globals,
-                "secret/permesi",
-                Duration::from_secs(60),
-                Duration::from_secs(120),
-                ISSUER.to_string(),
-                AUDIENCE.to_string(),
-                leeway,
-            );
-            assert_eq!(verifier.iat_leeway_seconds, leeway);
         }
         Ok(())
     }

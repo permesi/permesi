@@ -43,20 +43,30 @@ fn openbao_error_message(json_response: &Value) -> &str {
 
 /// The part of an OpenBao address that is safe in diagnostics.
 ///
-/// For a URL that is scheme, host, port and path: userinfo, query and fragment are
+/// Only the two forms an address can take are shown. An `http` or `https` URL with a
+/// host is reduced to scheme, host, port and path: userinfo, query and fragment are
 /// dropped, because an operator-supplied address can carry proxy credentials or a token
-/// there. An absolute path is an Agent socket and is returned as it is. Anything else is
-/// not echoed at all. Every log line, span field, `Debug` output and error that names an
-/// OpenBao address goes through this function.
+/// there. An Agent socket, written as an absolute path or as `unix://` and an absolute
+/// path, is shown up to the first `?` or `#`. Anything else is not echoed at all: a
+/// mistyped address or a secret pasted into the wrong setting still parses as a URL of
+/// some scheme, and would otherwise be printed whole. Every log line, span field, `Debug`
+/// output and error that names an OpenBao address goes through this function.
 #[must_use]
 pub fn loggable_url(url: &str) -> String {
-    if url.starts_with('/') && !url.starts_with("//") {
-        return url.to_string();
+    const UNSHOWN: &str = "<unparseable URL>";
+    let socket = url.strip_prefix("unix://").unwrap_or(url);
+    if socket.starts_with('/') && !socket.starts_with("//") {
+        let path = socket.split(['?', '#']).next().unwrap_or_default();
+        let shown = url.len() - socket.len() + path.len();
+        return url.get(..shown).unwrap_or(UNSHOWN).to_string();
     }
     let Ok(parsed) = Url::parse(url) else {
-        return "<unparseable URL>".to_string();
+        return UNSHOWN.to_string();
     };
     let host = parsed.host_str().unwrap_or_default();
+    if !matches!(parsed.scheme(), "http" | "https") || host.is_empty() {
+        return UNSHOWN.to_string();
+    }
     let port = parsed
         .port()
         .map_or_else(String::new, |port| format!(":{port}"));
@@ -438,13 +448,45 @@ mod tests {
         for opaque in ["not a url with secret", "", "//secret@host"] {
             assert_eq!(loggable_url(opaque), "<unparseable URL>");
         }
+        // An Agent socket in either spelling, never with what follows the path.
+        for (given, shown) in [
+            ("/run/openbao/agent.sock", "/run/openbao/agent.sock"),
+            (
+                "unix:///run/openbao/agent.sock",
+                "unix:///run/openbao/agent.sock",
+            ),
+            (
+                "/run/openbao/agent.sock?proxy_token=secret-query#frag",
+                "/run/openbao/agent.sock",
+            ),
+            (
+                "unix:///run/openbao/agent.sock?proxy_token=secret-query",
+                "unix:///run/openbao/agent.sock",
+            ),
+            (
+                "/run/openbao/agent.sock#secret-fragment",
+                "/run/openbao/agent.sock",
+            ),
+        ] {
+            assert_eq!(loggable_url(given), shown);
+        }
+        // A mistyped address or a misplaced secret parses as a URL of some other scheme,
+        // or without the `//` that makes the rest an authority. None of it is shown.
+        for opaque in [
+            "bao:bao-user:bao-password@openbao.internal:8200",
+            "vault:hvs.secret-wrapping-token",
+            "postgres://user:secret@db.internal/permesi",
+            "unix://relative-secret",
+            "unix:secret",
+            "file:///etc/secret-path",
+            "https://",
+        ] {
+            assert_eq!(loggable_url(opaque), "<unparseable URL>", "{opaque}");
+        }
+        // A special scheme written without `//` still names a host, and only the host.
         assert_eq!(
-            loggable_url("/run/openbao/agent.sock"),
-            "/run/openbao/agent.sock"
-        );
-        assert_eq!(
-            loggable_url("unix:///run/openbao/agent.sock"),
-            "unix:///run/openbao/agent.sock"
+            loggable_url("https:proxy-user:proxy-password@openbao.example:8200"),
+            "https://openbao.example:8200/"
         );
     }
 

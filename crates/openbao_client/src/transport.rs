@@ -56,7 +56,7 @@ impl std::fmt::Debug for OpenBaoTarget {
                 .finish(),
             Self::AgentProxy { socket_path } => f
                 .debug_struct("AgentProxy")
-                .field("socket_path", socket_path)
+                .field("socket_path", &loggable_socket(socket_path))
                 .finish(),
         }
     }
@@ -463,11 +463,18 @@ impl std::fmt::Debug for OpenBaoTransport {
             OpenBaoTransportInner::AgentProxy { socket_path, .. } => f
                 .debug_struct("OpenBaoTransport")
                 .field("mode", &OpenBaoMode::AgentProxy)
-                .field("socket_path", &socket_path.display().to_string())
+                .field("socket_path", &loggable_socket(socket_path))
                 .field("user_agent", &self.user_agent)
                 .finish(),
         }
     }
+}
+
+/// A socket path as diagnostics show it. The setting it comes from is free text, so a
+/// query string or fragment appended to it is part of the stored path; it is cut off here
+/// the same way [`crate::loggable_url`] cuts it from an address.
+fn loggable_socket(path: &Path) -> String {
+    crate::loggable_url(&path.display().to_string())
 }
 
 fn check_socket_accessibility(path: &Path) -> Result<()> {
@@ -485,7 +492,7 @@ fn check_socket_accessibility(path: &Path) -> Result<()> {
         }
         Err(e) => Err(anyhow!(
             "OpenBao Agent socket not accessible at {}: {e}",
-            path.display()
+            loggable_socket(path)
         )),
     }
 }
@@ -493,7 +500,7 @@ fn check_socket_accessibility(path: &Path) -> Result<()> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{OpenBaoMode, OpenBaoTarget};
+    use super::{OpenBaoMode, OpenBaoTarget, OpenBaoTransport};
 
     /// A target and a transport are formatted in startup diagnostics; the operator-supplied
     /// base URL must appear without its userinfo and query string.
@@ -501,7 +508,7 @@ mod tests {
     fn target_and_transport_debug_output_drop_address_credentials() -> anyhow::Result<()> {
         let url = "https://proxy-user:proxy-password@openbao.internal:8200/?proxy_token=query-token-value";
         let target = OpenBaoTarget::parse(url)?;
-        let transport = super::OpenBaoTransport::from_target("test", target.clone())?;
+        let transport = OpenBaoTransport::from_target("test", target.clone())?;
         let shown = format!("{target:?} {target:#?} {transport:?} {transport:#?}");
         assert!(shown.contains("https://openbao.internal:8200/"));
         for secret in [
@@ -514,6 +521,16 @@ mod tests {
         }
         let socket = OpenBaoTarget::parse("unix:///run/openbao/agent.sock")?;
         assert!(format!("{socket:?}").contains("/run/openbao/agent.sock"));
+        // Whatever follows the socket path is kept as part of the path, and never shown:
+        // not by `Debug`, and not by the error for a socket that is not there.
+        let trailing =
+            OpenBaoTarget::parse("unix:///run/openbao/absent.sock?proxy_token=query-token-value")?;
+        let refused = OpenBaoTransport::from_target("test", trailing.clone())
+            .err()
+            .map_or_else(String::new, |error| format!("{error:#}"));
+        let shown = format!("{trailing:?} {trailing:#?} {refused}");
+        assert!(shown.contains("/run/openbao/absent.sock") && refused.contains("not accessible"));
+        assert!(!shown.contains("query-token-value") && !shown.contains("proxy_token"));
         Ok(())
     }
 

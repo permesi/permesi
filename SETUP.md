@@ -288,7 +288,12 @@ Notes:
 
 ### Manual Configuration Recipe (Reference)
 
-If you cannot use OpenTofu, this section provides the manual steps to configure an equivalent OpenBao instance.
+If you cannot use OpenTofu, this section gives the manual steps for the mounts, Transit
+keys, KV secrets, policies and certificate login roles. Run every command from the
+repository root. It is not a complete replacement for the module: the PKI hierarchy and
+roles, the AppRole roles, the database engine and the Genesis rate-limit quotas are
+described only in section F, by the settings that matter for security, and have to be
+created from the module's files.
 
 ### A. Enable Secret Engines and Auth Methods
 ```bash
@@ -343,12 +348,11 @@ services are tested against. Each service policy limits lease renewal to the ser
 own database leases, and the Genesis policy pins the parameters of a signing request.
 
 ```bash
-cd openbao/contrib/opentofu/policies
-bao policy write permesi permesi-policy.hcl
-bao policy write genesis genesis-policy.hcl
-bao policy write permesi-agent permesi-agent.hcl
-bao policy write genesis-agent genesis-agent.hcl
-bao policy write permesi-operators operator-policy.hcl
+bao policy write permesi openbao/contrib/opentofu/policies/permesi-policy.hcl
+bao policy write genesis openbao/contrib/opentofu/policies/genesis-policy.hcl
+bao policy write permesi-agent openbao/contrib/opentofu/policies/permesi-agent.hcl
+bao policy write genesis-agent openbao/contrib/opentofu/policies/genesis-agent.hcl
+bao policy write permesi-operators openbao/contrib/opentofu/policies/operator-policy.hcl
 ```
 
 The `permesi` policy reads the admission authority record at
@@ -361,11 +365,9 @@ Create cert-auth roles for the OpenBao Agent bootstrap certificates so the agent
 authenticate, issue the service's TLS material and proxy the service's own requests. Each
 role carries the agent policy and the service policy, and not the `default` policy,
 mirroring `openbao/contrib/opentofu/auth_cert.tf`. The DNS SANs must match the bootstrap
-certificates.
+certificates. Cert auth was enabled in section A.
 
 ```bash
-bao auth enable cert
-
 bao write auth/cert/certs/permesi-agent \
   display_name="permesi-agent" \
   token_policies="permesi-agent,permesi" \
@@ -382,6 +384,26 @@ bao write auth/cert/certs/genesis-agent \
   certificate=@/path/to/pki-int.pem \
   allowed_dns_sans="genesis.permesi.localhost"
 ```
+
+### F. What This Recipe Does Not Create
+The module also provisions the resources below. Create them from its files; the settings
+named here are the ones a hand-made equivalent most easily gets wrong.
+
+- **PKI** (`pki.tf`): the root and intermediate CAs and four roles on `pki-int`. The
+  `permesi-runtime` and `genesis-runtime` roles, which the Agent policies issue from,
+  must be server-only: `server_flag=true client_flag=false ext_key_usage=ServerAuth`.
+  OpenBao sets `client_flag=true` by default. A runtime certificate shares its issuer
+  and DNS SAN with the bootstrap certificate, so one that also allowed client
+  authentication could be presented to cert auth to obtain the service's OpenBao
+  token. Only the `*-bootstrap` roles issue client certificates.
+- **AppRole** (`approle.tf`), for services that log in without an Agent: each role has
+  `token_no_default_policy=true`, `secret_id_num_uses=1` and `secret_id_ttl=3600`, so
+  a SecretID works once and expires within the hour.
+- **Database engine** (`databases.tf`): the connections, and the roles whose creation
+  statements grant each dynamic user only its service's runtime role (section 3).
+- **Rate-limit quotas** (`quotas.tf`): six `genesis-*` quotas on the paths the
+  internet-facing Genesis can drive: signing, database credentials, both PKI issue
+  paths and its two login roles.
 
 ---
 

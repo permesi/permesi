@@ -130,15 +130,7 @@ pub async fn execute(args: Args) -> Result<()> {
         globals.set_token_lease(lease);
     }
 
-    let admission_verifier = api::handlers::AdmissionVerifier::start(
-        &globals,
-        &args.openbao_kv_mount,
-        args.admission_refresh,
-        args.admission_max_age,
-        issuer,
-        audience,
-        args.admission_iat_leeway,
-    );
+    let admission_verifier = start_admission_verifier(&args, &globals, issuer, audience);
 
     // Get database username and password from OpenBao
     openbao::database::database_creds(&mut globals)
@@ -167,6 +159,26 @@ pub async fn execute(args: Args) -> Result<()> {
         app_config,
     )
     .await
+}
+
+/// Start the admission verifier with the operator's settings. It is separate from
+/// `execute`, which needs a live OpenBao, so a test can confirm that each setting,
+/// the clock-skew allowance in particular, reaches the verifier that judges tokens.
+fn start_admission_verifier(
+    args: &Args,
+    globals: &GlobalArgs,
+    issuer: String,
+    audience: String,
+) -> std::sync::Arc<api::handlers::AdmissionVerifier> {
+    api::handlers::AdmissionVerifier::start(
+        globals,
+        &args.openbao_kv_mount,
+        args.admission_refresh,
+        args.admission_max_age,
+        issuer,
+        audience,
+        args.admission_iat_leeway,
+    )
 }
 
 fn build_app_config(args: &Args, openbao_addr: String) -> api::AppConfig {
@@ -427,6 +439,45 @@ mod tests {
         args.opaque_exchange_timeout_ms = 5000;
         let config = build_app_config(&args, "http://localhost:8200".into());
         assert_eq!(config.auth.opaque_exchange_timeout_ms(), 5000);
+        Ok(())
+    }
+
+    /// `--admission-iat-leeway-seconds` must reach the verifier the server runs with.
+    #[tokio::test]
+    async fn server_starts_the_admission_verifier_with_the_configured_iat_leeway()
+    -> anyhow::Result<()> {
+        // Nothing listens here; the verifier's background reader only fails to refresh.
+        let url = "http://127.0.0.1:1";
+        let transport = openbao_client::OpenBaoTransport::from_target(
+            crate::APP_USER_AGENT,
+            openbao_client::OpenBaoTarget::parse(url)?,
+        )?;
+        let globals = GlobalArgs::new(url.to_string(), transport);
+        for leeway in [0, 7, 30] {
+            let mut args = default_args()?;
+            args.admission_iat_leeway = leeway;
+            let verifier =
+                start_admission_verifier(&args, &globals, "issuer".into(), "audience".into());
+            assert_eq!(verifier.iat_leeway_seconds(), leeway);
+        }
+        Ok(())
+    }
+
+    /// The application state is `Debug`. The OpenBao address it holds is the operator's
+    /// own text when that could not be reduced to an origin, and must not be printed.
+    #[test]
+    fn app_config_debug_output_drops_address_credentials() -> anyhow::Result<()> {
+        let args = default_args()?;
+        for address in [
+            "https://bao-user:bao-password@openbao.internal:8200/?bao_token=bao-query-value",
+            "https://bao-user:bao-password@openbao.internal:notaport/?bao_token=bao-query-value",
+        ] {
+            let config = build_app_config(&args, address.to_string());
+            let shown = format!("{config:?} {config:#?}");
+            for secret in ["bao-user", "bao-password", "bao-query-value", "bao_token"] {
+                assert!(!shown.contains(secret), "{secret} in {address}");
+            }
+        }
         Ok(())
     }
 

@@ -43,8 +43,10 @@ the signed artifacts.
   kept a usable link for as long as the row existed.
 - Startup diagnostics no longer carry OpenBao or database credentials. The
   startup configuration block shows `openbao_role_id_set` in place of the AppRole
-  RoleID, shows the OpenBao address without userinfo or query string, and hides a
-  DSN password given as a query parameter as well as one in the userinfo. The
+  RoleID, shows the OpenBao address without userinfo or query string, and shows
+  the database DSN without its userinfo and with the value of any query parameter
+  that is not a known setting hidden. A value that is not an `http(s)` address, an
+  Agent socket path or a `postgres://` URL is not printed at all. The
   AppRole login and token unwrap no longer record the address or RoleID on a
   span, a login error no longer names the full request URL, and formatting the
   startup arguments, the OpenBao options or the transport with `Debug` prints
@@ -56,8 +58,9 @@ the signed artifacts.
   left Permesi unable to read the admission authority or use its OIDC signing
   key, set the Genesis signing key to rotate by itself, and gave the Agent
   certificate roles policies that do not exist. If you configured OpenBao by hand
-  from the earlier text, apply section D and E again and remove
-  `auto_rotate_period` from `transit/genesis/keys/genesis-signing`. The live
+  from the earlier text, apply section D and E again, remove
+  `auto_rotate_period` from `transit/genesis/keys/genesis-signing`, and check the
+  PKI and AppRole settings listed in the new section F. The live
   provisioning test now asserts that a service can renew its own lease and
   nothing else.
 
