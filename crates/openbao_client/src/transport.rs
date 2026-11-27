@@ -154,7 +154,10 @@ impl OpenBaoTarget {
 /// A plain `http` address is local when its host is a loopback IP, or `localhost` or a
 /// name under it that resolves, at the time of asking, to loopback addresses only. The
 /// spelling of such a name proves nothing, since a resolver can map it anywhere, so the
-/// addresses found are kept and the client is pinned to them.
+/// addresses found are kept and the client is pinned to them. A `localhost` name that
+/// does not resolve to loopback only is an error, not a remote address: every client is
+/// built from the address separately, and an answer that changed between the startup
+/// check and a later client must stop that client, not reroute it.
 pub(crate) enum Reach {
     /// `https`: the connection is encrypted and the server verified wherever it goes.
     Encrypted,
@@ -194,10 +197,16 @@ impl Reach {
                     } else {
                         Vec::new()
                     };
+                let local_name = name == "localhost" || name.ends_with(".localhost");
                 if !addresses.is_empty() && addresses.iter().all(|a| a.ip().is_loopback()) {
                     // The pin is keyed by the host as the client will look it up.
                     let host = parsed.host_str().unwrap_or(&name).to_string();
                     Self::LocalPlain(Some((host, addresses)))
+                } else if local_name {
+                    return Err(anyhow!(
+                        "OpenBao address names a localhost host that does not resolve to \
+                         loopback addresses only"
+                    ));
                 } else {
                     Self::RemotePlain
                 }
@@ -756,15 +765,18 @@ mod tests {
         assert_eq!(host, "openbao.localhost");
         assert_eq!(addresses.len(), 2);
         assert!(addresses.iter().all(|address| address.port() == 8200));
+        // Not reclassified as a remote address, which an opt-out or a proxy could then
+        // carry: refused, so a client built after the answer changed fails closed.
         for answer in [&["198.51.100.9"][..], &["127.0.0.1", "198.51.100.9"], &[]] {
             assert!(
-                matches!(
-                    Reach::of_with("http://openbao.localhost:8200", answers(answer))?,
-                    Reach::RemotePlain
-                ),
+                Reach::of_with("http://openbao.localhost:8200", answers(answer)).is_err(),
                 "{answer:?}"
             );
         }
+        assert!(matches!(
+            Reach::of_with("http://openbao.internal:8200", answers(&["127.0.0.1"]))?,
+            Reach::RemotePlain
+        ));
         assert!(matches!(
             Reach::of_with("https://openbao.localhost:8200", answers(&["198.51.100.9"]))?,
             Reach::Encrypted

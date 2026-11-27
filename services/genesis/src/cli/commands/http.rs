@@ -58,7 +58,7 @@ pub fn with_args(command: Command) -> Command {
                 .help("Longest in-flight requests may take to finish on shutdown; a second signal ends it at once")
                 .env("GENESIS_SHUTDOWN_DRAIN_SECONDS")
                 .default_value("20")
-                .value_parser(value_parser!(u64).range(1..=300)),
+                .value_parser(value_parser!(u64).range(1..=50)),
         )
 }
 
@@ -105,7 +105,7 @@ mod tests {
                 ["--header-read-timeout-seconds", "0"],
                 ["--header-read-timeout-seconds", "61"],
                 ["--shutdown-drain-seconds", "0"],
-                ["--shutdown-drain-seconds", "301"],
+                ["--shutdown-drain-seconds", "51"],
             ] {
                 assert!(
                     command()

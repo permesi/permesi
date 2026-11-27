@@ -179,3 +179,40 @@ async fn replacement_connection_is_bounded(bare: &PgPool, pool: &PgPool, first: 
     );
     Ok(())
 }
+
+/// PostgreSQL quotes an invalid setting value in the error it returns, and that error
+/// reached the service's startup message. A DSN setting that held a secret by mistake
+/// would have been printed. The connection error now names the SQLSTATE only.
+#[tokio::test]
+async fn a_refused_connection_names_no_value_from_the_dsn() -> Result<()> {
+    const MARKER: &str = "s3cr3tmarker";
+    runtime::ensure_container_runtime()?;
+    let postgres = PostgresContainer::start("bridge").await?;
+    postgres.wait_until_ready().await?;
+    let mut dsn = url::Url::parse(&postgres.admin_dsn())?;
+    dsn.query_pairs_mut()
+        .append_pair("options", &format!("-c statement_timeout={MARKER}"));
+    let target = service_utils::database::ConnectionTarget::parse(dsn.as_str(), true)?;
+    let shape = PoolConfig::new(
+        1,
+        0,
+        Duration::from_secs(3),
+        Duration::from_secs(60),
+        Duration::from_mins(5),
+    )?;
+    let failed = shape
+        .connect(target, "session-timeouts")
+        .await
+        .err()
+        .map(|error| format!("{error:#}"))
+        .context("an invalid setting must refuse the connection")?;
+    ensure!(
+        !failed.contains(MARKER),
+        "the error repeats the value: {failed}"
+    );
+    ensure!(
+        failed.contains("SQLSTATE 22023"),
+        "unexpected failure: {failed}"
+    );
+    Ok(())
+}

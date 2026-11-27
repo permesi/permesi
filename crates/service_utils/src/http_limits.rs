@@ -46,7 +46,10 @@ use std::{fmt, time::Duration};
 
 const REQUEST_TIMEOUT_MAX: Duration = Duration::from_mins(10);
 const HEADER_READ_TIMEOUT_MAX: Duration = Duration::from_mins(1);
-const DRAIN_TIMEOUT_MAX: Duration = Duration::from_mins(5);
+/// The drain and the 8 s of worker and pool shutdown after it must fit in the 60 s of
+/// validity a lease keeps when its renewal gives up, so connections still hold valid
+/// credentials while they finish.
+const DRAIN_TIMEOUT_MAX: Duration = Duration::from_secs(50);
 const TIMEOUT_MIN: Duration = Duration::from_secs(1);
 
 /// Validated HTTP deadlines of one service.
@@ -78,7 +81,7 @@ impl HttpLimits {
             bail!("header read timeout must not exceed the request timeout");
         }
         if !(TIMEOUT_MIN..=DRAIN_TIMEOUT_MAX).contains(&drain_timeout) {
-            bail!("shutdown drain must be between 1 s and 5 min");
+            bail!("shutdown drain must be between 1 s and 50 s");
         }
         Ok(Self {
             request: request_timeout,
@@ -117,13 +120,18 @@ impl HttpLimits {
         let limit = self.request;
         router.layer(axum::middleware::from_fn(
             move |request: Request, next: Next| async move {
-                match tokio::time::timeout(limit, next.run(request)).await {
-                    Ok(response) => response,
-                    Err(_) => (
+                // The deadline is checked before the handler is polled again, so a handler
+                // that becomes ready only after the deadline, as after a scheduling stall,
+                // is still cut off.
+                let deadline = tokio::time::sleep(limit);
+                tokio::select! {
+                    biased;
+                    () = deadline => (
                         StatusCode::SERVICE_UNAVAILABLE,
                         [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
                     )
                         .into_response(),
+                    response = next.run(request) => response,
                 }
             },
         ))
@@ -189,6 +197,7 @@ mod tests {
 
     #[test]
     fn limits_are_bounded_and_ordered() -> Result<()> {
+        assert!(limits(60, 10, 50).is_ok());
         let accepted = limits(60, 10, 20)?;
         assert_eq!(
             accepted.to_string(),
@@ -202,12 +211,36 @@ mod tests {
             // Reading the headers may not take longer than the whole request.
             (5, 6, 20),
             (60, 10, 0),
-            (60, 10, 301),
+            // A longer drain would outlast the credentials of a lease that is ending.
+            (60, 10, 51),
         ] {
             assert!(
                 limits(request, header, drain).is_err(),
                 "{request}/{header}/{drain}"
             );
+        }
+        Ok(())
+    }
+
+    /// When the handler and the deadline are ready at the same moment, as after a stall
+    /// of the scheduler, the deadline wins. The replaced middleware polled the handler
+    /// first and let an overdue request through.
+    #[tokio::test(start_paused = true)]
+    async fn a_handler_ready_only_at_the_deadline_is_still_cut_off() -> Result<()> {
+        let app =
+            api_error::with_error_envelope(limits(2, 1, 5)?.bound_requests(Router::new().route(
+                "/late",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    "too late"
+                }),
+            )));
+        for _ in 0..16 {
+            let late = app
+                .clone()
+                .oneshot(Request::get("/late").body(Body::empty())?)
+                .await?;
+            assert_eq!(late.status(), StatusCode::SERVICE_UNAVAILABLE);
         }
         Ok(())
     }

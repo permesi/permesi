@@ -44,8 +44,19 @@ the signed artifacts.
   `password` in the query are refused too, and a user or password before the `@`
   is replaced: the services connect with the credentials OpenBao issued. Remove
   the parameters the list does not name from each DSN before upgrading.
-- An OpenBao address may not contain a character outside printable ASCII or a
-  percent-escape in its host part.
+- An OpenBao address must be written as `scheme://host...` and may not contain a
+  backslash, a character outside printable ASCII or a percent-escape in its host
+  part. A plain `http://` address naming `localhost` or a name under it stops the
+  service when that name does not resolve to loopback addresses only.
+- A DSN may not contain an escaped control character, a `host` parameter that is not
+  a host name, an IP address or a socket directory, or an `options[...]` parameter
+  without a setting name. `sslmode` is accepted in any letter case, as the driver
+  does. A socket directory chosen through `PGHOST` counts as local.
+- `--shutdown-drain-seconds` accepts 1 to 50 (was 1 to 300).
+- A failed database connection is reported with its kind or SQLSTATE only; the
+  server's message, which can quote a value from the DSN, is no longer shown.
+- `--admission-issuer` and `--admission-audience` (Genesis) and Permesi's expected
+  issuer and audience refuse control characters.
 - Genesis refuses `--trusted-proxy` ranges that cover every address (`0.0.0.0/0`,
   `::/0`) and control characters in `--admission-issuer` and
   `--admission-audience`.
@@ -109,13 +120,17 @@ the signed artifacts.
   `SIGINT` ends it at once instead of being ignored. When the drain ends, a request
   still in a handler is abandoned and answered with `503`; before, it could finish
   while the workers and the pool were already being shut down. The worker and pool
-  shutdown that follow are capped at 4 s each, so a stop takes at most 28 s, or
-  about 33 s when traces are exported and flushed. Give the supervisor 35 s or
-  more; the Helm charts set 60 s. The settings have `PERMESI_*` and `GENESIS_*`
-  environment names of the same form.
+  shutdown that follow are capped at 4 s each, so a stop takes about 28 s, or
+  about 33 s when traces are exported and flushed, plus any blocking work a dropped
+  handler had already started. Give the supervisor the drain plus 15 s or more; the
+  Helm charts set 60 s. The drain accepts 1 to 50 s, so it ends while the
+  credentials of a lease whose renewal failed are still valid. The settings have
+  `PERMESI_*` and `GENESIS_*` environment names of the same form.
 - The session timeouts are set when a connection is opened. Behind PgBouncer in
-  transaction mode set `statement_timeout` and `lock_timeout` on the database role
-  instead; a session setting does not stay with the service's transactions there.
+  transaction mode set `statement_timeout` and `lock_timeout` on the database
+  (`ALTER DATABASE ... SET`) instead; a session setting does not stay with the
+  service's transactions there, and a setting on the shared runtime role does not
+  reach the per-lease logins OpenBao creates.
 
 ### Fixed
 

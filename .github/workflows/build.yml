@@ -416,19 +416,31 @@ jobs:
         shell: bash
         run: |-
           set -euo pipefail
+          # A command substitution does not inherit `set -e` by default; without this a
+          # failed push inside push_for_digest would not stop the step.
+          shopt -s inherit_errexit
           test -s dist-bin/permesi && test -s dist-bin/genesis
-          # Push one reference and print the digest the registry stored for it.
+          # Push one reference and print the digest the registry stored for it. Each
+          # failure returns explicitly: after a failed push, inspecting the local image
+          # could still produce a well-formed digest that was never published.
           push_for_digest() {
             local reference="$1" repository="${1%%:*}" digest="" digest_file
             if ${CONTAINER_TOOL} push --help 2>&1 | grep -q -- '--digestfile'; then
-              digest_file="$(mktemp)"
-              ${CONTAINER_TOOL} push --digestfile "${digest_file}" "${reference}" >&2
-              digest="$(tr -d '[:space:]' < "${digest_file}")"
+              digest_file="$(mktemp)" || return 1
+              if ! ${CONTAINER_TOOL} push --digestfile "${digest_file}" "${reference}" >&2; then
+                rm -f "${digest_file}"
+                echo "The push of ${reference} failed." >&2
+                return 1
+              fi
+              digest="$(tr -d '[:space:]' < "${digest_file}")" || return 1
               rm -f "${digest_file}"
             else
-              ${CONTAINER_TOOL} push "${reference}" >&2
+              if ! ${CONTAINER_TOOL} push "${reference}" >&2; then
+                echo "The push of ${reference} failed." >&2
+                return 1
+              fi
               digest="$(${CONTAINER_TOOL} image inspect "${reference}" --format '{{join .RepoDigests "\n"}}' \
-                | awk -F@ -v repository="${repository}" '$1 == repository { print $2; exit }')"
+                | awk -F@ -v repository="${repository}" '$1 == repository { print $2; exit }')" || return 1
             fi
             if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "The push of ${reference} reported no digest." >&2
@@ -446,8 +458,11 @@ jobs:
               -f "${dockerfile}" \
               -t "${image}:develop" \
               .
-            # Assigned first: a failed push must fail the step, not write an empty output.
-            digest="$(push_for_digest "${image}:develop")"
+            # Assigned first, and checked: a failed push must fail the step, not write
+            # an output.
+            if ! digest="$(push_for_digest "${image}:develop")"; then
+              exit 1
+            fi
             echo "${service}_digest=${digest}" >> "$GITHUB_OUTPUT"
           done
 

@@ -23,10 +23,14 @@
 //! After the drain come three bounded steps: up to 4 s for background workers
 //! ([`WORKER_STOP_TIMEOUT`]), up to 4 s to close the database pool, and, in a build
 //! that exports traces, the flush of the telemetry exporter, which its own timeouts
-//! limit to about 5 s. With the default 20 s drain that is at most 28 s without
+//! limit to about 5 s. With the default 20 s drain that is about 28 s without
 //! telemetry export and about 33 s with it, so the supervisor's grace period should be
-//! 35 s or more; the Helm charts set 60 s. A second signal shortens only the drain: the
-//! steps after it are short, release what the process holds, and always run.
+//! the drain plus 15 s or more; the Helm charts set 60 s. These are the bounds of each
+//! step, not of the process: blocking work a dropped handler had already started runs
+//! to its end, and the runtime waits for it before the process exits. A second signal
+//! shortens only the drain: the steps after it are short, release what the process
+//! holds, and always run. The drain is limited to 50 s so it and the steps after it end
+//! within the 60 s of validity a lease keeps once its renewal has given up.
 
 use crate::openbao::renew::ShutdownSignal;
 use axum::{
@@ -72,13 +76,16 @@ impl Cutoff {
             move |request: Request, next: Next| {
                 let cutoff = cutoff.clone();
                 async move {
+                    // The cutoff is checked first, so a handler that happens to be ready
+                    // when it fires does not run to completion after it.
                     tokio::select! {
-                        response = next.run(request) => response,
+                        biased;
                         () = cutoff.cancelled() => (
                             StatusCode::SERVICE_UNAVAILABLE,
                             [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
                         )
                             .into_response(),
+                        response = next.run(request) => response,
                     }
                 }
             },
@@ -169,6 +176,37 @@ mod tests {
         sync::mpsc,
         time::{Duration, timeout},
     };
+
+    /// Once the cutoff has fired, no request runs to completion, not even one whose
+    /// handler is ready at once. Without priority for the cutoff, about half of them did.
+    #[tokio::test]
+    async fn a_cut_request_never_completes_even_when_its_handler_is_ready() -> anyhow::Result<()> {
+        use axum::{Router, body::Body, http::Request, http::StatusCode, routing::get};
+        use tower::ServiceExt;
+        let cutoff = super::Cutoff::new();
+        let app = cutoff.guard(Router::new().route("/ready", get(|| async { "done" })));
+        let before = app
+            .clone()
+            .oneshot(Request::get("/ready").body(Body::empty())?)
+            .await?;
+        assert_eq!(before.status(), StatusCode::OK);
+        cutoff.cut();
+        for _ in 0..128 {
+            let after = app
+                .clone()
+                .oneshot(Request::get("/ready").body(Body::empty())?)
+                .await?;
+            assert_eq!(after.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                after
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|value| value.to_str().ok()),
+                Some("no-store")
+            );
+        }
+        Ok(())
+    }
 
     /// Tests that listen for OS signals share the process: a SIGTERM sent by one
     /// reaches every listener, so they must not overlap.

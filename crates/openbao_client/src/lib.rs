@@ -90,7 +90,7 @@ pub fn loggable_url(url: &str) -> String {
     }
     let Some((parsed, host)) = Url::parse(url)
         .ok()
-        .filter(|_| !escaped_authority(url))
+        .filter(|_| !escaped_authority(url) && !ambiguous_authority(url))
         .filter(|parsed| matches!(parsed.scheme(), "http" | "https"))
         .and_then(|parsed| {
             let host = host_name(&parsed)?;
@@ -138,6 +138,17 @@ fn escaped_authority(url: &str) -> bool {
         .is_some_and(|authority| authority.contains('%'))
 }
 
+/// Whether an address is not written in the one form whose host is unambiguous:
+/// `scheme://host...`. The URL parser accepts backslashes for slashes and skips extra
+/// slashes before the host of an `http` address, so the text a check reads and the
+/// host the parser finds can differ.
+fn ambiguous_authority(url: &str) -> bool {
+    url.contains('\\')
+        || url
+            .split_once("://")
+            .is_none_or(|(_, rest)| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// Parse an operator-supplied OpenBao address that requests are sent to.
 ///
 /// Only `http` and `https` are accepted, the host has to pass [`host_name`], and an
@@ -162,6 +173,11 @@ fn parse_http_address(url: &str) -> Result<(Url, String)> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(anyhow!(
             "Error parsing URL: unsupported scheme, expected http or https"
+        ));
+    }
+    if ambiguous_authority(url) {
+        return Err(anyhow!(
+            "Error parsing URL: the address must be written as scheme://host"
         ));
     }
     if parsed.host_str().is_none_or(str::is_empty) {
@@ -598,8 +614,9 @@ mod tests {
         // into the path, and path parameters can carry a token. Such a path is not shown.
         for (given, shown) in [
             (
+                // A backslash makes the host ambiguous, so nothing of it is shown.
                 "https://corp\\bao-user:backslash-secret@openbao.internal:8200/v1/auth/approle/login",
-                "https://corp",
+                "<address not shown>",
             ),
             (
                 "https://bao-user:8200/slash-port-secret@openbao.internal:8200",
@@ -622,10 +639,11 @@ mod tests {
             assert_eq!(logged, shown, "{given}");
             assert!(!logged.contains("secret"), "{given}");
         }
-        // A special scheme written without `//` still names a host, and only the host.
+        // A special scheme written without `//` is refused for connecting, since the
+        // parser finds a host the text never marked as one, so nothing of it is shown.
         assert_eq!(
             loggable_url("https:proxy-user:proxy-password@openbao.example:8200"),
-            "https://openbao.example:8200/"
+            "<address not shown>"
         );
     }
 
@@ -649,6 +667,8 @@ mod tests {
             "https://openbao.internal%E2%80%8Bhost-secret:8200/v1",
             "https://openbao%2Einternal:8200/v1",
             "https://user:pass%41word@openbao.internal:8200/v1",
+            "http:///openbao.internal:8200/v1",
+            "http:\\\\openbao.internal:8200/v1",
         ] {
             assert_eq!(loggable_url(opaque), "<address not shown>", "{opaque}");
         }
@@ -671,6 +691,11 @@ mod tests {
             "https://openbao.internal\u{feff}host-secret:8200",
             "https://openbao.internal%EF%BB%BFhost-secret:8200",
             "https://openbao.internal%E2%80%8Bhost-secret:8200",
+            // The parser skips these to reach a host the text before it never named.
+            "http:///openbao.internal:8200",
+            "http:\\\\openbao.internal:8200",
+            "https://\\openbao.internal:8200",
+            "http:openbao.internal:8200",
             "hvs.scheme-secret:8200",
             "hvs.scheme-secret://openbao.internal:8200",
             "ftp://openbao.internal:21",

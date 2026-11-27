@@ -66,7 +66,7 @@ fn with_admission_args(command: Command) -> Command {
                 .long("admission-issuer")
                 .env("GENESIS_ADMISSION_ISS")
                 .default_value(DEFAULT_ADMISSION_ISSUER)
-                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .value_parser(token_identifier)
                 .help("Issuer (iss) written into admission tokens; must match Permesi"),
         )
         .arg(
@@ -74,7 +74,7 @@ fn with_admission_args(command: Command) -> Command {
                 .long("admission-audience")
                 .env("GENESIS_ADMISSION_AUD")
                 .default_value(DEFAULT_ADMISSION_AUDIENCE)
-                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .value_parser(token_identifier)
                 .help("Audience (aud) written into admission tokens; must match Permesi"),
         )
 }
@@ -203,6 +203,22 @@ pub fn new() -> Command {
     logging::with_args(command)
 }
 
+/// Parse an issuer or audience written into or expected in admission tokens: not empty,
+/// not padded with whitespace, and without control characters, which would also forge a
+/// line in the startup log that shows the value.
+///
+/// # Errors
+/// Returns a message saying which rule the value breaks; the value is not repeated.
+pub fn token_identifier(value: &str) -> Result<String, String> {
+    if value.is_empty() || value.trim() != value {
+        return Err("must not be empty or padded with whitespace".to_string());
+    }
+    if value.chars().any(char::is_control) {
+        return Err("must not contain control characters".to_string());
+    }
+    Ok(value.to_string())
+}
+
 /// Parse one trusted proxy range. A prefix length of zero names every address of its
 /// family, which would let any caller supply the client address and country again, so
 /// it is refused instead of read as "trust everyone".
@@ -222,6 +238,25 @@ pub fn trusted_proxy_range(value: &str) -> Result<sqlx::types::ipnetwork::IpNetw
 
 #[cfg(test)]
 mod tests {
+    /// The parser itself refuses what would break a token or the startup log; dispatch
+    /// checks again.
+    #[test]
+    fn token_identifier_refuses_empty_padded_and_control_values() {
+        for value in [
+            "",
+            " permesi",
+            "permesi ",
+            "https://genesis.test\nforged",
+            "permesi\u{7}",
+        ] {
+            assert!(super::token_identifier(value).is_err(), "{value:?}");
+        }
+        assert_eq!(
+            super::token_identifier("permesi").ok().as_deref(),
+            Some("permesi")
+        );
+    }
+
     /// The parser itself refuses a range of every address; dispatch checks again.
     #[test]
     fn trusted_proxy_range_refuses_a_range_of_every_address() {
