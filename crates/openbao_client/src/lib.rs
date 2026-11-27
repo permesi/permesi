@@ -90,6 +90,7 @@ pub fn loggable_url(url: &str) -> String {
     }
     let Some((parsed, host)) = Url::parse(url)
         .ok()
+        .filter(|_| !escaped_authority(url))
         .filter(|parsed| matches!(parsed.scheme(), "http" | "https"))
         .and_then(|parsed| {
             let host = host_name(&parsed)?;
@@ -126,20 +127,35 @@ fn host_name(parsed: &Url) -> Option<String> {
     }
 }
 
+/// Whether the part of an address before its path holds a percent-escape. The URL parser
+/// decodes one in the host and then drops characters that have no place in a host name,
+/// an encoded byte-order mark for one, joining the text on either side of it.
+fn escaped_authority(url: &str) -> bool {
+    url.split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()
+        .is_some_and(|authority| authority.contains('%'))
+}
+
 /// Parse an operator-supplied OpenBao address that requests are sent to.
 ///
 /// Only `http` and `https` are accepted, the host has to pass [`host_name`], and an
-/// address with whitespace or a control character inside it is refused instead of
-/// being repaired: the URL parser would drop a tab or line break and join the text
-/// around it into one host. The error never repeats any part of the address.
+/// address with whitespace, a control character, a character outside ASCII or a
+/// percent-escape in its host part is refused instead of being repaired: the URL parser
+/// would drop a tab, a line break or an invisible character and join the text around it
+/// into one host. What is parsed is therefore what was written, and what is shown or
+/// connected to is what was parsed. The error never repeats any part of the address.
 fn parse_http_address(url: &str) -> Result<(Url, String)> {
-    if url
-        .trim()
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control())
-    {
+    let url = url.trim();
+    if !url.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err(anyhow!(
-            "Error parsing URL: whitespace or control character inside the address"
+            "Error parsing URL: whitespace, control or non-ASCII character inside the address"
+        ));
+    }
+    if escaped_authority(url) {
+        return Err(anyhow!(
+            "Error parsing URL: percent-escape in the host part of the address"
         ));
     }
     let parsed = Url::parse(url)?;
@@ -156,12 +172,12 @@ fn parse_http_address(url: &str) -> Result<(Url, String)> {
     Ok((parsed, host))
 }
 
-/// Bounded like the transport so a stalled OpenBao cannot hang startup login.
-fn client(user_agent: &str) -> Result<Client> {
-    Ok(Client::builder()
+/// The client for the login and renewal calls to `url`: bounded like the transport so a
+/// stalled OpenBao cannot hang startup login, and routed like it, so a local plain
+/// address is never sent through a proxy.
+fn client(user_agent: &str, url: &str) -> Result<Client> {
+    Ok(transport::client_builder(url)?
         .user_agent(user_agent)
-        .connect_timeout(transport::OPENBAO_CONNECT_TIMEOUT)
-        .timeout(transport::OPENBAO_REQUEST_TIMEOUT)
         .redirect(transport::refuse_redirects())
         .build()?)
 }
@@ -215,7 +231,7 @@ pub fn approle_login_url(url: &str) -> Result<String> {
 /// # Errors
 /// Returns an error if the OpenBao request fails or the response is missing expected fields.
 pub async fn unwrap(user_agent: &str, url: &str, token: &str) -> Result<String> {
-    let client = client(user_agent)?;
+    let client = client(user_agent, url)?;
 
     let unwrap_url = endpoint_url(url, "/v1/sys/wrapping/unwrap")?;
 
@@ -263,7 +279,7 @@ pub async fn approle_login(
     sid: &str,
     rid: &str,
 ) -> Result<(String, u64)> {
-    let client = client(user_agent)?;
+    let client = client(user_agent, url)?;
 
     let login_payload = json!({
         "role_id": rid,
@@ -323,7 +339,7 @@ pub async fn renew_token(
     token: &SecretString,
     increment: Option<u64>,
 ) -> Result<u64> {
-    let client = client(user_agent)?;
+    let client = client(user_agent, url)?;
 
     let payload = json!({
         "increment": increment.unwrap_or(0)
@@ -376,7 +392,7 @@ pub async fn renew_db_token(
     lease_id: &str,
     increment: u64,
 ) -> Result<u64> {
-    let client = client(user_agent)?;
+    let client = client(user_agent, url)?;
 
     let payload = json!({
         "increment": increment,
@@ -428,7 +444,7 @@ pub async fn database_creds(
     openbao_token: &SecretString,
     db_path: &str,
 ) -> Result<DatabaseCreds> {
-    let client = client(user_agent)?;
+    let client = client(user_agent, openbao_url)?;
 
     let db_creds = endpoint_url(openbao_url, db_path)?;
 
@@ -628,6 +644,11 @@ mod tests {
             "https://openbao.internal%26token%3Dhost-secret",
             "https://openbao.internal\u{200b}host-secret:8200/v1",
             "https://openbao.internal\u{ad}host-secret:8200/v1",
+            // Escapes the parser decodes in a host and then drops, joining both sides.
+            "https://openbao.internal%EF%BB%BFhost-secret:8200/v1",
+            "https://openbao.internal%E2%80%8Bhost-secret:8200/v1",
+            "https://openbao%2Einternal:8200/v1",
+            "https://user:pass%41word@openbao.internal:8200/v1",
         ] {
             assert_eq!(loggable_url(opaque), "<address not shown>", "{opaque}");
         }
@@ -645,6 +666,11 @@ mod tests {
             "https://openbao.internal;token=host-secret",
             "https://openbao.internal&token=host-secret:8200",
             "https://openbao.internal%3Btoken%3Dhost-secret",
+            // The parser would remove these and connect to the joined name.
+            "https://openbao.internal\u{200b}host-secret:8200",
+            "https://openbao.internal\u{feff}host-secret:8200",
+            "https://openbao.internal%EF%BB%BFhost-secret:8200",
+            "https://openbao.internal%E2%80%8Bhost-secret:8200",
             "hvs.scheme-secret:8200",
             "hvs.scheme-secret://openbao.internal:8200",
             "ftp://openbao.internal:21",

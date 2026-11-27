@@ -138,6 +138,12 @@ fn admission_identity(matches: &clap::ArgMatches) -> Result<(String, String)> {
             !value.is_empty() && value.trim() == value,
             "--{name} must not be empty or padded with whitespace"
         );
+        // The value is written into every token and shown at startup; a line break in
+        // it would also forge a log line.
+        anyhow::ensure!(
+            !value.chars().any(char::is_control),
+            "--{name} must not contain control characters"
+        );
         Ok(value)
     };
     Ok((value("admission-issuer")?, value("admission-audience")?))
@@ -156,12 +162,18 @@ fn request_metadata(matches: &clap::ArgMatches) -> Result<crate::api::peer::Requ
         !trust_unix_proxy || matches.get_one::<String>("socket-path").is_some(),
         "--trust-unix-proxy requires --socket-path"
     );
+    let trusted_proxies: Vec<sqlx::types::ipnetwork::IpNetwork> = matches
+        .get_many("trusted-proxy")
+        .map_or_else(Vec::new, |ranges| ranges.copied().collect());
+    // Rechecked after clap: a range of every address trusts every caller.
+    anyhow::ensure!(
+        trusted_proxies.iter().all(|range| range.prefix() > 0),
+        "--trusted-proxy must not cover every address"
+    );
     crate::api::peer::RequestMetadataPolicy::new(
         header("client-ip-header")?,
         header("client-country-header")?,
-        matches
-            .get_many::<sqlx::types::ipnetwork::IpNetwork>("trusted-proxy")
-            .map_or_else(Vec::new, |ranges| ranges.copied().collect()),
+        trusted_proxies,
         trust_unix_proxy,
     )
 }
@@ -175,7 +187,8 @@ fn require_encrypted_openbao(
     let allow_insecure_http = matches.get_flag("openbao-allow-insecure-http");
     target.require_encrypted_transport(allow_insecure_http)?;
     if allow_insecure_http && target.require_encrypted_transport(false).is_err() {
-        tracing::warn!(
+        // Error level is the default verbosity; this must show on every start.
+        tracing::error!(
             "OpenBao is reached over plain http: tokens and secrets cross the network in \
              clear text (--openbao-allow-insecure-http)"
         );
@@ -215,7 +228,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     let db_pool = crate::cli::commands::database::parse(matches)?;
-    crate::cli::commands::database::require_verified_tls(matches, &dsn)?;
+    let database = crate::cli::commands::database::connection_target(matches, &dsn)?;
     let http = crate::cli::commands::http::parse(matches)?;
 
     let signing_version = matches
@@ -234,6 +247,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         port,
         socket_path,
         dsn,
+        database,
         db_pool,
         http,
         openbao_url,
@@ -250,6 +264,91 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collects what is logged at the service's default level while a closure runs.
+    fn logged_at_default_level(run: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if let Ok(mut buffer) = self.0.lock() {
+                    buffer.extend_from_slice(bytes);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        // ERROR is what the service logs when no verbosity is asked for.
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = captured
+            .0
+            .lock()
+            .map_or_else(|_| Vec::new(), |buffer| buffer.clone());
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// An opt-out that is in effect is announced on every start, and it has to be seen.
+    /// The notices were logged as warnings, which the default level drops, so a service
+    /// started without `-v` said nothing. An opt-out that changes nothing stays silent.
+    #[test]
+    fn effective_transport_opt_outs_are_announced_at_the_default_log_level() {
+        const OPENBAO_NOTICE: &str = "--openbao-allow-insecure-http";
+        const DATABASE_NOTICE: &str = "--db-allow-unverified-tls";
+        let start = |openbao: &str, dsn: &str| {
+            let matches = crate::cli::commands::new().try_get_matches_from([
+                "genesis",
+                "--tls-pem-bundle",
+                "bundle",
+                "--openbao-role-id",
+                "role",
+                "--openbao-secret-id",
+                "role-secret",
+                "--openbao-url",
+                openbao,
+                "--dsn",
+                dsn,
+                "--openbao-allow-insecure-http",
+                "--db-allow-unverified-tls",
+            ]);
+            assert!(matches.is_ok_and(|matches| handler(&matches).is_ok()));
+        };
+        temp_env::with_vars_unset(
+            ["GENESIS_SOCKET_PATH", "PGHOST", "PGHOSTADDR", "PGSSLMODE"],
+            || {
+                let logged = logged_at_default_level(|| {
+                    start(
+                        "http://openbao.internal:8200",
+                        "postgres://app:dsn-secret@db.internal/app",
+                    );
+                });
+                assert!(logged.contains(OPENBAO_NOTICE), "{logged}");
+                assert!(logged.contains(DATABASE_NOTICE), "{logged}");
+                // Neither notice names an address or a credential.
+                for private in ["dsn-secret", "role-secret", "internal"] {
+                    assert!(!logged.contains(private), "{logged}");
+                }
+
+                // The same flags with connections that never needed them.
+                let logged = logged_at_default_level(|| {
+                    start(
+                        "https://openbao.internal:8200",
+                        "postgres://db.internal/app?sslmode=verify-full",
+                    );
+                    start("http://127.0.0.1:8200", "postgres://127.0.0.1/app");
+                });
+                assert_eq!(logged, "");
+            },
+        );
+    }
 
     /// Startup refuses an OpenBao address that would carry tokens in clear text and a
     /// DSN whose connection nobody verifies, unless the host is local or the operator
@@ -453,6 +552,13 @@ mod tests {
                     &["--client-country-header", ""],
                     &["--trusted-proxy", "attacker.example"],
                     &["--trusted-proxy", "192.0.2.0/33"],
+                    // A range of every address would trust every caller again.
+                    &["--trusted-proxy", "0.0.0.0/0"],
+                    &["--trusted-proxy", "::/0"],
+                    &["--trusted-proxy", "10.0.0.0/8,198.51.100.7/0"],
+                    // Written into every token and shown at startup.
+                    &["--admission-issuer", "https://genesis.test\nforged line"],
+                    &["--admission-audience", "permesi\u{7}"],
                     // Meaningless on a TCP listener, so it is not accepted there.
                     &["--trust-unix-proxy"],
                 ] {

@@ -17,20 +17,40 @@ the signed artifacts.
 
 - Both services refuse to start with an OpenBao address or a database DSN whose
   connection can be read or impersonated on the network.
-  - A plain `http://` OpenBao address is accepted only for a loopback host. For
-    any other host use `https://`, or opt in with `--openbao-allow-insecure-http`
-    (`PERMESI_OPENBAO_ALLOW_INSECURE_HTTP`, `GENESIS_OPENBAO_ALLOW_INSECURE_HTTP`).
-    An Agent socket is not affected.
-  - A DSN to a host that is not loopback and not a Unix socket needs
-    `sslmode=verify-full` or `verify-ca`. The driver's default, `prefer`, falls
-    back to clear text and never checks the server certificate. Opt out with
-    `--db-allow-unverified-tls` (`PERMESI_DB_ALLOW_UNVERIFIED_TLS`,
+  - A plain `http://` OpenBao address is accepted only when it stays on the
+    machine: a loopback address, or `localhost` or a name under it that resolves to
+    loopback addresses only. For any other host use `https://`, or opt in with
+    `--openbao-allow-insecure-http` (`PERMESI_OPENBAO_ALLOW_INSECURE_HTTP`,
+    `GENESIS_OPENBAO_ALLOW_INSECURE_HTTP`). An Agent socket is not affected. On the
+    local plain path the client ignores `HTTP_PROXY` and the other proxy variables
+    and connects only to the loopback addresses it found.
+  - A DSN whose connection is not local needs `sslmode=verify-full` or `verify-ca`.
+    The driver's default, `prefer`, falls back to clear text and never checks the
+    server certificate. Local is a Unix socket or a loopback address, judged by the
+    address the driver dials: `hostaddr` and `PGHOSTADDR` count, not just the host.
+    Opt out with `--db-allow-unverified-tls` (`PERMESI_DB_ALLOW_UNVERIFIED_TLS`,
     `GENESIS_DB_ALLOW_UNVERIFIED_TLS`).
 
   Before upgrading, add the `sslmode` and `sslrootcert` to each DSN and switch
   OpenBao to `https`, or set the opt-outs. They exist for development clusters.
-  A service started with an opt-out that is actually in effect logs a warning on
-  every start.
+  A service started with an opt-out that is actually in effect says so at error
+  level on every start, so it shows at the default verbosity.
+
+- The DSN query accepts only the parameters the driver acts on: `sslmode`,
+  `sslrootcert`, `sslcert`, `sslkey`, `host`, `hostaddr`, `port`, `dbname`,
+  `application_name`, `options` and `statement-cache-capacity`. Any other
+  parameter stops the service at startup, `connect_timeout` included: the driver
+  ignored such a parameter and wrote its name and value to the log. `user` and
+  `password` in the query are refused too, and a user or password before the `@`
+  is replaced: the services connect with the credentials OpenBao issued. Remove
+  the parameters the list does not name from each DSN before upgrading.
+- An OpenBao address may not contain a character outside printable ASCII or a
+  percent-escape in its host part.
+- Genesis refuses `--trusted-proxy` ranges that cover every address (`0.0.0.0/0`,
+  `::/0`) and control characters in `--admission-issuer` and
+  `--admission-audience`.
+- Permesi refuses a `--request-timeout-seconds` that is not longer than
+  `--oauth-token-timeout-ms`.
 
 - Operator elevation is no longer a bearer token. `POST /v1/auth/admin/elevate`
   records the elevation in PostgreSQL against the session that asked for it and
@@ -81,11 +101,21 @@ the signed artifacts.
   (`--header-read-timeout-seconds`). Until now only handlers with their own
   deadline were bounded, and a client could hold a connection open by never
   finishing its request.
-- Shutdown fits a 30 s termination grace period. The drain of in-flight requests
-  now defaults to 20 s (`--shutdown-drain-seconds`, was a fixed 30 s), a second
-  `SIGTERM` or `SIGINT` ends it at once instead of being ignored, and the worker
-  and pool shutdown that follow are capped at 4 s each. The settings have
-  `PERMESI_*` and `GENESIS_*` environment names of the same form.
+  The timed-out answer carries `Cache-Control: no-store`. Requests after the first
+  on an HTTP/2 connection have no header deadline in the service; bound them at the
+  ingress if untrusted HTTP/2 clients reach the TLS listener.
+- Shutdown is bounded. The drain of in-flight requests now defaults to 20 s
+  (`--shutdown-drain-seconds`, was a fixed 30 s), and a second `SIGTERM` or
+  `SIGINT` ends it at once instead of being ignored. When the drain ends, a request
+  still in a handler is abandoned and answered with `503`; before, it could finish
+  while the workers and the pool were already being shut down. The worker and pool
+  shutdown that follow are capped at 4 s each, so a stop takes at most 28 s, or
+  about 33 s when traces are exported and flushed. Give the supervisor 35 s or
+  more; the Helm charts set 60 s. The settings have `PERMESI_*` and `GENESIS_*`
+  environment names of the same form.
+- The session timeouts are set when a connection is opened. Behind PgBouncer in
+  transaction mode set `statement_timeout` and `lock_timeout` on the database role
+  instead; a session setting does not stay with the service's transactions there.
 
 ### Fixed
 
@@ -111,7 +141,9 @@ the signed artifacts.
   address. The issuer, audience and the two header names are now CLI settings
   (`--admission-issuer`, `--admission-audience`, `--client-ip-header`,
   `--client-country-header`) validated at startup; their environment names are
-  unchanged.
+  unchanged. The trusted hop has to overwrite both headers: a country header that
+  arrives twice is recorded as no country, and the development HAProxy now deletes
+  an inbound `CF-IPCountry`.
 
 - An operator elevation is bound to the session that performed the step-up and ends
   with it. Logout, a password change, suspension and session cleanup delete it;

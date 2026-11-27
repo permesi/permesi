@@ -118,10 +118,12 @@ impl RequestMetadataPolicy {
         forwarded.or(peer.address)
     }
 
-    /// The raw country header, only from a trusted peer.
+    /// The raw country header, only from a trusted peer and only when it is present
+    /// exactly once. Two values mean a proxy appended its own to one the caller sent,
+    /// and nothing says which is which.
     #[must_use]
     pub fn client_country<'a>(&self, peer: Peer, headers: &'a HeaderMap) -> Option<&'a str> {
-        self.trusts(peer)
+        (self.trusts(peer) && headers.get_all(&self.country_header).iter().count() == 1)
             .then(|| headers.get(&self.country_header))
             .flatten()
             .and_then(|value| value.to_str().ok())
@@ -232,6 +234,24 @@ mod tests {
                 Some("192.0.2.10".parse()?)
             );
         }
+        Ok(())
+    }
+
+    /// A proxy that passes the caller's country header on and adds its own sends two.
+    /// The first one used to be recorded, which is the caller's.
+    #[test]
+    fn trusted_proxy_with_two_country_values_supplies_none() -> Result<()> {
+        let policy = policy(&["192.0.2.0/24"], false)?;
+        let peer = tcp("192.0.2.10")?;
+        let mut headers = forwarded()?;
+        assert_eq!(policy.client_country(peer, &headers), Some("SE"));
+        headers.append("CF-IPCountry", "NO".parse()?);
+        assert_eq!(policy.client_country(peer, &headers), None);
+        assert_eq!(
+            policy.client_address(peer, &headers),
+            Some("198.51.100.7".parse()?),
+            "the address header is still single"
+        );
         Ok(())
     }
 

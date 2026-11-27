@@ -137,7 +137,7 @@ async fn init_oauth(
 pub async fn new(
     port: u16,
     socket_path: Option<String>,
-    dsn: String,
+    database: service_utils::database::ConnectionTarget,
     globals: &GlobalArgs,
     admission: Arc<handlers::AdmissionVerifier>,
     config: AppConfig,
@@ -149,7 +149,7 @@ pub async fn new(
 
     let pool = config
         .database
-        .connect(&dsn, env!("CARGO_PKG_NAME"))
+        .connect(database, env!("CARGO_PKG_NAME"))
         .await?;
 
     let secrets = openbao::kv::read_config_secrets(globals, &config.kv.mount, &config.kv.path)
@@ -429,9 +429,10 @@ async fn serve_socket(
     let drain_started = CancellationToken::new();
 
     info!("Listening on unix:{}", path.display());
+    let cutoff = shutdown::Cutoff::new();
     let socket_server = axum::serve(
         listener,
-        app.layer(axum::Extension(auth::operations::UnixPeer)),
+        cutoff.guard(app.layer(axum::Extension(auth::operations::UnixPeer))),
     )
     .with_graceful_shutdown({
         let shutdown_reason = shutdown_reason.clone();
@@ -450,6 +451,9 @@ async fn serve_socket(
         result = socket_server.into_future() => result.context("Unix socket server failed"),
         () = drain_deadline => Ok(()),
     };
+    // axum's connection tasks outlive the server future dropped above. Abandon the
+    // requests still in a handler, so none runs on into worker and pool shutdown.
+    cutoff.cut();
 
     if let Err(err) = tokio::fs::remove_file(&path).await {
         warn!(error = %err, "Failed to remove unix socket on shutdown");
@@ -487,6 +491,8 @@ async fn serve_tls(
     let handle = axum_server::Handle::new();
 
     let shutdown_reason = Arc::new(Mutex::new(None));
+    let cutoff = shutdown::Cutoff::new();
+    let app = cutoff.guard(app);
 
     tokio::spawn({
         let handle = handle.clone();
@@ -495,6 +501,8 @@ async fn serve_tls(
             *shutdown_reason.lock().await = shutdown::requested(&mut shutdown_rx).await;
             handle.graceful_shutdown(Some(http.drain_timeout()));
             shutdown::drain_ended(http.drain_timeout()).await;
+            // The drain is over: abandon what is still in a handler, then close.
+            cutoff.cut();
             handle.shutdown();
         }
     });
@@ -600,17 +608,48 @@ mod tests {
     const DRAIN: Duration = Duration::from_secs(20);
 
     /// A request that never finishes holds its connection open. The drain then lasts as
-    /// long as configured and no longer, where it used to be a fixed 30 seconds.
+    /// long as configured and no longer, where it used to be a fixed 30 seconds. When it
+    /// ends the request is abandoned: its handler used to live on in the server's
+    /// connection task and could finish, and answer, after the service had moved on to
+    /// stopping its workers and closing the pool.
     #[tokio::test]
     async fn serve_socket_stops_waiting_for_a_stuck_request_at_the_drain_limit() -> Result<()> {
-        use tokio::io::AsyncWriteExt;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            sync::Notify,
+        };
+        struct OnDrop(Arc<AtomicBool>);
+        impl Drop for OnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
         let _serial = OS_SIGNAL_TESTS.lock().await;
         let dir = std::env::temp_dir().join(format!("permesi-{}", Ulid::generate()));
         fs::create_dir_all(&dir).context("create temp dir failed")?;
         let socket_path = dir.join("permesi.sock");
+        let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let (dropped, completed) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
         let app = Router::new().route(
             "/stuck",
-            axum::routing::get(std::future::pending::<&'static str>),
+            axum::routing::get({
+                let (entered, release) = (entered.clone(), release.clone());
+                let (dropped, completed) = (dropped.clone(), completed.clone());
+                move || async move {
+                    let _abandoned = OnDrop(dropped);
+                    entered.notify_one();
+                    release.notified().await;
+                    completed.store(true, Ordering::SeqCst);
+                    "done"
+                }
+            }),
         );
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -631,7 +670,9 @@ mod tests {
         client
             .write_all(b"GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await?;
-        sleep(Duration::from_millis(200)).await;
+        timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .context("the request never reached its handler")?;
 
         let started = std::time::Instant::now();
         let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
@@ -646,6 +687,25 @@ mod tests {
         assert!(
             waited >= Duration::from_millis(900) && waited < Duration::from_secs(5),
             "the drain lasted {waited:?}"
+        );
+
+        // The handler is dropped at the cutoff. Letting it go on afterwards changes
+        // nothing: it no longer exists, and the caller is not told it succeeded.
+        timeout(Duration::from_secs(5), async {
+            while !dropped.load(Ordering::SeqCst) {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("the handler outlived the drain limit")?;
+        release.notify_one();
+        let mut reply = Vec::new();
+        let _ = timeout(Duration::from_secs(2), client.read_to_end(&mut reply)).await;
+        let reply = String::from_utf8_lossy(&reply);
+        assert!(!completed.load(Ordering::SeqCst), "the handler finished");
+        assert!(
+            !reply.contains("200 OK") && !reply.contains("done"),
+            "the caller got the handler's answer: {reply}"
         );
         drop(client);
         let _ = fs::remove_dir_all(&dir);

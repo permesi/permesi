@@ -16,15 +16,33 @@
 //!    its handler is dropped, which rolls back any open transaction. An
 //!    operation-specific deadline shorter than this still fires first.
 //! 3. On shutdown, in-flight requests get `drain_timeout` to finish
-//!    ([`crate::shutdown::drain_ended`]).
+//!    ([`crate::shutdown::drain_ended`]); what is still in a handler then is abandoned
+//!    ([`crate::shutdown::Cutoff`]).
+//!
+//! ## What the connection timers do not cover
+//! Three timers act before a request reaches a handler, and they are not one deadline:
+//! the TLS handshake has the TLS acceptor's own fixed limit, the first request of a
+//! connection has `header_read_timeout` counted from the end of that handshake, and
+//! each later HTTP/1 request has `header_read_timeout` for its headers. On an idle
+//! HTTP/1 keep-alive connection that last timer closes the connection, so clients
+//! reconnect after `header_read_timeout` of silence. HTTP/2, which the TLS listener
+//! negotiates, has no equivalent for requests after the first: a peer that opens a
+//! stream and never completes its header block is not timed out here. A deployment
+//! that exposes the TLS listener to untrusted HTTP/2 clients needs that bound from the
+//! proxy or load balancer in front.
 //!
 //! The values come from each service's CLI and are validated again here, so a bad
 //! combination fails startup.
 
 use anyhow::{Result, bail};
-use axum::{Router, http::StatusCode};
+use axum::{
+    Router,
+    extract::Request,
+    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+    middleware::Next,
+    response::IntoResponse,
+};
 use std::{fmt, time::Duration};
-use tower_http::timeout::TimeoutLayer;
 
 const REQUEST_TIMEOUT_MAX: Duration = Duration::from_mins(10);
 const HEADER_READ_TIMEOUT_MAX: Duration = Duration::from_mins(1);
@@ -90,14 +108,24 @@ impl HttpLimits {
     /// produces is rewritten into the JSON envelope and passes through CORS and request
     /// correlation like any other error. `503` matches what the handlers' own deadlines
     /// return; `408` would invite some clients to resend a request that may have had
-    /// an effect.
+    /// an effect. The answer carries `Cache-Control: no-store`: it describes a moment,
+    /// and a route that forbids caching must not lose that on this path.
     pub fn bound_requests<S>(&self, router: Router<S>) -> Router<S>
     where
         S: Clone + Send + Sync + 'static,
     {
-        router.layer(TimeoutLayer::with_status_code(
-            StatusCode::SERVICE_UNAVAILABLE,
-            self.request,
+        let limit = self.request;
+        router.layer(axum::middleware::from_fn(
+            move |request: Request, next: Next| async move {
+                match tokio::time::timeout(limit, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+                    )
+                        .into_response(),
+                }
+            },
         ))
     }
 
@@ -208,6 +236,14 @@ mod tests {
             .await?;
         assert_eq!(stuck.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(started.elapsed(), Duration::from_secs(2));
+        // A route that forbids caching keeps that on this path too.
+        assert_eq!(
+            stuck
+                .headers()
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
         let body = axum::body::to_bytes(stuck.into_body(), 4096).await?;
         let body: serde_json::Value = serde_json::from_slice(&body)?;
         assert_eq!(

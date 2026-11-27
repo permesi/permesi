@@ -23,6 +23,7 @@ use hyper_util::rt::TokioExecutor;
 use hyperlocal::{UnixConnector, Uri};
 use serde_json::Value;
 use std::{
+    net::{SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -125,10 +126,10 @@ impl OpenBaoTarget {
     /// text.
     ///
     /// An Agent socket and an `https` address pass. A plain `http` address passes only
-    /// when its host is loopback (`localhost`, a `.localhost` name or a loopback IP),
-    /// where nothing leaves the machine, or when `allow_plain_http` says the operator
-    /// accepted the risk, as a development cluster with an in-cluster OpenBao does.
-    /// The decision reads the configured address only and has no side effects.
+    /// when it stays on this machine (see [`Reach`]), or when `allow_plain_http` says the
+    /// operator accepted the risk, as a development cluster with an in-cluster OpenBao
+    /// does. The decision has no side effects; for `localhost` names it asks the
+    /// resolver.
     ///
     /// # Errors
     /// Returns an error for a plain `http` address to any other host. The message does
@@ -137,24 +138,89 @@ impl OpenBaoTarget {
         let Self::Tcp { base_url } = self else {
             return Ok(());
         };
+        match Reach::of(base_url)? {
+            Reach::Encrypted | Reach::LocalPlain(_) => Ok(()),
+            Reach::RemotePlain if allow_plain_http => Ok(()),
+            Reach::RemotePlain => Err(anyhow!(
+                "OpenBao address uses plain http to a host that is not loopback; use https, \
+                 or accept clear-text tokens explicitly with --openbao-allow-insecure-http"
+            )),
+        }
+    }
+}
+
+/// How requests to a TCP OpenBao address travel.
+///
+/// A plain `http` address is local when its host is a loopback IP, or `localhost` or a
+/// name under it that resolves, at the time of asking, to loopback addresses only. The
+/// spelling of such a name proves nothing, since a resolver can map it anywhere, so the
+/// addresses found are kept and the client is pinned to them.
+pub(crate) enum Reach {
+    /// `https`: the connection is encrypted and the server verified wherever it goes.
+    Encrypted,
+    /// Plain `http` that does not leave the machine, with the name and the loopback
+    /// addresses to pin when the host is a name.
+    LocalPlain(Option<(String, Vec<SocketAddr>)>),
+    /// Plain `http` to another host, acceptable only by explicit opt-in.
+    RemotePlain,
+}
+
+impl Reach {
+    /// Classify a base URL that passed `parse_http_address`.
+    pub(crate) fn of(base_url: &str) -> Result<Self> {
         let (parsed, _) = crate::parse_http_address(base_url)?;
-        let loopback = match parsed.host() {
+        if parsed.scheme() == "https" {
+            return Ok(Self::Encrypted);
+        }
+        Ok(match parsed.host() {
+            Some(url::Host::Ipv4(address)) if address.is_loopback() => Self::LocalPlain(None),
+            Some(url::Host::Ipv6(address)) if address.is_loopback() => Self::LocalPlain(None),
             Some(url::Host::Domain(name)) => {
                 let name = name.trim_end_matches('.').to_ascii_lowercase();
-                name == "localhost" || name.ends_with(".localhost")
+                let port = parsed.port_or_known_default().unwrap_or(80);
+                let addresses: Vec<SocketAddr> =
+                    if name == "localhost" || name.ends_with(".localhost") {
+                        (name.as_str(), port)
+                            .to_socket_addrs()
+                            .map_or_default(Iterator::collect)
+                    } else {
+                        Vec::new()
+                    };
+                if !addresses.is_empty() && addresses.iter().all(|a| a.ip().is_loopback()) {
+                    // The pin is keyed by the host as the client will look it up.
+                    let host = parsed.host_str().unwrap_or(&name).to_string();
+                    Self::LocalPlain(Some((host, addresses)))
+                } else {
+                    Self::RemotePlain
+                }
             }
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
-            None => false,
-        };
-        if parsed.scheme() == "https" || loopback || allow_plain_http {
-            return Ok(());
-        }
-        Err(anyhow!(
-            "OpenBao address uses plain http to a host that is not loopback; use https, \
-             or accept clear-text tokens explicitly with --openbao-allow-insecure-http"
-        ))
+            _ => Self::RemotePlain,
+        })
     }
+}
+
+/// The HTTP client builder every request to a TCP OpenBao address starts from.
+///
+/// On the local plain-`http` path the client ignores the proxy settings of the
+/// environment and connects only to the loopback addresses found by [`Reach::of`].
+/// Without that, `HTTP_PROXY` would carry a login or a token to the proxy in clear
+/// text although the address says loopback. An `https` address keeps the environment's
+/// proxy, which only tunnels the encrypted connection, and a plain address the operator
+/// opted into is theirs to route.
+///
+/// # Errors
+/// Returns an error if the address is not a valid OpenBao address.
+pub(crate) fn client_builder(base_url: &str) -> Result<reqwest::ClientBuilder> {
+    let builder = reqwest::Client::builder()
+        .connect_timeout(OPENBAO_CONNECT_TIMEOUT)
+        .timeout(OPENBAO_REQUEST_TIMEOUT);
+    Ok(match Reach::of(base_url)? {
+        Reach::LocalPlain(Some((host, addresses))) => {
+            builder.no_proxy().resolve_to_addrs(&host, &addresses)
+        }
+        Reach::LocalPlain(None) => builder.no_proxy(),
+        Reach::Encrypted | Reach::RemotePlain => builder,
+    })
 }
 
 #[derive(Clone)]
@@ -192,10 +258,8 @@ impl OpenBaoTransport {
     pub fn from_target(user_agent: &str, target: OpenBaoTarget) -> Result<Self> {
         let inner = match target {
             OpenBaoTarget::Tcp { base_url } => {
-                let client = reqwest::Client::builder()
+                let client = client_builder(&base_url)?
                     .user_agent(user_agent)
-                    .connect_timeout(OPENBAO_CONNECT_TIMEOUT)
-                    .timeout(OPENBAO_REQUEST_TIMEOUT)
                     .redirect(refuse_redirects())
                     .build()?;
                 OpenBaoTransportInner::Tcp { client, base_url }
@@ -619,7 +683,6 @@ mod tests {
             "http://[::1]:8200",
             "http://localhost:8200",
             "http://LOCALHOST.:8200",
-            "http://openbao.localhost:8200",
             "unix:///run/openbao/agent.sock",
             "/run/openbao/agent.sock",
         ] {
@@ -666,6 +729,8 @@ mod tests {
         for address in [
             "https://openbao.internal\nnext-line-secret",
             "https://openbao.internal;token=host-secret",
+            "https://openbao.internal\u{200b}host-secret:8200",
+            "https://openbao.internal%EF%BB%BFhost-secret:8200",
             "https://",
         ] {
             let refused = OpenBaoTarget::parse(address)

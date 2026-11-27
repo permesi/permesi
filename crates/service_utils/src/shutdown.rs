@@ -15,18 +15,81 @@
 //! Installing the handlers also means a later signal no longer kills the process, so
 //! the drain has to end by itself. It ends when the last connection closes, when the
 //! configured drain time is over, or as soon as a second signal arrives
-//! ([`drain_ended`]): an operator who asks twice gets the stop without waiting. What
-//! follows the drain is bounded too, 4 s for background workers and 4 s for the
-//! database pool, so with the default 20 s drain a stop takes at most 28 s and fits a
-//! 30 s termination grace period.
+//! ([`drain_ended`]): an operator who asks twice gets the stop without waiting. At
+//! that point the requests still in a handler are abandoned ([`Cutoff`]), so no work
+//! runs on into the steps that follow.
+//!
+//! ## How long a stop takes
+//! After the drain come three bounded steps: up to 4 s for background workers
+//! ([`WORKER_STOP_TIMEOUT`]), up to 4 s to close the database pool, and, in a build
+//! that exports traces, the flush of the telemetry exporter, which its own timeouts
+//! limit to about 5 s. With the default 20 s drain that is at most 28 s without
+//! telemetry export and about 33 s with it, so the supervisor's grace period should be
+//! 35 s or more; the Helm charts set 60 s. A second signal shortens only the drain: the
+//! steps after it are short, release what the process holds, and always run.
 
 use crate::openbao::renew::ShutdownSignal;
+use axum::{
+    Router,
+    extract::Request,
+    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+    middleware::Next,
+    response::IntoResponse,
+};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 /// Longest wait for a cancelled background worker after the drain.
 pub const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Ends the requests that are still in a handler when the drain is over.
+///
+/// Stopping the listener does not stop the handlers: the server's connection tasks
+/// outlive the future that accepted them, so a request that entered before the drain
+/// limit could finish after the service had returned from serving, alongside the
+/// worker and pool shutdown. [`Cutoff::guard`] puts every request of a router under
+/// one switch, and [`Cutoff::cut`] drops the handlers still running, which rolls back
+/// their open transactions, and answers their callers with `503`.
+#[derive(Clone, Debug, Default)]
+pub struct Cutoff(CancellationToken);
+
+impl Cutoff {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Put every request to `router` under this cutoff. Apply it outermost, so nothing
+    /// of a request keeps running once it is cut.
+    pub fn guard<S>(&self, router: Router<S>) -> Router<S>
+    where
+        S: Clone + Send + Sync + 'static,
+    {
+        let cutoff = self.0.clone();
+        router.layer(axum::middleware::from_fn(
+            move |request: Request, next: Next| {
+                let cutoff = cutoff.clone();
+                async move {
+                    tokio::select! {
+                        response = next.run(request) => response,
+                        () = cutoff.cancelled() => (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+                        )
+                            .into_response(),
+                    }
+                }
+            },
+        ))
+    }
+
+    /// Abandon every request still in a handler, and any that arrives afterwards.
+    pub fn cut(&self) {
+        self.0.cancel();
+    }
+}
 
 /// Resolve when a drain that has just started must stop waiting for connections:
 /// after `limit`, or as soon as the operating system signals again.

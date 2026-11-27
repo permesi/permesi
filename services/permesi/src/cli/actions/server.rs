@@ -16,6 +16,8 @@ pub struct Args {
     pub port: u16,
     pub socket_path: Option<String>,
     pub dsn: String,
+    /// The checked connection the pool makes; `dsn` is kept only to be shown.
+    pub database: service_utils::database::ConnectionTarget,
     pub db_pool: PoolConfig,
     pub http: service_utils::http_limits::HttpLimits,
     pub oauth: crate::oauth::config::OAuthConfig,
@@ -140,21 +142,19 @@ pub async fn execute(args: Args) -> Result<()> {
 
     debug!("Global args: {:?}", globals);
 
-    let mut dsn = Url::parse(&args.dsn)?;
-
-    // Set username & password from GlobalArgs
-    dsn.set_username(&globals.openbao_db_username)
-        .map_err(|()| anyhow!("Error setting username"))?;
-
-    dsn.set_password(Some(globals.openbao_db_password.expose_secret()))
-        .map_err(|()| anyhow!("Error setting password"))?;
+    // The credentials OpenBao issued go onto the connection that was checked at
+    // startup; the DSN is not parsed again and cannot supply its own.
+    let database = args.database.clone().with_credentials(
+        &globals.openbao_db_username,
+        globals.openbao_db_password.expose_secret(),
+    );
 
     let app_config = build_app_config(&args, openbao_addr);
 
     api::new(
         args.port,
         args.socket_path,
-        dsn.to_string(),
+        database,
         &globals,
         admission_verifier,
         app_config,
@@ -561,6 +561,10 @@ mod tests {
             port: 8080,
             socket_path: None,
             dsn: "postgres://user:pass@localhost:5432/db".to_string(),
+            database: service_utils::database::ConnectionTarget::parse(
+                "postgres://localhost/db",
+                false,
+            )?,
             db_pool: PoolConfig::new(
                 10,
                 2,

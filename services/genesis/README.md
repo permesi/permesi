@@ -28,9 +28,9 @@ TL;DR:
 
 When OpenBao token renewal or the DB lease renewal keeps failing until the lease can no longer cover a drain, `genesis` shuts down with an error so your supervisor can restart it and force a fresh OpenBao login; shorter OpenBao outages (a restart, a standby/active transition) are retried with backoff instead. Leases also end at their max TTL (4 hours with the shipped OpenTofu module): one minute before that, `genesis` requests the same restart while its credentials still work. `genesis` also fails closed when `/ready` (and the detailed `/health`) sees Postgres authentication-style failures (for example expired/revoked dynamic users), so those credential failures trigger a restart and fresh credential fetch.
 
-On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `genesis` stops accepting connections and lets in-flight requests finish for up to 20 seconds (`--shutdown-drain-seconds` / `GENESIS_SHUTDOWN_DRAIN_SECONDS`, range 1-300), then flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process. A second `SIGTERM` or `SIGINT` during the drain closes the remaining connections immediately. What follows the drain is bounded as well (4 seconds for background workers, 4 for the database pool), so a stop takes at most 28 seconds with the default drain and fits a 30 second termination grace period.
+On `SIGTERM` or `SIGINT` (Kubernetes pod termination, `systemctl stop`, Ctrl-C), `genesis` stops accepting connections and lets in-flight requests finish for up to 20 seconds (`--shutdown-drain-seconds` / `GENESIS_SHUTDOWN_DRAIN_SECONDS`, range 1-300), then flushes telemetry, removes its Unix socket when serving on one, and exits with status 0. The fail-closed shutdowns above use the same drain but exit with an error so the supervisor restarts the process. A second `SIGTERM` or `SIGINT` during the drain ends it immediately. When the drain ends, by its limit or by that second signal, a request still in a handler is abandoned: its handler is dropped, an open transaction rolls back, and the caller gets `503`. What follows the drain is bounded as well: 4 seconds for background workers, 4 for the database pool and, when traces are exported, about 5 for the telemetry flush. A stop therefore takes at most 28 seconds with the default drain, or about 33 with trace export, so give the supervisor a grace period of 35 seconds or more (the Helm charts set 60). The second signal shortens only the drain; the steps after it always run.
 
-Two more deadlines apply to every request. `--request-timeout-seconds` / `GENESIS_REQUEST_TIMEOUT_SECONDS` (default `60`, range 1-600) is the longest any request may take to be answered; a slower one gets `503` and its handler is dropped. `--header-read-timeout-seconds` / `GENESIS_HEADER_READ_TIMEOUT_SECONDS` (default `10`, range 1-60, at most the request timeout) is how long a connection on the TCP/TLS listener may take to deliver a request's headers before it is closed; on the Unix socket the same-host reverse proxy enforces its own client timeouts.
+Two more deadlines apply to every request. `--request-timeout-seconds` / `GENESIS_REQUEST_TIMEOUT_SECONDS` (default `60`, range 1-600) is the longest any request may take to be answered; a slower one gets `503` and its handler is dropped. `--header-read-timeout-seconds` / `GENESIS_HEADER_READ_TIMEOUT_SECONDS` (default `10`, range 1-60, at most the request timeout) is how long a connection on the TCP/TLS listener may take to deliver a request's headers before it is closed; on the Unix socket the same-host reverse proxy enforces its own client timeouts. The timed-out answer carries `Cache-Control: no-store`. On an idle HTTP/1 keep-alive connection the header timer closes the connection, so clients reconnect after that long without a request. Requests after the first on an HTTP/2 connection have no header deadline in the service; put that bound in the proxy or load balancer if untrusted HTTP/2 clients reach the TLS listener directly.
 
 In the workspace “Split-Trust” flow:
 
@@ -94,7 +94,13 @@ PostgreSQL pool (also CLI flags):
 - `--db-lock-timeout-ms` / `GENESIS_DB_LOCK_TIMEOUT_MS` (default `5000`, range 100-60000, at most the statement timeout): session `lock_timeout` of every pooled connection
 - `--db-allow-unverified-tls` / `GENESIS_DB_ALLOW_UNVERIFIED_TLS` (off by default): accept a DSN to a host that is not local without `sslmode=verify-full` or `verify-ca`
 
-The service refuses to start with connections that can be read or impersonated on the network. A plain `http://` OpenBao address is accepted only for a loopback host (`localhost`, a `.localhost` name, `127.0.0.0/8`, `::1`); for any other host use `https://`, or opt in with `--openbao-allow-insecure-http` / `GENESIS_OPENBAO_ALLOW_INSECURE_HTTP`. A DSN to a host that is not local (not loopback and not a Unix socket) needs `sslmode=verify-full` or `verify-ca`, usually with `sslrootcert`, because the driver's default `prefer` falls back to clear text and never checks the certificate; `--db-allow-unverified-tls` opts out. Both opt-outs exist for development clusters and are not meant for production. An Agent socket is not affected.
+The service refuses to start with connections that can be read or impersonated on the network. A plain `http://` OpenBao address is accepted only when it stays on the machine: a loopback address (`127.0.0.0/8`, `::1`), or `localhost` or a name under it that resolves to loopback addresses only. For any other host use `https://`, or opt in with `--openbao-allow-insecure-http` / `GENESIS_OPENBAO_ALLOW_INSECURE_HTTP`. On that local plain path the client ignores `HTTP_PROXY` and the other proxy variables and connects only to the loopback addresses it found, so a proxy setting or a later change in name resolution cannot carry a token off the machine. An `https://` address still honours the proxy variables. An Agent socket is not affected.
+
+A DSN whose connection is not local needs `sslmode=verify-full` or `verify-ca`, usually with `sslrootcert`, because the driver's default `prefer` falls back to clear text and never checks the certificate; `--db-allow-unverified-tls` opts out. Local means a Unix socket or a loopback address. What counts is the address the driver dials: `hostaddr` in the DSN, or `PGHOSTADDR`, replaces the host for that purpose, so `localhost` with a remote `hostaddr` is not local. Both opt-outs exist for development clusters and are not meant for production; a service that relies on one says so at error level on every start.
+
+The DSN is checked before the driver sees it. Its query may hold only the parameters the driver acts on: `sslmode`, `sslrootcert`, `sslcert`, `sslkey`, `host`, `hostaddr`, `port`, `dbname`, `application_name`, `options` and `statement-cache-capacity`. Any other parameter, including libpq's `connect_timeout`, is refused: the driver would ignore it and log its value. `user` and `password` in the query are refused as well, and a user or password before the `@` is replaced, because the service always connects with the credentials OpenBao issued. A refused DSN is never repeated in the error.
+
+The session timeouts are set on each connection when it is opened, which holds for a direct connection and for a pooler in session mode. Behind PgBouncer in transaction mode a session setting does not stay with the service's transactions; set `statement_timeout` and `lock_timeout` on the database role there instead.
 
 The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`genesis`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the OpenBao-issued username and password are fixed for the life of the process, and a new database lease means a restart.
 
@@ -192,14 +198,19 @@ was told to trust:
 - `--client-ip-header` / `GENESIS_IP_HEADER` (default: Cloudflare `CF-Connecting-IP`)
 - `--client-country-header` / `GENESIS_COUNTRY_HEADER` (default: Cloudflare `CF-IPCountry`)
 - `--trusted-proxy` / `GENESIS_TRUSTED_PROXIES` — comma-separated CIDRs of the proxies
-  that overwrite those headers. Empty by default.
+  that overwrite those headers. Empty by default. A range that covers every address
+  (`0.0.0.0/0`, `::/0`) is refused: it would trust every caller.
 - `--trust-unix-proxy` / `GENESIS_TRUST_UNIX_PROXY` — accept the headers from the
   same-host proxy when Genesis listens on a Unix socket (`--socket-path`).
 
 From any other peer the headers are ignored: the record holds the address of the
 connection itself and no country. Set the proxy ranges to the edge or ingress that
-fronts Genesis, and make that hop overwrite the address header, not append to it; a
-request carrying the header twice is recorded under the proxy's address.
+fronts Genesis, and make that hop overwrite both headers, not append to them or pass
+the caller's through. A hop that only sets the address would let a caller choose the
+country that is recorded, so it has to delete an inbound country header unless it
+sets its own. A request carrying the address header twice is recorded under the
+proxy's address, and one carrying the country header twice is recorded without a
+country. The development HAProxy in `config/haproxy` deletes both.
 
 ## Database & Retention
 

@@ -105,8 +105,11 @@ fn with_client_metadata_args(command: Command) -> Command {
                 .env("GENESIS_TRUSTED_PROXIES")
                 .value_delimiter(',')
                 .action(clap::ArgAction::Append)
-                .value_parser(clap::value_parser!(sqlx::types::ipnetwork::IpNetwork))
-                .help("Proxy CIDRs allowed to supply the client address and country headers"),
+                .value_parser(trusted_proxy_range)
+                .help(
+                    "Proxy CIDRs allowed to supply the client address and country headers; \
+                     a range that covers every address is refused",
+                ),
         )
         .arg(
             Arg::new("trust-unix-proxy")
@@ -198,6 +201,23 @@ pub fn new() -> Command {
     let command = database::with_args(command);
     let command = http::with_args(command);
     logging::with_args(command)
+}
+
+/// Parse one trusted proxy range. A prefix length of zero names every address of its
+/// family, which would let any caller supply the client address and country again, so
+/// it is refused instead of read as "trust everyone".
+///
+/// # Errors
+/// Returns a message for a value that is not a CIDR range or that covers every address.
+pub fn trusted_proxy_range(value: &str) -> Result<sqlx::types::ipnetwork::IpNetwork, String> {
+    let range: sqlx::types::ipnetwork::IpNetwork = value
+        .trim()
+        .parse()
+        .map_err(|_| "not an IP address or CIDR range".to_string())?;
+    if range.prefix() == 0 {
+        return Err("a range that covers every address would trust every caller".to_string());
+    }
+    Ok(range)
 }
 
 #[cfg(test)]

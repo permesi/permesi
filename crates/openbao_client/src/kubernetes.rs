@@ -95,10 +95,9 @@ pub async fn kubernetes_login(
     if jwt.is_empty() {
         return Err(anyhow!("OpenBao Kubernetes JWT file is empty"));
     }
-    let client = reqwest::Client::builder()
+    let client = crate::transport::client_builder(origin)
+        .map_err(|_| anyhow!("could not build OpenBao Kubernetes login client"))?
         .user_agent(user_agent)
-        .connect_timeout(crate::transport::OPENBAO_CONNECT_TIMEOUT)
-        .timeout(crate::transport::OPENBAO_REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| anyhow!("could not build OpenBao Kubernetes login client"))?;

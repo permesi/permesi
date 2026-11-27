@@ -408,14 +408,34 @@ jobs:
           name: image-binaries
           path: dist-bin
 
-      # The digests are read back from the registry, as the release does, so the
-      # qualification below runs against exactly what `:develop` now names.
+      # Each digest is the one the push itself reports, so the qualification below runs
+      # against the image built from this commit. Reading it back by pulling `:develop`
+      # could name an image another run pushed in between.
       - name: Build & Push images
         id: push
         shell: bash
         run: |-
           set -euo pipefail
           test -s dist-bin/permesi && test -s dist-bin/genesis
+          # Push one reference and print the digest the registry stored for it.
+          push_for_digest() {
+            local reference="$1" repository="${1%%:*}" digest="" digest_file
+            if ${CONTAINER_TOOL} push --help 2>&1 | grep -q -- '--digestfile'; then
+              digest_file="$(mktemp)"
+              ${CONTAINER_TOOL} push --digestfile "${digest_file}" "${reference}" >&2
+              digest="$(tr -d '[:space:]' < "${digest_file}")"
+              rm -f "${digest_file}"
+            else
+              ${CONTAINER_TOOL} push "${reference}" >&2
+              digest="$(${CONTAINER_TOOL} image inspect "${reference}" --format '{{join .RepoDigests "\n"}}' \
+                | awk -F@ -v repository="${repository}" '$1 == repository { print $2; exit }')"
+            fi
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "The push of ${reference} reported no digest." >&2
+              return 1
+            fi
+            printf '%s\n' "${digest}"
+          }
           for service in permesi genesis web; do
             image="ghcr.io/permesi/${service}"
             dockerfile="services/${service}/Dockerfile"
@@ -426,27 +446,9 @@ jobs:
               -f "${dockerfile}" \
               -t "${image}:develop" \
               .
-            ${CONTAINER_TOOL} push "${image}:develop"
-          done
-          resolve_digest() {
-            local image="ghcr.io/permesi/$1:develop" digest="" attempt
-            for attempt in {1..12}; do
-              if ${CONTAINER_TOOL} pull "${image}" >/dev/null 2>&1; then
-                digest="$(${CONTAINER_TOOL} image inspect "${image}" --format '{{join .RepoDigests "\n"}}' \
-                  | awk -F@ '/^ghcr.io\/permesi\/'"$1"'@sha256:/ { print $2; exit }')"
-              fi
-              if [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-                printf '%s\n' "${digest}"
-                return 0
-              fi
-              echo "Waiting for ${image} to become pullable (${attempt}/12)..." >&2
-              sleep 10
-            done
-            echo "Timed out waiting for ${image} to become pullable from GHCR." >&2
-            return 1
-          }
-          for service in permesi genesis web; do
-            echo "${service}_digest=$(resolve_digest "${service}")" >> "$GITHUB_OUTPUT"
+            # Assigned first: a failed push must fail the step, not write an empty output.
+            digest="$(push_for_digest "${image}:develop")"
+            echo "${service}_digest=${digest}" >> "$GITHUB_OUTPUT"
           done
 
   # Start the release's image qualification against the `:develop` images just pushed, so

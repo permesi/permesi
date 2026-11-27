@@ -3,7 +3,6 @@ use anyhow::{Context, Result, anyhow};
 use secrecy::{ExposeSecret, SecretString};
 use service_utils::database::PoolConfig;
 use tracing::{debug, info};
-use url::Url;
 
 pub struct Args {
     pub signing_version: u32,
@@ -15,6 +14,8 @@ pub struct Args {
     pub port: u16,
     pub socket_path: Option<String>,
     pub dsn: String,
+    /// The checked connection the pool makes; `dsn` is kept only to be shown.
+    pub database: service_utils::database::ConnectionTarget,
     pub db_pool: PoolConfig,
     pub http: service_utils::http_limits::HttpLimits,
     pub openbao_url: String,
@@ -98,19 +99,17 @@ pub async fn execute(args: Args) -> Result<()> {
 
     debug!("Global args: {:?}", globals);
 
-    let mut dsn = Url::parse(&args.dsn)?;
-
-    // Set username & password from GlobalArgs
-    dsn.set_username(&globals.openbao_db_username)
-        .map_err(|()| anyhow!("Error setting username"))?;
-
-    dsn.set_password(Some(globals.openbao_db_password.expose_secret()))
-        .map_err(|()| anyhow!("Error setting password"))?;
+    // The credentials OpenBao issued go onto the connection that was checked at
+    // startup; the DSN is not parsed again and cannot supply its own.
+    let database = args.database.clone().with_credentials(
+        &globals.openbao_db_username,
+        globals.openbao_db_password.expose_secret(),
+    );
 
     api::new(
         args.port,
         args.socket_path,
-        dsn.to_string(),
+        database,
         args.db_pool,
         api::Settings {
             public_limits: args.public_limits,
@@ -250,6 +249,10 @@ mod tests {
             socket_path: None,
             dsn: "postgres://dsn-user:dsn-password@db.internal:5432/genesis?password=dsn-query-password"
                 .to_string(),
+            database: service_utils::database::ConnectionTarget::parse(
+                "postgres://localhost/db",
+                false,
+            )?,
             db_pool: PoolConfig::new(
                 10,
                 2,

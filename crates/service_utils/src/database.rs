@@ -38,7 +38,12 @@ use sqlx::{
     PgPool, Postgres, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
-use std::{fmt, str::FromStr, time::Duration};
+use std::{
+    fmt,
+    net::{IpAddr, ToSocketAddrs},
+    str::FromStr,
+    time::Duration,
+};
 use tracing::warn;
 
 /// Upper bound on `max_connections` for one process.
@@ -223,18 +228,21 @@ impl PoolConfig {
             })
     }
 
-    /// Connect a pool whose connections report `application_name` to PostgreSQL.
+    /// Connect a pool to a checked [`ConnectionTarget`]; its connections report
+    /// `application_name` to PostgreSQL.
     ///
-    /// Errors never include the DSN, which carries the OpenBao-issued password.
+    /// The target is the one the transport policy was decided on, so the pool cannot
+    /// connect anywhere else. Errors never include the DSN or the credentials.
     ///
     /// # Errors
-    /// Returns an error if the DSN is malformed or the initial connections fail.
-    pub async fn connect(&self, dsn: &str, application_name: &str) -> Result<PgPool> {
-        let options = PgConnectOptions::from_str(dsn)
-            .context("Invalid database connection string")?
-            .application_name(application_name);
+    /// Returns an error if the initial connections fail.
+    pub async fn connect(
+        &self,
+        target: ConnectionTarget,
+        application_name: &str,
+    ) -> Result<PgPool> {
         self.pool_options()
-            .connect_with(options)
+            .connect_with(target.options.application_name(application_name))
             .await
             .context("Failed to connect to database")
     }
@@ -320,7 +328,9 @@ pub fn loggable_dsn(dsn: &str) -> String {
     };
     let shown = |key: &str, value: &str| match key {
         "sslmode" => LOGGABLE_SSL_MODES.contains(&value),
-        "port" | "connect_timeout" => plain(value, b""),
+        "port" | "connect_timeout" => {
+            !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+        }
         _ => LOGGABLE_DSN_PARAMETERS.contains(&key) && plain(value, b"-_./"),
     };
     let mut pairs: Vec<String> = parsed
@@ -339,49 +349,207 @@ pub fn loggable_dsn(dsn: &str) -> String {
     format!("{}://{host}{port}{database}{query}", parsed.scheme())
 }
 
-/// Refuse a DSN that would let the database connection fall back to clear text or skip
-/// verifying the server.
+/// The DSN query parameters the driver acts on. It ignores any other, after logging
+/// its name and value, so nothing else is accepted.
+const ACCEPTED_DSN_PARAMETERS: [&str; 16] = [
+    "sslmode",
+    "ssl-mode",
+    "sslrootcert",
+    "ssl-root-cert",
+    "ssl-ca",
+    "sslcert",
+    "ssl-cert",
+    "sslkey",
+    "ssl-key",
+    "statement-cache-capacity",
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "application_name",
+    "options",
+];
+
+/// A database connection that passed the transport policy, parsed once.
 ///
-/// sqlx defaults to `sslmode=prefer`: it tries TLS, silently continues without it when
-/// the server declines, and never checks the certificate, so anyone on the path can
-/// read or answer for the database. A Unix socket and a loopback host pass, since
-/// nothing leaves the machine. Any other host needs `sslmode=verify-full` or
-/// `verify-ca`, unless `allow_unverified` says the operator accepted the risk, as a
-/// development cluster without database TLS does. The DSN is parsed exactly as the
-/// pool parses it, `PG*` environment variables included, so the decision is about the
-/// options the pool will really use. It has no side effects.
+/// ## Flow Overview
+/// 1. [`ConnectionTarget::parse`] checks the DSN text before the driver sees it: the
+///    scheme, the host, and every query parameter. The driver logs an unknown parameter
+///    with its value and repeats an invalid `sslmode` in its error, so a password typed
+///    into the wrong place would reach the log; such a DSN is refused here with a
+///    message that repeats none of it.
+/// 2. The driver parses the DSN, `PG*` environment variables included, and the policy
+///    is decided on the address it will dial, which `hostaddr` or `PGHOSTADDR` can make
+///    different from the host.
+/// 3. [`ConnectionTarget::with_credentials`] sets the user and password issued by
+///    `OpenBao` on the typed options, and [`PoolConfig::connect`] connects with exactly
+///    these options. Nothing is parsed a second time.
 ///
-/// # Errors
-/// Returns an error for an unparsable DSN, or for a host that is not local without a
-/// verifying `sslmode`. The message never repeats the DSN.
-pub fn require_verified_tls(dsn: &str, allow_unverified: bool) -> Result<()> {
-    use sqlx::postgres::PgSslMode;
-    let options = PgConnectOptions::from_str(dsn).context("Invalid database connection string")?;
-    let host = options
-        .get_host()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    let local = options.get_socket().is_some()
-        || host.starts_with('/')
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
-    let verified = matches!(
-        options.get_ssl_mode(),
-        PgSslMode::VerifyFull | PgSslMode::VerifyCa
-    );
-    if local || verified || allow_unverified {
-        return Ok(());
+/// The policy: sqlx defaults to `sslmode=prefer`, which tries TLS, silently continues
+/// without it when the server declines, and never checks the certificate, so anyone on
+/// the path can read or answer for the database. A Unix socket and a loopback address
+/// pass, since nothing leaves the machine. Any other address needs
+/// `sslmode=verify-full` or `verify-ca`, unless the operator accepted the risk, as a
+/// development cluster without database TLS does.
+#[derive(Clone)]
+pub struct ConnectionTarget {
+    options: PgConnectOptions,
+    relies_on_opt_out: bool,
+}
+
+/// Shows nothing: the options hold the password once the credentials are set.
+impl fmt::Debug for ConnectionTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConnectionTarget")
+            .field("relies_on_opt_out", &self.relies_on_opt_out)
+            .finish_non_exhaustive()
     }
-    bail!(
-        "database DSN names a host that is not local without sslmode=verify-full or \
-         verify-ca; add one, or accept an unverified connection explicitly with \
-         --db-allow-unverified-tls"
-    )
+}
+
+impl ConnectionTarget {
+    /// Check `dsn` and decide whether its connection may be made.
+    ///
+    /// # Errors
+    /// Returns an error for a DSN that is malformed, names a parameter the driver does
+    /// not act on, puts credentials in the query, or reaches an address that is not
+    /// local without a verifying `sslmode` while `allow_unverified` is false. No message
+    /// repeats any part of the DSN.
+    pub fn parse(dsn: &str, allow_unverified: bool) -> Result<Self> {
+        use sqlx::postgres::PgSslMode;
+        let dial_address = checked_dsn(dsn)?;
+        // The driver's own error can repeat a value, so it is not kept.
+        let options = PgConnectOptions::from_str(dsn.trim())
+            .map_err(|_| anyhow::anyhow!("Invalid database connection string"))?;
+        let local = options.get_socket().is_some()
+            || match dial_address.or_else(environment_dial_address) {
+                Some(address) => address.is_loopback(),
+                None => local_host(options.get_host(), options.get_port()),
+            };
+        let verified = matches!(
+            options.get_ssl_mode(),
+            PgSslMode::VerifyFull | PgSslMode::VerifyCa
+        );
+        if !(local || verified || allow_unverified) {
+            bail!(
+                "database DSN reaches an address that is not local without \
+                 sslmode=verify-full or verify-ca; add one, or accept an unverified \
+                 connection explicitly with --db-allow-unverified-tls"
+            )
+        }
+        Ok(Self {
+            options,
+            relies_on_opt_out: !(local || verified),
+        })
+    }
+
+    /// Whether only the operator's opt-out let this connection through, so the caller
+    /// can say so at every start.
+    #[must_use]
+    pub fn relies_on_opt_out(&self) -> bool {
+        self.relies_on_opt_out
+    }
+
+    /// Set the user and password the pool connects with. They replace any userinfo of
+    /// the DSN; the query cannot carry credentials at all.
+    #[must_use]
+    pub fn with_credentials(mut self, username: &str, password: &str) -> Self {
+        self.options = self.options.username(username).password(password);
+        self
+    }
+}
+
+/// Checks the text of a DSN before the driver parses it and returns the `hostaddr` it
+/// names, if any. The driver dials that address instead of the host.
+fn checked_dsn(dsn: &str) -> Result<Option<IpAddr>> {
+    const MALFORMED: &str = "Invalid database connection string";
+    let dsn = dsn.trim();
+    let authority = ["postgres://", "postgresql://"].iter().any(|prefix| {
+        dsn.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    });
+    if !authority || !dsn.bytes().all(|byte| byte.is_ascii_graphic()) {
+        bail!(MALFORMED);
+    }
+    let parsed = url::Url::parse(dsn).map_err(|_| anyhow::anyhow!(MALFORMED))?;
+    let plain = |text: &str, extra: &[u8]| {
+        text.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || extra.contains(&byte))
+    };
+    // A socket DSN has no host, or names the socket directory percent-encoded. An IP
+    // literal is already parsed as one.
+    let host_shaped = match parsed.host() {
+        Some(url::Host::Domain(name)) => {
+            plain(name, b"-_.")
+                || (name.to_ascii_lowercase().starts_with("%2f") && plain(name, b"-_.%"))
+        }
+        _ => true,
+    };
+    if !host_shaped {
+        bail!("database DSN host is not a host name, an IP address or a socket directory");
+    }
+    let mut dial_address = None;
+    for (key, value) in parsed.query_pairs() {
+        match &*key {
+            "user" | "password" => bail!(
+                "database DSN carries credentials in its query; the service connects \
+                 with the credentials OpenBao issues"
+            ),
+            "sslmode" | "ssl-mode" if !LOGGABLE_SSL_MODES.contains(&&*value) => {
+                bail!("database DSN has an sslmode that is not one PostgreSQL defines")
+            }
+            "port" | "statement-cache-capacity"
+                if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                bail!("database DSN has a numeric parameter that is not a number")
+            }
+            "hostaddr" => {
+                dial_address =
+                    Some(value.parse::<IpAddr>().map_err(|_| {
+                        anyhow::anyhow!("database DSN hostaddr is not an IP address")
+                    })?);
+            }
+            key if ACCEPTED_DSN_PARAMETERS.contains(&key) || key.starts_with("options[") => {}
+            _ => bail!(
+                "database DSN has a query parameter the service does not use; accepted \
+                 are {}",
+                ACCEPTED_DSN_PARAMETERS.join(", ")
+            ),
+        }
+    }
+    Ok(dial_address)
+}
+
+/// The dial address the driver takes from the environment when the DSN names none.
+fn environment_dial_address() -> Option<IpAddr> {
+    std::env::var("PGHOSTADDR").ok()?.parse().ok()
+}
+
+/// Whether a host the driver will resolve stays on this machine: a loopback address, or
+/// `localhost` or a name under it that resolves, here and now, to loopback addresses
+/// only. The spelling alone is not enough, since a resolver can map such a name anywhere.
+fn local_host(host: &str, port: u16) -> bool {
+    let name = host.trim_end_matches('.').to_ascii_lowercase();
+    if let Ok(address) = name
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    {
+        return address.is_loopback();
+    }
+    if name != "localhost" && !name.ends_with(".localhost") {
+        return false;
+    }
+    (name.as_str(), port)
+        .to_socket_addrs()
+        .is_ok_and(|mut addresses| {
+            let mut any = false;
+            let all = addresses.all(|address| {
+                any = true;
+                address.ip().is_loopback()
+            });
+            any && all
+        })
 }
 
 /// One-line summary for startup logs.
@@ -416,14 +584,34 @@ pub async fn close(pool: &PgPool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PoolConfig, loggable_dsn, require_verified_tls};
-    use std::time::Duration;
+    use super::{ConnectionTarget, PoolConfig, loggable_dsn};
+    use sqlx::ConnectOptions;
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    const PG_ENV: [&str; 7] = [
+        "PGHOST",
+        "PGHOSTADDR",
+        "PGSSLMODE",
+        "PGSSLROOTCERT",
+        "PGPORT",
+        "PGUSER",
+        "PGPASSWORD",
+    ];
+
+    fn refusal(dsn: &str, allow_unverified: bool) -> Option<String> {
+        ConnectionTarget::parse(dsn, allow_unverified)
+            .err()
+            .map(|error| format!("{error:#}"))
+    }
 
     /// `sslmode=prefer`, the default, falls back to clear text and verifies nothing. Off
     /// the local machine only a verifying mode is accepted unless the operator opted in.
     #[test]
     fn unverified_database_tls_is_refused_off_the_local_machine() {
-        const PG_ENV: [&str; 4] = ["PGHOST", "PGSSLMODE", "PGSSLROOTCERT", "PGPORT"];
         temp_env::with_vars_unset(PG_ENV, || {
             for dsn in [
                 "postgres://app@db.internal/permesi?sslmode=verify-full",
@@ -431,13 +619,18 @@ mod tests {
                 "postgres://app@10.0.0.7/permesi?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem",
                 "postgres://app@localhost/permesi",
                 "postgres://app@LOCALHOST.:5432/permesi?sslmode=disable",
-                "postgres://app@db.localhost/permesi",
                 "postgres://app@127.0.0.1:5432/permesi",
                 "postgres://app@[::1]:5432/permesi",
                 "postgres:///permesi?host=/var/run/postgresql",
                 "postgres://app@%2Fvar%2Frun%2Fpostgresql/permesi",
             ] {
-                assert!(require_verified_tls(dsn, false).is_ok(), "{dsn}");
+                assert_eq!(refusal(dsn, false), None, "{dsn}");
+                // Nothing had to be waived, so nothing is announced.
+                assert!(
+                    ConnectionTarget::parse(dsn, true)
+                        .is_ok_and(|target| !target.relies_on_opt_out()),
+                    "{dsn}"
+                );
             }
             for dsn in [
                 "postgres://app@db.internal/permesi",
@@ -453,24 +646,216 @@ mod tests {
                 // The query can move the connection away from the host in the authority.
                 "postgres://app@localhost/permesi?host=db.internal",
             ] {
-                let refused = require_verified_tls(dsn, false)
-                    .err()
-                    .map(|error| format!("{error:#}"));
+                let refused = refusal(dsn, false);
                 assert!(
                     refused.as_ref().is_some_and(
                         |error| error.contains("verify-full") && !error.contains("dsn-secret")
                     ),
                     "{dsn}: {refused:?}"
                 );
-                assert!(require_verified_tls(dsn, true).is_ok(), "{dsn}");
+                assert!(
+                    ConnectionTarget::parse(dsn, true)
+                        .is_ok_and(|target| target.relies_on_opt_out()),
+                    "{dsn}"
+                );
             }
-            assert!(require_verified_tls("not a dsn", true).is_err());
+            assert!(refusal("not a dsn", true).is_some());
         });
         // The pool honours PGSSLMODE, so the decision does too.
         temp_env::with_vars(
             [("PGSSLMODE", Some("verify-full")), ("PGHOST", None)],
-            || assert!(require_verified_tls("postgres://app@db.internal/permesi", false).is_ok()),
+            || assert_eq!(refusal("postgres://app@db.internal/permesi", false), None),
         );
+    }
+
+    /// The driver dials `hostaddr`, or `PGHOSTADDR`, when one is set, and the host only
+    /// names the certificate. The check looked at the host, so a DSN that said
+    /// `localhost` could connect anywhere without TLS. The decision is now about the
+    /// address that is dialed, and it is the one the driver reports.
+    #[test]
+    fn dial_address_decides_what_is_local_not_the_host_name() {
+        let driver_dials = |target: &ConnectionTarget| {
+            target
+                .options
+                .to_url_lossy()
+                .query_pairs()
+                .find(|(key, _)| key == "hostaddr")
+                .map(|(_, value)| value.into_owned())
+        };
+        temp_env::with_vars_unset(PG_ENV, || {
+            for dsn in [
+                "postgres://app@localhost/permesi?hostaddr=198.51.100.9",
+                "postgres://app@localhost/permesi?hostaddr=198.51.100.9&sslmode=disable",
+                "postgres://app@127.0.0.1/permesi?hostaddr=2001:db8::9",
+                "postgres://app@[::1]/permesi?hostaddr=127.0.0.1&hostaddr=198.51.100.9",
+            ] {
+                let refused = refusal(dsn, false);
+                assert!(
+                    refused
+                        .as_ref()
+                        .is_some_and(|error| error.contains("verify-full")),
+                    "{dsn}: {refused:?}"
+                );
+            }
+            // The other way round: a remote name dialed on loopback stays on the machine.
+            for (dsn, dialed) in [
+                (
+                    "postgres://app@db.internal/permesi?hostaddr=127.0.0.1",
+                    "127.0.0.1",
+                ),
+                ("postgres://app@db.internal/permesi?hostaddr=::1", "::1"),
+                (
+                    "postgres://app@db.internal/permesi?hostaddr=198.51.100.9&hostaddr=127.0.0.1",
+                    "127.0.0.1",
+                ),
+            ] {
+                let target = ConnectionTarget::parse(dsn, false);
+                assert_eq!(
+                    target.as_ref().ok().and_then(driver_dials).as_deref(),
+                    Some(dialed),
+                    "{dsn}"
+                );
+            }
+            for dsn in [
+                "postgres://app@localhost/permesi?hostaddr=db.internal",
+                "postgres://app@localhost/permesi?hostaddr=",
+            ] {
+                assert!(
+                    refusal(dsn, true).is_some_and(|error| error.contains("hostaddr")),
+                    "{dsn}"
+                );
+            }
+        });
+        temp_env::with_vars(
+            [
+                ("PGHOSTADDR", Some("198.51.100.9")),
+                ("PGHOST", None),
+                ("PGSSLMODE", None),
+            ],
+            || {
+                let dsn = "postgres://app@localhost/permesi";
+                assert!(refusal(dsn, false).is_some_and(|error| error.contains("verify-full")));
+                let target = ConnectionTarget::parse(dsn, true);
+                assert_eq!(
+                    target.as_ref().ok().and_then(driver_dials).as_deref(),
+                    Some("198.51.100.9"),
+                    "the check and the driver read the same variable"
+                );
+                // The DSN's own address wins over the environment, as in the driver.
+                assert_eq!(
+                    refusal(
+                        "postgres://app@db.internal/permesi?hostaddr=127.0.0.1",
+                        false
+                    ),
+                    None
+                );
+            },
+        );
+    }
+
+    /// Collects what is logged while a closure runs.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Ok(mut buffer) = self.0.lock() {
+                buffer.extend_from_slice(bytes);
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The driver logs a parameter it does not know with its value, and repeats an
+    /// invalid `sslmode` in its error. A password in the wrong place took either path
+    /// into the log. Such a DSN is now refused before the driver sees it, and neither the
+    /// error nor anything logged repeats a name or a value from it.
+    #[test]
+    fn unsupported_dsn_is_refused_without_repeating_any_of_it() {
+        const MARKER: &str = "s3cr3tmarker";
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            temp_env::with_vars_unset(PG_ENV, || {
+                for dsn in [
+                    format!("postgres://app@localhost/permesi?sslpassword={MARKER}"),
+                    format!("postgres://app@localhost/permesi?{MARKER}=1"),
+                    format!("postgres://app@localhost/permesi?connect_timeout={MARKER}"),
+                    format!("postgres://app@localhost/permesi?sslmode={MARKER}"),
+                    format!("postgres://app@localhost/permesi?ssl-mode={MARKER}"),
+                    format!("postgres://app@localhost/permesi?port={MARKER}"),
+                    format!("postgres://app@localhost/permesi?statement-cache-capacity={MARKER}"),
+                    format!("postgres://app@localhost/permesi?hostaddr={MARKER}"),
+                    format!("postgres://app@localhost/permesi?password={MARKER}"),
+                    format!("postgres://app@localhost/permesi?user={MARKER}"),
+                    format!("postgres://app@localhost:{MARKER}/permesi"),
+                    format!("postgres://app@db.internal,{MARKER}/permesi?sslmode=verify-full"),
+                    format!("postgres://app@db.internal;password={MARKER}/permesi"),
+                    format!("mysql://app:{MARKER}@localhost/permesi"),
+                    format!("postgres://app@localhost/permesi?sslmode=disable \n{MARKER}"),
+                ] {
+                    for allow_unverified in [false, true] {
+                        let refused = refusal(&dsn, allow_unverified);
+                        assert!(
+                            refused
+                                .as_ref()
+                                .is_some_and(|error| !error.contains(MARKER)),
+                            "{dsn}: {refused:?}"
+                        );
+                    }
+                }
+                // What the driver does act on is still accepted.
+                for dsn in [
+                    "postgres://app@localhost/permesi?sslmode=disable&application_name=x&port=5433",
+                    "postgres://app@localhost/permesi?options=-c%20search_path%3Dpublic",
+                    "postgres://app@localhost/permesi?options[search_path]=public",
+                    "postgres://app@localhost/permesi?statement-cache-capacity=0&dbname=other",
+                ] {
+                    assert_eq!(refusal(dsn, false), None, "{dsn}");
+                }
+            });
+        });
+        let logged = captured
+            .0
+            .lock()
+            .map_or_else(|_| Vec::new(), |buffer| buffer.clone());
+        let logged = String::from_utf8_lossy(&logged);
+        assert!(!logged.contains(MARKER), "logged: {logged}");
+        assert!(
+            !logged.contains("unrecognized"),
+            "the driver saw a parameter it ignores: {logged}"
+        );
+    }
+
+    /// The pool connects as the user OpenBao issued. A user or password in the DSN's
+    /// userinfo is replaced, the query cannot carry any, and a socket DSN, which has no
+    /// authority to put a user into, works like any other.
+    #[test]
+    fn issued_credentials_replace_those_of_the_dsn() -> anyhow::Result<()> {
+        temp_env::with_vars_unset(PG_ENV, || -> anyhow::Result<()> {
+            for dsn in [
+                "postgres://dsn-user:dsn-password@localhost:5432/permesi",
+                "postgres://localhost/permesi",
+                "postgres:///permesi?host=/var/run/postgresql",
+                "postgres:///permesi",
+            ] {
+                let target = ConnectionTarget::parse(dsn, false)?
+                    .with_credentials("leased-user", "leased-pw");
+                assert_eq!(target.options.get_username(), "leased-user", "{dsn}");
+                let url = target.options.to_url_lossy();
+                assert_eq!(url.password(), Some("leased%2Dpw"), "{dsn}");
+                assert!(!format!("{target:?}").contains("leased"), "{dsn}");
+            }
+            Ok(())
+        })
     }
 
     /// libpq and sqlx accept the password in the userinfo or as a query parameter; a
@@ -554,6 +939,16 @@ mod tests {
             (
                 "postgres://db.internal/permesi?sslmode=disable&port=5433",
                 "postgres://db.internal/permesi?sslmode=disable&port=5433",
+            ),
+            // A number is digits. Letters and digits, with no punctuation to give it
+            // away, were shown as the port or the timeout.
+            (
+                "postgres://db.internal/permesi?port=ABC123&connect_timeout=ABCD",
+                "postgres://db.internal/permesi?REDACTED",
+            ),
+            (
+                "postgres://db.internal/permesi?port=&connect_timeout=30",
+                "postgres://db.internal/permesi?connect_timeout=30&REDACTED",
             ),
         ] {
             let logged = loggable_dsn(dsn);

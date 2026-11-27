@@ -300,12 +300,28 @@ fn require_encrypted_openbao(
     let allow_insecure_http = matches.get_flag("openbao-allow-insecure-http");
     target.require_encrypted_transport(allow_insecure_http)?;
     if allow_insecure_http && target.require_encrypted_transport(false).is_err() {
-        tracing::warn!(
+        // Error level is the default verbosity; this must show on every start.
+        tracing::error!(
             "OpenBao is reached over plain http: tokens and secrets cross the network in \
              clear text (--openbao-allow-insecure-http)"
         );
     }
     Ok(())
+}
+
+/// The HTTP deadlines, checked against the token endpoint's own. That endpoint answers
+/// a slow exchange in the OAuth error format when its deadline passes; a request timeout
+/// at or below that deadline would cut the request off first, with the generic answer.
+fn http_limits(
+    matches: &clap::ArgMatches,
+    oauth: &crate::oauth::config::OAuthConfig,
+) -> Result<service_utils::http_limits::HttpLimits> {
+    let http = crate::cli::commands::http::parse(matches)?;
+    anyhow::ensure!(
+        http.request_timeout() > std::time::Duration::from_millis(oauth.tokens.timeout_ms),
+        "--request-timeout-seconds must be longer than --oauth-token-timeout-ms"
+    );
+    Ok(http)
 }
 
 /// Map validated CLI matches to a server action.
@@ -354,9 +370,9 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     let db_pool = database::parse(matches)?;
-    database::require_verified_tls(matches, &dsn)?;
-    let http = crate::cli::commands::http::parse(matches)?;
+    let database = database::connection_target(matches, &dsn)?;
     let oauth = crate::oauth::config::OAuthConfig::from_matches(matches)?;
+    let http = http_limits(matches, &oauth)?;
     let tenant_mutations = tenant_mutation_policy(matches)?;
 
     let registration = crate::api::handlers::auth::registration::Policy::from_matches(matches)?;
@@ -372,6 +388,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         port,
         socket_path,
         dsn,
+        database,
         db_pool,
         http,
         oauth,
@@ -423,6 +440,81 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 mod tests {
     use super::*;
 
+    /// With a request timeout at or below the token endpoint's deadline the generic
+    /// timeout answered first, without the OAuth error format or its cache headers.
+    #[test]
+    fn request_timeout_must_exceed_the_token_endpoint_deadline() {
+        let start = |extra: &[&str]| {
+            let matches = crate::cli::commands::new().try_get_matches_from(
+                [
+                    "permesi",
+                    "--tls-pem-bundle",
+                    "bundle",
+                    "--openbao-role-id",
+                    "role",
+                    "--openbao-secret-id",
+                    "secret",
+                    "--openbao-url",
+                    "https://openbao.internal:8200",
+                    "--dsn",
+                    "postgres://localhost/app",
+                ]
+                .into_iter()
+                .chain(extra.iter().copied()),
+            );
+            matches
+                .map_err(|error| error.kind().to_string())
+                .and_then(|matches| handler(&matches).map(|_| ()).map_err(|e| format!("{e:#}")))
+        };
+        temp_env::with_vars_unset(
+            [
+                "PERMESI_SOCKET_PATH",
+                "PERMESI_REQUEST_TIMEOUT_SECONDS",
+                "PGHOST",
+                "PGHOSTADDR",
+                "PGSSLMODE",
+            ],
+            || {
+                assert_eq!(start(&[]), Ok(()));
+                assert_eq!(
+                    start(&[
+                        "--request-timeout-seconds",
+                        "6",
+                        "--header-read-timeout-seconds",
+                        "5"
+                    ]),
+                    Ok(())
+                );
+                for refused in [
+                    &[
+                        "--request-timeout-seconds",
+                        "5",
+                        "--header-read-timeout-seconds",
+                        "5",
+                    ][..],
+                    &[
+                        "--request-timeout-seconds",
+                        "1",
+                        "--header-read-timeout-seconds",
+                        "1",
+                    ],
+                    &[
+                        "--oauth-token-timeout-ms",
+                        "30000",
+                        "--request-timeout-seconds",
+                        "30",
+                    ],
+                ] {
+                    let error = start(refused).err().unwrap_or_default();
+                    assert!(
+                        error.contains("--oauth-token-timeout-ms"),
+                        "{refused:?}: {error}"
+                    );
+                }
+            },
+        );
+    }
+
     /// Dispatch repeats clap's bound, so a value that reaches it another way still cannot
     /// start a server on which no elevation would ever succeed.
     #[test]
@@ -441,6 +533,91 @@ mod tests {
         for value in [1, 43_200, 46_800] {
             assert_eq!(admin_ttl(value).ok(), Some(value));
         }
+    }
+
+    /// Collects what is logged at the service's default level while a closure runs.
+    fn logged_at_default_level(run: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if let Ok(mut buffer) = self.0.lock() {
+                    buffer.extend_from_slice(bytes);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        // ERROR is what the service logs when no verbosity is asked for.
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = captured
+            .0
+            .lock()
+            .map_or_else(|_| Vec::new(), |buffer| buffer.clone());
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// An opt-out that is in effect is announced on every start, and it has to be seen.
+    /// The notices were logged as warnings, which the default level drops, so a service
+    /// started without `-v` said nothing. An opt-out that changes nothing stays silent.
+    #[test]
+    fn effective_transport_opt_outs_are_announced_at_the_default_log_level() {
+        const OPENBAO_NOTICE: &str = "--openbao-allow-insecure-http";
+        const DATABASE_NOTICE: &str = "--db-allow-unverified-tls";
+        let start = |openbao: &str, dsn: &str| {
+            let matches = crate::cli::commands::new().try_get_matches_from([
+                "permesi",
+                "--tls-pem-bundle",
+                "bundle",
+                "--openbao-role-id",
+                "role",
+                "--openbao-secret-id",
+                "role-secret",
+                "--openbao-url",
+                openbao,
+                "--dsn",
+                dsn,
+                "--openbao-allow-insecure-http",
+                "--db-allow-unverified-tls",
+            ]);
+            assert!(matches.is_ok_and(|matches| handler(&matches).is_ok()));
+        };
+        temp_env::with_vars_unset(
+            ["PERMESI_SOCKET_PATH", "PGHOST", "PGHOSTADDR", "PGSSLMODE"],
+            || {
+                let logged = logged_at_default_level(|| {
+                    start(
+                        "http://openbao.internal:8200",
+                        "postgres://app:dsn-secret@db.internal/app",
+                    );
+                });
+                assert!(logged.contains(OPENBAO_NOTICE), "{logged}");
+                assert!(logged.contains(DATABASE_NOTICE), "{logged}");
+                // Neither notice names an address or a credential.
+                for private in ["dsn-secret", "role-secret", "internal"] {
+                    assert!(!logged.contains(private), "{logged}");
+                }
+
+                // The same flags with connections that never needed them.
+                let logged = logged_at_default_level(|| {
+                    start(
+                        "https://openbao.internal:8200",
+                        "postgres://db.internal/app?sslmode=verify-full",
+                    );
+                    start("http://127.0.0.1:8200", "postgres://127.0.0.1/app");
+                });
+                assert_eq!(logged, "");
+            },
+        );
     }
 
     /// Startup refuses an OpenBao address that would carry tokens in clear text and a

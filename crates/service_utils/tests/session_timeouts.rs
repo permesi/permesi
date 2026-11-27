@@ -60,8 +60,10 @@ async fn every_pooled_connection_is_bounded() -> Result<()> {
         )
     };
 
+    let target = service_utils::database::ConnectionTarget::parse(&dsn, false)?;
+
     // The defaults both services start from.
-    let defaults = shape()?.connect(&dsn, "session-timeouts").await?;
+    let defaults = shape()?.connect(target.clone(), "session-timeouts").await?;
     let (statement, lock, _) = timeouts(&defaults).await?;
     ensure!(
         (statement.as_str(), lock.as_str()) == ("30s", "5s"),
@@ -71,7 +73,7 @@ async fn every_pooled_connection_is_bounded() -> Result<()> {
 
     let pool = shape()?
         .with_session_timeouts(Duration::from_millis(1_500), Duration::from_millis(400))?
-        .connect(&dsn, "session-timeouts")
+        .connect(target.clone(), "session-timeouts")
         .await?;
     let (statement, lock, first) = timeouts(&pool).await?;
     ensure!(

@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Arg, ArgMatches, Command, value_parser};
-use service_utils::database::PoolConfig;
+use service_utils::database::{ConnectionTarget, PoolConfig};
 use std::time::Duration;
 
 pub const ARG_DB_MAX_CONNECTIONS: &str = "db-max-connections";
@@ -19,22 +19,25 @@ pub const ARG_DB_STATEMENT_TIMEOUT_MS: &str = "db-statement-timeout-ms";
 pub const ARG_DB_LOCK_TIMEOUT_MS: &str = "db-lock-timeout-ms";
 pub const ARG_DB_ALLOW_UNVERIFIED_TLS: &str = "db-allow-unverified-tls";
 
-/// Refuse a DSN whose connection could be read or impersonated on the network.
+/// Check the DSN and return the connection the pool will make. A DSN whose connection
+/// could be read or impersonated on the network is refused.
+///
+/// When only `--db-allow-unverified-tls` lets the connection through, that is said on
+/// every start, at error level: it is the default verbosity, and an opt-out left on in
+/// production must not go unnoticed.
 ///
 /// # Errors
-/// Returns an error when the DSN names a host that is not local without a verifying
-/// `sslmode` and `--db-allow-unverified-tls` was not given.
-pub fn require_verified_tls(matches: &ArgMatches, dsn: &str) -> Result<()> {
-    let allow_unverified = matches.get_flag(ARG_DB_ALLOW_UNVERIFIED_TLS);
-    service_utils::database::require_verified_tls(dsn, allow_unverified)?;
-    if allow_unverified && service_utils::database::require_verified_tls(dsn, false).is_err() {
-        // Said on every start, so an opt-out left on in production does not go unnoticed.
-        tracing::warn!(
+/// Returns an error for a malformed or unsupported DSN, and when it reaches an address
+/// that is not local without a verifying `sslmode` and the opt-out was not given.
+pub fn connection_target(matches: &ArgMatches, dsn: &str) -> Result<ConnectionTarget> {
+    let target = ConnectionTarget::parse(dsn, matches.get_flag(ARG_DB_ALLOW_UNVERIFIED_TLS))?;
+    if target.relies_on_opt_out() {
+        tracing::error!(
             "the database connection is not verified and may be clear text \
              (--db-allow-unverified-tls)"
         );
     }
-    Ok(())
+    Ok(target)
 }
 
 /// Build the validated pool configuration from parsed flags.
