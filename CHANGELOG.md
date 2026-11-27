@@ -39,10 +39,17 @@ the signed artifacts.
   and ignores an `Authorization` header. It answers `401` without a live full
   session and `403` while the session is not elevated.
   - Apply `db/sql/02_permesi.sql` before starting the new image. It adds the table
-    `platform_operator_elevations` and its grants; without it every elevation
-    answers `503`.
+    `platform_operator_elevations` and its grants; without it an elevation and a
+    status read by an operator both answer `503`.
   - A client that sent `Authorization: Bearer <admin_token>` has to send the
-    session cookie instead. The bundled web app already does.
+    session cookie instead. The bundled web app already does, so deploy the web app
+    and the API of this version together: an older web app cannot open the status
+    page against this API, and this web app cannot against an older API.
+  - `expires_at` keeps the stored precision and has a numeric offset, for example
+    `2026-11-27T10:15:30.123456+00:00`.
+  - In the status response `platform.operator_count` and
+    `platform.recent_attempts_count` are `null` when the count could not be read.
+    They used to be reported as `0`.
   - Elevations issued by an earlier version stop working at the upgrade; operators
     elevate again.
 - `--platform-admin-ttl-seconds` (`PLATFORM_ADMIN_TTL_SECONDS`) accepts 1 to 46800.
@@ -88,6 +95,8 @@ the signed artifacts.
   replica other than the one that had issued the token.
 - An OpenBao token with no remaining lifetime is refused with `403` at elevation
   instead of answering `500`.
+- The admin console asks for a new step-up when the server refuses the status page,
+  instead of still showing an elevation as active until the page is reloaded.
 
 ### Security
 
@@ -111,6 +120,12 @@ the signed artifacts.
 - An elevation is recorded under the account and session locks after the OpenBao
   call. A session that logged out or changed its password while OpenBao was
   answering used to receive a valid elevation anyway.
+- An elevation ends no later than a deadline fixed before the OpenBao token is looked
+  up, so time spent waiting cannot carry it past the token that earned it.
+- The limits on elevation and bootstrap attempts (three per user and ten per address
+  in ten minutes) hold under concurrency. The window was counted and the attempt
+  recorded in separate steps, so requests sent together could all be admitted.
+- A successful elevation and its entry in the attempt log are committed together.
 - The operator routes under `/v1/auth/admin` answer with `Cache-Control: no-store`.
 
 ## [0.6.1] - 2026-11-26

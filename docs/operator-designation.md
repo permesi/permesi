@@ -49,13 +49,28 @@ is then authorized by the session cookie and that row: `401` without a live full
 session of an active account, `403` while the session holds no current elevation.
 
 The elevation lasts no longer than `--platform-admin-ttl-seconds` (1 to 46800, default
-43200), the remaining life of the OpenBao token, or the session. It belongs to one
-session: another session of the same user is not elevated, and logout, session
-replacement, a password change, containment and session cleanup delete it with the
-session. The row is written under the same identity and session locks as every
-lifecycle change, after the OpenBao call, so a session that ended while OpenBao was
-answering gets no elevation. Elevating again replaces the row. Responses of the
-`/v1/auth/admin` routes carry `Cache-Control: no-store`.
+43200), the remaining life of the OpenBao token, or the session. The OpenBao bound is
+a deadline fixed on the database clock before the token is looked up, less one second
+for OpenBao's rounding, so time spent waiting for OpenBao or for a lock shortens the
+elevation and never extends it; a token with a second or less left grants nothing.
+It belongs to one session: another session of the same user is not elevated, and
+logout, session replacement, a password change, containment and session cleanup delete
+it with the session. The row is written under the same identity and session locks as
+every lifecycle change, after the OpenBao call, so a session that ended while OpenBao
+was answering gets no elevation. Elevating again replaces the row; step-ups that
+overlap on one session are applied in the order they commit, each backed by its own
+valid OpenBao token. Responses of the `/v1/auth/admin` routes carry
+`Cache-Control: no-store`.
+
+Each elevation or bootstrap attempt is reserved in `admin_attempts` before OpenBao is
+asked: three per user and ten per address in ten minutes, and a fifteen-minute
+cooldown after three in a row that did not succeed. The limits are checked and the
+attempt reserved in one transaction under a lock for the user and one for the
+address, so requests that arrive together cannot all be admitted. A successful
+elevation marks its attempt in the same transaction that writes the grant, so the two
+are recorded together or not at all. When storage fails the answer is `503`; nothing
+is recorded unless the failure was the loss of the commit's acknowledgement, in which
+case the next status read shows the elevation.
 
 Because the cookie is the credential, a session that has elevated can read
 infrastructure status from any tab or client holding that cookie until the elevation

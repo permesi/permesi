@@ -218,8 +218,8 @@ pub struct OpenBaoStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlatformStats {
-    pub operator_count: i64,
-    pub recent_attempts_count: i64,
+    pub operator_count: Option<i64>,
+    pub recent_attempts_count: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

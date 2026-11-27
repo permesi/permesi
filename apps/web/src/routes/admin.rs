@@ -1,6 +1,7 @@
 //! Admin overview showing neutral navigation cards and semantic system-health status.
 
 use crate::{
+    app_lib::AppError,
     components::{Icon, IconName, icon_size},
     features::auth::{client, state::use_auth, types::AdminInfraResponse},
     routes::paths,
@@ -15,8 +16,24 @@ pub fn AdminPage() -> impl IntoView {
 
     let infra = LocalResource::new(move || {
         // Tracked so the status reloads when the session is elevated again.
-        auth.admin_elevation.track();
-        async move { client::admin_infra().await }
+        let elevation = auth.admin_elevation.get();
+        async move {
+            let status = client::admin_infra().await;
+            // The server decides. When it refuses, the elevation remembered here is
+            // stale (ended, or the session is gone), so the console asks for a new
+            // step-up instead of showing an elevation that no longer exists.
+            if let Err(AppError::Http {
+                status: rejected @ (401 | 403),
+                ..
+            }) = &status
+            {
+                auth.forget_rejected_elevation(elevation.as_ref());
+                if *rejected == 401 {
+                    auth.drop_session_if_gone();
+                }
+            }
+            status
+        }
     });
 
     view! {
@@ -148,17 +165,22 @@ fn render_infra_grid(data: AdminInfraResponse) -> impl IntoView {
                 <div class="space-y-2">
                     <div class="flex justify-between text-sm">
                         <span class="text-gray-500 dark:text-gray-400">"Operators"</span>
-                        <span class="font-medium dark:text-white">{data.platform.operator_count}</span>
+                        <span class="font-medium dark:text-white">{format_count(data.platform.operator_count)}</span>
                     </div>
                     <div class="flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm">
                         <span class="text-gray-500 dark:text-gray-400">"Recent Elevation Attempts"</span>
-                        <span class="font-medium dark:text-white">{data.platform.recent_attempts_count}</span>
+                        <span class="font-medium dark:text-white">{format_count(data.platform.recent_attempts_count)}</span>
                     </div>
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">"Attempts tracked in the last hour"</p>
                 </div>
             </div>
         </div>
     }
+}
+
+/// A count the server could not read is shown as unavailable, never as zero.
+fn format_count(value: Option<i64>) -> String {
+    value.map_or_else(|| "Unavailable".to_string(), |count| count.to_string())
 }
 
 fn format_bytes(value: Option<i64>) -> String {

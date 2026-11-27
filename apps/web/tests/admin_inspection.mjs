@@ -66,7 +66,7 @@ try {
  await call('Page.navigate',{url:origin+'/console/admin/claim'});
  await wait("document.querySelector('input[placeholder=\"s.xxxxx\"]')");
  await evaluate("(()=>{const e=document.querySelector('input[placeholder=\"s.xxxxx\"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'inspection-fixture-step-up');e.dispatchEvent(new Event('input',{bubbles:true}));})()");
- await clickButton('Elevate');await wait(`${text('Admin elevation active until')}||${text('Claimed successfully')}`);await clickLink('/console/admin');await wait(text('Admin Dashboard'));
+ await clickButton('Elevate');await wait(`${text('Admin elevation active until')}||${text('Claimed successfully')}`);await clickLink('/console/admin');await wait(text('Admin Dashboard'));await wait(text('Pool Size'));
  const card="[...document.querySelectorAll('a')].find(e=>e.querySelector('h2')?.textContent==='Organizations')";
  await wait(card);
  assert.equal(await evaluate(`new URL((${card}).href).pathname`),'/console/admin/orgs','Dashboard must open the global admin directory');

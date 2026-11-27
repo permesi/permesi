@@ -5,7 +5,15 @@
 //! Permesi processes have in common.
 
 use super::*;
-use crate::api::handlers::auth::{AdminConfig, AdminState, storage};
+use crate::api::handlers::auth::{
+    AdminConfig, AdminState,
+    admin_elevation::{clock, grant, openbao_deadline},
+    authority_guard::{AuthorityGuard, Policy},
+    storage,
+};
+use axum::http::{HeaderMap, header::AUTHORIZATION};
+use jiff::SignedDuration;
+use jiff_sqlx::ToSqlx;
 use serde_json::Value;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -148,6 +156,43 @@ async fn logout(router: &Router, cookie: &str) -> Result<StatusCode> {
         .status())
 }
 
+/// Polls `ready` until it holds, so a test acts on an observed state and not on a guess
+/// about how long another task needs to reach it.
+async fn eventually<F, Fut>(what: &str, mut ready: F) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<bool>>,
+{
+    for _ in 0..200 {
+        if ready().await? {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    Err(anyhow!("timed out waiting until {what}"))
+}
+
+/// Whether some backend is blocked on a lock, as the elevation is while a lifecycle
+/// change holds the account.
+async fn lock_waiter(pool: &PgPool) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                       WHERE datname=current_database() AND wait_event_type='Lock')",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Whether every attempt the limiter registered for `user` ended as a success.
+async fn attempts_succeeded(pool: &PgPool, user: Uuid) -> Result<Option<bool>> {
+    Ok(
+        sqlx::query_scalar("SELECT bool_and(NOT is_failure) FROM admin_attempts WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
 async fn grants(pool: &PgPool) -> Result<i64> {
     Ok(
         sqlx::query_scalar("SELECT COUNT(*) FROM platform_operator_elevations")
@@ -177,13 +222,18 @@ async fn elevation_recorded_by_one_replica_authorizes_the_status_route_on_anothe
         ["expires_at"],
         "the response carries no credential"
     );
-    let stored: String = sqlx::query_scalar(
-        r#"SELECT to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
-           FROM platform_operator_elevations"#,
-    )
-    .fetch_one(&f.db.pool)
-    .await?;
-    assert_eq!(body.pointer("/expires_at"), Some(&Value::String(stored)));
+    // PostgreSQL parses the response itself: the browser is told the stored instant, to
+    // the microsecond, and not a rounded one it would act on early.
+    let reported = body
+        .pointer("/expires_at")
+        .and_then(Value::as_str)
+        .context("expires_at")?;
+    let exact: bool =
+        sqlx::query_scalar("SELECT expires_at=$1::timestamptz FROM platform_operator_elevations")
+            .bind(reported)
+            .fetch_one(&f.db.pool)
+            .await?;
+    assert!(exact, "{reported} is not the stored expiry");
 
     assert_eq!(infra(&second, Some(&cookie)).await?, StatusCode::OK);
     assert_eq!(infra(&first, Some(&cookie)).await?, StatusCode::OK);
@@ -191,6 +241,20 @@ async fn elevation_recorded_by_one_replica_authorizes_the_status_route_on_anothe
     assert_eq!(infra(&restarted, Some(&cookie)).await?, StatusCode::OK);
     // The cookie is the only credential; nothing a caller puts in a header elevates.
     assert_eq!(infra(&second, None).await?, StatusCode::UNAUTHORIZED);
+    let (_, plain) = operator(&f.db.pool).await?;
+    for (cookie, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(plain.as_str()), StatusCode::FORBIDDEN),
+    ] {
+        let mut request = Request::builder()
+            .uri(INFRA)
+            .header(AUTHORIZATION, format!("Bearer {reported}"));
+        if let Some(cookie) = cookie {
+            request = request.header(COOKIE, format!("permesi_session={cookie}"));
+        }
+        let (status, _) = send(&second, request.body(Body::empty())?).await?;
+        assert_eq!(status, expected, "a bearer header carries no authority");
+    }
     Ok(())
 }
 
@@ -210,6 +274,7 @@ async fn elevation_belongs_to_one_session_and_ends_at_logout() -> Result<()> {
     assert_eq!(elevate(&router, &ordinary).await?.0, StatusCode::FORBIDDEN);
     assert_eq!(elevate(&router, &elevated).await?.0, StatusCode::OK);
     assert_eq!(grants(pool).await?, 1);
+    assert_eq!(attempts_succeeded(pool, operator_id).await?, Some(true));
     assert_eq!(infra(&router, Some(&elevated)).await?, StatusCode::OK);
     for (cookie, expected) in [
         (same_user.clone(), StatusCode::FORBIDDEN),
@@ -402,28 +467,35 @@ async fn openbao_token_without_remaining_lifetime_grants_nothing() -> Result<()>
     Ok(())
 }
 
+/// A deadline `seconds` from the database's present.
+async fn deadline_in(pool: &PgPool, seconds: i64) -> Result<jiff_sqlx::Timestamp> {
+    Ok(clock(pool)
+        .await?
+        .to_jiff()
+        .checked_add(SignedDuration::from_secs(seconds))?
+        .to_sqlx())
+}
+
 /// The statement itself writes nothing for a lifetime that is not positive, for a session
 /// of another user, or for a session, account or designation that no longer qualifies.
 #[tokio::test]
 async fn grant_statement_stands_on_its_own_checks() -> Result<()> {
-    use crate::api::handlers::auth::admin_elevation::grant;
-
     let f = Fixture::new().await?;
     let pool = &f.db.pool;
     let (operator_id, cookie) = operator(pool).await?;
     let (other_operator, _) = operator(pool).await?;
     let hash = hash_session_token(&cookie);
+    let far = deadline_in(pool, 3600).await?;
     let mut connection = pool.acquire().await?;
     for ttl in [i64::MIN, -1, 0] {
-        assert_eq!(grant(&mut connection, operator_id, &hash, ttl).await?, None);
+        let refused = grant(&mut connection, operator_id, &hash, ttl, far).await?;
+        assert!(refused.is_none(), "lifetime {ttl}");
     }
-    assert_eq!(
-        grant(&mut connection, other_operator, &hash, 60).await?,
-        None
-    );
+    let foreign = grant(&mut connection, other_operator, &hash, 60, far).await?;
+    assert!(foreign.is_none(), "another user's session");
     assert_eq!(grants(pool).await?, 0);
     assert!(
-        grant(&mut connection, operator_id, &hash, 1)
+        grant(&mut connection, operator_id, &hash, 1, far)
             .await?
             .is_some()
     );
@@ -444,13 +516,170 @@ async fn grant_statement_stands_on_its_own_checks() -> Result<()> {
         let changed = sqlx::query(change).bind(user).execute(pool).await?;
         assert_eq!(changed.rows_affected(), 1, "{change}");
         let hash = hash_session_token(&cookie);
-        assert_eq!(
-            grant(&mut connection, user, &hash, 60).await?,
-            None,
-            "{change}"
-        );
+        let refused = grant(&mut connection, user, &hash, 60, far).await?;
+        assert!(refused.is_none(), "{change}");
     }
     assert_eq!(grants(pool).await?, 1);
+    Ok(())
+}
+
+/// The OpenBao bound is an instant, not a duration added when the row is written: the
+/// grant ends exactly at the deadline however late the statement runs, and a deadline
+/// that has passed writes nothing. Before, the remaining seconds were added to a later
+/// clock reading, so any wait in between extended the elevation past the token.
+#[tokio::test]
+async fn grant_ends_at_the_deadline_fixed_before_the_openbao_lookup() -> Result<()> {
+    let f = Fixture::new().await?;
+    let pool = &f.db.pool;
+    let (operator_id, cookie) = operator(pool).await?;
+    let hash = hash_session_token(&cookie);
+    let mut connection = pool.acquire().await?;
+
+    let deadline = deadline_in(pool, 5).await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let expires = grant(&mut connection, operator_id, &hash, 3600, deadline)
+        .await?
+        .context("a live deadline grants")?;
+    assert_eq!(expires.to_jiff(), deadline.to_jiff());
+
+    for past in [0, -1, -3600] {
+        let deadline = deadline_in(pool, past).await?;
+        let refused = grant(&mut connection, operator_id, &hash, 3600, deadline).await?;
+        assert!(refused.is_none(), "deadline {past} seconds from now");
+    }
+    // The refused renewals left the earlier grant and its deadline as they were.
+    let stored: jiff_sqlx::Timestamp =
+        sqlx::query_scalar("SELECT expires_at FROM platform_operator_elevations")
+            .fetch_one(pool)
+            .await?;
+    assert_eq!(stored.to_jiff(), expires.to_jiff());
+    Ok(())
+}
+
+/// OpenBao reports whole seconds, rounded, so one second is given up, and a token with
+/// a second or less grants nothing. A lifetime far beyond the configured one is capped
+/// before any arithmetic.
+#[test]
+fn openbao_deadline_gives_up_one_second_and_never_overflows() -> Result<()> {
+    let anchor: jiff::Timestamp = "2026-01-02T03:04:05.250Z".parse()?;
+    let after = |seconds: i64| -> Result<jiff::Timestamp> {
+        Ok(anchor.checked_add(SignedDuration::from_secs(seconds))?)
+    };
+    for ttl in [i64::MIN, -1, 0, 1] {
+        assert!(
+            openbao_deadline(anchor.to_sqlx(), ttl, DEFAULT_TTL).is_none(),
+            "{ttl}"
+        );
+    }
+    for (ttl, configured, expected) in [
+        (2, DEFAULT_TTL, 1),
+        (120, DEFAULT_TTL, 119),
+        (DEFAULT_TTL, DEFAULT_TTL, DEFAULT_TTL - 1),
+        (DEFAULT_TTL + 1, DEFAULT_TTL, DEFAULT_TTL),
+        (i64::MAX, DEFAULT_TTL, DEFAULT_TTL),
+        (i64::MAX, i64::MAX, i64::MAX - 1),
+    ] {
+        let deadline =
+            openbao_deadline(anchor.to_sqlx(), ttl, configured).map(jiff_sqlx::Timestamp::to_jiff);
+        // A sum that leaves the calendar grants nothing instead of wrapping.
+        assert_eq!(deadline, after(expected).ok(), "{ttl}/{configured}");
+    }
+    Ok(())
+}
+
+/// Time OpenBao takes to answer comes out of the elevation. The stub answers after two
+/// seconds for a token with six left, so at most about three remain when the grant is
+/// written; anchoring the deadline after the lookup would leave five.
+#[tokio::test]
+async fn slow_openbao_lookup_shortens_the_elevation() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.openbao_token(6, Duration::from_secs(2)).await;
+    let router = f.replica(DEFAULT_TTL)?;
+    let (operator_id, cookie) = operator(&f.db.pool).await?;
+    assert_eq!(elevate(&router, &cookie).await?.0, StatusCode::OK);
+    let left = remaining_seconds(&f.db.pool, &cookie).await?;
+    assert!(left > 1.0 && left <= 3.0, "{left} seconds left");
+    assert_eq!(
+        attempts_succeeded(&f.db.pool, operator_id).await?,
+        Some(true)
+    );
+    Ok(())
+}
+
+/// A step-up after the designation revision changed replaces the unusable grant with a
+/// current one, in the same row.
+#[tokio::test]
+async fn renewed_step_up_replaces_a_grant_from_an_earlier_revision() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.openbao_token(3600, Duration::ZERO).await;
+    let router = f.replica(DEFAULT_TTL)?;
+    let pool = &f.db.pool;
+    let (operator_id, cookie) = operator(pool).await?;
+    assert_eq!(elevate(&router, &cookie).await?.0, StatusCode::OK);
+    let first: (Uuid, jiff_sqlx::Timestamp) =
+        sqlx::query_as("SELECT operator_revision,created_at FROM platform_operator_elevations")
+            .fetch_one(pool)
+            .await?;
+
+    sqlx::query("UPDATE platform_operators SET token_revision=uuidv4() WHERE user_id=$1")
+        .bind(operator_id)
+        .execute(pool)
+        .await?;
+    assert_eq!(infra(&router, Some(&cookie)).await?, StatusCode::FORBIDDEN);
+    assert_eq!(elevate(&router, &cookie).await?.0, StatusCode::OK);
+    assert_eq!(infra(&router, Some(&cookie)).await?, StatusCode::OK);
+
+    let second: (Uuid, jiff_sqlx::Timestamp) =
+        sqlx::query_as("SELECT operator_revision,created_at FROM platform_operator_elevations")
+            .fetch_one(pool)
+            .await?;
+    assert_ne!(second.0, first.0, "the grant carries the current revision");
+    assert!(
+        second.1.to_jiff() > first.1.to_jiff(),
+        "the grant records when it was renewed"
+    );
+    assert_eq!(grants(pool).await?, 1);
+    Ok(())
+}
+
+/// Reauthentication that issues a new session consumes the old one, and the elevation
+/// does not follow to the replacement.
+#[tokio::test]
+async fn replaced_session_does_not_inherit_the_elevation() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.openbao_token(3600, Duration::ZERO).await;
+    let router = f.replica(DEFAULT_TTL)?;
+    let pool = &f.db.pool;
+    let (operator_id, cookie) = operator(pool).await?;
+    assert_eq!(elevate(&router, &cookie).await?.0, StatusCode::OK);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(COOKIE, format!("permesi_session={cookie}").parse()?);
+    let auth = crate::api::AppState::for_tests(pool.clone())?.auth;
+    let issued = AuthorityGuard::acquire(pool, &headers, operator_id, Policy::Full, 1000)
+        .await
+        .map_err(|status| anyhow!("acquire: {status}"))?
+        .issue_full(&auth)
+        .await
+        .map_err(|status| anyhow!("issue: {status}"))?;
+    let replacement = issued
+        .to_str()?
+        .split(';')
+        .next()
+        .and_then(|pair| pair.strip_prefix("permesi_session="))
+        .context("replacement cookie")?
+        .to_string();
+    assert_ne!(replacement, cookie);
+
+    assert_eq!(
+        infra(&router, Some(&cookie)).await?,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        infra(&router, Some(&replacement)).await?,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(grants(pool).await?, 0);
     Ok(())
 }
 
@@ -459,30 +688,37 @@ async fn grant_statement_stands_on_its_own_checks() -> Result<()> {
 #[tokio::test]
 async fn session_that_ended_during_the_openbao_call_gets_no_elevation() -> Result<()> {
     let f = Fixture::new().await?;
-    f.openbao_token(3600, Duration::from_millis(600)).await;
+    f.openbao_token(3600, Duration::from_millis(500)).await;
     let router = f.replica(DEFAULT_TTL)?;
-    let (_, cookie) = operator(&f.db.pool).await?;
+    let (operator_id, cookie) = operator(&f.db.pool).await?;
 
     let pending = tokio::spawn({
         let (router, cookie) = (router.clone(), cookie.clone());
         async move { elevate(&router, &cookie).await.map(|(status, _)| status) }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Act only once OpenBao has the lookup in hand: the session was valid until then.
+    eventually("OpenBao received the lookup", || async {
+        let received = f.openbao.received_requests().await.unwrap_or_default();
+        Ok(!received.is_empty())
+    })
+    .await?;
     assert!(!pending.is_finished(), "the request is waiting on OpenBao");
     assert_eq!(logout(&router, &cookie).await?, StatusCode::NO_CONTENT);
 
     assert_eq!(pending.await??, StatusCode::UNAUTHORIZED);
     assert_eq!(grants(&f.db.pool).await?, 0);
+    assert_eq!(
+        attempts_succeeded(&f.db.pool, operator_id).await?,
+        Some(false),
+        "an elevation that was not recorded is not counted as a success"
+    );
     Ok(())
 }
 
-/// Starts an elevation while `change` runs in a transaction that already holds the
-/// account's lifecycle lock, and returns the elevation's status after it commits.
-async fn elevate_against(
-    f: &Fixture,
-    change: Option<&'static str>,
-    hold: Duration,
-) -> Result<StatusCode> {
+/// Starts an elevation while a transaction holds the account's lifecycle lock, waits
+/// until the elevation is blocked on it, runs `change` there and commits, and returns
+/// the elevation's status. Without a change the lock is held until the elevation gives up.
+async fn elevate_against(f: &Fixture, change: Option<&'static str>) -> Result<StatusCode> {
     let router = f.replica(DEFAULT_TTL)?;
     let (operator_id, cookie) = operator(&f.db.pool).await?;
     let mut lifecycle = f.db.pool.begin().await?;
@@ -491,29 +727,33 @@ async fn elevate_against(
         .execute(&mut *lifecycle)
         .await?;
     let pending = tokio::spawn(async move { elevate(&router, &cookie).await.map(|(s, _)| s) });
-    tokio::time::sleep(hold).await;
-    if let Some(change) = change {
-        assert!(!pending.is_finished(), "the elevation waits for the lock");
-        sqlx::query(change)
-            .bind(operator_id)
-            .execute(&mut *lifecycle)
-            .await?;
-        lifecycle.commit().await?;
-        return pending.await?;
-    }
-    let status = pending.await??;
-    lifecycle.rollback().await?;
-    Ok(status)
+    eventually("the elevation waits for the account lock", || {
+        lock_waiter(&f.db.pool)
+    })
+    .await?;
+    let Some(change) = change else {
+        let status = pending.await??;
+        lifecycle.rollback().await?;
+        return Ok(status);
+    };
+    assert!(!pending.is_finished(), "the elevation waits for the lock");
+    let changed = sqlx::query(change)
+        .bind(operator_id)
+        .execute(&mut *lifecycle)
+        .await?;
+    assert_eq!(changed.rows_affected(), 1, "{change}");
+    lifecycle.commit().await?;
+    pending.await?
 }
 
 /// The grant is written under the lock every lifecycle change takes first, so a change
 /// that got there earlier decides the outcome, and a lock that is not released in time
-/// refuses the elevation instead of letting it through.
+/// refuses the elevation instead of letting it through. The limiter's reservation is
+/// marked successful in the same transaction: without it there is no grant either.
 #[tokio::test]
 async fn elevation_waits_for_a_lifecycle_change_and_honours_its_outcome() -> Result<()> {
     let f = Fixture::new().await?;
     f.openbao_token(3600, Duration::ZERO).await;
-    let short = Duration::from_millis(250);
     for (change, expected) in [
         (
             "DELETE FROM user_sessions WHERE user_id=$1",
@@ -527,19 +767,40 @@ async fn elevation_waits_for_a_lifecycle_change_and_honours_its_outcome() -> Res
             "UPDATE platform_operators SET enabled=FALSE,token_revision=uuidv4() WHERE user_id=$1",
             StatusCode::FORBIDDEN,
         ),
+        (
+            "DELETE FROM admin_attempts WHERE user_id=$1",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
     ] {
         assert_eq!(
-            elevate_against(&f, Some(change), short).await?,
+            elevate_against(&f, Some(change)).await?,
             expected,
             "{change}"
         );
     }
     // Held past the one-second database deadline of the test configuration.
     assert_eq!(
-        elevate_against(&f, None, Duration::from_millis(1500)).await?,
+        elevate_against(&f, None).await?,
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(grants(&f.db.pool).await?, 0);
+    Ok(())
+}
+
+/// When the elevation cannot be looked up the read is refused; a storage failure is
+/// never read as "elevated".
+#[tokio::test]
+async fn status_read_is_refused_when_the_elevation_cannot_be_looked_up() -> Result<()> {
+    let unreachable = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
+        .connect_lazy("postgres://invalid@127.0.0.1:1/invalid?sslmode=disable")?;
+    let openbao = MockServer::start().await;
+    let router = replica(&unreachable, &openbao, DEFAULT_TTL)?;
+    let cookie = generate_session_token()?;
+    assert_eq!(
+        infra(&router, Some(&cookie)).await?,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     Ok(())
 }
 

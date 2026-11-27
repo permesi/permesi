@@ -87,6 +87,32 @@ impl AuthContext {
         self.admin_elevation.set(None);
     }
 
+    /// Forgets the elevation the server just refused, unless a newer one replaced it
+    /// while that request was in flight. Returns whether it was forgotten.
+    pub fn forget_rejected_elevation(&self, rejected: Option<&AdminElevateResponse>) -> bool {
+        let current = self.admin_elevation.get_untracked();
+        let same = match (current.as_ref(), rejected) {
+            (Some(current), Some(rejected)) => current.expires_at == rejected.expires_at,
+            _ => false,
+        };
+        if same {
+            self.admin_elevation.set(None);
+        }
+        same
+    }
+
+    /// Asks the server whether the session still exists after it refused a request as
+    /// unauthenticated, and clears the local session when it does not, so the guards
+    /// send the user to sign in. A failed check changes nothing.
+    pub fn drop_session_if_gone(&self) {
+        let auth = *self;
+        spawn_local(async move {
+            if let Ok(None) = client::fetch_session().await {
+                auth.clear_session();
+            }
+        });
+    }
+
     /// Refetches the session from the server to update roles/flags.
     pub fn refresh_session(&self) {
         let auth = *self;

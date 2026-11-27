@@ -9,7 +9,8 @@
 //!
 //! Security boundaries:
 //! - OpenBao tokens are never persisted or logged.
-//! - Operator membership is a UI gate only; OpenBao policy is authoritative.
+//! - The session and the operator designation in PostgreSQL authorize; the OpenBao
+//!   policy is the additional factor an elevation or the first bootstrap requires.
 //! - An elevation is short-lived, requires step-up for each issuance, belongs to one
 //!   session and ends with it; see `admin_elevation` for the storage rules.
 
@@ -20,7 +21,7 @@ use axum::{
     response::IntoResponse,
 };
 use sqlx::{PgPool, Row};
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
@@ -216,6 +217,7 @@ pub async fn admin_status(
         (status = 200, description = "Detailed infrastructure status. Cache-Control: no-store.", body = AdminInfraResponse),
         (status = 401, description = "Missing, expired or limited session, or inactive account."),
         (status = 403, description = "The session holds no current elevation: never elevated, expired, disabled operator, or stale designation revision."),
+        (status = 503, description = "Authorization storage unavailable; the read is refused."),
     ),
     tag = "auth"
 )]
@@ -256,13 +258,15 @@ pub async fn admin_infra(
         }
     };
 
-    let operator_count = platform_operator_count(&pool).await.unwrap_or(0);
+    // A count that could not be read is reported as absent, never as zero.
+    let operator_count = platform_operator_count(&pool).await.ok();
     let recent_attempts = sqlx::query(
         "SELECT COUNT(*) FROM admin_attempts WHERE created_at > NOW() - INTERVAL '1 hour'",
     )
     .fetch_one(&*pool)
     .await
-    .map_or(0, |row| row.get::<i64, _>(0));
+    .ok()
+    .map(|row| row.get::<i64, _>(0));
 
     let platform = PlatformStats {
         operator_count,
@@ -294,7 +298,8 @@ async fn database_size_bytes(pool: &PgPool, name: &str) -> Option<i64> {
 /// Authorizes an infrastructure read from the session cookie alone: a full session of an
 /// active account that holds a current elevation. A missing, limited or dead session is
 /// `401`; a live session without a usable elevation is `403`. The decision is made by
-/// `admin_elevation::authorize` from server data, and a failed lookup refuses the read.
+/// `admin_elevation::authorize` from server data, and a failed lookup refuses the read
+/// with `503`.
 async fn require_elevation(headers: &HeaderMap, pool: &PgPool) -> Result<(), StatusCode> {
     let token = extract_session_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
     if SessionKind::from_token(&token) != SessionKind::Full {
@@ -306,7 +311,7 @@ async fn require_elevation(headers: &HeaderMap, pool: &PgPool) -> Result<(), Sta
         Ok(Access::NoSession) => Err(StatusCode::UNAUTHORIZED),
         Err(err) => {
             error!("Failed to look up operator elevation: {err}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(StatusCode::SERVICE_UNAVAILABLE)
         }
     }
 }
@@ -418,10 +423,11 @@ pub async fn admin_bootstrap(
     responses(
         (status = 200, description = "The session is elevated until `expires_at`. Cache-Control: no-store.", body = AdminElevateResponse),
         (status = 400, description = "Invalid request.", body = String),
-        (status = 401, description = "Missing or invalid session, including one that ended during the request."),
-        (status = 403, description = "Not an operator, or the OpenBao token lacks the policy or has no remaining lifetime."),
+        (status = 401, description = "Missing or invalid session, including one that ended during the request, or an OpenBao token that OpenBao rejects.", body = String),
+        (status = 403, description = "Not an operator, the OpenBao token lacks the policy or has no remaining lifetime, or the session or designation stopped qualifying during the request.", body = String),
         (status = 429, description = "Rate limited."),
-        (status = 503, description = "OpenBao or authentication storage unavailable; no elevation was recorded."),
+        (status = 502, description = "OpenBao answered the token lookup with an invalid response.", body = String),
+        (status = 503, description = "OpenBao or authentication storage unavailable. Nothing is recorded unless the failure was the loss of the commit's acknowledgement."),
     ),
     tag = "auth"
 )]
@@ -473,32 +479,45 @@ pub async fn admin_elevate(
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
 
-    // Measured from before the lookup, so the time OpenBao and the locks below take is
-    // charged against the token's remaining life and never added to it.
-    let looked_up = Instant::now();
+    // Read before the lookup: the elevation's deadline is this instant plus the token's
+    // remaining life, so time spent on OpenBao and on the locks below is never added.
+    let anchor = match admin_elevation::clock(&pool).await {
+        Ok(anchor) => anchor,
+        Err(err) => {
+            error!("Failed to read the database clock: {err}");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
     let openbao_info =
         match validate_openbao_token(admin_state.as_ref(), principal.user_id, token).await {
             Ok(info) => info,
             Err(response) => return *response,
         };
 
-    let expires_at = match record_elevation(
-        &headers,
-        &pool,
-        &auth_state,
-        &admin_state,
-        principal.user_id,
-        openbao_info.ttl,
-        looked_up,
-    )
-    .await
-    {
-        Ok(expires_at) => expires_at,
-        Err(status) => return status.into_response(),
+    let step_up = StepUp {
+        user_id: principal.user_id,
+        attempt_id,
+        anchor,
+        openbao_ttl_seconds: openbao_info.ttl,
     };
+    match record_elevation(&headers, &pool, &auth_state, &admin_state, step_up).await {
+        Ok(expires_at) => {
+            let expires_at = crate::api::timestamp::rfc3339(expires_at);
+            (StatusCode::OK, Json(AdminElevateResponse { expires_at })).into_response()
+        }
+        Err(status) => status.into_response(),
+    }
+}
 
-    admin_state.rate_limiter().record_success(attempt_id).await;
-    (StatusCode::OK, Json(AdminElevateResponse { expires_at })).into_response()
+/// A validated OpenBao step-up waiting to be recorded.
+struct StepUp {
+    user_id: Uuid,
+    /// The rate limiter's reservation for this request.
+    attempt_id: Uuid,
+    /// Database clock read before the OpenBao lookup.
+    anchor: jiff_sqlx::Timestamp,
+    /// Remaining life OpenBao reported for the token.
+    openbao_ttl_seconds: i64,
 }
 
 /// Commits the elevation for the exact session that asked for it and returns its expiry.
@@ -509,52 +528,65 @@ pub async fn admin_elevate(
 /// the grant is written on that transaction: either the mutation committed first and
 /// this request is refused (`401` for a dead session, `403` for a lost designation), or
 /// the grant commits first and the mutation deletes or invalidates it. The lifetime is
-/// the smaller of the configured one and what is left of the OpenBao token after the
-/// time spent since its lookup. Storage failures answer `503` and record nothing.
+/// bounded by the configured one and by the deadline fixed before the OpenBao lookup.
+/// The rate limiter's reservation is marked successful in the same transaction, so a
+/// grant and its audit record commit together or not at all. Storage failures answer
+/// `503`; nothing is recorded unless the failure was the loss of the commit's
+/// acknowledgement.
 async fn record_elevation(
     headers: &HeaderMap,
     pool: &PgPool,
     auth_state: &AuthState,
     admin_state: &AdminState,
-    user_id: Uuid,
-    openbao_ttl_seconds: i64,
-    looked_up: Instant,
-) -> Result<String, StatusCode> {
+    step_up: StepUp,
+) -> Result<jiff_sqlx::Timestamp, StatusCode> {
+    let configured = admin_state.config().admin_ttl_seconds();
+    let deadline =
+        admin_elevation::openbao_deadline(step_up.anchor, step_up.openbao_ttl_seconds, configured)
+            .ok_or(StatusCode::FORBIDDEN)?;
     let session_hash = extract_session_token(headers)
         .map(|token| hash_session_token(&token))
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let mut guard = AuthorityGuard::acquire(
         pool,
         headers,
-        user_id,
+        step_up.user_id,
         Policy::Full,
         auth_state.config().opaque_exchange_timeout_ms(),
     )
     .await?;
 
-    // Round the elapsed time up: a token with under a second left grants nothing.
-    let elapsed = i64::try_from(looked_up.elapsed().as_secs())
-        .unwrap_or(i64::MAX)
-        .saturating_add(1);
-    let ttl_seconds = admin_state
-        .config()
-        .admin_ttl_seconds()
-        .min(openbao_ttl_seconds.saturating_sub(elapsed));
-
-    // `grant` writes nothing for a lifetime that is not positive, or when the session,
-    // the account or the designation stopped qualifying before the locks were taken.
-    let expires_at =
-        admin_elevation::grant(guard.connection(), user_id, &session_hash, ttl_seconds)
-            .await
-            .map_err(|err| {
-                error!("Failed to record operator elevation: {err}");
-                StatusCode::SERVICE_UNAVAILABLE
-            })?
-            .ok_or(StatusCode::FORBIDDEN)?;
-    guard.commit().await.map_err(|err| {
-        error!("Failed to commit operator elevation: {err}");
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
+    // `grant` writes nothing when the deadline has passed, or when the session, the
+    // account or the designation stopped qualifying before the locks were taken.
+    let unavailable = |step: &'static str| {
+        move |err: &dyn std::fmt::Display| {
+            error!("Failed to {step}: {err}");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    };
+    let expires_at = admin_elevation::grant(
+        guard.connection(),
+        step_up.user_id,
+        &session_hash,
+        configured,
+        deadline,
+    )
+    .await
+    .map_err(|err| unavailable("record operator elevation")(&err))?
+    .ok_or(StatusCode::FORBIDDEN)?;
+    let recorded = AdminRateLimiter::record_success_on(guard.connection(), step_up.attempt_id)
+        .await
+        .map_err(|err| unavailable("record the elevation attempt's success")(&err))?;
+    if !recorded {
+        // The reservation is gone, so the elevation would have no audit record.
+        return Err(unavailable("record the elevation attempt's success")(
+            &"the attempt no longer exists",
+        ));
+    }
+    guard
+        .commit()
+        .await
+        .map_err(|err| unavailable("commit operator elevation")(&err))?;
     Ok(expires_at)
 }
 

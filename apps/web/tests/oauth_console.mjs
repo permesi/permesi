@@ -26,7 +26,7 @@ let memberRole='owner', delayCapabilities=false, failCapabilities=false;
 const orgId='33333333-3333-4333-8333-333333333333';
 const grantId='44444444-4444-4444-8444-444444444444';
 const profileId='a4ce5e44-b738-48dd-8c2e-0eb930aa0c8b';
-let sessionIsOperator=false;
+let sessionIsOperator=false;let infraStatus=200;const infraAuthorization=[];
 let unavailableMetadataPath=null, unavailableMetadataStatus=503;
 let lastLogin=time, loginTrackingComplete=true;
 let savedGrants=[{id:grantId,client_id:clientId,client_name:'Jobs reader',application_name:'Jobs application',organization_slug:'crono',organization_name:'Crono',scopes:['jobs:read','runs:read'],created_at:time}];
@@ -60,6 +60,7 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:profileId,email:'ui@example.test',is_operator:sessionIsOperator,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
   if(p==='/v1/me')return send(200,{id:profileId,email:'ui@example.test',display_name:null,locale:null,created_at:time,updated_at:time,roles:[],scopes:[],mfa_enabled:true,totp_enabled:true});
   if(p==='/v1/auth/admin/status')return send(200,{bootstrap_open:false,operator:sessionIsOperator,cooldown_seconds:0});
+  if(p==='/v1/auth/admin/infra'&&req.method==='GET'){infraAuthorization.push(req.headers.authorization??null);return infraStatus===200?send(200,{database:{status:'ok',pool_size:5,active_connections:1,idle_connections:4,permesi_size_bytes:1024},openbao:{status:'ok',version:'fixture',sealed:false},platform:{operator_count:1,recent_attempts_count:null}}):send(infraStatus,'');}
   if(p==='/v1/auth/admin/elevate'&&req.method==='POST'){assert(sessionIsOperator);return send(200,{expires_at:new Date(Date.now()+600000).toISOString()});}
   if(p==='/v1/users')return send(200,[{id:profileId,email:'profile@example.test',display_name:'Fixture profile'}]);
   if(p===`/v1/users/${profileId}`)return send(200,{id:profileId,email:'profile@example.test',display_name:null,locale:'en-US',role:null,created_at:time,updated_at:time,last_login_at:lastLogin,login_tracking_complete:loginTrackingComplete});
@@ -560,8 +561,13 @@ try {
  for(const endpoint of [route.replace('/console','/v1'),'/v1/orgs/crono/projects/jobs/envs/production','/v1/orgs/crono/projects/jobs','/v1/orgs/crono'])assert(requests.some(value=>value.method==='DELETE'&&value.path===endpoint&&value.input===null));
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
  sessionIsOperator=true;await goto('/console/admin/claim');await wait("document.querySelector('input[placeholder=\"s.xxxxx\"]')");
- await evaluate("(()=>{const input=document.querySelector('input[placeholder=\"s.xxxxx\"]');input.value='fixture-step-up';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
- await click('Elevate');await wait("document.body.innerText.includes('Admin elevation active until')");
+ const stepUp=async()=>{await wait("document.querySelector('input[placeholder=\"s.xxxxx\"]')");await evaluate("(()=>{const input=document.querySelector('input[placeholder=\"s.xxxxx\"]');input.value='fixture-step-up';input.dispatchEvent(new Event('input',{bubbles:true}));})()");await click('Elevate');await wait("document.body.innerText.includes('Admin elevation active until')");};
+ const overview=async()=>{await click('Admin Overview');await wait("document.body.innerText.includes('Pool Size')");};
+ await stepUp();await overview();
+ assert(await evaluate("document.body.innerText.includes('Unavailable')"),'A count the server could not read must not be shown as zero');
+ // The server ends an elevation without telling the browser: the next refused read must drop the remembered one and offer a new step-up.
+ for(const rejected of [403,401]){infraStatus=rejected;await click('Refresh system status');await wait("document.body.innerText.includes('Elevation Required')");infraStatus=200;await click('Elevate Session');await stepUp();await overview();}
+ assert(infraAuthorization.length>=5&&infraAuthorization.every(value=>value===null),'Infrastructure status is authorized by the session cookie, never a bearer credential');
  await click('Global Users');await wait("document.body.innerText.includes('profile@example.test')");await click('profile@example.test');
  await wait("document.body.innerText.includes('Profile Information') && document.body.innerText.includes('Designation') && document.querySelector('button[aria-label=\"Copy user ID\"]')");
  await wait("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Last Login') && document.querySelectorAll('time').length===3");

@@ -179,7 +179,7 @@ pub struct AdminElevateRequest {
 /// The elevation is held server-side against the session; nothing here is a credential.
 #[derive(ToSchema, Serialize, Deserialize)]
 pub struct AdminElevateResponse {
-    /// When the session's elevation ends (RFC 3339, UTC).
+    /// When the session's elevation ends (RFC 3339, UTC, to the microsecond).
     pub expires_at: String,
 }
 
@@ -208,8 +208,10 @@ pub struct OpenBaoStatus {
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct PlatformStats {
-    pub operator_count: i64,
-    pub recent_attempts_count: i64,
+    /// Operator designations, enabled or not; absent when the count could not be read.
+    pub operator_count: Option<i64>,
+    /// Bootstrap and elevation attempts in the last hour; absent when unreadable.
+    pub recent_attempts_count: Option<i64>,
 }
 
 #[cfg(test)]

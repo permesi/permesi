@@ -1612,7 +1612,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session, including one that ended during the request.",
+            "description": "Missing or invalid session, including one that ended during the request, or an OpenBao token that OpenBao rejects.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1622,7 +1622,7 @@
             }
           },
           "403": {
-            "description": "Not an operator, or the OpenBao token lacks the policy or has no remaining lifetime.",
+            "description": "Not an operator, the OpenBao token lacks the policy or has no remaining lifetime, or the session or designation stopped qualifying during the request.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1641,8 +1641,18 @@
               }
             }
           },
+          "502": {
+            "description": "OpenBao answered the token lookup with an invalid response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "OpenBao or authentication storage unavailable; no elevation was recorded.",
+            "description": "OpenBao or authentication storage unavailable. Nothing is recorded unless the failure was the loss of the commit's acknowledgement.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1683,6 +1693,16 @@
           },
           "403": {
             "description": "The session holds no current elevation: never elevated, expired, disabled operator, or stale designation revision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authorization storage unavailable; the read is refused.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8296,7 +8316,7 @@
         "properties": {
           "expires_at": {
             "type": "string",
-            "description": "When the session's elevation ends (RFC 3339, UTC)."
+            "description": "When the session's elevation ends (RFC 3339, UTC, to the microsecond)."
           }
         }
       },
@@ -9537,18 +9557,22 @@
       },
       "PlatformStats": {
         "type": "object",
-        "required": [
-          "operator_count",
-          "recent_attempts_count"
-        ],
         "properties": {
           "operator_count": {
-            "type": "integer",
-            "format": "int64"
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Operator designations, enabled or not; absent when the count could not be read."
           },
           "recent_attempts_count": {
-            "type": "integer",
-            "format": "int64"
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bootstrap and elevation attempts in the last hour; absent when unreadable."
           }
         }
       },

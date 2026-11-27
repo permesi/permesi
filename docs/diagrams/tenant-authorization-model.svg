@@ -73,7 +73,7 @@
   <text x="672" y="143.0" text-anchor="start" class="node-title">1. Platform Operator (platform:admin)</text>
   <text x="672" y="160.0" text-anchor="start" class="node-body">• Read-only global tenant inspection (/v1/admin/orgs)</text>
   <text x="672" y="175.0" text-anchor="start" class="node-body">• Account suspension / reactivation &amp; two-operator designation</text>
-  <text x="672" y="190.0" text-anchor="start" class="node-body">• OpenBao step-up PASETO required for /v1/auth/admin/infra</text>
+  <text x="672" y="190.0" text-anchor="start" class="node-body">• OpenBao step-up, held per session, for /v1/auth/admin/infra</text>
   <text x="672" y="205.0" text-anchor="start" class="node-body">• Never bypasses tenant write roles or confers OAuth scopes</text>
   <rect x="660" y="250" width="434" height="122" rx="8" fill="#d1fae5" stroke="#047857" stroke-width="1.5" filter="url(#shadow)"/>
   <text x="672" y="285.0" text-anchor="start" class="node-title">2. Organization Membership &amp; Roles (Active Only)</text>

@@ -6,9 +6,12 @@
 //! 3) Trigger 15-minute cooldown after 3 consecutive failures.
 //!
 //! Scaling: Uses `PostgreSQL` to synchronize limits across multiple service instances.
+//! Checking the limits and reserving the attempt happen in one transaction that holds
+//! an advisory lock for the user and one for the address, so concurrent requests, on
+//! one replica or several, cannot each count the window before any of them is recorded.
 
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use std::time::Duration;
 use tracing::{Instrument, error};
 use uuid::Uuid;
@@ -18,6 +21,9 @@ const USER_ATTEMPT_LIMIT: i64 = 3;
 const IP_ATTEMPT_LIMIT: i64 = 10;
 const FAILURE_LIMIT: i64 = 3;
 const COOLDOWN_DURATION: Duration = Duration::from_mins(15);
+/// Advisory lock classes; the second key is a hash of the user id or the address.
+const USER_LOCK_CLASS: i32 = 4_201_111;
+const IP_LOCK_CLASS: i32 = 4_201_112;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AdminRateLimitError {
@@ -40,6 +46,10 @@ impl AdminRateLimiter {
 
     /// Checks limits and registers a new attempt.
     ///
+    /// The checks and the reservation are one transaction under the user's and the
+    /// address's advisory locks, taken in that order, so the window limits hold under
+    /// concurrency. Any database failure refuses the attempt.
+    ///
     /// # Errors
     /// Returns `AdminRateLimitError::Limited` if rolling window limits are exceeded.
     /// Returns `AdminRateLimitError::Cooldown` if the user is in a failure-triggered cooldown.
@@ -49,33 +59,48 @@ impl AdminRateLimiter {
         ip: Option<&str>,
         country_code: Option<&str>,
     ) -> Result<Uuid, AdminRateLimitError> {
-        // A cooldown that cannot be read is treated as active: an unavailable
-        // database must not reopen operator-token guessing.
-        let cooldown = self.cooldown(user_id).await.map_err(|err| {
-            error!("Failed to read admin cooldown: {err}");
-            AdminRateLimitError::Limited
-        })?;
+        let refused = |step: &'static str| {
+            move |err: sqlx::Error| {
+                // Fail closed: an unavailable database must not reopen operator-token guessing.
+                error!("Failed to {step}: {err}");
+                AdminRateLimitError::Limited
+            }
+        };
+        let mut transaction = service_utils::database::begin(&self.pool)
+            .await
+            .map_err(|err| {
+                error!("Failed to begin admin attempt registration: {err}");
+                AdminRateLimitError::Limited
+            })?;
+        lock_subject(&mut transaction, USER_LOCK_CLASS, &user_id.to_string())
+            .await
+            .map_err(refused("lock the user's admin attempts"))?;
+        if let Some(ip) = ip {
+            lock_subject(&mut transaction, IP_LOCK_CLASS, ip)
+                .await
+                .map_err(refused("lock the address's admin attempts"))?;
+        }
+
+        // A cooldown that cannot be read is treated as active.
+        let cooldown = cooldown(&mut transaction, user_id)
+            .await
+            .map_err(refused("read admin cooldown"))?;
         if cooldown > 0 {
             return Err(AdminRateLimitError::Cooldown {
                 remaining_seconds: cooldown,
             });
         }
 
-        // Check user rolling window.
-        let user_attempts = self.count_user_attempts(user_id).await.map_err(|err| {
-            error!("Failed to count user admin attempts: {err}");
-            AdminRateLimitError::Limited // Fail closed
-        })?;
+        let user_attempts = count_attempts(&mut transaction, Subject::User(user_id))
+            .await
+            .map_err(refused("count user admin attempts"))?;
         if user_attempts >= USER_ATTEMPT_LIMIT {
             return Err(AdminRateLimitError::Limited);
         }
-
-        // Check IP rolling window.
         if let Some(ip) = ip {
-            let ip_attempts = self.count_ip_attempts(ip).await.map_err(|err| {
-                error!("Failed to count IP admin attempts: {err}");
-                AdminRateLimitError::Limited
-            })?;
+            let ip_attempts = count_attempts(&mut transaction, Subject::Ip(ip))
+                .await
+                .map_err(refused("count IP admin attempts"))?;
             if ip_attempts >= IP_ATTEMPT_LIMIT {
                 return Err(AdminRateLimitError::Limited);
             }
@@ -93,15 +118,16 @@ impl AdminRateLimiter {
             .bind(user_id)
             .bind(ip)
             .bind(country_code)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *transaction)
             .instrument(span)
             .await
-            .map_err(|err| {
-                error!("Failed to register admin attempt: {err}");
-                AdminRateLimitError::Limited
-            })?;
-
-        Ok(row.get(0))
+            .map_err(refused("register admin attempt"))?;
+        let attempt: Uuid = row.get(0);
+        transaction
+            .commit()
+            .await
+            .map_err(refused("commit admin attempt"))?;
+        Ok(attempt)
     }
 
     /// Confirms that the attempt was successful by clearing the failure flag.
@@ -122,6 +148,23 @@ impl AdminRateLimiter {
         }
     }
 
+    /// Clears the failure flag of `attempt_id` on the caller's transaction, so the
+    /// success is recorded together with what it stands for or not at all. Returns
+    /// whether exactly that attempt was updated.
+    ///
+    /// # Errors
+    /// Returns the database error; the caller's transaction must then roll back.
+    pub async fn record_success_on(
+        connection: &mut PgConnection,
+        attempt_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let updated = sqlx::query("UPDATE admin_attempts SET is_failure = FALSE WHERE id = $1")
+            .bind(attempt_id)
+            .execute(connection)
+            .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+
     /// No-op if using the pessimistic default (where `register_attempt` sets `is_failure=TRUE`).
     /// Kept for API consistency.
     pub fn record_failure(&self, _attempt_id: Uuid) {
@@ -131,82 +174,102 @@ impl AdminRateLimiter {
     /// Returns the remaining cooldown time in seconds for display. A failed lookup
     /// shows no cooldown; enforcement in `register_attempt` fails closed instead.
     pub async fn cooldown_seconds(&self, user_id: Uuid) -> u64 {
-        self.cooldown(user_id).await.unwrap_or(0)
+        let Ok(mut connection) = self.pool.acquire().await else {
+            return 0;
+        };
+        cooldown(&mut connection, user_id).await.unwrap_or(0)
     }
+}
 
-    /// Remaining cooldown in seconds, or the database error that prevented reading it.
-    async fn cooldown(&self, user_id: Uuid) -> Result<u64, sqlx::Error> {
-        let query = r"
-            WITH last_attempts AS (
-                SELECT is_failure, created_at
-                FROM admin_attempts
-                WHERE user_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-            )
-            SELECT MAX(created_at) as last_failure_at
-            FROM last_attempts
-            HAVING COUNT(*) = $2 AND BOOL_AND(is_failure)
-        ";
-        let span = tracing::info_span!(
-            "db.query",
-            db.system = "postgresql",
-            db.operation = "SELECT"
-        );
-        let row = sqlx::query(query)
-            .bind(user_id)
-            .bind(FAILURE_LIMIT)
-            .fetch_optional(&self.pool)
-            .instrument(span)
-            .await;
+/// Who a window count is for.
+#[derive(Clone, Copy)]
+enum Subject<'a> {
+    User(Uuid),
+    Ip(&'a str),
+}
 
-        Ok(match row? {
-            Some(row) => {
-                let last_failure_at: jiff_sqlx::Timestamp = row.get("last_failure_at");
-                let now = jiff::Timestamp::now();
-                let elapsed = now.duration_since(last_failure_at.to_jiff()).as_secs();
-                let cooldown_secs = i64::try_from(COOLDOWN_DURATION.as_secs()).unwrap_or(i64::MAX);
-                if elapsed < cooldown_secs {
-                    u64::try_from(cooldown_secs - elapsed).unwrap_or(0)
-                } else {
-                    0
-                }
+/// Serializes registrations for one user or one address until the transaction ends.
+async fn lock_subject(
+    connection: &mut PgConnection,
+    class: i32,
+    subject: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+        .bind(class)
+        .bind(subject)
+        .execute(connection)
+        .await
+        .map(|_| ())
+}
+
+/// Remaining cooldown in seconds, or the database error that prevented reading it.
+async fn cooldown(connection: &mut PgConnection, user_id: Uuid) -> Result<u64, sqlx::Error> {
+    let query = r"
+        WITH last_attempts AS (
+            SELECT is_failure, created_at
+            FROM admin_attempts
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+        )
+        SELECT MAX(created_at) as last_failure_at
+        FROM last_attempts
+        HAVING COUNT(*) = $2 AND BOOL_AND(is_failure)
+    ";
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT"
+    );
+    let row = sqlx::query(query)
+        .bind(user_id)
+        .bind(FAILURE_LIMIT)
+        .fetch_optional(connection)
+        .instrument(span)
+        .await;
+
+    Ok(match row? {
+        Some(row) => {
+            let last_failure_at: jiff_sqlx::Timestamp = row.get("last_failure_at");
+            let now = jiff::Timestamp::now();
+            let elapsed = now.duration_since(last_failure_at.to_jiff()).as_secs();
+            let cooldown_secs = i64::try_from(COOLDOWN_DURATION.as_secs()).unwrap_or(i64::MAX);
+            if elapsed < cooldown_secs {
+                u64::try_from(cooldown_secs - elapsed).unwrap_or(0)
+            } else {
+                0
             }
-            None => 0,
-        })
-    }
+        }
+        None => 0,
+    })
+}
 
-    async fn count_user_attempts(&self, user_id: Uuid) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM admin_attempts WHERE user_id = $1 AND created_at > NOW() - $2::interval";
-        let span = tracing::info_span!(
-            "db.query",
-            db.system = "postgresql",
-            db.operation = "SELECT"
-        );
-        let row = sqlx::query(query)
-            .bind(user_id)
-            .bind(format!("{} seconds", ATTEMPT_WINDOW.as_secs()))
-            .fetch_one(&self.pool)
-            .instrument(span)
-            .await?;
-        Ok(row.get(0))
-    }
-
-    async fn count_ip_attempts(&self, ip: &str) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM admin_attempts WHERE ip_address = $1::inet AND created_at > NOW() - $2::interval";
-        let span = tracing::info_span!(
-            "db.query",
-            db.system = "postgresql",
-            db.operation = "SELECT"
-        );
-        let row = sqlx::query(query)
-            .bind(ip)
-            .bind(format!("{} seconds", ATTEMPT_WINDOW.as_secs()))
-            .fetch_one(&self.pool)
-            .instrument(span)
-            .await?;
-        Ok(row.get(0))
-    }
+/// Attempts registered for `subject` inside the rolling window.
+async fn count_attempts(
+    connection: &mut PgConnection,
+    subject: Subject<'_>,
+) -> Result<i64, sqlx::Error> {
+    let window = format!("{} seconds", ATTEMPT_WINDOW.as_secs());
+    let span = tracing::info_span!(
+        "db.query",
+        db.system = "postgresql",
+        db.operation = "SELECT"
+    );
+    let count = match subject {
+        Subject::User(user_id) => sqlx::query_scalar(
+            "SELECT COUNT(*) FROM admin_attempts WHERE user_id = $1 AND created_at > NOW() - $2::interval",
+        )
+        .bind(user_id),
+        Subject::Ip(ip) => sqlx::query_scalar(
+            "SELECT COUNT(*) FROM admin_attempts WHERE ip_address = $1::inet AND created_at > NOW() - $2::interval",
+        )
+        .bind(ip),
+    };
+    count
+        .bind(window)
+        .fetch_one(connection)
+        .instrument(span)
+        .await
 }
 
 #[cfg(test)]
@@ -248,6 +311,79 @@ mod tests {
         .await
         .context("failed to insert user")?;
         Ok(row.get("id"))
+    }
+
+    /// Counting the window and reserving the attempt were separate statements on separate
+    /// connections, so requests arriving together each saw room and all got in. They now
+    /// take turns: exactly the limit is admitted, per user and per address.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn concurrent_registrations_cannot_exceed_the_window_limits() -> Result<()> {
+        runtime::ensure_container_runtime()
+            .context("The window limits require PostgreSQL; a skip is not coverage")?;
+        let (pool, container) = get_test_pool().await?;
+        // More connections than either limit, and not a divisor of one: requests that
+        // are not serialized then count the window together and overshoot it.
+        let wide = PgPoolOptions::new()
+            .max_connections(16)
+            .acquire_timeout(std::time::Duration::from_secs(30))
+            .connect(&container.admin_dsn())
+            .await?;
+        // Open every connection first, so the burst below is not staggered by connecting.
+        let mut warm = Vec::new();
+        for _ in 0..16 {
+            warm.push(wide.acquire().await?);
+        }
+        drop(warm);
+        let limiter = std::sync::Arc::new(AdminRateLimiter::new(wide));
+        let admitted = |attempts: Vec<(Uuid, Option<&'static str>)>| {
+            let limiter = limiter.clone();
+            async move {
+                // Every request starts at the same moment, on several threads.
+                let start = std::sync::Arc::new(tokio::sync::Barrier::new(attempts.len()));
+                let tasks: Vec<_> = attempts
+                    .into_iter()
+                    .map(|(user, ip)| {
+                        let (limiter, start) = (limiter.clone(), start.clone());
+                        tokio::spawn(async move {
+                            start.wait().await;
+                            limiter.register_attempt(user, ip, None).await
+                        })
+                    })
+                    .collect();
+                let mut admitted = 0;
+                for task in tasks {
+                    // Past the limit a request is refused by the window, or by the
+                    // cooldown the three unconfirmed attempts before it started.
+                    if task.await?.is_ok() {
+                        admitted += 1;
+                    }
+                }
+                Ok::<_, anyhow::Error>(admitted)
+            }
+        };
+
+        let user = insert_user(&pool, "burst@example.com").await?;
+        assert_eq!(admitted(vec![(user, None); 24]).await?, 3);
+        let recorded: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM admin_attempts WHERE user_id=$1")
+                .bind(user)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(recorded, 3);
+
+        let mut one_address = Vec::new();
+        for index in 0..24 {
+            let user = insert_user(&pool, &format!("burst-{index}@example.com")).await?;
+            one_address.push((user, Some("203.0.113.7")));
+        }
+        assert_eq!(admitted(one_address).await?, 10);
+        let recorded: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM admin_attempts WHERE ip_address='203.0.113.7'::inet",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(recorded, 10);
+        Ok(())
     }
 
     /// With the database unreachable the cooldown cannot be read. Enforcement must

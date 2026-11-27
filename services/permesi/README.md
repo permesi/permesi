@@ -208,8 +208,9 @@ registration verification (useful for staged rollouts).
 ### Organization endpoints and authorization
 
 Self-service user operations must use `/v1/me/*` and resolve the user from the session cookie.
-Session authentication is cookie-based for browser flows; `Authorization: Bearer` is reserved for
-explicit step-up/admin tokens rather than normal user sessions.
+Session authentication is cookie-based for browser flows, including the operator step-up.
+`Authorization: Bearer` is used for OAuth access tokens (`/userinfo`), never for a user session
+or an operator elevation.
 Organization, project, environment, and application routes are scoped by org slug and require
 active membership. Org roles (`owner`, `admin`, `member`, `readonly`) are enforced server-side:
 owner/admin can mutate org resources; member/readonly are read-only. Unauthorized access is

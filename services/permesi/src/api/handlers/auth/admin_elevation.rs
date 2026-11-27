@@ -8,10 +8,12 @@
 //! with its session.
 //!
 //! ## Flow Overview
-//! 1. `POST /v1/auth/admin/elevate` validates the OpenBao token, then takes the identity
-//!    and exact-session locks of `AuthorityGuard` and calls [`grant`] on that transaction.
-//! 2. [`grant`] rechecks the account, the session and the operator designation under
-//!    those locks and writes the session's one row, replacing an earlier grant.
+//! 1. `POST /v1/auth/admin/elevate` reads the database [`clock`], then validates the
+//!    OpenBao token. [`openbao_deadline`] turns that reading and the token's remaining
+//!    life into the instant the elevation may not pass.
+//! 2. The handler takes the identity and exact-session locks of `AuthorityGuard` and
+//!    calls [`grant`] on that transaction. It rechecks the account, the session and the
+//!    operator designation and writes the session's one row, replacing an earlier grant.
 //! 3. `GET /v1/auth/admin/infra` calls [`authorize`] with the session cookie's hash.
 //!    One statement decides from the session, the account, the designation and the grant.
 //!
@@ -22,8 +24,18 @@
 //! suspending the account rotates the designation revision, which leaves a surviving
 //! row unusable. The grant never outlives the session, the configured lifetime or the
 //! OpenBao token that earned it. No OpenBao token is stored.
+//!
+//! Every time bound is measured on the database clock, in one place, so replicas need
+//! not agree on the time. The OpenBao bound is an instant fixed before the lookup, not
+//! a duration added when the row is written: time spent waiting for OpenBao, for a lock
+//! or for the statement shortens the elevation and can never extend it.
+//!
+//! Step-ups on one session are applied in the order they commit. Two that overlap are
+//! each backed by their own valid OpenBao token, and the later commit decides the row.
 
 use anyhow::{Context, Result};
+use jiff::SignedDuration;
+use jiff_sqlx::{Timestamp, ToSqlx};
 use sqlx::{PgConnection, PgPool};
 use tracing::Instrument;
 use uuid::Uuid;
@@ -39,15 +51,51 @@ pub(super) enum Access {
     NoSession,
 }
 
-/// Records the elevation of one locked session and returns its expiry (RFC 3339, UTC,
-/// whole seconds), or `None` when the session, account or designation no longer qualifies.
+/// Reads the database clock. Taken before the OpenBao lookup, it anchors the deadline
+/// of the elevation on the same clock that later writes and checks the grant.
+///
+/// # Errors
+/// Returns an error if the database cannot be read; no elevation may then proceed.
+pub(super) async fn clock(pool: &PgPool) -> Result<Timestamp> {
+    sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .context("failed to read the database clock")
+}
+
+/// The instant an elevation earned with an OpenBao token may not pass, or `None` when
+/// the token leaves no usable time.
+///
+/// `anchor` must have been read before the lookup that reported `openbao_ttl_seconds`,
+/// so the token cannot end before `anchor` plus its real remaining life. OpenBao
+/// reports that life in whole seconds, rounded, so one second is given up: the deadline
+/// is never later than the token's own end. A missing or negative lifetime, which the
+/// lookup reports as zero or less, grants nothing. The lifetime is capped just above
+/// `configured_seconds` first; that changes no result and keeps the arithmetic in range.
+pub(super) fn openbao_deadline(
+    anchor: Timestamp,
+    openbao_ttl_seconds: i64,
+    configured_seconds: i64,
+) -> Option<Timestamp> {
+    let usable = openbao_ttl_seconds
+        .min(configured_seconds.saturating_add(1))
+        .checked_sub(1)
+        .filter(|seconds| *seconds > 0)?;
+    anchor
+        .to_jiff()
+        .checked_add(SignedDuration::from_secs(usable))
+        .ok()
+        .map(ToSqlx::to_sqlx)
+}
+
+/// Records the elevation of one locked session and returns its expiry, or `None` when
+/// the session, account or designation no longer qualifies or no lifetime is left.
 ///
 /// The caller must hold `AuthorityGuard` locks for `user` and this session on
-/// `connection`, and must already have validated the OpenBao token; `ttl_seconds` is the
-/// smaller of the configured lifetime and that token's remaining life. The row binds
-/// the designation revision read here and expires no later than the session. A repeated
-/// elevation replaces the row, so the newest step-up decides the expiry. A lifetime that
-/// is not positive grants nothing and reaches no statement.
+/// `connection`, and must already have validated the OpenBao token. The row expires at
+/// the earliest of `ttl_seconds` from now, `deadline` (see [`openbao_deadline`]) and the
+/// session's own expiry, and binds the designation revision read here. A repeated
+/// elevation replaces the row. A lifetime that is not positive reaches no statement.
 ///
 /// # Errors
 /// Returns an error if the statement fails; the caller's transaction must then roll back.
@@ -56,30 +104,37 @@ pub(super) async fn grant(
     user: Uuid,
     session_hash: &[u8],
     ttl_seconds: i64,
-) -> Result<Option<String>> {
+    deadline: Timestamp,
+) -> Result<Option<Timestamp>> {
     if ttl_seconds <= 0 {
         return Ok(None);
     }
-    // One clock reading for the session check and both timestamps, so the row cannot be
-    // written with an expiry at or before its creation.
-    let query = r#"
-        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
+    // One clock reading for the session check, the bounds and both timestamps, so the
+    // row cannot be written with an expiry at or before its creation.
+    let query = r"
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now),
+        candidate AS (
+            SELECT s.id,
+                   po.token_revision,
+                   clock.now,
+                   LEAST(clock.now + $3::bigint * INTERVAL '1 second', $4, s.expires_at)
+                       AS expires_at
+            FROM clock
+            JOIN user_sessions s
+              ON s.user_id = $1 AND s.session_hash = $2 AND s.expires_at > clock.now
+            JOIN users u ON u.id = s.user_id AND u.status = 'active'
+            JOIN platform_operators po ON po.user_id = s.user_id AND po.enabled
+        )
         INSERT INTO platform_operator_elevations (session_id, operator_revision, created_at, expires_at)
-        SELECT s.id,
-               po.token_revision,
-               clock.now,
-               LEAST(clock.now + $3::bigint * INTERVAL '1 second', s.expires_at)
-        FROM clock
-        JOIN user_sessions s
-          ON s.user_id = $1 AND s.session_hash = $2 AND s.expires_at > clock.now
-        JOIN users u ON u.id = s.user_id AND u.status = 'active'
-        JOIN platform_operators po ON po.user_id = s.user_id AND po.enabled
+        SELECT id, token_revision, now, expires_at
+        FROM candidate
+        WHERE expires_at > now
         ON CONFLICT (session_id) DO UPDATE
             SET operator_revision = EXCLUDED.operator_revision,
                 created_at = EXCLUDED.created_at,
                 expires_at = EXCLUDED.expires_at
-        RETURNING to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
-    "#;
+        RETURNING expires_at
+    ";
     let span = tracing::info_span!(
         "db.query",
         db.system = "postgresql",
@@ -90,6 +145,7 @@ pub(super) async fn grant(
         .bind(user)
         .bind(session_hash)
         .bind(ttl_seconds)
+        .bind(deadline)
         .fetch_optional(connection)
         .instrument(span)
         .await
