@@ -529,6 +529,16 @@ fn environment_dial_address() -> Option<IpAddr> {
 /// `localhost` or a name under it that resolves, here and now, to loopback addresses
 /// only. The spelling alone is not enough, since a resolver can map such a name anywhere.
 fn local_host(host: &str, port: u16) -> bool {
+    local_host_with(host, port, |name, port| {
+        (name, port)
+            .to_socket_addrs()
+            .map_or_default(|addresses| addresses.map(|address| address.ip()).collect())
+    })
+}
+
+/// [`local_host`] with the resolver passed in, so the rule can be tested against answers
+/// this machine's resolver would never give.
+fn local_host_with(host: &str, port: u16, resolve: impl Fn(&str, u16) -> Vec<IpAddr>) -> bool {
     let name = host.trim_end_matches('.').to_ascii_lowercase();
     if let Ok(address) = name
         .trim_start_matches('[')
@@ -540,16 +550,8 @@ fn local_host(host: &str, port: u16) -> bool {
     if name != "localhost" && !name.ends_with(".localhost") {
         return false;
     }
-    (name.as_str(), port)
-        .to_socket_addrs()
-        .is_ok_and(|mut addresses| {
-            let mut any = false;
-            let all = addresses.all(|address| {
-                any = true;
-                address.ip().is_loopback()
-            });
-            any && all
-        })
+    let addresses = resolve(&name, port);
+    !addresses.is_empty() && addresses.iter().all(IpAddr::is_loopback)
 }
 
 /// One-line summary for startup logs.
@@ -753,6 +755,42 @@ mod tests {
         );
     }
 
+    /// A `localhost` name is local only if every address it resolves to is loopback.
+    /// This machine's resolver maps every such name to loopback, which hid a check that
+    /// trusted the spelling; here the resolver gives the answers a hostile one could.
+    #[test]
+    fn localhost_names_are_local_only_when_they_resolve_to_loopback() {
+        use super::local_host_with;
+        use std::net::IpAddr;
+        let answers = |answer: &'static [&'static str]| {
+            move |_: &str, _: u16| {
+                answer
+                    .iter()
+                    .filter_map(|address| address.parse::<IpAddr>().ok())
+                    .collect::<Vec<_>>()
+            }
+        };
+        for (host, answer, local) in [
+            ("localhost", &["127.0.0.1", "::1"][..], true),
+            ("db.localhost.", &["127.0.0.5"], true),
+            ("localhost", &["198.51.100.9"], false),
+            ("db.localhost", &["127.0.0.1", "198.51.100.9"], false),
+            ("db.localhost", &[], false),
+            // Not a localhost name: never treated as local, whatever it resolves to.
+            ("localhost.example.com", &["127.0.0.1"], false),
+            ("db.internal", &["127.0.0.1"], false),
+            // An address literal is decided without asking the resolver.
+            ("[::1]", &["198.51.100.9"], true),
+            ("198.51.100.9", &["127.0.0.1"], false),
+        ] {
+            assert_eq!(
+                local_host_with(host, 5432, answers(answer)),
+                local,
+                "{host} -> {answer:?}"
+            );
+        }
+    }
+
     /// Collects what is logged while a closure runs.
     #[derive(Clone, Default)]
     struct Captured(Arc<Mutex<Vec<u8>>>);
@@ -811,6 +849,25 @@ mod tests {
                             "{dsn}: {refused:?}"
                         );
                     }
+                }
+                // The check names what is wrong, without the value. This is the check's own
+                // message, not the driver's, whose error would repeat the value.
+                for (dsn, says) in [
+                    (
+                        format!("postgres://app@localhost/permesi?sslmode={MARKER}"),
+                        "sslmode",
+                    ),
+                    (
+                        format!("postgres://app@localhost/permesi?{MARKER}=1"),
+                        "query parameter",
+                    ),
+                    (
+                        format!("postgres://app@localhost/permesi?password={MARKER}"),
+                        "credentials",
+                    ),
+                ] {
+                    let refused = refusal(&dsn, true).unwrap_or_default();
+                    assert!(refused.contains(says), "{dsn}: {refused}");
                 }
                 // What the driver does act on is still accepted.
                 for dsn in [

@@ -168,6 +168,16 @@ pub(crate) enum Reach {
 impl Reach {
     /// Classify a base URL that passed `parse_http_address`.
     pub(crate) fn of(base_url: &str) -> Result<Self> {
+        Self::of_with(base_url, |name, port| {
+            (name, port)
+                .to_socket_addrs()
+                .map_or_default(Iterator::collect)
+        })
+    }
+
+    /// [`Reach::of`] with the resolver passed in, so the rule can be tested against
+    /// answers this machine's resolver would never give.
+    fn of_with(base_url: &str, resolve: impl Fn(&str, u16) -> Vec<SocketAddr>) -> Result<Self> {
         let (parsed, _) = crate::parse_http_address(base_url)?;
         if parsed.scheme() == "https" {
             return Ok(Self::Encrypted);
@@ -180,9 +190,7 @@ impl Reach {
                 let port = parsed.port_or_known_default().unwrap_or(80);
                 let addresses: Vec<SocketAddr> =
                     if name == "localhost" || name.ends_with(".localhost") {
-                        (name.as_str(), port)
-                            .to_socket_addrs()
-                            .map_or_default(Iterator::collect)
+                        resolve(&name, port)
                     } else {
                         Vec::new()
                     };
@@ -719,6 +727,48 @@ mod tests {
                 "{address}"
             );
         }
+        Ok(())
+    }
+
+    /// A plain `localhost` name counts as local only when every address it resolves to is
+    /// loopback, and the client is then pinned to exactly those. This machine's resolver
+    /// maps every `.localhost` name to loopback, so a hostile answer is supplied here.
+    #[test]
+    fn localhost_name_is_local_only_when_it_resolves_to_loopback() -> anyhow::Result<()> {
+        use super::Reach;
+        use std::net::SocketAddr;
+        let answers = |answer: &'static [&'static str]| {
+            move |_: &str, port: u16| {
+                answer
+                    .iter()
+                    .filter_map(|ip| ip.parse::<std::net::IpAddr>().ok())
+                    .map(|ip| SocketAddr::new(ip, port))
+                    .collect::<Vec<_>>()
+            }
+        };
+        let pinned = Reach::of_with(
+            "http://openbao.localhost:8200",
+            answers(&["127.0.0.1", "::1"]),
+        )?;
+        let Reach::LocalPlain(Some((host, addresses))) = pinned else {
+            anyhow::bail!("a name resolving to loopback is local");
+        };
+        assert_eq!(host, "openbao.localhost");
+        assert_eq!(addresses.len(), 2);
+        assert!(addresses.iter().all(|address| address.port() == 8200));
+        for answer in [&["198.51.100.9"][..], &["127.0.0.1", "198.51.100.9"], &[]] {
+            assert!(
+                matches!(
+                    Reach::of_with("http://openbao.localhost:8200", answers(answer))?,
+                    Reach::RemotePlain
+                ),
+                "{answer:?}"
+            );
+        }
+        assert!(matches!(
+            Reach::of_with("https://openbao.localhost:8200", answers(&["198.51.100.9"]))?,
+            Reach::Encrypted
+        ));
         Ok(())
     }
 

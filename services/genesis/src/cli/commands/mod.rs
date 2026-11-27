@@ -222,6 +222,28 @@ pub fn trusted_proxy_range(value: &str) -> Result<sqlx::types::ipnetwork::IpNetw
 
 #[cfg(test)]
 mod tests {
+    /// The parser itself refuses a range of every address; dispatch checks again.
+    #[test]
+    fn trusted_proxy_range_refuses_a_range_of_every_address() {
+        for value in [
+            "0.0.0.0/0",
+            "::/0",
+            " 0.0.0.0/0 ",
+            "attacker.example",
+            "192.0.2.0/33",
+        ] {
+            assert!(super::trusted_proxy_range(value).is_err(), "{value:?}");
+        }
+        for value in [
+            "192.0.2.0/24",
+            "2001:db8::/32",
+            "198.51.100.7",
+            "10.0.0.0/1",
+        ] {
+            assert!(super::trusted_proxy_range(value).is_ok(), "{value:?}");
+        }
+    }
+
     use super::*;
 
     /// `--help` prints the current value of an environment-backed argument unless the

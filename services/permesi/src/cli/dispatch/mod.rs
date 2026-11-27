@@ -566,6 +566,57 @@ mod tests {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
+    /// The charts always set both opt-out variables, to `false` unless the operator
+    /// asked for the opt-out, so that a shared `ConfigMap` cannot switch one on. A
+    /// variable that is present must therefore be read by its value: `false` keeps the
+    /// refusal, and only `true` waives it. Anything else stops the service.
+    #[test]
+    fn opt_out_variables_are_read_by_value_not_by_presence() {
+        let start = || {
+            crate::cli::commands::new()
+                .try_get_matches_from([
+                    "permesi",
+                    "--tls-pem-bundle",
+                    "bundle",
+                    "--openbao-role-id",
+                    "role",
+                    "--openbao-secret-id",
+                    "role-secret",
+                    "--openbao-url",
+                    "http://openbao.internal:8200",
+                    "--dsn",
+                    "postgres://db.internal/app",
+                ])
+                .map_err(|error| error.kind().to_string())
+                .and_then(|matches| handler(&matches).map(|_| ()).map_err(|e| format!("{e:#}")))
+        };
+        let with = |openbao: Option<&str>, database: Option<&str>| {
+            temp_env::with_vars(
+                [
+                    ("PERMESI_OPENBAO_ALLOW_INSECURE_HTTP", openbao),
+                    ("PERMESI_DB_ALLOW_UNVERIFIED_TLS", database),
+                    ("PERMESI_SOCKET_PATH", None),
+                    ("PGHOST", None),
+                    ("PGHOSTADDR", None),
+                    ("PGSSLMODE", None),
+                ],
+                start,
+            )
+        };
+        let plain = with(Some("false"), Some("true")).err().unwrap_or_default();
+        assert!(plain.contains("plain http"), "{plain}");
+        let unverified = with(Some("true"), Some("false")).err().unwrap_or_default();
+        assert!(unverified.contains("verify-full"), "{unverified}");
+        assert!(with(Some("false"), Some("false")).is_err());
+        assert_eq!(with(Some("true"), Some("true")), Ok(()));
+        for value in ["yes", "1", "on", ""] {
+            assert!(
+                with(Some(value), Some("true")).is_err(),
+                "{value:?} must not be read as an opt-out"
+            );
+        }
+    }
+
     /// An opt-out that is in effect is announced on every start, and it has to be seen.
     /// The notices were logged as warnings, which the default level drops, so a service
     /// started without `-v` said nothing. An opt-out that changes nothing stays silent.
