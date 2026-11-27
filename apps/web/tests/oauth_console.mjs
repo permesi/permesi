@@ -60,7 +60,7 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/v1/auth/session')return sessionKind==='none'||(sessionKind==='mfa_challenge'&&exhaustMfaChallenge)?send(401,''):send(200,{user_id:profileId,email:'ui@example.test',is_operator:sessionIsOperator,session_kind:sessionKind,totp_enabled:true,webauthn_enabled:false});
   if(p==='/v1/me')return send(200,{id:profileId,email:'ui@example.test',display_name:null,locale:null,created_at:time,updated_at:time,roles:[],scopes:[],mfa_enabled:true,totp_enabled:true});
   if(p==='/v1/auth/admin/status')return send(200,{bootstrap_open:false,operator:sessionIsOperator,cooldown_seconds:0});
-  if(p==='/v1/auth/admin/elevate'&&req.method==='POST'){assert(sessionIsOperator);return send(200,{admin_token:'fixture-ui-elevation',expires_at:new Date(Date.now()+600000).toISOString()});}
+  if(p==='/v1/auth/admin/elevate'&&req.method==='POST'){assert(sessionIsOperator);return send(200,{expires_at:new Date(Date.now()+600000).toISOString()});}
   if(p==='/v1/users')return send(200,[{id:profileId,email:'profile@example.test',display_name:'Fixture profile'}]);
   if(p===`/v1/users/${profileId}`)return send(200,{id:profileId,email:'profile@example.test',display_name:null,locale:'en-US',role:null,created_at:time,updated_at:time,last_login_at:lastLogin,login_tracking_complete:loginTrackingComplete});
   if(p===`/v1/users/${profileId}/operator`)return send(200,{designation:'disabled',pending_enable:false,requested_by_me:false,requested_by_email:null,requested_reason:null,requested_at:null,can_approve:false});
@@ -561,7 +561,7 @@ try {
  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:950,deviceScaleFactor:1,mobile:false});
  sessionIsOperator=true;await goto('/console/admin/claim');await wait("document.querySelector('input[placeholder=\"s.xxxxx\"]')");
  await evaluate("(()=>{const input=document.querySelector('input[placeholder=\"s.xxxxx\"]');input.value='fixture-step-up';input.dispatchEvent(new Event('input',{bubbles:true}));})()");
- await click('Elevate');await wait("document.body.innerText.includes('Admin token active until')");
+ await click('Elevate');await wait("document.body.innerText.includes('Admin elevation active until')");
  await click('Global Users');await wait("document.body.innerText.includes('profile@example.test')");await click('profile@example.test');
  await wait("document.body.innerText.includes('Profile Information') && document.body.innerText.includes('Designation') && document.querySelector('button[aria-label=\"Copy user ID\"]')");
  await wait("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Last Login') && document.querySelectorAll('time').length===3");

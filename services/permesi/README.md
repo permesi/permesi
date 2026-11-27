@@ -187,8 +187,10 @@ re-auth (default 10 minutes) and revoke all sessions once the new registration r
 Browser clients authenticate with the `permesi_session` cookie. Admin bootstrap/elevation calls
 (`POST /v1/auth/admin/bootstrap` and `POST /v1/auth/admin/elevate`) require this cookie-backed
 session and accept the OpenBao token in the JSON request body. On successful elevation, `permesi`
-returns a short-lived admin `PASETO` (`v4.public`) token. That admin token is then sent as
-`Authorization: Bearer <admin_token>` for elevated endpoints such as `GET /v1/auth/admin/infra`.
+records a short-lived elevation for that exact session in PostgreSQL and returns its expiry. The
+same cookie then authorizes `GET /v1/auth/admin/infra` on any replica until the elevation expires or
+the session ends. No admin bearer token exists; see
+[operator designation](../../docs/operator-designation.md#admin-elevation).
 
 ### Passkeys (WebAuthn)
 

@@ -1,8 +1,8 @@
 //! Admin claim page for platform operator bootstrap and elevation.
 //!
 //! Flow Overview: Fetch admin status, render the appropriate form, then submit
-//! the OpenBao token to bootstrap or elevate. The admin token is stored in memory
-//! and must be re-issued after expiration.
+//! the OpenBao token to bootstrap or elevate. The server holds the elevation against
+//! the session; its expiry is kept in memory and a new step-up is needed afterwards.
 
 use crate::{
     app_lib::AppError,
@@ -129,7 +129,7 @@ pub fn AdminClaimPage() -> impl IntoView {
                                 set_note,
                                 on_claim_submit,
                                 claim_action.pending().into(),
-                                auth.admin_token,
+                                auth.admin_elevation,
                             ).into_any(),
                             Err(err) => view! {
                                 <Alert kind=AlertKind::Error message=err.to_string() />
@@ -183,7 +183,7 @@ fn render_admin_forms(
     set_note: WriteSignal<String>,
     on_claim_submit: impl Fn(SubmitEvent) + Copy + Send + 'static,
     claim_pending: Signal<bool>,
-    admin_token: RwSignal<Option<crate::features::auth::types::AdminElevateResponse>>,
+    admin_elevation: RwSignal<Option<crate::features::auth::types::AdminElevateResponse>>,
 ) -> impl IntoView {
     let bootstrap_open = status.bootstrap_open;
     let operator = status.operator;
@@ -196,7 +196,7 @@ fn render_admin_forms(
         None
     };
     let has_active_token = Signal::derive(move || {
-        admin_token
+        admin_elevation
             .get()
             .is_some_and(|token| !is_token_expired(&token.expires_at))
     });
@@ -206,7 +206,7 @@ fn render_admin_forms(
             {cooldown_message.map(|message| {
                 view! { <Alert kind=AlertKind::Info message=message /> }
             })}
-            {active_token_notice(admin_token)}
+            {active_token_notice(admin_elevation)}
         </div>
 
         {move || {
@@ -277,11 +277,11 @@ fn render_admin_forms(
 
 /// Shows only a still-valid administrator elevation and its navigation link.
 fn active_token_notice(
-    admin_token: RwSignal<Option<crate::features::auth::types::AdminElevateResponse>>,
+    admin_elevation: RwSignal<Option<crate::features::auth::types::AdminElevateResponse>>,
 ) -> impl IntoView {
     view! {
             {move || {
-                admin_token
+                admin_elevation
                     .get()
                     .and_then(|token| {
                         if is_token_expired(&token.expires_at) {
@@ -290,7 +290,7 @@ fn active_token_notice(
                             Some(
                                 view! {
                                 <div role="status" class="text-sm text-green-700 dark:text-green-300">
-                                    "Admin token active until "<DateTime value=token.expires_at />"."
+                                    "Admin elevation active until "<DateTime value=token.expires_at />"."
                                 </div>
                                 <div class="mt-4">
                                     <A
@@ -377,10 +377,10 @@ fn watch_bootstrap_status(
     Effect::new(move |_| {
         if let Some(status) = status_signal.get() {
             // Security Fix: If the backend says bootstrap is open (meaning no operators exist),
-            // any client-side admin token is semantically invalid. Clear it to prevent
-            // "persistent admin token" issues when the DB is wiped.
-            if status.bootstrap_open && auth.admin_token.get_untracked().is_some() {
-                auth.clear_admin_token();
+            // any client-side elevation state is semantically invalid. Clear it so the
+            // console does not show a stale elevation when the DB is wiped.
+            if status.bootstrap_open && auth.admin_elevation.get_untracked().is_some() {
+                auth.clear_admin_elevation();
             }
         }
     });
@@ -413,7 +413,7 @@ fn watch_claim_results(
                     set_note.set(String::new());
                     match outcome {
                         ClaimOutcome::Elevated(token) => {
-                            auth_for_claim.set_admin_token(token);
+                            auth_for_claim.set_admin_elevation(token);
                             // We set success state, but simpler logic below relies on has_active_token
                             set_page_state.set(PageState::Success);
                             set_success.set(Some(

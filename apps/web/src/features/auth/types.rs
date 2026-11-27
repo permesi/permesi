@@ -187,9 +187,9 @@ pub struct AdminElevateRequest {
     pub openbao_token: String,
 }
 
+/// The server holds the elevation against the session; the browser keeps only its expiry.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AdminElevateResponse {
-    pub admin_token: String,
     pub expires_at: String,
 }
 

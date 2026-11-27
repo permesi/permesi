@@ -39,6 +39,59 @@ BEGIN
     END IF;
 END $$;
 
+-- An operator elevation belongs to exactly one session and cannot outlive it; the
+-- runtime role may replace a grant in place but never re-home or delete one directly.
+DO $$
+DECLARE
+    account UUID;
+    v_session UUID;
+BEGIN
+    INSERT INTO users(email,opaque_registration_record,status)
+        VALUES ('elevation-schema-'||uuidv4()::text||'@test.invalid',decode('01','hex'),'active')
+        RETURNING id INTO account;
+    INSERT INTO user_sessions(user_id,session_hash,expires_at)
+        VALUES (account,sha256(convert_to(uuidv4()::text,'UTF8')),NOW()+INTERVAL '1 hour')
+        RETURNING id INTO v_session;
+    INSERT INTO platform_operator_elevations(session_id,operator_revision,expires_at)
+        VALUES (v_session,uuidv4(),NOW()+INTERVAL '10 minutes');
+    BEGIN
+        INSERT INTO platform_operator_elevations(session_id,operator_revision,expires_at)
+            VALUES (v_session,uuidv4(),NOW()+INTERVAL '10 minutes');
+        RAISE EXCEPTION 'expected one elevation per session';
+    EXCEPTION WHEN unique_violation THEN
+        -- expected
+    END;
+    BEGIN
+        INSERT INTO platform_operator_elevations(session_id,operator_revision,expires_at)
+            VALUES (uuidv4(),uuidv4(),NOW()+INTERVAL '10 minutes');
+        RAISE EXCEPTION 'expected an elevation to require an existing session';
+    EXCEPTION WHEN foreign_key_violation THEN
+        -- expected
+    END;
+    BEGIN
+        INSERT INTO platform_operator_elevations(session_id,operator_revision,created_at,expires_at)
+            SELECT id,uuidv4(),NOW(),NOW() FROM user_sessions WHERE user_id=account AND id<>v_session;
+        UPDATE platform_operator_elevations SET expires_at=created_at WHERE session_id=v_session;
+        RAISE EXCEPTION 'expected an elevation to expire after its creation';
+    EXCEPTION WHEN check_violation THEN
+        -- expected
+    END;
+    DELETE FROM user_sessions WHERE id=v_session;
+    IF EXISTS(SELECT 1 FROM platform_operator_elevations WHERE session_id=v_session) THEN
+        RAISE EXCEPTION 'elevation must be deleted with its session';
+    END IF;
+    IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='permesi_runtime') AND (
+        NOT has_table_privilege('permesi_runtime','platform_operator_elevations','SELECT')
+        OR NOT has_table_privilege('permesi_runtime','platform_operator_elevations','INSERT')
+        OR NOT has_column_privilege('permesi_runtime','platform_operator_elevations','operator_revision','UPDATE')
+        OR NOT has_column_privilege('permesi_runtime','platform_operator_elevations','expires_at','UPDATE')
+        OR NOT has_column_privilege('permesi_runtime','platform_operator_elevations','created_at','UPDATE')
+        OR has_column_privilege('permesi_runtime','platform_operator_elevations','session_id','UPDATE')
+        OR has_table_privilege('permesi_runtime','platform_operator_elevations','DELETE')) THEN
+        RAISE EXCEPTION 'invalid runtime operator elevation privileges';
+    END IF;
+END $$;
+
 -- Tenant parents cannot physically cascade-delete retained authority. User deletion
 -- remains available, but both retained-history foreign keys must reject its cascade.
 DO $$

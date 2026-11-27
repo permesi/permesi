@@ -8,11 +8,11 @@ user's active memberships and retains its existing tenant-management controls.
 
 ## Flow and authorization
 
-The existing admin UI requires operator status and a live elevation token. Each
+The existing admin UI requires operator status and a live elevation. Each
 inspection API request independently requires a valid full-session cookie and the
 current database-derived `platform:admin` capability, represented internally by
 `InspectTenants`. The API follows the global user-data session boundary and does
-not require an elevation PASETO. Global user roles, organization roles and delegated
+not require an elevation. Global user roles, organization roles and delegated
 OAuth scopes do not grant inspection authority. Disabled operators, suspended
 accounts, expired/revoked sessions and limited MFA sessions cannot read the data.
 

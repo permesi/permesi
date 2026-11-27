@@ -25,7 +25,7 @@ where
                 view! { <NotFoundContent /> }.into_any()
             } else if !auth.is_operator.get() {
                 view! { <NotFoundContent /> }.into_any()
-            } else if auth.admin_token.get().is_none_or(|token| {
+            } else if auth.admin_elevation.get().is_none_or(|token| {
                 crate::features::auth::client::is_token_expired(&token.expires_at)
             }) {
                 view! { <ElevationPrompt /> }.into_any()

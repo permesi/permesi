@@ -41,7 +41,7 @@ pub fn AdminLayout() -> impl IntoView {
                             // Access control: allowed if bootstrap is open or user is an operator.
                             Some(Ok(res)) if res.bootstrap_open || res.operator => {
                                 let is_claim_page = location.pathname.get() == paths::ADMIN_CLAIM;
-                                let has_token = auth.admin_token.get().is_some_and(|token| {
+                                let has_token = auth.admin_elevation.get().is_some_and(|token| {
                                     !client::is_token_expired(&token.expires_at)
                                 });
 

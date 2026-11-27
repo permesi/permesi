@@ -78,9 +78,10 @@ audited [operator-designation lifecycle](operator-designation.md) to disable the
 operator record before restoring account eligibility; restoration of a disabled
 designation requires a new request and a distinct operator's approval. Infrastructure
 access rechecks active account status, so a suspended operator cannot use an
-otherwise unexpired admin elevation token. Suspension and reactivation also
-rotate the retained designation revision, so a token issued before suspension
-does not revive after account recovery.
+otherwise unexpired admin elevation. Suspension also deletes the sessions an
+elevation belongs to, and suspension and reactivation rotate the retained
+designation revision, so an elevation from before suspension does not revive after
+account recovery.
 
 ## Audit, permissions and rollout
 

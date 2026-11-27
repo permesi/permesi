@@ -22,6 +22,8 @@ pub const ARG_AUTH_RATE_LIMIT_IP_ATTEMPTS: &str = "auth-rate-limit-ip-attempts";
 pub const ARG_AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS: &str = "auth-rate-limit-account-attempts";
 
 pub const ARG_PLATFORM_ADMIN_TTL: &str = "platform-admin-ttl-seconds";
+/// Accepted operator elevation lifetimes: at least a second, at most 13 hours.
+pub const PLATFORM_ADMIN_TTL_RANGE: std::ops::RangeInclusive<i64> = 1..=46_800;
 pub const ARG_PLATFORM_RECENT_AUTH: &str = "platform-recent-auth-seconds";
 
 #[derive(Debug, Clone)]
@@ -352,10 +354,10 @@ fn with_admin_args(command: Command) -> Command {
         .arg(
             Arg::new(ARG_PLATFORM_ADMIN_TTL)
                 .long(ARG_PLATFORM_ADMIN_TTL)
-                .help("Admin elevation token TTL in seconds")
+                .help("Longest operator elevation in seconds (1-46800); the session and the OpenBao token can end it sooner")
                 .env("PLATFORM_ADMIN_TTL_SECONDS")
                 .default_value("43200")
-                .value_parser(clap::value_parser!(i64)),
+                .value_parser(clap::value_parser!(i64).range(PLATFORM_ADMIN_TTL_RANGE)),
         )
         .arg(
             Arg::new(ARG_PLATFORM_RECENT_AUTH)
@@ -428,6 +430,41 @@ mod tests {
                         .get_one::<i64>(super::ARG_OPAQUE_EXCHANGE_TIMEOUT)
                         .copied(),
                     Some(crate::cli::commands::DEFAULT_OPAQUE_EXCHANGE_TIMEOUT_MS)
+                );
+                Ok(())
+            },
+        )
+    }
+
+    /// The elevation lifetime used to accept any integer: zero and negative values made
+    /// every elevation fail with `500`, and values above 13 hours were issued and then
+    /// rejected on first use. Both now fail at startup.
+    #[test]
+    fn platform_admin_ttl_parser_enforces_bounds_and_default() -> anyhow::Result<()> {
+        temp_env::with_var(
+            "PLATFORM_ADMIN_TTL_SECONDS",
+            None::<&str>,
+            || -> anyhow::Result<()> {
+                let parse = |value: &str| {
+                    super::with_args(clap::Command::new("test")).try_get_matches_from([
+                        "test",
+                        "--platform-admin-ttl-seconds",
+                        value,
+                    ])
+                };
+                for value in ["-1", "0", "46801", "9223372036854775807", "", "12h"] {
+                    assert!(parse(value).is_err(), "{value:?} must be rejected");
+                }
+                for value in ["1", "43200", "46800"] {
+                    assert!(parse(value).is_ok(), "{value:?} must be accepted");
+                }
+                let defaults =
+                    super::with_args(clap::Command::new("test")).try_get_matches_from(["test"])?;
+                assert_eq!(
+                    defaults
+                        .get_one::<i64>(super::ARG_PLATFORM_ADMIN_TTL)
+                        .copied(),
+                    Some(43_200)
                 );
                 Ok(())
             },

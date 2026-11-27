@@ -267,7 +267,7 @@ sequenceDiagram
   
   ## Admin Elevation Flow
   
-  Platform operators must elevate their session to access administrative routes. This flow ensures that powerful actions require a short-lived step-up token backed by OpenBao.
+  Platform operators must elevate their session to access administrative routes. This flow ensures that the infrastructure view requires a short-lived step-up backed by OpenBao.
   
   ```mermaid
   sequenceDiagram
@@ -282,24 +282,24 @@ sequenceDiagram
     Note over API,OpenBao: Session elevation check
     API->>OpenBao: GET /v1/auth/token/lookup-self (X-Vault-Token)
     OpenBao-->>API: Valid + operator policy
-    API->>API: Mint short-lived Admin PASETO (v4.public)
-    API-->>Web: admin_token + expires_at
+    API->>API: Record the elevation for this session in PostgreSQL
+    API-->>Web: expires_at
   
     Note over Web,API: Authenticated Admin Request
-    Web->>API: GET /v1/auth/admin/infra (Bearer admin_token)
-    API->>API: Verify PASETO signature
+    Web->>API: GET /v1/auth/admin/infra (session cookie)
+    API->>API: Check the session's elevation in PostgreSQL
     API-->>Web: Infrastructure status
   ```
   
-  1. **OpenBao Step-up**: The operator provides an OpenBao token which is exchanged for a short-lived, signed PASETO admin token. The OpenBao token is never persisted or stored in the browser; it is only used once to mint the admin token.
-  2. **PASETO Admin Token**: Subsequent administrative requests use this token in the `Authorization: Bearer` header. The backend verifies the signature offline using its internal signing key.
-  3. **In-Memory Only**: The admin token is kept strictly in-memory. Reloading the page or closing the tab clears the elevation state, requiring re-entry of an OpenBao token for security.
-  4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the OpenBao token once creates the first operator and immediately issues an elevated admin token.
+  1. **OpenBao Step-up**: The operator provides an OpenBao token, which the API validates once and never stores. The token is not kept in the browser either.
+  2. **Server-side Elevation**: The API records the elevation against the exact session, so every replica honours it and it ends with the session: logout, a password change, suspension or disabling the operator all end it. The browser receives only the expiry time and holds no admin credential.
+  3. **In-Memory Only**: The browser keeps the expiry strictly in memory. Reloading the page or closing the tab clears the elevation prompt state, requiring re-entry of an OpenBao token.
+  4. **Chained Bootstrap**: During the initial setup (zero operators), the UI automatically chains the bootstrap and elevation calls. Entering the OpenBao token once creates the first operator and immediately elevates the session.
 
   Endpoint auth split for admin:
   - `/v1/auth/admin/status`, `/v1/auth/admin/bootstrap`, and `/v1/auth/admin/elevate` use the session cookie (`credentials: include`).
   - OpenBao token is sent in JSON payload for bootstrap/elevate (`{ "openbao_token": "..." }`).
-  - `/v1/auth/admin/infra` uses `Authorization: Bearer <admin_token>` (admin token only).
+  - `/v1/auth/admin/infra` uses the session cookie too and answers only while that session is elevated.
   
   ## Password Change Flow (OPAQUE)
   

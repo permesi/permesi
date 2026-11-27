@@ -34,7 +34,7 @@ This directory holds the engineering, security, protocol, and operational docume
 ## Platform Administration & Governance
 
 - [Account Suspension & Containment](account-containment.md) — Operator account suspension and reactivation, atomic authority retirement, database-clock proof cutoffs, and append-only lifecycle auditing.
-- [Platform-Operator Designation](operator-designation.md) — Two-operator request/approval lifecycle, sole-bootstrap exception, immediate disable, and elevation token revision checks.
+- [Platform-Operator Designation](operator-designation.md) — Two-operator request/approval lifecycle, sole-bootstrap exception, immediate disable, and session-bound admin elevation with revision checks.
 - [Read-Only Platform Tenant Inspection](admin-tenant-inspection.md) — Global `/v1/admin/orgs` hierarchy browsing for enabled platform operators without widening tenant write authority.
 
 ## Testing, Scenarios & CI

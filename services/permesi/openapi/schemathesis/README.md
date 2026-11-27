@@ -33,11 +33,10 @@ When you want to exercise authenticated routes, provide optional headers via env
 
 ```sh
 export PERMESI_SESSION_COOKIE="your-session-token"
-export PERMESI_ADMIN_TOKEN="your-admin-bearer-token"
 just schemathesis-permesi
 ```
 
-For local automation, you can generate a fixture user session (and optionally an admin bearer token) with:
+For local automation, you can generate a fixture user session (and optionally elevate it for the admin routes) with:
 
 ```sh
 just schemathesis-permesi-auth

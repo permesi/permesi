@@ -1592,7 +1592,7 @@
         },
         "responses": {
           "200": {
-            "description": "Admin token issued.",
+            "description": "The session is elevated until `expires_at`. Cache-Control: no-store.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1612,7 +1612,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid session.",
+            "description": "Missing or invalid session, including one that ended during the request.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1622,7 +1622,7 @@
             }
           },
           "403": {
-            "description": "Not an operator.",
+            "description": "Not an operator, or the OpenBao token lacks the policy or has no remaining lifetime.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1642,7 +1642,7 @@
             }
           },
           "503": {
-            "description": "OpenBao unavailable.",
+            "description": "OpenBao or authentication storage unavailable; no elevation was recorded.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1662,7 +1662,7 @@
         "operationId": "admin_infra",
         "responses": {
           "200": {
-            "description": "Detailed infrastructure status.",
+            "description": "Detailed infrastructure status. Cache-Control: no-store.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1672,7 +1672,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid admin token.",
+            "description": "Missing, expired or limited session, or inactive account.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1682,7 +1682,7 @@
             }
           },
           "403": {
-            "description": "Inactive account, disabled operator, or stale designation revision.",
+            "description": "The session holds no current elevation: never elevated, expired, disabled operator, or stale designation revision.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8289,16 +8289,14 @@
       },
       "AdminElevateResponse": {
         "type": "object",
+        "description": "The elevation is held server-side against the session; nothing here is a credential.",
         "required": [
-          "admin_token",
           "expires_at"
         ],
         "properties": {
-          "admin_token": {
-            "type": "string"
-          },
           "expires_at": {
-            "type": "string"
+            "type": "string",
+            "description": "When the session's elevation ends (RFC 3339, UTC)."
           }
         }
       },

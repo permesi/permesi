@@ -32,6 +32,24 @@ the signed artifacts.
   A service started with an opt-out that is actually in effect logs a warning on
   every start.
 
+- Operator elevation is no longer a bearer token. `POST /v1/auth/admin/elevate`
+  records the elevation in PostgreSQL against the session that asked for it and
+  returns only `expires_at`; the `admin_token` field is gone.
+  `GET /v1/auth/admin/infra` is authorized by the session cookie and that record,
+  and ignores an `Authorization` header. It answers `401` without a live full
+  session and `403` while the session is not elevated.
+  - Apply `db/sql/02_permesi.sql` before starting the new image. It adds the table
+    `platform_operator_elevations` and its grants; without it every elevation
+    answers `503`.
+  - A client that sent `Authorization: Bearer <admin_token>` has to send the
+    session cookie instead. The bundled web app already does.
+  - Elevations issued by an earlier version stop working at the upgrade; operators
+    elevate again.
+- `--platform-admin-ttl-seconds` (`PLATFORM_ADMIN_TTL_SECONDS`) accepts 1 to 46800.
+  It used to take any integer: zero or less made every elevation fail with `500`,
+  and more than 13 hours produced elevations that were rejected on first use. The
+  server now refuses to start with such a value.
+
 ### Changed
 
 - Every push to `develop` now starts `Qualify published images` against the
@@ -62,6 +80,15 @@ the signed artifacts.
   and pool shutdown that follow are capped at 4 s each. The settings have
   `PERMESI_*` and `GENESIS_*` environment names of the same form.
 
+### Fixed
+
+- An operator elevation works on every replica and survives a restart. It was a
+  token signed with a key each process generated at start, so behind more than one
+  replica the infrastructure status page failed whenever a request reached a
+  replica other than the one that had issued the token.
+- An OpenBao token with no remaining lifetime is refused with `403` at elevation
+  instead of answering `500`.
+
 ### Security
 
 - Genesis takes the client address and country for a token's audit record from the
@@ -76,6 +103,15 @@ the signed artifacts.
   (`--admission-issuer`, `--admission-audience`, `--client-ip-header`,
   `--client-country-header`) validated at startup; their environment names are
   unchanged.
+
+- An operator elevation is bound to the session that performed the step-up and ends
+  with it. Logout, a password change, suspension and session cleanup delete it;
+  another session of the same user is not elevated. Before, the elevation token
+  stayed valid until its own expiry, up to 12 hours, whatever happened to the session.
+- An elevation is recorded under the account and session locks after the OpenBao
+  call. A session that logged out or changed its password while OpenBao was
+  answering used to receive a valid elevation anyway.
+- The operator routes under `/v1/auth/admin` answer with `Cache-Control: no-store`.
 
 ## [0.6.1] - 2026-11-26
 

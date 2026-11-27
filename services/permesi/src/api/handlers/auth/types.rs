@@ -176,9 +176,10 @@ pub struct AdminElevateRequest {
     pub openbao_token: String,
 }
 
+/// The elevation is held server-side against the session; nothing here is a credential.
 #[derive(ToSchema, Serialize, Deserialize)]
 pub struct AdminElevateResponse {
-    pub admin_token: String,
+    /// When the session's elevation ends (RFC 3339, UTC).
     pub expires_at: String,
 }
 

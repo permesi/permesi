@@ -47,9 +47,6 @@ schemathesis-permesi:
   if [[ -n "${PERMESI_SESSION_COOKIE:-}" ]]; then
     headers+=(--header "Cookie: permesi_session=${PERMESI_SESSION_COOKIE}")
   fi
-  if [[ -n "${PERMESI_ADMIN_TOKEN:-}" ]]; then
-    headers+=(--header "Authorization: Bearer ${PERMESI_ADMIN_TOKEN}")
-  fi
 
   help_text="$("${runner[@]}" run -h 2>/dev/null || true)"
   base_args=(run docs/openapi/permesi.json)
@@ -228,16 +225,15 @@ schemathesis-permesi-auth-env email="schemathesis.local@example.com" role="owner
 
     openbao_token="$(just --quiet operator-token)"
     api_base="${PERMESI_API_BASE_URL:-https://api.permesi.localhost{{https_suffix}}}"
-    admin_response="$(
-      curl -fsS -k \
-        -H "Content-Type: application/json" \
-        -H "Cookie: permesi_session=${session_token}" \
-        -X POST \
-        "${api_base%/}/v1/auth/admin/elevate" \
-        -d "{\"openbao_token\":\"${openbao_token}\"}"
-    )"
-    admin_token="$(printf '%s' "$admin_response" | jq -er '.admin_token')"
-    printf 'export PERMESI_ADMIN_TOKEN="%s"\n' "$admin_token"
+    # Elevation is recorded server-side for this session; the cookie above is the
+    # only credential the run needs.
+    curl -fsS -k \
+      -H "Content-Type: application/json" \
+      -H "Cookie: permesi_session=${session_token}" \
+      -X POST \
+      "${api_base%/}/v1/auth/admin/elevate" \
+      -d "{\"openbao_token\":\"${openbao_token}\"}" \
+      | jq -e '.expires_at' >/dev/null
   fi
 
 schemathesis-permesi-auth email="schemathesis.local@example.com" role="owner" with_admin="false":

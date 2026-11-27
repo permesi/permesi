@@ -1,7 +1,7 @@
 //! Auth session state and context for the frontend. The provider hydrates the
 //! session once on mount using cookie-based API calls and exposes derived auth
-//! signals for guards and routes. Admin elevation tokens are kept in-memory
-//! only for security.
+//! signals for guards and routes. The admin elevation lives on the server; only
+//! its expiry is kept here, in memory.
 
 use crate::features::auth::{
     client,
@@ -13,7 +13,7 @@ use leptos::{prelude::*, task::spawn_local};
 /// Auth session context shared through Leptos.
 pub struct AuthContext {
     pub session: RwSignal<Option<UserSession>>,
-    pub admin_token: RwSignal<Option<AdminElevateResponse>>,
+    pub admin_elevation: RwSignal<Option<AdminElevateResponse>>,
     pub is_authenticated: Signal<bool>,
     pub is_full_session: Signal<bool>,
     pub is_operator: Signal<bool>,
@@ -24,7 +24,7 @@ impl AuthContext {
     /// Builds a context around the provided session signal.
     fn new(
         session: RwSignal<Option<UserSession>>,
-        admin_token: RwSignal<Option<AdminElevateResponse>>,
+        admin_elevation: RwSignal<Option<AdminElevateResponse>>,
         is_loading: RwSignal<bool>,
     ) -> Self {
         let is_authenticated = Signal::derive(move || session.get().is_some());
@@ -37,7 +37,7 @@ impl AuthContext {
             Signal::derive(move || session.get().is_some_and(|session| session.is_operator));
         Self {
             session,
-            admin_token,
+            admin_elevation,
             is_authenticated,
             is_full_session,
             is_operator,
@@ -71,20 +71,20 @@ impl AuthContext {
         self.session.set(Some(session));
     }
 
-    /// Stores the admin elevation token (in-memory only).
-    pub fn set_admin_token(&self, token: AdminElevateResponse) {
-        self.admin_token.set(Some(token));
+    /// Remembers until when the server holds this session elevated (in-memory only).
+    pub fn set_admin_elevation(&self, elevation: AdminElevateResponse) {
+        self.admin_elevation.set(Some(elevation));
     }
 
     /// Clears the in-memory session, typically on logout.
     pub fn clear_session(&self) {
         self.session.set(None);
-        self.admin_token.set(None);
+        self.admin_elevation.set(None);
     }
 
-    /// Clears only the admin elevation token.
-    pub fn clear_admin_token(&self) {
-        self.admin_token.set(None);
+    /// Forgets the elevation; the server-side grant ends with the session or its expiry.
+    pub fn clear_admin_elevation(&self) {
+        self.admin_elevation.set(None);
     }
 
     /// Refetches the session from the server to update roles/flags.
@@ -103,14 +103,14 @@ impl AuthContext {
 pub fn AuthProvider(children: Children) -> impl IntoView {
     super::authorization::capture_request();
     let session = RwSignal::new(None);
-    let admin_token = RwSignal::new(None);
+    let admin_elevation = RwSignal::new(None);
     let is_loading = RwSignal::new(true);
-    let auth = AuthContext::new(session, admin_token, is_loading);
+    let auth = AuthContext::new(session, admin_elevation, is_loading);
     provide_context(auth);
 
-    // Automatically clear admin token when it expires.
+    // Automatically forget the elevation when it expires.
     Effect::new(move |_| {
-        if let Some(token) = auth.admin_token.get() {
+        if let Some(token) = auth.admin_elevation.get() {
             let expires_at_ms = js_sys::Date::parse(&token.expires_at);
             if expires_at_ms.is_nan() {
                 return;
@@ -119,20 +119,20 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
             let diff = expires_at_ms - now_ms;
 
             if diff <= 0.0 {
-                auth.clear_admin_token();
+                auth.clear_admin_elevation();
             } else {
                 let Ok(delay) = std::time::Duration::try_from_secs_f64(diff / 1000.0) else {
-                    auth.clear_admin_token();
+                    auth.clear_admin_elevation();
                     return;
                 };
                 let auth_retry = auth;
                 spawn_local(async move {
                     gloo_timers::future::sleep(delay).await;
-                    // Double check if the token we wanted to clear is still the same one
-                    if let Some(current) = auth_retry.admin_token.get_untracked()
-                        && current.admin_token == token.admin_token
+                    // Clear only the elevation this timer was started for.
+                    if let Some(current) = auth_retry.admin_elevation.get_untracked()
+                        && current.expires_at == token.expires_at
                     {
-                        auth_retry.clear_admin_token();
+                        auth_retry.clear_admin_elevation();
                     }
                 });
             }
@@ -176,8 +176,8 @@ pub fn AuthProvider(children: Children) -> impl IntoView {
 pub fn use_auth() -> AuthContext {
     use_context::<AuthContext>().unwrap_or_else(|| {
         let session = RwSignal::new(None);
-        let admin_token = RwSignal::new(None);
+        let admin_elevation = RwSignal::new(None);
         let is_loading = RwSignal::new(false); // Not loading if provider is missing
-        AuthContext::new(session, admin_token, is_loading)
+        AuthContext::new(session, admin_elevation, is_loading)
     })
 }

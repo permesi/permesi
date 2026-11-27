@@ -6,8 +6,8 @@
 //! may approve their own request for the first *new* second designation. Disabling
 //! another operator is immediate but cannot remove the last enabled operator.
 //! Every mutation is atomic with its fixed-reason audit event and retires target
-//! sessions/proofs on a designation change. Admin tokens bind to a revision that
-//! changes on each transition, preventing old tokens from reviving after recovery.
+//! sessions/proofs on a designation change. Admin elevations bind to a revision that
+//! changes on each transition, preventing old elevations from reviving after recovery.
 
 use std::sync::Arc;
 

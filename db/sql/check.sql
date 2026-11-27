@@ -121,6 +121,9 @@ BEGIN
     IF to_regclass('public.user_sessions') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: user_sessions';
     END IF;
+    IF to_regclass('public.platform_operator_elevations') IS NULL THEN
+        RAISE EXCEPTION 'Missing permesi table: platform_operator_elevations';
+    END IF;
     IF to_regclass('public.webauthn_exchanges') IS NULL THEN
         RAISE EXCEPTION 'Missing permesi table: webauthn_exchanges';
     END IF;

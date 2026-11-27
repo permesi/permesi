@@ -4,10 +4,9 @@
 
 use crate::{
     app_lib::{
-        AppError, get_json_with_credentials, get_json_with_headers,
-        get_optional_json_with_credentials, post_empty_with_credentials, post_json_with_headers,
-        post_json_with_headers_response, post_json_with_headers_with_credentials,
-        post_json_with_headers_with_credentials_response,
+        AppError, get_json_with_credentials, get_optional_json_with_credentials,
+        post_empty_with_credentials, post_json_with_headers, post_json_with_headers_response,
+        post_json_with_headers_with_credentials, post_json_with_headers_with_credentials_response,
     },
     features::auth::types::{
         AdminBootstrapRequest, AdminBootstrapResponse, AdminElevateRequest, AdminElevateResponse,
@@ -252,10 +251,10 @@ pub async fn admin_status() -> Result<AdminStatusResponse, AppError> {
     get_json_with_credentials("/v1/auth/admin/status").await
 }
 
-/// Fetches detailed infrastructure status for operators.
-pub async fn admin_infra(token: Option<&str>) -> Result<AdminInfraResponse, AppError> {
-    let headers = auth_headers(token);
-    get_json_with_headers("/v1/auth/admin/infra", &headers).await
+/// Fetches detailed infrastructure status for operators. The session cookie is the
+/// credential; the server authorizes it from the elevation recorded for that session.
+pub async fn admin_infra() -> Result<AdminInfraResponse, AppError> {
+    get_json_with_credentials("/v1/auth/admin/infra").await
 }
 
 /// Attempts to bootstrap the first platform operator.
@@ -265,7 +264,7 @@ pub async fn admin_bootstrap(
     post_json_with_headers_with_credentials_response("/v1/auth/admin/bootstrap", request, &[]).await
 }
 
-/// Exchanges an OpenBao token for a short-lived admin elevation token.
+/// Steps the current session up with an OpenBao token; the response gives the expiry.
 pub async fn admin_elevate(
     request: &AdminElevateRequest,
 ) -> Result<AdminElevateResponse, AppError> {
@@ -279,10 +278,6 @@ pub fn is_token_expired(expires_at: &str) -> bool {
         return false;
     }
     parsed <= js_sys::Date::now()
-}
-
-fn auth_headers(token: Option<&str>) -> Vec<(String, String)> {
-    token.map_or_default(|token| vec![("Authorization".to_string(), format!("Bearer {token}"))])
 }
 
 /// Fetches the system health status.

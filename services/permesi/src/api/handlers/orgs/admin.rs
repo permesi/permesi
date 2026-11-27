@@ -64,8 +64,15 @@ pub struct PageQuery {
 }
 
 /// Applies privacy policy even when Axum rejects a path, query or unsupported method.
+/// Covers tenant inspection and the operator routes under `/v1/auth/admin`, whose
+/// responses are authorized by cookie and describe operators or infrastructure.
 pub(crate) async fn prevent_cache(uri: axum::http::Uri, mut response: Response) -> Response {
-    if uri.path() != "/v1/admin/orgs" && !uri.path().starts_with("/v1/admin/orgs/") {
+    let covered = ["/v1/admin/orgs", "/v1/auth/admin"].iter().any(|prefix| {
+        uri.path()
+            .strip_prefix(prefix)
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+    });
+    if !covered {
         return response;
     }
     response

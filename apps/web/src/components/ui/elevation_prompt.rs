@@ -14,7 +14,7 @@ pub fn ElevationPrompt() -> impl IntoView {
                 <Icon name=IconName::LockedKey size=icon_size::EMPTY class="mb-4 text-gray-400 dark:text-gray-500" />
                 <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-2">"Elevation Required"</h2>
                 <p class="text-gray-500 dark:text-gray-400 mb-6 text-sm">
-                    "You are a platform operator, but this section requires an active admin token. Please elevate your session to continue."
+                    "You are a platform operator, but this section requires an active admin elevation. Please elevate your session to continue."
                 </p>
                 <A
                     href={paths::ADMIN_CLAIM}

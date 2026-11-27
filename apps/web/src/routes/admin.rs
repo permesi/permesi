@@ -14,8 +14,9 @@ pub fn AdminPage() -> impl IntoView {
     let auth = use_auth();
 
     let infra = LocalResource::new(move || {
-        let token = auth.admin_token.get();
-        async move { client::admin_infra(token.as_ref().map(|t| t.admin_token.as_str())).await }
+        // Tracked so the status reloads when the session is elevated again.
+        auth.admin_elevation.track();
+        async move { client::admin_infra().await }
     });
 
     view! {

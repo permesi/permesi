@@ -31,7 +31,7 @@ Permesi is an identity and access management (IAM) and OpenID Connect (OIDC) pro
 ### 3. `apps/web` (Web Console)
 
 - **Role:** Static client-side-rendered (CSR) Leptos WebAssembly application built with Trunk and Tailwind CSS.
-- **Trust model:** Runs entirely in the browser with no server-side secrets. All access control is enforced by `permesi` over HTTPS using `HttpOnly` session cookies (and short-lived in-memory admin PASETO tokens for elevated infrastructure views). See [apps/web/README.md](../apps/web/README.md).
+- **Trust model:** Runs entirely in the browser with no server-side secrets. All access control is enforced by `permesi` over HTTPS using `HttpOnly` session cookies (the elevated infrastructure view is a short-lived server-side step-up of the same session). See [apps/web/README.md](../apps/web/README.md).
 
 ### 4. PostgreSQL 19 & OpenBao 2.7 (Data & Cryptography Plane)
 
@@ -71,7 +71,7 @@ and a fixed non-token Transit signature.
 
 ## Multi-Replica Authentication & Session Flow
 
-No user authentication ceremony, rate limit, or OAuth state relies on process-local memory or sticky sessions. Start and finish requests can land on different `permesi` replicas behind any load balancer. *(Exception: platform-operator admin elevation PASETOs for `/v1/auth/admin/infra` currently use a process-local signing key, so an elevation token minted on one replica can fail verification on another until shared key distribution is implemented; see [TODO.md](../TODO.md).)*
+No user authentication ceremony, rate limit, or OAuth state relies on process-local memory or sticky sessions. Start and finish requests can land on different `permesi` replicas behind any load balancer. Platform-operator admin elevation for `/v1/auth/admin/infra` follows the same rule: it is a PostgreSQL row tied to the session, readable by every replica.
 
 ![Multi-Replica Authentication and MFA Session Flow](diagrams/auth-session-flow.svg)
 
@@ -106,7 +106,7 @@ Permesi enforces strict boundaries between **platform administration**, **tenant
 *Source: [diagrams/tenant-authorization-model.d2](diagrams/tenant-authorization-model.d2)*
 
 - **Tenant hierarchy:** Organizations own Projects, Projects own independent sibling Environments (`0..1` active `production` and any number of `non_production`), and Environments own logical Applications. Applications own multiple OAuth clients and a delegated scope registry. Resources are soft-deleted explicitly from the bottom up ([resource lifecycle](resource-lifecycle.md)).
-- **Platform operators (`platform:admin`):** Authorized via `platform_operators` for read-only global inspection (`/v1/admin/orgs`), auditable account containment, and two-operator designation. OpenBao step-up elevation mints a short-lived admin PASETO for `/v1/auth/admin/infra`. Platform operators cannot bypass organization write roles or grant themselves OAuth scopes.
+- **Platform operators (`platform:admin`):** Authorized via `platform_operators` for read-only global inspection (`/v1/admin/orgs`), auditable account containment, and two-operator designation. OpenBao step-up elevation records a short-lived, session-bound grant for `/v1/auth/admin/infra`. Platform operators cannot bypass organization write roles or grant themselves OAuth scopes.
 - **Organization roles (`owner`, `admin`, `member`, `readonly`):** Checked server-side against active `org_memberships`. Unauthorized or foreign tenant routes return `404` to avoid resource enumeration.
 - **Delegated OAuth scopes:** Distinct from internal `Principal.scopes`. Application scopes follow `<resource>:<action>` (with `platform:` and `users:` namespaces reserved), while OIDC protocol scopes (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`) are system-managed. Every grant binds one user, one client, one application, and one owning organization.
 

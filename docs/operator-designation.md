@@ -5,14 +5,14 @@ membership and delegated OAuth scopes. An active, mailbox-verified account can b
 designated through the user-detail console. The API requires an enabled operator's
 exact full session with authentication in the last ten minutes. The console uses
 the existing OPAQUE password reauthentication flow and asks the operator to type
-the target email before submitting. Session cookies, not admin elevation PASETOs,
-authorize these mutations across Permesi replicas.
+the target email before submitting. Session cookies authorize these mutations across
+Permesi replicas; an admin elevation is not required and adds nothing to them.
 The console shows the requester, reason and request time for pending approvals,
 and lets the actor choose a fixed audit reason; it does not accept free-form
 incident text.
-Admin elevation PASETO signing still uses a process-local key, so an elevation
-token may fail verification on another replica; shared key distribution and
-rotation are tracked separately in TODO.md.
+Admin elevation, the OpenBao step-up that opens the infrastructure status route, is
+recorded in PostgreSQL against the exact session. Every replica reads the same record,
+and it is deleted with the session.
 
 `POST /v1/users/{id}/operator/request-enable` records a pending request with a
 fixed audit reason; it grants no authority. A different enabled operator approves
@@ -31,13 +31,35 @@ incident response so disabling one still leaves two people for later approvals.
 immediately. Self-action and disabling the last enabled operator are rejected.
 Disable and enable rotate the designation's token revision and remove the target's
 full/limited sessions and unfinished OPAQUE/WebAuthn exchanges. A fresh login is
-required after approval. Every admin elevation PASETO binds the operator's current
+required after approval. Every admin elevation binds the operator's current
 revision; infrastructure access rechecks it against PostgreSQL, so an elevation
-token from before disable cannot revive after re-enablement. Infrastructure access
+from before disable cannot revive after re-enablement. Infrastructure access
 also checks that the operator account is currently active, so suspension blocks an
-otherwise valid elevation token. Account status transitions rotate the revision,
-preventing old elevation tokens from reviving after reactivation. Ordinary tenant roles
+otherwise valid elevation. Account status transitions rotate the revision,
+preventing old elevations from reviving after reactivation. Ordinary tenant roles
 and saved OAuth grants are untouched by designation changes.
+
+## Admin elevation
+
+`POST /v1/auth/admin/elevate` takes an OpenBao token carrying the operator policy
+from an enabled operator's full session. The token is validated with OpenBao on every
+call and never stored. On success Permesi writes one row for that session in
+`platform_operator_elevations` and returns only its expiry. `GET /v1/auth/admin/infra`
+is then authorized by the session cookie and that row: `401` without a live full
+session of an active account, `403` while the session holds no current elevation.
+
+The elevation lasts no longer than `--platform-admin-ttl-seconds` (1 to 46800, default
+43200), the remaining life of the OpenBao token, or the session. It belongs to one
+session: another session of the same user is not elevated, and logout, session
+replacement, a password change, containment and session cleanup delete it with the
+session. The row is written under the same identity and session locks as every
+lifecycle change, after the OpenBao call, so a session that ended while OpenBao was
+answering gets no elevation. Elevating again replaces the row. Responses of the
+`/v1/auth/admin` routes carry `Cache-Control: no-store`.
+
+Because the cookie is the credential, a session that has elevated can read
+infrastructure status from any tab or client holding that cookie until the elevation
+ends. The same cookie already carries the operator's user-management authority.
 
 The actor/target identities are locked in UUID order, and a bounded PostgreSQL
 transaction rechecks the exact session and enabled operator record after waiting.

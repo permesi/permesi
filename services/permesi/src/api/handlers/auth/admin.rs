@@ -4,12 +4,14 @@
 //! 1) Authenticate via session cookie.
 //! 2) Apply bootstrap gating + recent-auth checks + rate limits.
 //! 3) Validate OpenBao step-up tokens on every elevation.
-//! 4) Issue short-lived admin PASETOs scoped to platform actions.
+//! 4) Record the elevation in PostgreSQL against the exact session, under the
+//!    identity and session locks, and authorize infrastructure reads from that row.
 //!
 //! Security boundaries:
 //! - OpenBao tokens are never persisted or logged.
 //! - Operator membership is a UI gate only; OpenBao policy is authoritative.
-//! - Admin tokens are short-lived and require step-up for each issuance.
+//! - An elevation is short-lived, requires step-up for each issuance, belongs to one
+//!   session and ends with it; see `admin_elevation` for the storage rules.
 
 use axum::{
     Json,
@@ -18,23 +20,26 @@ use axum::{
     response::IntoResponse,
 };
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use tracing::error;
 use uuid::Uuid;
 
 use super::{
+    AuthState,
+    admin_elevation::{self, Access},
     admin_rate_limit::{AdminRateLimitError, AdminRateLimiter},
     admin_storage::{
-        BootstrapOutcome, bootstrap_operator, enabled_operator_revision, operator_enabled,
-        platform_operator_count,
+        BootstrapOutcome, bootstrap_operator, operator_enabled, platform_operator_count,
     },
-    admin_token::{AdminTokenIdentity, AdminTokenSigner},
+    authority_guard::{AuthorityGuard, Policy},
     principal::{Principal, require_auth},
+    session::extract_session_token,
+    session_kind::SessionKind,
     types::{
         AdminBootstrapRequest, AdminBootstrapResponse, AdminElevateRequest, AdminElevateResponse,
         AdminInfraResponse, AdminStatusResponse, DatabaseStats, PlatformStats,
     },
-    utils::{extract_client_ip, extract_country_code},
+    utils::{extract_client_ip, extract_country_code, hash_session_token},
 };
 use crate::openbao::step_up::{LookupSelfError, StepUpClient};
 use openbao_client::OpenBaoTransport;
@@ -123,24 +128,21 @@ impl AdminConfig {
 pub struct AdminState {
     config: AdminConfig,
     rate_limiter: AdminRateLimiter,
-    token_signer: AdminTokenSigner,
     openbao_client: StepUpClient,
 }
 
 impl AdminState {
     /// # Errors
-    /// Returns an error if the OpenBao client or token signer cannot be initialized.
+    /// Returns an error if the OpenBao client cannot be initialized.
     pub fn new(
         config: AdminConfig,
         pool: sqlx::PgPool,
         transport: OpenBaoTransport,
     ) -> anyhow::Result<Self> {
         let openbao_client = StepUpClient::new(transport)?;
-        let token_signer = AdminTokenSigner::new()?;
         Ok(Self {
             config,
             rate_limiter: AdminRateLimiter::new(pool),
-            token_signer,
             openbao_client,
         })
     }
@@ -153,11 +155,6 @@ impl AdminState {
     #[must_use]
     pub fn rate_limiter(&self) -> &AdminRateLimiter {
         &self.rate_limiter
-    }
-
-    #[must_use]
-    pub fn token_signer(&self) -> &AdminTokenSigner {
-        &self.token_signer
     }
 
     #[must_use]
@@ -216,9 +213,9 @@ pub async fn admin_status(
     get,
     path = "/v1/auth/admin/infra",
     responses(
-        (status = 200, description = "Detailed infrastructure status.", body = AdminInfraResponse),
-        (status = 401, description = "Missing or invalid admin token."),
-        (status = 403, description = "Inactive account, disabled operator, or stale designation revision."),
+        (status = 200, description = "Detailed infrastructure status. Cache-Control: no-store.", body = AdminInfraResponse),
+        (status = 401, description = "Missing, expired or limited session, or inactive account."),
+        (status = 403, description = "The session holds no current elevation: never elevated, expired, disabled operator, or stale designation revision."),
     ),
     tag = "auth"
 )]
@@ -227,18 +224,8 @@ pub async fn admin_infra(
     pool: State<sqlx::PgPool>,
     admin_state: State<Arc<AdminState>>,
 ) -> impl IntoResponse {
-    let identity = match verify_admin_token(&headers, &admin_state) {
-        Ok(identity) => identity,
-        Err(status) => return status.into_response(),
-    };
-
-    match enabled_operator_revision(&pool, identity.user_id).await {
-        Ok(Some(revision)) if revision == identity.operator_revision => {}
-        Ok(_) => return StatusCode::FORBIDDEN.into_response(),
-        Err(err) => {
-            error!("Failed to lookup operator status: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
+    if let Err(status) = require_elevation(&headers, &pool).await {
+        return status.into_response();
     }
 
     let db_status = if pool.acquire().await.is_ok() {
@@ -304,27 +291,24 @@ async fn database_size_bytes(pool: &PgPool, name: &str) -> Option<i64> {
     .ok()?
 }
 
-/// Validates an admin elevation token and return the operator's user id.
-pub fn verify_admin_token(
-    headers: &HeaderMap,
-    admin_state: &AdminState,
-) -> Result<AdminTokenIdentity, StatusCode> {
-    let value = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let token = value
-        .trim()
-        .strip_prefix("Bearer ")
-        .or_else(|| value.trim().strip_prefix("bearer "))
-        .ok_or(StatusCode::UNAUTHORIZED)?
-        .trim();
-
-    admin_state
-        .token_signer()
-        .verify(token)
-        .map_err(|_| StatusCode::UNAUTHORIZED)
+/// Authorizes an infrastructure read from the session cookie alone: a full session of an
+/// active account that holds a current elevation. A missing, limited or dead session is
+/// `401`; a live session without a usable elevation is `403`. The decision is made by
+/// `admin_elevation::authorize` from server data, and a failed lookup refuses the read.
+async fn require_elevation(headers: &HeaderMap, pool: &PgPool) -> Result<(), StatusCode> {
+    let token = extract_session_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
+    if SessionKind::from_token(&token) != SessionKind::Full {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    match admin_elevation::authorize(pool, &hash_session_token(&token)).await {
+        Ok(Access::Elevated) => Ok(()),
+        Ok(Access::NotElevated) => Err(StatusCode::FORBIDDEN),
+        Ok(Access::NoSession) => Err(StatusCode::UNAUTHORIZED),
+        Err(err) => {
+            error!("Failed to look up operator elevation: {err}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 #[utoipa::path(
@@ -432,18 +416,19 @@ pub async fn admin_bootstrap(
     path = "/v1/auth/admin/elevate",
     request_body = AdminElevateRequest,
     responses(
-        (status = 200, description = "Admin token issued.", body = AdminElevateResponse),
+        (status = 200, description = "The session is elevated until `expires_at`. Cache-Control: no-store.", body = AdminElevateResponse),
         (status = 400, description = "Invalid request.", body = String),
-        (status = 401, description = "Missing or invalid session."),
-        (status = 403, description = "Not an operator."),
+        (status = 401, description = "Missing or invalid session, including one that ended during the request."),
+        (status = 403, description = "Not an operator, or the OpenBao token lacks the policy or has no remaining lifetime."),
         (status = 429, description = "Rate limited."),
-        (status = 503, description = "OpenBao unavailable."),
+        (status = 503, description = "OpenBao or authentication storage unavailable; no elevation was recorded."),
     ),
     tag = "auth"
 )]
 pub async fn admin_elevate(
     headers: HeaderMap,
     pool: State<sqlx::PgPool>,
+    auth_state: State<Arc<AuthState>>,
     admin_state: State<Arc<AdminState>>,
     payload: Option<Json<AdminElevateRequest>>,
 ) -> impl IntoResponse {
@@ -488,45 +473,89 @@ pub async fn admin_elevate(
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
 
+    // Measured from before the lookup, so the time OpenBao and the locks below take is
+    // charged against the token's remaining life and never added to it.
+    let looked_up = Instant::now();
     let openbao_info =
         match validate_openbao_token(admin_state.as_ref(), principal.user_id, token).await {
             Ok(info) => info,
             Err(response) => return *response,
         };
 
-    // Cap the admin token TTL to the bao token's remaining life if it is shorter
-    // than our configured maximum.
+    let expires_at = match record_elevation(
+        &headers,
+        &pool,
+        &auth_state,
+        &admin_state,
+        principal.user_id,
+        openbao_info.ttl,
+        looked_up,
+    )
+    .await
+    {
+        Ok(expires_at) => expires_at,
+        Err(status) => return status.into_response(),
+    };
+
+    admin_state.rate_limiter().record_success(attempt_id).await;
+    (StatusCode::OK, Json(AdminElevateResponse { expires_at })).into_response()
+}
+
+/// Commits the elevation for the exact session that asked for it and returns its expiry.
+///
+/// The session was authenticated before the OpenBao call, which can take long enough for
+/// a logout, password rotation or designation change to commit. So the account and the
+/// exact session are locked again here, in the order every lifecycle mutation uses, and
+/// the grant is written on that transaction: either the mutation committed first and
+/// this request is refused (`401` for a dead session, `403` for a lost designation), or
+/// the grant commits first and the mutation deletes or invalidates it. The lifetime is
+/// the smaller of the configured one and what is left of the OpenBao token after the
+/// time spent since its lookup. Storage failures answer `503` and record nothing.
+async fn record_elevation(
+    headers: &HeaderMap,
+    pool: &PgPool,
+    auth_state: &AuthState,
+    admin_state: &AdminState,
+    user_id: Uuid,
+    openbao_ttl_seconds: i64,
+    looked_up: Instant,
+) -> Result<String, StatusCode> {
+    let session_hash = extract_session_token(headers)
+        .map(|token| hash_session_token(&token))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let mut guard = AuthorityGuard::acquire(
+        pool,
+        headers,
+        user_id,
+        Policy::Full,
+        auth_state.config().opaque_exchange_timeout_ms(),
+    )
+    .await?;
+
+    // Round the elapsed time up: a token with under a second left grants nothing.
+    let elapsed = i64::try_from(looked_up.elapsed().as_secs())
+        .unwrap_or(i64::MAX)
+        .saturating_add(1);
     let ttl_seconds = admin_state
         .config()
         .admin_ttl_seconds()
-        .min(openbao_info.ttl);
+        .min(openbao_ttl_seconds.saturating_sub(elapsed));
 
-    let revision = match enabled_operator_revision(&pool, principal.user_id).await {
-        Ok(Some(revision)) => revision,
-        Ok(None) => return StatusCode::FORBIDDEN.into_response(),
-        Err(err) => {
-            error!("Failed to lookup operator revision: {err}");
-            return StatusCode::SERVICE_UNAVAILABLE.into_response();
-        }
-    };
-    let admin_token =
-        match admin_state
-            .token_signer()
-            .issue(principal.user_id, revision, ttl_seconds)
-        {
-            Ok(token) => token,
-            Err(err) => {
-                error!("Failed to mint admin token: {err}");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
-
-    admin_state.rate_limiter().record_success(attempt_id).await;
-    let response = AdminElevateResponse {
-        admin_token: admin_token.token,
-        expires_at: admin_token.expires_at,
-    };
-    (StatusCode::OK, Json(response)).into_response()
+    // `grant` writes nothing for a lifetime that is not positive, or when the session,
+    // the account or the designation stopped qualifying before the locks were taken.
+    let expires_at =
+        admin_elevation::grant(guard.connection(), user_id, &session_hash, ttl_seconds)
+            .await
+            .map_err(|err| {
+                error!("Failed to record operator elevation: {err}");
+                StatusCode::SERVICE_UNAVAILABLE
+            })?
+            .ok_or(StatusCode::FORBIDDEN)?;
+    guard.commit().await.map_err(|err| {
+        error!("Failed to commit operator elevation: {err}");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+    Ok(expires_at)
 }
 
 fn reject_large_body(headers: &HeaderMap) -> Option<StatusCode> {
@@ -840,138 +869,6 @@ mod tests {
                 .await?;
         assert!(enabled);
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn admin_infra_rejects_non_operator() -> Result<()> {
-        use crate::api::handlers::auth::admin::admin_infra;
-        use axum::{extract::State, http::header::AUTHORIZATION, response::IntoResponse};
-        use std::sync::Arc;
-
-        if !can_bind_localhost() {
-            eprintln!("Skipping test: cannot bind localhost");
-            return Ok(());
-        }
-        if let Err(err) = runtime::ensure_container_runtime() {
-            eprintln!("Skipping integration test: {err}");
-            return Ok(());
-        }
-
-        let (pool, _container) = get_test_pool().await?;
-        sqlx::query("TRUNCATE users, platform_operators, admin_attempts, user_sessions CASCADE")
-            .execute(&pool)
-            .await?;
-
-        let user_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO users (id, email, status, opaque_registration_record) VALUES ($1, 'non-operator@example.com', 'active', $2)")
-            .bind(user_id)
-            .bind(vec![0u8; 16])
-            .execute(&pool)
-            .await?;
-
-        let server = MockServer::start().await;
-        let config = AdminConfig::new(server.uri());
-        let state = Arc::new(AdminState::new(
-            config,
-            pool.clone(),
-            create_transport(&server.uri()),
-        )?);
-
-        let admin_token = state
-            .token_signer()
-            .issue(user_id, Uuid::new_v4(), 60)?
-            .token;
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Bearer {admin_token}").parse()?);
-
-        let response = admin_infra(headers, State(pool), State(state))
-            .await
-            .into_response();
-
-        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn admin_infra_rejects_token_from_prior_designation_revision() -> Result<()> {
-        use crate::api::handlers::auth::admin::admin_infra;
-        use axum::{extract::State, http::header::AUTHORIZATION, response::IntoResponse};
-        use std::sync::Arc;
-
-        if !can_bind_localhost() || runtime::ensure_container_runtime().is_err() {
-            eprintln!("Skipping integration test: localhost or container runtime unavailable");
-            return Ok(());
-        }
-        let (pool, _container) = get_test_pool().await?;
-        let user = Uuid::new_v4();
-        sqlx::query("INSERT INTO users(id,email,status,opaque_registration_record) VALUES($1,$2,'active',$3)")
-            .bind(user).bind(format!("{user}@example.test")).bind(vec![1_u8])
-            .execute(&pool).await?;
-        let revision: Uuid = sqlx::query_scalar(
-            "INSERT INTO platform_operators(user_id) VALUES($1) RETURNING token_revision",
-        )
-        .bind(user)
-        .fetch_one(&pool)
-        .await?;
-        let server = MockServer::start().await;
-        let state = Arc::new(AdminState::new(
-            AdminConfig::new(server.uri()),
-            pool.clone(),
-            create_transport(&server.uri()),
-        )?);
-        let token = state.token_signer().issue(user, revision, 60)?.token;
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
-        sqlx::query("UPDATE platform_operators SET token_revision=uuidv4() WHERE user_id=$1")
-            .bind(user)
-            .execute(&pool)
-            .await?;
-        let response = admin_infra(headers, State(pool), State(state))
-            .await
-            .into_response();
-        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn admin_infra_rejects_suspended_operator_with_current_revision() -> Result<()> {
-        use crate::api::handlers::auth::admin::admin_infra;
-        use axum::{extract::State, http::header::AUTHORIZATION, response::IntoResponse};
-        use std::sync::Arc;
-
-        if !can_bind_localhost() || runtime::ensure_container_runtime().is_err() {
-            eprintln!("Skipping integration test: localhost or container runtime unavailable");
-            return Ok(());
-        }
-        let (pool, _container) = get_test_pool().await?;
-        let user = Uuid::new_v4();
-        sqlx::query("INSERT INTO users(id,email,status,opaque_registration_record) VALUES($1,$2,'active',$3)")
-            .bind(user).bind(format!("{user}@example.test")).bind(vec![1_u8])
-            .execute(&pool).await?;
-        let revision: Uuid = sqlx::query_scalar(
-            "INSERT INTO platform_operators(user_id) VALUES($1) RETURNING token_revision",
-        )
-        .bind(user)
-        .fetch_one(&pool)
-        .await?;
-        let server = MockServer::start().await;
-        let state = Arc::new(AdminState::new(
-            AdminConfig::new(server.uri()),
-            pool.clone(),
-            create_transport(&server.uri()),
-        )?);
-        let token = state.token_signer().issue(user, revision, 60)?.token;
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
-        sqlx::query("UPDATE users SET status='disabled' WHERE id=$1")
-            .bind(user)
-            .execute(&pool)
-            .await?;
-        let response = admin_infra(headers, State(pool), State(state))
-            .await
-            .into_response();
-        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
         Ok(())
     }
 }

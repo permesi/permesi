@@ -276,6 +276,21 @@ fn validate_opaque_limits(auth_opts: &auth::Options) -> Result<()> {
     Ok(())
 }
 
+/// Rechecks the operator elevation lifetime after clap. Outside the range every
+/// elevation would be refused, so the server does not start with such a value.
+fn admin_ttl(value: i64) -> Result<i64> {
+    if auth::PLATFORM_ADMIN_TTL_RANGE.contains(&value) {
+        Ok(value)
+    } else {
+        Err(anyhow!(
+            "invalid argument: --{} must be between {} and {}",
+            auth::ARG_PLATFORM_ADMIN_TTL,
+            auth::PLATFORM_ADMIN_TTL_RANGE.start(),
+            auth::PLATFORM_ADMIN_TTL_RANGE.end()
+        ))
+    }
+}
+
 /// Refuse a clear-text OpenBao address unless the host is loopback or the operator opted
 /// in, and say so on every start when the opt-in is what let the address through.
 fn require_encrypted_openbao(
@@ -396,7 +411,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         auth_rate_limit_window_seconds,
         auth_rate_limit_ip_attempts,
         auth_rate_limit_account_attempts,
-        platform_admin_ttl_seconds: auth_opts.admin.ttl_seconds,
+        platform_admin_ttl_seconds: admin_ttl(auth_opts.admin.ttl_seconds)?,
         platform_recent_auth_seconds: auth_opts.admin.recent_auth_seconds,
         openbao_kv_mount,
         openbao_kv_path: openbao_opts.kv_path,
@@ -407,6 +422,26 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dispatch repeats clap's bound, so a value that reaches it another way still cannot
+    /// start a server on which no elevation would ever succeed.
+    #[test]
+    fn admin_ttl_is_rechecked_after_clap() {
+        for value in [i64::MIN, -1, 0, 46_801, i64::MAX] {
+            let refused = admin_ttl(value).map_err(|error| error.to_string());
+            assert_eq!(
+                refused,
+                Err(
+                    "invalid argument: --platform-admin-ttl-seconds must be between 1 and 46800"
+                        .to_string()
+                ),
+                "{value}"
+            );
+        }
+        for value in [1, 43_200, 46_800] {
+            assert_eq!(admin_ttl(value).ok(), Some(value));
+        }
+    }
 
     /// Startup refuses an OpenBao address that would carry tokens in clear text and a
     /// DSN whose connection nobody verifies, unless the host is local or the operator

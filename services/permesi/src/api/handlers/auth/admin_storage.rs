@@ -56,15 +56,6 @@ pub async fn operator_enabled(pool: &PgPool, user_id: Uuid) -> Result<bool> {
     Ok(row.is_some_and(|row| row.get::<bool, _>("enabled")))
 }
 
-/// Returns an active account's enabled designation revision for admin elevation checks.
-pub async fn enabled_operator_revision(pool: &PgPool, user_id: Uuid) -> Result<Option<Uuid>> {
-    sqlx::query_scalar("SELECT po.token_revision FROM platform_operators po JOIN users u ON u.id=po.user_id WHERE po.user_id=$1 AND po.enabled AND u.status='active'")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .context("failed to lookup operator revision")
-}
-
 /// Bootstraps the first operator under the existing advisory lock and safe transaction startup.
 /// Callers must enforce the bootstrap endpoint's session and admission policy.
 pub async fn bootstrap_operator(

@@ -935,6 +935,20 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
 CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions (expires_at);
 
+-- Operator step-up for the infrastructure status route: at most one grant per full
+-- session, visible to every replica. The owner is the session's user, so a grant cannot
+-- name another account, and it is deleted with its session on logout, session
+-- replacement, password rotation, containment and expiry cleanup. The designation
+-- revision is the one current at issuance; a later disable or suspension rotates the
+-- live revision and leaves the grant unusable.
+CREATE TABLE IF NOT EXISTS platform_operator_elevations (
+    session_id UUID PRIMARY KEY REFERENCES user_sessions(id) ON DELETE CASCADE,
+    operator_revision UUID NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+        CHECK (expires_at > created_at),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Temporary OPAQUE transcripts are AEAD sealed under an OpenBao-derived key. External
 -- login UUIDs are hashed, and DELETE ... RETURNING consumes one attempt across replicas.
 -- WebAuthn protocol state is transient, sealed, and consumed before proof checking.
@@ -1302,6 +1316,10 @@ BEGIN
         GRANT UPDATE (is_failure) ON TABLE admin_attempts TO permesi_runtime;
         -- SELECT FOR SHARE needs an UPDATE privilege; identities/history remain immutable.
         GRANT UPDATE (enabled,token_revision) ON TABLE platform_operators TO permesi_runtime;
+        -- A repeated step-up replaces the session's grant in place. Rows are removed only
+        -- by the session cascade, which runs with the table owner's privileges.
+        GRANT INSERT ON TABLE platform_operator_elevations TO permesi_runtime;
+        GRANT UPDATE (operator_revision,expires_at,created_at) ON TABLE platform_operator_elevations TO permesi_runtime;
         GRANT UPDATE (requested_by,requested_at,reason) ON TABLE platform_operator_enable_requests TO permesi_runtime;
         GRANT UPDATE (scope_id) ON TABLE oauth_grant_scopes TO permesi_runtime;
         GRANT UPDATE (revoked_at,revocation_reason) ON TABLE oauth_refresh_families TO permesi_runtime;

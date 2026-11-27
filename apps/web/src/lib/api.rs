@@ -30,30 +30,6 @@ pub async fn get_json_with_credentials<T: DeserializeOwned>(path: &str) -> Resul
     handle_json_response(response).await
 }
 
-/// Fetches JSON with custom headers and no cookies.
-pub async fn get_json_with_headers<T: DeserializeOwned>(
-    path: &str,
-    headers: &[(String, String)],
-) -> Result<T, AppError> {
-    let url = build_url(path);
-    let response = send_with_timeout(|signal| {
-        let mut builder = Request::get(&url)
-            .credentials(RequestCredentials::Omit)
-            .abort_signal(Some(signal));
-
-        for (name, value) in headers {
-            builder = builder.header(name.as_str(), value.as_str());
-        }
-
-        builder
-            .build()
-            .map_err(|err| AppError::Serialization(format!("Failed to build request: {err}")))
-    })
-    .await?;
-
-    handle_json_response(response).await
-}
-
 /// Fetches JSON from an explicit base URL, used for genesis token calls.
 pub async fn get_json_with_base<T: DeserializeOwned>(
     base_url: &str,
