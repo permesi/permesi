@@ -1631,8 +1631,18 @@
               }
             }
           },
+          "413": {
+            "description": "Request body too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
-            "description": "Rate limited.",
+            "description": "Rate limited or in cooldown; also answered when the attempt log cannot be read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1652,7 +1662,7 @@
             }
           },
           "503": {
-            "description": "OpenBao or authentication storage unavailable. Nothing is recorded unless the failure was the loss of the commit's acknowledgement.",
+            "description": "OpenBao or authentication storage unavailable. No elevation is recorded unless the failure was the loss of the commit's acknowledgement; the attempt reserved before the failure still counts toward the limits.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9557,6 +9567,10 @@
       },
       "PlatformStats": {
         "type": "object",
+        "required": [
+          "operator_count",
+          "recent_attempts_count"
+        ],
         "properties": {
           "operator_count": {
             "type": [
@@ -9564,7 +9578,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Operator designations, enabled or not; absent when the count could not be read."
+            "description": "Operator designations, enabled or not; `null` when the count could not be read."
           },
           "recent_attempts_count": {
             "type": [
@@ -9572,7 +9586,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Bootstrap and elevation attempts in the last hour; absent when unreadable."
+            "description": "Bootstrap and elevation attempts in the last hour; `null` when unreadable."
           }
         }
       },

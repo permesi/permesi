@@ -568,6 +568,9 @@ try {
  // The server ends an elevation without telling the browser: the next refused read must drop the remembered one and offer a new step-up.
  for(const rejected of [403,401]){infraStatus=rejected;await click('Refresh system status');await wait("document.body.innerText.includes('Elevation Required')");infraStatus=200;await click('Elevate Session');await stepUp();await overview();}
  assert(infraAuthorization.length>=5&&infraAuthorization.every(value=>value===null),'Infrastructure status is authorized by the session cookie, never a bearer credential');
+ // A session the server no longer knows leaves the console for the entry point, as logout does, and comes back signed in.
+ infraStatus=401;sessionKind='none';await click('Refresh system status');await wait("location.pathname==='/'");
+ infraStatus=200;sessionKind='full';await goto('/console/admin/claim');await stepUp();
  await click('Global Users');await wait("document.body.innerText.includes('profile@example.test')");await click('profile@example.test');
  await wait("document.body.innerText.includes('Profile Information') && document.body.innerText.includes('Designation') && document.querySelector('button[aria-label=\"Copy user ID\"]')");
  await wait("[...document.querySelectorAll('dt')].some(e=>e.textContent==='Last Login') && document.querySelectorAll('time').length===3");

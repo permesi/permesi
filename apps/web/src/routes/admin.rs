@@ -29,7 +29,7 @@ pub fn AdminPage() -> impl IntoView {
             {
                 auth.forget_rejected_elevation(elevation.as_ref());
                 if *rejected == 401 {
-                    auth.drop_session_if_gone();
+                    auth.reconcile_session_after_refusal();
                 }
             }
             status

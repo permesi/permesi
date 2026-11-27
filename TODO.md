@@ -9,7 +9,7 @@ Confirmed during the OpenBao 2.7 and PostgreSQL 19 stabilization and left open b
 - [ ] **Error diagnostics hygiene:** Upstream OpenBao error bodies (KV, TOTP, Transit, and the login and renewal calls) are copied into error messages and can reach logs/spans. Map them to fixed codes.
 - [ ] **JWKS cache window during signing-key rotation:** A warmed replica can serve an older key set for one cache TTL while issuing tokens with a new `kid`, and HTTP `max-age` is not capped by remaining cache life.
 - [ ] **`/token` pool holding across OpenBao calls:** `/token` holds its PostgreSQL transaction and pool connection across OpenBao signing calls, bounded only by the handler timeout. Fetch signing metadata first and gate exchanges below `max_connections`.
-- [ ] **Smaller hardening items:** paginate `GET /v1/users`; reduce per-request session auth DB checkouts/writes; zeroize OPAQUE seed, MFA pepper, and TOTP keys in memory; remove unused Genesis `tokens` indexes.
+- [ ] **Smaller hardening items:** declare the session cookie as an OpenAPI security scheme on every cookie-authorized operation (none declares one today); paginate `GET /v1/users`; reduce per-request session auth DB checkouts/writes; zeroize OPAQUE seed, MFA pepper, and TOTP keys in memory; remove unused Genesis `tokens` indexes.
 - [ ] **Deployment follow-ups:** Run the browser upgrade qualification once an OpenBao-era release exists to upgrade from; track OpenBao's migration of `api_proxy` from `bao agent` to `bao proxy`; exercise native Kubernetes auth against a live cluster.
 
 ## Planned Milestones

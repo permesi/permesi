@@ -9,6 +9,9 @@
 //! Checking the limits and reserving the attempt happen in one transaction that holds
 //! an advisory lock for the user and one for the address, so concurrent requests, on
 //! one replica or several, cannot each count the window before any of them is recorded.
+//! The reservation commits before OpenBao is asked and starts as a failure; only a
+//! request that ends in an elevation or a bootstrap marks it successful. A database that
+//! cannot be read refuses the attempt, which the caller answers as rate limited.
 
 use anyhow::Result;
 use sqlx::{PgConnection, PgPool, Row};
@@ -72,6 +75,13 @@ impl AdminRateLimiter {
                 error!("Failed to begin admin attempt registration: {err}");
                 AdminRateLimitError::Limited
             })?;
+        // Each statement below has to see what the request before it committed while
+        // this one waited for the lock. Under REPEATABLE READ the snapshot would be
+        // taken before the wait and miss it, whatever the database default is.
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .execute(&mut *transaction)
+            .await
+            .map_err(refused("set the admin attempt isolation level"))?;
         lock_subject(&mut transaction, USER_LOCK_CLASS, &user_id.to_string())
             .await
             .map_err(refused("lock the user's admin attempts"))?;
@@ -313,83 +323,161 @@ mod tests {
         Ok(row.get("id"))
     }
 
+    /// Runs every attempt at the same moment on several threads and returns how many
+    /// were admitted and how the others were refused.
+    async fn burst(
+        limiter: &std::sync::Arc<AdminRateLimiter>,
+        attempts: Vec<(Uuid, Option<&'static str>)>,
+    ) -> Result<(usize, Vec<AdminRateLimitError>)> {
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(attempts.len()));
+        let tasks: Vec<_> = attempts
+            .into_iter()
+            .map(|(user, ip)| {
+                let (limiter, start) = (limiter.clone(), start.clone());
+                tokio::spawn(async move {
+                    start.wait().await;
+                    limiter.register_attempt(user, ip, None).await
+                })
+            })
+            .collect();
+        let (mut admitted, mut refused) = (0, Vec::new());
+        for task in tasks {
+            match task.await? {
+                Ok(_) => admitted += 1,
+                Err(refusal) => refused.push(refusal),
+            }
+        }
+        Ok((admitted, refused))
+    }
+
     /// Counting the window and reserving the attempt were separate statements on separate
     /// connections, so requests arriving together each saw room and all got in. They now
-    /// take turns: exactly the limit is admitted, per user and per address.
+    /// take turns: exactly the limit is admitted, per user and per address, whatever
+    /// isolation level the database or the role defaults to.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn concurrent_registrations_cannot_exceed_the_window_limits() -> Result<()> {
         runtime::ensure_container_runtime()
             .context("The window limits require PostgreSQL; a skip is not coverage")?;
         let (pool, container) = get_test_pool().await?;
-        // More connections than either limit, and not a divisor of one: requests that
-        // are not serialized then count the window together and overshoot it.
-        let wide = PgPoolOptions::new()
-            .max_connections(16)
-            .acquire_timeout(std::time::Duration::from_secs(30))
-            .connect(&container.admin_dsn())
-            .await?;
-        // Open every connection first, so the burst below is not staggered by connecting.
-        let mut warm = Vec::new();
-        for _ in 0..16 {
-            warm.push(wide.acquire().await?);
-        }
-        drop(warm);
-        let limiter = std::sync::Arc::new(AdminRateLimiter::new(wide));
-        let admitted = |attempts: Vec<(Uuid, Option<&'static str>)>| {
-            let limiter = limiter.clone();
-            async move {
-                // Every request starts at the same moment, on several threads.
-                let start = std::sync::Arc::new(tokio::sync::Barrier::new(attempts.len()));
-                let tasks: Vec<_> = attempts
-                    .into_iter()
-                    .map(|(user, ip)| {
-                        let (limiter, start) = (limiter.clone(), start.clone());
-                        tokio::spawn(async move {
-                            start.wait().await;
-                            limiter.register_attempt(user, ip, None).await
-                        })
+        for isolation in ["read committed", "repeatable read"] {
+            // More connections than either limit, and not a divisor of one: requests that
+            // are not serialized then count the window together and overshoot it.
+            let wide = PgPoolOptions::new()
+                .max_connections(16)
+                .acquire_timeout(std::time::Duration::from_secs(30))
+                .after_connect(move |connection, _| {
+                    Box::pin(async move {
+                        sqlx::query(sqlx::AssertSqlSafe(format!(
+                            "SET default_transaction_isolation TO '{isolation}'"
+                        )))
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
                     })
-                    .collect();
-                let mut admitted = 0;
-                for task in tasks {
-                    // Past the limit a request is refused by the window, or by the
-                    // cooldown the three unconfirmed attempts before it started.
-                    if task.await?.is_ok() {
-                        admitted += 1;
-                    }
-                }
-                Ok::<_, anyhow::Error>(admitted)
-            }
-        };
-
-        let user = insert_user(&pool, "burst@example.com").await?;
-        assert_eq!(admitted(vec![(user, None); 24]).await?, 3);
-        let recorded: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM admin_attempts WHERE user_id=$1")
-                .bind(user)
-                .fetch_one(&pool)
+                })
+                .connect(&container.admin_dsn())
                 .await?;
-        assert_eq!(recorded, 3);
+            // Open every connection first, so the burst is not staggered by connecting.
+            let mut warm = Vec::new();
+            for _ in 0..16 {
+                warm.push(wide.acquire().await?);
+            }
+            drop(warm);
+            let limiter = std::sync::Arc::new(AdminRateLimiter::new(wide));
+            let tag = isolation.replace(' ', "-");
 
-        let mut one_address = Vec::new();
-        for index in 0..24 {
-            let user = insert_user(&pool, &format!("burst-{index}@example.com")).await?;
-            one_address.push((user, Some("203.0.113.7")));
+            let user = insert_user(&pool, &format!("burst-{tag}@example.com")).await?;
+            let (admitted, _) = burst(&limiter, vec![(user, None); 24]).await?;
+            assert_eq!(admitted, 3, "{isolation}: per user");
+            let recorded: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM admin_attempts WHERE user_id=$1")
+                    .bind(user)
+                    .fetch_one(&pool)
+                    .await?;
+            assert_eq!(recorded, 3, "{isolation}: per user");
+
+            // Two confirmed attempts leave room for one more and keep the cooldown out
+            // of it, so every refusal here is the window's own.
+            let seeded = insert_user(&pool, &format!("seeded-{tag}@example.com")).await?;
+            sqlx::query(
+                "INSERT INTO admin_attempts(user_id,is_failure) VALUES($1,FALSE),($1,FALSE)",
+            )
+            .bind(seeded)
+            .execute(&pool)
+            .await?;
+            let (admitted, refused) = burst(&limiter, vec![(seeded, None); 24]).await?;
+            assert_eq!(admitted, 1, "{isolation}: window");
+            assert!(
+                refused
+                    .iter()
+                    .all(|refusal| *refusal == AdminRateLimitError::Limited),
+                "{isolation}: {refused:?}"
+            );
+
+            let address: &'static str = if isolation == "read committed" {
+                "203.0.113.7"
+            } else {
+                "203.0.113.8"
+            };
+            let mut one_address = Vec::new();
+            for index in 0..24 {
+                let user = insert_user(&pool, &format!("burst-{tag}-{index}@example.com")).await?;
+                one_address.push((user, Some(address)));
+            }
+            let (admitted, _) = burst(&limiter, one_address).await?;
+            assert_eq!(admitted, 10, "{isolation}: per address");
+            let recorded: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM admin_attempts WHERE ip_address=$1::inet")
+                    .bind(address)
+                    .fetch_one(&pool)
+                    .await?;
+            assert_eq!(recorded, 10, "{isolation}: per address");
         }
-        assert_eq!(admitted(one_address).await?, 10);
-        let recorded: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM admin_attempts WHERE ip_address='203.0.113.7'::inet",
-        )
-        .fetch_one(&pool)
-        .await?;
-        assert_eq!(recorded, 10);
         Ok(())
     }
 
-    /// With the database unreachable the cooldown cannot be read. Enforcement must
+    /// The transaction starts, and then the attempt log cannot be read: the role has no
+    /// privilege on it. The attempt is refused and nothing is reserved.
+    #[tokio::test]
+    async fn register_attempt_fails_closed_when_the_attempt_log_cannot_be_read() -> Result<()> {
+        runtime::ensure_container_runtime()
+            .context("The refusal requires PostgreSQL; a skip is not coverage")?;
+        let (pool, container) = get_test_pool().await?;
+        let user = insert_user(&pool, "unreadable@example.com").await?;
+        let name = format!("no_privileges_{}", Uuid::new_v4().simple());
+        let password = Uuid::new_v4().simple().to_string();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "REVOKE ALL ON admin_attempts FROM PUBLIC; CREATE ROLE {name} LOGIN PASSWORD '{password}';"
+        )))
+        .execute(&pool)
+        .await?;
+        let admin = url::Url::parse(&container.admin_dsn())?;
+        let mut unprivileged = admin.clone();
+        unprivileged
+            .set_username(&name)
+            .and_then(|()| unprivileged.set_password(Some(&password)))
+            .map_err(|()| anyhow::anyhow!("role credentials"))?;
+        let limiter = AdminRateLimiter::new(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect(unprivileged.as_str())
+                .await?,
+        );
+        assert_eq!(
+            limiter.register_attempt(user, None, None).await,
+            Err(AdminRateLimitError::Limited)
+        );
+        let recorded: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_attempts")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(recorded, 0);
+        Ok(())
+    }
+
+    /// With the database unreachable no reservation can start. Enforcement must
     /// refuse the attempt; only the display helper may fall back to "no cooldown".
     #[tokio::test]
-    async fn register_attempt_fails_closed_when_the_cooldown_cannot_be_read() -> Result<()> {
+    async fn register_attempt_fails_closed_when_the_database_is_unreachable() -> Result<()> {
         let pool = PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_millis(200))
             .connect_lazy("postgres://invalid@127.0.0.1:1/invalid?sslmode=disable")?;

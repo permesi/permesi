@@ -70,22 +70,21 @@ pub(super) async fn clock(pool: &PgPool) -> Result<Timestamp> {
 /// so the token cannot end before `anchor` plus its real remaining life. OpenBao
 /// reports that life in whole seconds, rounded, so one second is given up: the deadline
 /// is never later than the token's own end. A missing or negative lifetime, which the
-/// lookup reports as zero or less, grants nothing. The lifetime is capped just above
-/// `configured_seconds` first; that changes no result and keeps the arithmetic in range.
-pub(super) fn openbao_deadline(
-    anchor: Timestamp,
-    openbao_ttl_seconds: i64,
-    configured_seconds: i64,
-) -> Option<Timestamp> {
+/// lookup reports as zero or less, grants nothing.
+///
+/// The deadline depends on the token alone. The configured lifetime is a separate bound
+/// that [`grant`] measures from the moment it writes, so a slow lookup shortens the
+/// elevation only as far as the token requires. A lifetime too long for the calendar
+/// gives the latest instant it can express: such a token bounds nothing in practice.
+pub(super) fn openbao_deadline(anchor: Timestamp, openbao_ttl_seconds: i64) -> Option<Timestamp> {
     let usable = openbao_ttl_seconds
-        .min(configured_seconds.saturating_add(1))
         .checked_sub(1)
         .filter(|seconds| *seconds > 0)?;
-    anchor
+    let deadline = anchor
         .to_jiff()
         .checked_add(SignedDuration::from_secs(usable))
-        .ok()
-        .map(ToSqlx::to_sqlx)
+        .unwrap_or(jiff::Timestamp::MAX);
+    Some(deadline.to_sqlx())
 }
 
 /// Records the elevation of one locked session and returns its expiry, or `None` when

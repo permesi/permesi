@@ -66,11 +66,16 @@ Each elevation or bootstrap attempt is reserved in `admin_attempts` before OpenB
 asked: three per user and ten per address in ten minutes, and a fifteen-minute
 cooldown after three in a row that did not succeed. The limits are checked and the
 attempt reserved in one transaction under a lock for the user and one for the
-address, so requests that arrive together cannot all be admitted. A successful
-elevation marks its attempt in the same transaction that writes the grant, so the two
-are recorded together or not at all. When storage fails the answer is `503`; nothing
-is recorded unless the failure was the loss of the commit's acknowledgement, in which
-case the next status read shows the elevation.
+address, so requests that arrive together cannot all be admitted. The reservation is
+committed at that point and counts as a failure until it is marked otherwise, so a
+request that OpenBao or storage fails still uses up an attempt. A successful elevation
+marks its attempt in the same transaction that writes the grant: the grant and its
+success mark are recorded together or not at all. A failure of OpenBao or of storage
+answers `503`, and an attempt log that cannot be read answers `429`, since a limit
+that cannot be checked is treated as reached. After a `503` no elevation exists unless
+the failure was the loss of the commit's acknowledgement. `GET /v1/auth/admin/infra`
+shows whether the session is elevated now; it cannot tell which of two step-ups
+produced that.
 
 Because the cookie is the credential, a session that has elevated can read
 infrastructure status from any tab or client holding that cookie until the elevation

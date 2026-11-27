@@ -425,9 +425,10 @@ pub async fn admin_bootstrap(
         (status = 400, description = "Invalid request.", body = String),
         (status = 401, description = "Missing or invalid session, including one that ended during the request, or an OpenBao token that OpenBao rejects.", body = String),
         (status = 403, description = "Not an operator, the OpenBao token lacks the policy or has no remaining lifetime, or the session or designation stopped qualifying during the request.", body = String),
-        (status = 429, description = "Rate limited."),
+        (status = 413, description = "Request body too large."),
+        (status = 429, description = "Rate limited or in cooldown; also answered when the attempt log cannot be read."),
         (status = 502, description = "OpenBao answered the token lookup with an invalid response.", body = String),
-        (status = 503, description = "OpenBao or authentication storage unavailable. Nothing is recorded unless the failure was the loss of the commit's acknowledgement."),
+        (status = 503, description = "OpenBao or authentication storage unavailable. No elevation is recorded unless the failure was the loss of the commit's acknowledgement; the attempt reserved before the failure still counts toward the limits."),
     ),
     tag = "auth"
 )]
@@ -455,7 +456,7 @@ pub async fn admin_elevate(
         Ok(false) => return StatusCode::FORBIDDEN.into_response(),
         Err(err) => {
             error!("Failed to lookup operator status: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     }
 
@@ -530,9 +531,10 @@ struct StepUp {
 /// the grant commits first and the mutation deletes or invalidates it. The lifetime is
 /// bounded by the configured one and by the deadline fixed before the OpenBao lookup.
 /// The rate limiter's reservation is marked successful in the same transaction, so a
-/// grant and its audit record commit together or not at all. Storage failures answer
-/// `503`; nothing is recorded unless the failure was the loss of the commit's
-/// acknowledgement.
+/// grant and its success mark commit together or not at all. Storage failures answer
+/// `503`; no elevation is recorded unless the failure was the loss of the commit's
+/// acknowledgement. The reservation itself was committed earlier and, unmarked, counts
+/// as a failed attempt.
 async fn record_elevation(
     headers: &HeaderMap,
     pool: &PgPool,
@@ -541,9 +543,8 @@ async fn record_elevation(
     step_up: StepUp,
 ) -> Result<jiff_sqlx::Timestamp, StatusCode> {
     let configured = admin_state.config().admin_ttl_seconds();
-    let deadline =
-        admin_elevation::openbao_deadline(step_up.anchor, step_up.openbao_ttl_seconds, configured)
-            .ok_or(StatusCode::FORBIDDEN)?;
+    let deadline = admin_elevation::openbao_deadline(step_up.anchor, step_up.openbao_ttl_seconds)
+        .ok_or(StatusCode::FORBIDDEN)?;
     let session_hash = extract_session_token(headers)
         .map(|token| hash_session_token(&token))
         .ok_or(StatusCode::UNAUTHORIZED)?;

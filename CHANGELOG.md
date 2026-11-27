@@ -116,7 +116,8 @@ the signed artifacts.
 - An operator elevation is bound to the session that performed the step-up and ends
   with it. Logout, a password change, suspension and session cleanup delete it;
   another session of the same user is not elevated. Before, the elevation token
-  stayed valid until its own expiry, up to 12 hours, whatever happened to the session.
+  stayed valid until its own expiry, 12 hours by default, whatever happened to the
+  session.
 - An elevation is recorded under the account and session locks after the OpenBao
   call. A session that logged out or changed its password while OpenBao was
   answering used to receive a valid elevation anyway.

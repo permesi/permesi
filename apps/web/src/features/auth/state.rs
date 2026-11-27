@@ -101,14 +101,24 @@ impl AuthContext {
         same
     }
 
-    /// Asks the server whether the session still exists after it refused a request as
-    /// unauthenticated, and clears the local session when it does not, so the guards
-    /// send the user to sign in. A failed check changes nothing.
-    pub fn drop_session_if_gone(&self) {
+    /// Brings the local session in line with the server after it refused a request as
+    /// unauthenticated. A session that still exists is applied as the server describes
+    /// it, so a session that became limited is routed to its MFA step. When the session
+    /// is gone the page is reloaded at the entry point, which reads the session from the
+    /// server again; local state is left alone until then, because tearing the console
+    /// down in place while its views are mounted is not safe. A failed check changes
+    /// nothing.
+    pub fn reconcile_session_after_refusal(&self) {
         let auth = *self;
         spawn_local(async move {
-            if let Ok(None) = client::fetch_session().await {
-                auth.clear_session();
+            match client::fetch_session().await {
+                Ok(Some(session)) => auth.set_session(session),
+                Ok(None) => {
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.location().set_href("/");
+                    }
+                }
+                Err(_) => {}
             }
         });
     }

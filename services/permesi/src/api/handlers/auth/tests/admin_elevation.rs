@@ -67,6 +67,17 @@ async fn stub_openbao(openbao: &MockServer, ttl: i64, delay: Duration) {
 /// The production router over its own state: nothing is shared with another replica
 /// except the database and OpenBao.
 fn replica(pool: &PgPool, openbao: &MockServer, ttl: i64) -> Result<Router> {
+    replica_with_deadline(pool, openbao, ttl, None)
+}
+
+/// As [`replica`], with the lock and statement deadline of the authentication
+/// transactions set explicitly, for tests that hold a lock on purpose.
+fn replica_with_deadline(
+    pool: &PgPool,
+    openbao: &MockServer,
+    ttl: i64,
+    deadline_ms: Option<i64>,
+) -> Result<Router> {
     let transport = openbao_client::OpenBaoTransport::from_target(
         crate::APP_USER_AGENT,
         openbao_client::OpenBaoTarget::Tcp {
@@ -79,6 +90,20 @@ fn replica(pool: &PgPool, openbao: &MockServer, ttl: i64) -> Result<Router> {
         pool.clone(),
         transport,
     )?);
+    if let Some(deadline_ms) = deadline_ms {
+        state.auth = Arc::new(AuthState::new(
+            AuthConfig::new("https://permesi.dev".to_string())
+                .with_opaque_exchange_timeout_ms(deadline_ms),
+            OpaqueState::from_seed(
+                [1u8; 32],
+                "api.permesi.dev".to_string(),
+                Duration::from_secs(30),
+                10_000,
+            ),
+            Arc::new(RateLimiter::noop()),
+            MfaConfig::new(),
+        ));
+    }
     Ok(crate::api::with_response_policy(
         crate::api::router().split_for_parts().0.with_state(state),
     ))
@@ -172,13 +197,14 @@ where
     Err(anyhow!("timed out waiting until {what}"))
 }
 
-/// Whether some backend is blocked on a lock, as the elevation is while a lifecycle
-/// change holds the account.
-async fn lock_waiter(pool: &PgPool) -> Result<bool> {
+/// Whether a backend is blocked on a lock held by backend `blocker`, as the elevation
+/// is while that lifecycle transaction holds the account.
+async fn waits_for(pool: &PgPool, blocker: i32) -> Result<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
-                       WHERE datname=current_database() AND wait_event_type='Lock')",
+        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity a
+                       WHERE a.wait_event_type='Lock' AND pg_blocking_pids(a.pid) @> ARRAY[$1])",
     )
+    .bind(blocker)
     .fetch_one(pool)
     .await?)
 }
@@ -547,43 +573,50 @@ async fn grant_ends_at_the_deadline_fixed_before_the_openbao_lookup() -> Result<
         let refused = grant(&mut connection, operator_id, &hash, 3600, deadline).await?;
         assert!(refused.is_none(), "deadline {past} seconds from now");
     }
+    // A token that bounds nothing leaves the configured lifetime as the limit.
+    let (unbounded_user, unbounded) = operator(pool).await?;
+    let latest = jiff::Timestamp::MAX.to_sqlx();
+    let hash_unbounded = hash_session_token(&unbounded);
+    assert!(
+        grant(&mut connection, unbounded_user, &hash_unbounded, 60, latest)
+            .await?
+            .is_some()
+    );
+    let left = remaining_seconds(pool, &unbounded).await?;
+    assert!(left > 50.0 && left <= 60.0, "{left} seconds left");
+
     // The refused renewals left the earlier grant and its deadline as they were.
-    let stored: jiff_sqlx::Timestamp =
-        sqlx::query_scalar("SELECT expires_at FROM platform_operator_elevations")
-            .fetch_one(pool)
-            .await?;
+    let stored: jiff_sqlx::Timestamp = sqlx::query_scalar(
+        "SELECT e.expires_at FROM platform_operator_elevations e
+         JOIN user_sessions s ON s.id=e.session_id WHERE s.session_hash=$1",
+    )
+    .bind(&hash)
+    .fetch_one(pool)
+    .await?;
     assert_eq!(stored.to_jiff(), expires.to_jiff());
     Ok(())
 }
 
 /// OpenBao reports whole seconds, rounded, so one second is given up, and a token with
-/// a second or less grants nothing. A lifetime far beyond the configured one is capped
-/// before any arithmetic.
+/// a second or less grants nothing. The deadline depends on the token alone, and one too
+/// far away for the calendar becomes the latest instant instead of wrapping or failing.
 #[test]
 fn openbao_deadline_gives_up_one_second_and_never_overflows() -> Result<()> {
     let anchor: jiff::Timestamp = "2026-01-02T03:04:05.250Z".parse()?;
-    let after = |seconds: i64| -> Result<jiff::Timestamp> {
-        Ok(anchor.checked_add(SignedDuration::from_secs(seconds))?)
-    };
     for ttl in [i64::MIN, -1, 0, 1] {
-        assert!(
-            openbao_deadline(anchor.to_sqlx(), ttl, DEFAULT_TTL).is_none(),
+        assert!(openbao_deadline(anchor.to_sqlx(), ttl).is_none(), "{ttl}");
+    }
+    for (ttl, expected) in [(2, 1), (120, 119), (DEFAULT_TTL, DEFAULT_TTL - 1)] {
+        assert_eq!(
+            openbao_deadline(anchor.to_sqlx(), ttl).map(jiff_sqlx::Timestamp::to_jiff),
+            Some(anchor.checked_add(SignedDuration::from_secs(expected))?),
             "{ttl}"
         );
     }
-    for (ttl, configured, expected) in [
-        (2, DEFAULT_TTL, 1),
-        (120, DEFAULT_TTL, 119),
-        (DEFAULT_TTL, DEFAULT_TTL, DEFAULT_TTL - 1),
-        (DEFAULT_TTL + 1, DEFAULT_TTL, DEFAULT_TTL),
-        (i64::MAX, DEFAULT_TTL, DEFAULT_TTL),
-        (i64::MAX, i64::MAX, i64::MAX - 1),
-    ] {
-        let deadline =
-            openbao_deadline(anchor.to_sqlx(), ttl, configured).map(jiff_sqlx::Timestamp::to_jiff);
-        // A sum that leaves the calendar grants nothing instead of wrapping.
-        assert_eq!(deadline, after(expected).ok(), "{ttl}/{configured}");
-    }
+    assert_eq!(
+        openbao_deadline(anchor.to_sqlx(), i64::MAX).map(jiff_sqlx::Timestamp::to_jiff),
+        Some(jiff::Timestamp::MAX)
+    );
     Ok(())
 }
 
@@ -603,6 +636,29 @@ async fn slow_openbao_lookup_shortens_the_elevation() -> Result<()> {
         attempts_succeeded(&f.db.pool, operator_id).await?,
         Some(true)
     );
+    Ok(())
+}
+
+/// A slow lookup costs only what the token requires. With a token good for an hour and
+/// the shortest lifetime that can be configured, a lookup that takes longer than that
+/// lifetime still elevates, for the full configured second from the moment of writing.
+/// Charging the wait against the configured lifetime refused this valid step-up and
+/// counted it as a failed attempt.
+#[tokio::test]
+async fn slow_lookup_with_a_long_lived_token_keeps_the_configured_lifetime() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.openbao_token(3600, Duration::from_millis(1200)).await;
+    let router = f.replica(1)?;
+    let pool = &f.db.pool;
+    let (operator_id, cookie) = operator(pool).await?;
+    assert_eq!(elevate(&router, &cookie).await?.0, StatusCode::OK);
+    let lifetime: f64 = sqlx::query_scalar(
+        "SELECT EXTRACT(EPOCH FROM expires_at-created_at)::float8 FROM platform_operator_elevations",
+    )
+    .fetch_one(pool)
+    .await?;
+    assert!((lifetime - 1.0).abs() < 0.001, "{lifetime} second lifetime");
+    assert_eq!(attempts_succeeded(pool, operator_id).await?, Some(true));
     Ok(())
 }
 
@@ -688,7 +744,8 @@ async fn replaced_session_does_not_inherit_the_elevation() -> Result<()> {
 #[tokio::test]
 async fn session_that_ended_during_the_openbao_call_gets_no_elevation() -> Result<()> {
     let f = Fixture::new().await?;
-    f.openbao_token(3600, Duration::from_millis(500)).await;
+    // Long enough that the logout below always lands while OpenBao is still answering.
+    f.openbao_token(3600, Duration::from_secs(3)).await;
     let router = f.replica(DEFAULT_TTL)?;
     let (operator_id, cookie) = operator(&f.db.pool).await?;
 
@@ -716,19 +773,23 @@ async fn session_that_ended_during_the_openbao_call_gets_no_elevation() -> Resul
 }
 
 /// Starts an elevation while a transaction holds the account's lifecycle lock, waits
-/// until the elevation is blocked on it, runs `change` there and commits, and returns
-/// the elevation's status. Without a change the lock is held until the elevation gives up.
+/// until the elevation is blocked on exactly that transaction, runs `change` there and
+/// commits, and returns the elevation's status. Without a change the lock is held until
+/// the elevation gives up at its one-second database deadline.
 async fn elevate_against(f: &Fixture, change: Option<&'static str>) -> Result<StatusCode> {
-    let router = f.replica(DEFAULT_TTL)?;
+    // With a change to apply, the elevation gets ample time to wait for it.
+    let deadline_ms = change.map(|_| 10_000);
+    let router = replica_with_deadline(&f.db.pool, &f.openbao, DEFAULT_TTL, deadline_ms)?;
     let (operator_id, cookie) = operator(&f.db.pool).await?;
     let mut lifecycle = f.db.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id=$1 FOR NO KEY UPDATE")
-        .bind(operator_id)
-        .execute(&mut *lifecycle)
-        .await?;
+    let blocker: i32 =
+        sqlx::query_scalar("SELECT pg_backend_pid() FROM users WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(operator_id)
+            .fetch_one(&mut *lifecycle)
+            .await?;
     let pending = tokio::spawn(async move { elevate(&router, &cookie).await.map(|(s, _)| s) });
     eventually("the elevation waits for the account lock", || {
-        lock_waiter(&f.db.pool)
+        waits_for(&f.db.pool, blocker)
     })
     .await?;
     let Some(change) = change else {

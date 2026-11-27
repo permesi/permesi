@@ -208,9 +208,11 @@ pub struct OpenBaoStatus {
 
 #[derive(ToSchema, Serialize, Deserialize, Debug)]
 pub struct PlatformStats {
-    /// Operator designations, enabled or not; absent when the count could not be read.
+    /// Operator designations, enabled or not; `null` when the count could not be read.
+    #[schema(required = true)]
     pub operator_count: Option<i64>,
-    /// Bootstrap and elevation attempts in the last hour; absent when unreadable.
+    /// Bootstrap and elevation attempts in the last hour; `null` when unreadable.
+    #[schema(required = true)]
     pub recent_attempts_count: Option<i64>,
 }
 
