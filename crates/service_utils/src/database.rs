@@ -241,15 +241,41 @@ impl PoolConfig {
         target: ConnectionTarget,
         application_name: &str,
     ) -> Result<PgPool> {
-        self.pool_options()
-            .connect_with(target.options.application_name(application_name))
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "Failed to connect to database: {}",
-                    connection_failure(&error)
-                )
-            })
+        let options = target.options.application_name(application_name);
+        // A pinned name is tried at each loopback address it resolved to, in turn, as
+        // the driver would have tried them: a server listening on `::1` only must stay
+        // reachable through `localhost`. Only an address that did not answer moves on
+        // to the next; any other answer is the server's. Each address can take up to
+        // the acquire timeout.
+        let mut attempts: Vec<PgConnectOptions> = target
+            .loopback_candidates
+            .iter()
+            .map(|address| options.clone().hostaddr(*address))
+            .collect();
+        if attempts.is_empty() {
+            attempts.push(options);
+        }
+        let last = attempts.len().saturating_sub(1);
+        let mut failure = None;
+        for (index, attempt) in attempts.into_iter().enumerate() {
+            match self.pool_options().connect_with(attempt).await {
+                Ok(pool) => return Ok(pool),
+                // The pool retries a refused connection until its acquire timeout and
+                // then reports the timeout, so both mean the address did not answer.
+                Err(error @ (sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut)) if index < last => {
+                    failure = Some(error);
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        let failure = failure.map_or_else(
+            || "connection failed".to_string(),
+            |error| connection_failure(&error),
+        );
+        Err(anyhow::anyhow!("Failed to connect to database: {failure}"))
     }
 }
 
@@ -258,10 +284,12 @@ impl PoolConfig {
 /// name the address. The SQLSTATE is enough to look the failure up.
 fn connection_failure(error: &sqlx::Error) -> String {
     match error {
-        sqlx::Error::Database(database) => format!(
-            "the server refused the connection (SQLSTATE {})",
-            database.code().as_deref().unwrap_or("unknown")
-        ),
+        sqlx::Error::Database(database) => {
+            format!(
+                "the server refused the connection (SQLSTATE {})",
+                shown_sqlstate(database.code().as_deref())
+            )
+        }
         sqlx::Error::Io(io) => format!("network error ({:?})", io.kind()),
         sqlx::Error::Tls(_) => "TLS negotiation or certificate verification failed".to_string(),
         sqlx::Error::PoolTimedOut => "timed out waiting for a connection".to_string(),
@@ -269,6 +297,18 @@ fn connection_failure(error: &sqlx::Error) -> String {
         sqlx::Error::Configuration(_) => "invalid connection settings".to_string(),
         _ => "connection failed".to_string(),
     }
+}
+
+/// A SQLSTATE as sent by the peer, if it is one: five ASCII capitals or digits. The
+/// driver stores whatever text the peer put in that field, so anything else is not shown.
+fn shown_sqlstate(code: Option<&str>) -> &str {
+    code.filter(|code| {
+        code.len() == 5
+            && code
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+    })
+    .unwrap_or("unknown")
 }
 
 /// DSN query parameters whose values are settings. Any other parameter is hidden whole.
@@ -418,6 +458,9 @@ const ACCEPTED_DSN_PARAMETERS: [&str; 16] = [
 pub struct ConnectionTarget {
     options: PgConnectOptions,
     relies_on_opt_out: bool,
+    /// The loopback addresses a pinned `localhost` name resolved to, in the order they
+    /// are tried; empty when the connection is not pinned.
+    loopback_candidates: Vec<IpAddr>,
 }
 
 /// Shows nothing: the options hold the password once the credentials are set.
@@ -444,6 +487,17 @@ impl ConnectionTarget {
         // The driver's own error can repeat a value, so it is not kept.
         let mut options = PgConnectOptions::from_str(&without_password_lookup(dsn))
             .map_err(|_| anyhow::anyhow!("Invalid database connection string"))?;
+        // `PGDATABASE` and `PGOPTIONS` reach the startup packet without passing the DSN
+        // checks; they are held to the same rule.
+        if options
+            .get_database()
+            .is_some_and(|name| name.chars().any(char::is_control))
+            || options
+                .get_options()
+                .is_some_and(|text| text.chars().any(char::is_control))
+        {
+            bail!("database settings hold a control character");
+        }
         // The driver connects through a socket when one is named, or when its effective
         // host is a directory, which `PGHOST` or its own discovery can supply.
         let socket = options.get_socket().is_some() || options.get_host().starts_with('/');
@@ -451,17 +505,23 @@ impl ConnectionTarget {
             options.get_ssl_mode(),
             PgSslMode::VerifyFull | PgSslMode::VerifyCa
         );
+        let mut loopback_candidates = Vec::new();
         let local = socket
             || match dial_address.or_else(environment_dial_address) {
                 Some(address) => address.is_loopback(),
-                None => match loopback_address(options.get_host(), options.get_port()) {
-                    Some(address) => {
+                None => match loopback_addresses(options.get_host(), options.get_port()) {
+                    Some(addresses) => {
                         // The driver would resolve the name again for every connection,
                         // and a later answer could point anywhere. An unencrypted
-                        // connection that is allowed for being local is pinned to the
+                        // connection that is allowed for being local is pinned to a
                         // loopback address found now; the host still names the server.
+                        // `PoolConfig::connect` tries each address found, as resolving
+                        // the name would have, and keeps the one that answers.
                         if !verified {
-                            options = options.hostaddr(address);
+                            if let Some(first) = addresses.first() {
+                                options = options.hostaddr(*first);
+                            }
+                            loopback_candidates = addresses;
                         }
                         true
                     }
@@ -478,6 +538,7 @@ impl ConnectionTarget {
         Ok(Self {
             options,
             relies_on_opt_out: !(local || verified),
+            loopback_candidates,
         })
     }
 
@@ -528,7 +589,7 @@ fn checked_dsn(dsn: &str) -> Result<Option<IpAddr>> {
     }
     // Decoded text goes into the NUL-delimited startup packet; a control character there
     // could end one field and begin another.
-    if encodes_control(parsed.path())
+    if decodes_to_control(parsed.path())
         || parsed
             .query_pairs()
             .any(|(key, value)| key.chars().chain(value.chars()).any(char::is_control))
@@ -560,10 +621,7 @@ fn checked_dsn(dsn: &str) -> Result<Option<IpAddr>> {
             }
             // The same shapes as a host in the authority: a name, an IP literal or a
             // socket directory. A comma is not a list of hosts to the driver.
-            "host"
-                if !(plain(&value, b"-_.:[]")
-                    || (value.starts_with('/') && plain(&value, b"/-_.~@"))) =>
-            {
+            "host" if !host_value(&value) => {
                 bail!("database DSN host is not a host name, an IP address or a socket directory")
             }
             // The driver ignores a bracketed option it cannot read, silently.
@@ -587,36 +645,69 @@ fn checked_dsn(dsn: &str) -> Result<Option<IpAddr>> {
     Ok(dial_address)
 }
 
-/// Whether URL text holds a percent-escape for an ASCII control character.
-fn encodes_control(text: &str) -> bool {
-    text.as_bytes().windows(3).any(|window| match window {
-        [b'%', high, low] => std::str::from_utf8(&[*high, *low])
-            .ok()
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-            .is_some_and(|byte| byte < 0x20 || byte == 0x7f),
-        _ => false,
-    })
+/// Whether a `host` query value is one the driver can use as the authority's host is: a
+/// host name, an IP literal, or an absolute socket directory, which may hold any
+/// character but a control character. The driver reads a comma or an appended port as
+/// part of a name, so neither is accepted.
+fn host_value(value: &str) -> bool {
+    if value.starts_with('/') {
+        return !value.chars().any(char::is_control);
+    }
+    if value
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .is_ok()
+    {
+        return true;
+    }
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
 }
 
-/// The DSN as given, with a placeholder password in its userinfo when it names a host
-/// and no password. Without a password the driver reads the password file while
-/// parsing, and logs a malformed line of that file whole. The services always replace
-/// the password with the one OpenBao issues, so the placeholder is never used. A DSN
-/// without a host keeps the lookup: its authority cannot hold a password.
+/// Whether URL text, once its percent-escapes are decoded, holds a control character.
+fn decodes_to_control(text: &str) -> bool {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&first, tail)) = rest.split_first() {
+        let escaped = match tail {
+            [high, low, ..] if first == b'%' => std::str::from_utf8(&[*high, *low])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok()),
+            _ => None,
+        };
+        if let (Some(byte), Some(after)) = (escaped, tail.get(2..)) {
+            bytes.push(byte);
+            rest = after;
+        } else {
+            bytes.push(first);
+            rest = tail;
+        }
+    }
+    String::from_utf8_lossy(&bytes)
+        .chars()
+        .any(char::is_control)
+}
+
+/// The DSN as given, with a placeholder password added for the driver's parser when it
+/// has none. Without a password the driver reads the password file while parsing, and
+/// logs a malformed line of that file whole. The placeholder goes into the query, which a
+/// hostless socket DSN has as well; a `password` there from the operator was refused by
+/// [`checked_dsn`]. The services always replace the password with the one OpenBao
+/// issues before connecting.
 fn without_password_lookup(dsn: &str) -> String {
     let dsn = dsn.trim();
     let Ok(mut url) = url::Url::parse(dsn) else {
         return dsn.to_string();
     };
-    if url.password().is_none() && url.host_str().is_some_and(|host| !host.is_empty()) {
-        if url.username().is_empty() && url.set_username("permesi").is_err() {
-            return dsn.to_string();
-        }
-        if url.set_password(Some("replaced-before-connecting")).is_ok() {
-            return url.into();
-        }
+    // A DSN that carries a password keeps it, and the driver then reads no file.
+    if url.password().is_none() {
+        url.query_pairs_mut()
+            .append_pair("password", "replaced-before-connecting");
     }
-    dsn.to_string()
+    url.into()
 }
 
 /// The dial address the driver takes from the environment when the DSN names none.
@@ -624,46 +715,45 @@ fn environment_dial_address() -> Option<IpAddr> {
     std::env::var("PGHOSTADDR").ok()?.parse().ok()
 }
 
-/// The loopback address a host the driver would resolve stays on, if it stays on this
+/// The loopback addresses a host the driver would resolve stays on, if it stays on this
 /// machine: a loopback address itself, or `localhost` or a name under it that resolves,
 /// here and now, to loopback addresses only. The spelling alone is not enough, since a
-/// resolver can map such a name anywhere. IPv4 is preferred, as it is more often the
-/// address a database listens on.
-fn loopback_address(host: &str, port: u16) -> Option<IpAddr> {
-    loopback_address_with(host, port, |name, port| {
+/// resolver can map such a name anywhere. IPv4 addresses come first.
+fn loopback_addresses(host: &str, port: u16) -> Option<Vec<IpAddr>> {
+    loopback_addresses_with(host, port, |name, port| {
         (name, port)
             .to_socket_addrs()
             .map_or_default(|addresses| addresses.map(|address| address.ip()).collect())
     })
 }
 
-/// [`loopback_address`] with the resolver passed in, so the rule can be tested against
+/// [`loopback_addresses`] with the resolver passed in, so the rule can be tested against
 /// answers this machine's resolver would never give.
-fn loopback_address_with(
+fn loopback_addresses_with(
     host: &str,
     port: u16,
     resolve: impl Fn(&str, u16) -> Vec<IpAddr>,
-) -> Option<IpAddr> {
+) -> Option<Vec<IpAddr>> {
     let name = host.trim_end_matches('.').to_ascii_lowercase();
     if let Ok(address) = name
         .trim_start_matches('[')
         .trim_end_matches(']')
         .parse::<IpAddr>()
     {
-        return address.is_loopback().then_some(address);
+        return address.is_loopback().then(|| vec![address]);
     }
     if name != "localhost" && !name.ends_with(".localhost") {
         return None;
     }
-    let addresses = resolve(&name, port);
+    let mut addresses = resolve(&name, port);
     if addresses.is_empty() || !addresses.iter().all(IpAddr::is_loopback) {
         return None;
     }
-    addresses
-        .iter()
-        .find(|address| address.is_ipv4())
-        .or_else(|| addresses.first())
-        .copied()
+    // IPv4 first, as it is more often the address a database listens on; the rest
+    // keep the resolver's order. Duplicates, one per socket type, are dropped.
+    addresses.sort_by_key(|address| !address.is_ipv4());
+    addresses.dedup();
+    Some(addresses)
 }
 
 /// One-line summary for startup logs.
@@ -872,7 +962,7 @@ mod tests {
     /// trusted the spelling; here the resolver gives the answers a hostile one could.
     #[test]
     fn localhost_names_are_local_only_when_they_resolve_to_loopback() {
-        use super::loopback_address_with;
+        use super::loopback_addresses_with;
         use std::net::IpAddr;
         let answers = |answer: &'static [&'static str]| {
             move |_: &str, _: u16| {
@@ -895,9 +985,12 @@ mod tests {
             ("[::1]", &["198.51.100.9"], true),
             ("198.51.100.9", &["127.0.0.1"], false),
         ] {
-            let found = loopback_address_with(host, 5432, answers(answer));
+            let found = loopback_addresses_with(host, 5432, answers(answer));
             assert_eq!(found.is_some(), local, "{host} -> {answer:?}");
-            assert!(found.is_none_or(|address| address.is_loopback()), "{host}");
+            assert!(
+                found.is_none_or(|addresses| addresses.iter().all(std::net::IpAddr::is_loopback)),
+                "{host}"
+            );
         }
     }
 
@@ -950,6 +1043,60 @@ mod tests {
         Ok(())
     }
 
+    /// Pinning `localhost` to one address broke a server listening on `::1` only: the
+    /// driver used to try every address the name resolved to. Each address found is
+    /// tried in turn now. The listener here speaks no PostgreSQL; reaching it at all,
+    /// after `127.0.0.1` refused, is what is checked.
+    #[tokio::test]
+    async fn a_pinned_localhost_still_reaches_a_server_on_ipv6_loopback_only() -> anyhow::Result<()>
+    {
+        use std::net::ToSocketAddrs;
+        let Ok(listener) = tokio::net::TcpListener::bind("[::1]:0").await else {
+            eprintln!("IPv6 loopback is not available on this host");
+            return Ok(());
+        };
+        let port = listener.local_addr()?.port();
+        let resolves_both = ("localhost", port)
+            .to_socket_addrs()
+            .is_ok_and(|addresses| {
+                let addresses: Vec<_> = addresses.map(|address| address.ip()).collect();
+                addresses.iter().any(std::net::IpAddr::is_ipv4)
+                    && addresses.iter().any(std::net::IpAddr::is_ipv6)
+            });
+        anyhow::ensure!(
+            resolves_both,
+            "this test needs localhost to resolve to both 127.0.0.1 and ::1"
+        );
+        let reached = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            drop(stream);
+            anyhow::Ok(())
+        });
+        let target = temp_env::with_vars_unset(PG_ENV, || {
+            ConnectionTarget::parse(&format!("postgres://app@localhost:{port}/permesi"), false)
+        })?;
+        assert_eq!(
+            target
+                .loopback_candidates
+                .first()
+                .map(std::net::IpAddr::is_ipv4),
+            Some(true)
+        );
+        let pool = PoolConfig::new(
+            1,
+            0,
+            Duration::from_secs(3),
+            Duration::from_secs(60),
+            Duration::from_mins(5),
+        )?;
+        let failed = pool.connect(target, "pin-fallback").await;
+        assert!(failed.is_err(), "the listener speaks no PostgreSQL");
+        tokio::time::timeout(Duration::from_secs(5), reached)
+            .await
+            .map_err(|_| anyhow::anyhow!("::1 was never tried after 127.0.0.1 refused"))???;
+        Ok(())
+    }
+
     /// The driver reads the password file while parsing a DSN without a password, and
     /// logs a malformed line of it whole. Such a line can hold a real password.
     #[test]
@@ -979,6 +1126,9 @@ mod tests {
                     for dsn in [
                         "postgres://app@localhost/permesi",
                         "postgres://localhost/permesi",
+                        // A socket DSN has no authority to hold a password.
+                        "postgres:///permesi?host=/var/run/postgresql",
+                        "postgres:///permesi",
                     ] {
                         assert!(ConnectionTarget::parse(dsn, false).is_ok(), "{dsn}");
                     }
@@ -1011,17 +1161,71 @@ mod tests {
                 "postgres://app@localhost/permesi?options[=x",
                 "postgres://app@localhost/permesi?options[]=x",
                 "postgres://app@localhost/permesi?options[search_path=x",
+                // A control outside ASCII, escaped in the path.
+                "postgres://app@localhost/perm%C2%85esi",
+                "postgres://app@localhost/permesi?host=",
+                "postgres://app@localhost/permesi?host=db.internal:5432",
+                "postgres://app@localhost/permesi?host=/var/run/post%0Agres",
             ] {
                 assert!(refusal(dsn, true).is_some(), "{dsn}");
             }
             for dsn in [
                 "postgres://app@localhost/permesi?host=/var/run/postgresql",
+                // A socket directory may hold a space, as in the authority form.
+                "postgres://app@localhost/permesi?host=/run/my%20postgres",
+                "postgres://app@%2Frun%2Fmy%20postgres/permesi",
+                "postgres://app@localhost/permesi?host=[::1]",
                 "postgres://app@db.internal/permesi?sslmode=VERIFY-FULL",
                 "postgres://app@db.internal/permesi?ssl-mode=Verify-Ca",
             ] {
                 assert_eq!(refusal(dsn, false), None, "{dsn}");
             }
         });
+    }
+
+    /// A SQLSTATE field is shown only in its defined form; a peer can put any text there.
+    #[test]
+    fn only_a_well_formed_sqlstate_is_shown() {
+        use super::shown_sqlstate;
+        for (code, shown) in [
+            (Some("22023"), "22023"),
+            (Some("57P01"), "57P01"),
+            (Some("2202"), "unknown"),
+            (Some("220234"), "unknown"),
+            (Some("22o23"), "unknown"),
+            (Some("s3cr3tmarker"), "unknown"),
+            (Some("2202\n"), "unknown"),
+            (None, "unknown"),
+        ] {
+            assert_eq!(shown_sqlstate(code), shown, "{code:?}");
+        }
+    }
+
+    /// The path is decoded before its control characters are looked for, escapes for
+    /// characters outside ASCII included. The database-name check after parsing would
+    /// also refuse these, so this checks the first line of defence on its own.
+    #[test]
+    fn escaped_control_characters_are_found_after_decoding() {
+        use super::decodes_to_control;
+        for text in [
+            "/perm%00esi",
+            "/perm%0Aesi",
+            "/perm%7Fesi",
+            "/perm%C2%85esi",
+            "/%c2%9f",
+        ] {
+            assert!(decodes_to_control(text), "{text}");
+        }
+        for text in [
+            "/permesi",
+            "/perm%20esi",
+            "/caf%C3%A9",
+            "/100%",
+            "/%zz",
+            "/%4",
+        ] {
+            assert!(!decodes_to_control(text), "{text}");
+        }
     }
 
     /// The connection error carries the kind of failure and nothing of its text.

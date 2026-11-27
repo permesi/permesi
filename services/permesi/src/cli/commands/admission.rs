@@ -28,6 +28,10 @@ pub fn token_identifier(value: &str) -> Result<String, String> {
 /// As [`token_identifier`], except that an empty or blank value is kept: it means the
 /// setting is not set, as it always has.
 fn blank_or_token_identifier(value: &str) -> Result<String, String> {
+    // Controls first: a tab is whitespace, and would otherwise pass as blank.
+    if value.chars().any(char::is_control) {
+        return Err("must not contain control characters".to_string());
+    }
     if value.trim().is_empty() {
         Ok(value.to_string())
     } else {
@@ -120,6 +124,9 @@ mod tests {
             ("https://genesis.test\nforged", "permesi"),
             ("https://genesis.test", "permesi\u{7}"),
             (" https://genesis.test", "permesi"),
+            // Whitespace that is a control character is not read as "not set".
+            ("\t", "permesi"),
+            ("https://genesis.test", "\n"),
         ] {
             assert!(parse(issuer, audience).is_err(), "{issuer:?} {audience:?}");
         }

@@ -55,6 +55,12 @@ the signed artifacts.
 - `--shutdown-drain-seconds` accepts 1 to 50 (was 1 to 300).
 - A failed database connection is reported with its kind or SQLSTATE only; the
   server's message, which can quote a value from the DSN, is no longer shown.
+- A `localhost` DSN used without TLS is pinned to the loopback addresses it resolved
+  to at startup; each is tried in turn, so a server listening on `::1` only stays
+  reachable. The driver no longer reads the password file.
+- The email outbox worker is aborted when it has not stopped 4 s after the drain,
+  instead of running on while the pool closes; a message whose send was interrupted
+  can be delivered again.
 - `--admission-issuer` and `--admission-audience` (Genesis) and Permesi's expected
   issuer and audience refuse control characters.
 - Genesis refuses `--trusted-proxy` ranges that cover every address (`0.0.0.0/0`,
@@ -123,7 +129,7 @@ the signed artifacts.
   shutdown that follow are capped at 4 s each, so a stop takes about 28 s, or
   about 33 s when traces are exported and flushed, plus any blocking work a dropped
   handler had already started. Give the supervisor the drain plus 15 s or more; the
-  Helm charts set 60 s. The drain accepts 1 to 50 s, so it ends while the
+  Helm charts' 60 s covers drains up to 45 s. The drain accepts 1 to 50 s, so it ends while the
   credentials of a lease whose renewal failed are still valid. The settings have
   `PERMESI_*` and `GENESIS_*` environment names of the same form.
 - The session timeouts are set when a connection is opened. Behind PgBouncer in

@@ -424,7 +424,7 @@ jobs:
           # failure returns explicitly: after a failed push, inspecting the local image
           # could still produce a well-formed digest that was never published.
           push_for_digest() {
-            local reference="$1" repository="${1%%:*}" digest="" digest_file
+            local reference="$1" digest="" digest_file
             if ${CONTAINER_TOOL} push --help 2>&1 | grep -q -- '--digestfile'; then
               digest_file="$(mktemp)" || return 1
               if ! ${CONTAINER_TOOL} push --digestfile "${digest_file}" "${reference}" >&2; then
@@ -435,12 +435,17 @@ jobs:
               digest="$(tr -d '[:space:]' < "${digest_file}")" || return 1
               rm -f "${digest_file}"
             else
-              if ! ${CONTAINER_TOOL} push "${reference}" >&2; then
+              # Docker prints the digest it pushed ("<tag>: digest: sha256:... size: N").
+              # That line is used rather than the local image's digests, which can
+              # still list an older manifest of the same repository first.
+              local output
+              if ! output="$(${CONTAINER_TOOL} push "${reference}")"; then
                 echo "The push of ${reference} failed." >&2
                 return 1
               fi
-              digest="$(${CONTAINER_TOOL} image inspect "${reference}" --format '{{join .RepoDigests "\n"}}' \
-                | awk -F@ -v repository="${repository}" '$1 == repository { print $2; exit }')" || return 1
+              printf '%s\n' "${output}" >&2
+              digest="$(printf '%s\n' "${output}" \
+                | sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' | tail -n 1)"
             fi
             if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "The push of ${reference} reported no digest." >&2

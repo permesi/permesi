@@ -297,9 +297,9 @@ fn require_encrypted_openbao(
     matches: &clap::ArgMatches,
     target: &openbao_client::OpenBaoTarget,
 ) -> Result<()> {
-    let allow_insecure_http = matches.get_flag("openbao-allow-insecure-http");
-    target.require_encrypted_transport(allow_insecure_http)?;
-    if allow_insecure_http && target.require_encrypted_transport(false).is_err() {
+    // One decision admits the address and decides the notice, so the two cannot
+    // disagree when a name resolves differently from one look to the next.
+    if target.relies_on_insecure_http(matches.get_flag("openbao-allow-insecure-http"))? {
         // Error level is the default verbosity; this must show on every start.
         tracing::error!(
             "OpenBao is reached over plain http: tokens and secrets cross the network in \

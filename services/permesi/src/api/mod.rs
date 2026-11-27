@@ -275,16 +275,27 @@ pub(crate) fn test_http_limits() -> Result<service_utils::http_limits::HttpLimit
     )
 }
 
-/// Wait for a cancelled worker to finish, abandoning it after
+/// Wait for a cancelled worker to finish, and abort it after
 /// [`shutdown::WORKER_STOP_TIMEOUT`].
 ///
-/// An abandoned worker is dropped with the runtime; its open transaction rolls
-/// back, so claimed outbox rows stay pending and are retried by the next process.
-async fn stop_worker(name: &str, worker: JoinHandle<()>) {
-    match timeout(shutdown::WORKER_STOP_TIMEOUT, worker).await {
+/// Dropping the handle would only detach the task, which then ran on while the pool
+/// was being closed: an SMTP send could complete and its acknowledgement fail. The
+/// task is aborted at its next await point instead, and this waits until it has
+/// stopped. Its open transaction rolls back, so claimed outbox rows stay pending and
+/// are retried by the next process; a message whose send was interrupted can be
+/// delivered again, as delivery is at least once.
+async fn stop_worker(name: &str, mut worker: JoinHandle<()>) {
+    match timeout(shutdown::WORKER_STOP_TIMEOUT, &mut worker).await {
         Ok(Ok(())) => debug!(worker = name, "background worker stopped"),
         Ok(Err(err)) => warn!(worker = name, error = %err, "background worker failed"),
-        Err(_) => warn!(worker = name, "background worker did not stop in time"),
+        Err(_) => {
+            warn!(
+                worker = name,
+                "background worker did not stop in time; aborting it"
+            );
+            worker.abort();
+            let _ = worker.await;
+        }
     }
 }
 
@@ -604,6 +615,40 @@ mod tests {
     /// Tests that listen for OS signals share the process: a SIGTERM sent by one
     /// reaches every listener, so they must not overlap.
     static OS_SIGNAL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// A worker that does not stop in time is stopped, not left running: once
+    /// `stop_worker` returns, it never reaches the work it was waiting to do. Dropping
+    /// the handle used to detach it, and it went on while the pool was closing.
+    /// Takes the real four seconds of the stop deadline.
+    #[tokio::test]
+    async fn a_worker_past_its_stop_deadline_never_runs_again() -> Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let ran_on = Arc::new(AtomicBool::new(false));
+        let worker = tokio::spawn({
+            let ran_on = ran_on.clone();
+            async move {
+                let _ = held.await;
+                ran_on.store(true, Ordering::SeqCst);
+            }
+        });
+        // Bounded, so a regression fails here instead of hanging the test run.
+        timeout(Duration::from_secs(10), super::stop_worker("test", worker))
+            .await
+            .context("stop_worker waited for a worker that was never stopped")?;
+        // Whatever the worker was waiting for arrives now; it must not act on it.
+        let _ = release.send(());
+        tokio::task::yield_now().await;
+        sleep(Duration::from_millis(200)).await;
+        assert!(
+            !ran_on.load(Ordering::SeqCst),
+            "the worker ran after stop_worker returned"
+        );
+        Ok(())
+    }
 
     const DRAIN: Duration = Duration::from_secs(20);
 

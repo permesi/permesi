@@ -25,7 +25,7 @@
 //! that exports traces, the flush of the telemetry exporter, which its own timeouts
 //! limit to about 5 s. With the default 20 s drain that is about 28 s without
 //! telemetry export and about 33 s with it, so the supervisor's grace period should be
-//! the drain plus 15 s or more; the Helm charts set 60 s. These are the bounds of each
+//! the drain plus 15 s or more; the Helm charts' 60 s covers drains up to 45 s. These are the bounds of each
 //! step, not of the process: blocking work a dropped handler had already started runs
 //! to its end, and the runtime waits for it before the process exits. A second signal
 //! shortens only the drain: the steps after it are short, release what the process

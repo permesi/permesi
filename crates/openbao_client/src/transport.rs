@@ -135,12 +135,22 @@ impl OpenBaoTarget {
     /// Returns an error for a plain `http` address to any other host. The message does
     /// not repeat the address.
     pub fn require_encrypted_transport(&self, allow_plain_http: bool) -> Result<()> {
+        self.relies_on_insecure_http(allow_plain_http).map(|_| ())
+    }
+
+    /// The same decision as [`OpenBaoTarget::require_encrypted_transport`], made once,
+    /// that also says whether only `allow_plain_http` let the address through, so the
+    /// caller can announce the opt-out from the decision it acted on.
+    ///
+    /// # Errors
+    /// As [`OpenBaoTarget::require_encrypted_transport`].
+    pub fn relies_on_insecure_http(&self, allow_plain_http: bool) -> Result<bool> {
         let Self::Tcp { base_url } = self else {
-            return Ok(());
+            return Ok(false);
         };
         match Reach::of(base_url)? {
-            Reach::Encrypted | Reach::LocalPlain(_) => Ok(()),
-            Reach::RemotePlain if allow_plain_http => Ok(()),
+            Reach::Encrypted | Reach::LocalPlain(_) => Ok(false),
+            Reach::RemotePlain if allow_plain_http => Ok(true),
             Reach::RemotePlain => Err(anyhow!(
                 "OpenBao address uses plain http to a host that is not loopback; use https, \
                  or accept clear-text tokens explicitly with --openbao-allow-insecure-http"

@@ -131,11 +131,7 @@ fn host_name(parsed: &Url) -> Option<String> {
 /// decodes one in the host and then drops characters that have no place in a host name,
 /// an encoded byte-order mark for one, joining the text on either side of it.
 fn escaped_authority(url: &str) -> bool {
-    url.split_once("://")
-        .map_or(url, |(_, rest)| rest)
-        .split(['/', '?', '#'])
-        .next()
-        .is_some_and(|authority| authority.contains('%'))
+    raw_authority(url).is_some_and(|authority| authority.contains('%'))
 }
 
 /// Whether an address is not written in the one form whose host is unambiguous:
@@ -143,10 +139,20 @@ fn escaped_authority(url: &str) -> bool {
 /// slashes before the host of an `http` address, so the text a check reads and the
 /// host the parser finds can differ.
 fn ambiguous_authority(url: &str) -> bool {
-    url.contains('\\')
-        || url
-            .split_once("://")
-            .is_none_or(|(_, rest)| rest.is_empty() || rest.starts_with('/'))
+    url.contains('\\') || raw_authority(url).is_none_or(str::is_empty)
+}
+
+/// The authority as written: the text between the leading `scheme://` and the first
+/// `/`, `?` or `#`. `None` when the address does not begin with a scheme followed
+/// directly by `//`, so a `://` further on, in a path, is never taken for it.
+fn raw_authority(url: &str) -> Option<&str> {
+    let (scheme, rest) = url.split_once(':')?;
+    let scheme_shaped = !scheme.is_empty()
+        && scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte));
+    let rest = rest.strip_prefix("//").filter(|_| scheme_shaped)?;
+    rest.split(['/', '?', '#']).next()
 }
 
 /// Parse an operator-supplied OpenBao address that requests are sent to.
@@ -669,6 +675,9 @@ mod tests {
             "https://user:pass%41word@openbao.internal:8200/v1",
             "http:///openbao.internal:8200/v1",
             "http:\\\\openbao.internal:8200/v1",
+            // A `://` in the path is not the authority delimiter.
+            "https:localhost/a://openbao.internal",
+            "https:/localhost/a://openbao.internal",
         ] {
             assert_eq!(loggable_url(opaque), "<address not shown>", "{opaque}");
         }
