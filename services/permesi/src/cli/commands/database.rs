@@ -25,10 +25,16 @@ pub const ARG_DB_ALLOW_UNVERIFIED_TLS: &str = "db-allow-unverified-tls";
 /// Returns an error when the DSN names a host that is not local without a verifying
 /// `sslmode` and `--db-allow-unverified-tls` was not given.
 pub fn require_verified_tls(matches: &ArgMatches, dsn: &str) -> Result<()> {
-    service_utils::database::require_verified_tls(
-        dsn,
-        matches.get_flag(ARG_DB_ALLOW_UNVERIFIED_TLS),
-    )
+    let allow_unverified = matches.get_flag(ARG_DB_ALLOW_UNVERIFIED_TLS);
+    service_utils::database::require_verified_tls(dsn, allow_unverified)?;
+    if allow_unverified && service_utils::database::require_verified_tls(dsn, false).is_err() {
+        // Said on every start, so an opt-out left on in production does not go unnoticed.
+        tracing::warn!(
+            "the database connection is not verified and may be clear text \
+             (--db-allow-unverified-tls)"
+        );
+    }
+    Ok(())
 }
 
 /// Build the validated pool configuration from parsed flags.

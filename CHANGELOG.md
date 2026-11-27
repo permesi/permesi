@@ -29,6 +29,8 @@ the signed artifacts.
 
   Before upgrading, add the `sslmode` and `sslrootcert` to each DSN and switch
   OpenBao to `https`, or set the opt-outs. They exist for development clusters.
+  A service started with an opt-out that is actually in effect logs a warning on
+  every start.
 
 ### Changed
 

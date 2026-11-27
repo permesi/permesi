@@ -276,6 +276,23 @@ fn validate_opaque_limits(auth_opts: &auth::Options) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a clear-text OpenBao address unless the host is loopback or the operator opted
+/// in, and say so on every start when the opt-in is what let the address through.
+fn require_encrypted_openbao(
+    matches: &clap::ArgMatches,
+    target: &openbao_client::OpenBaoTarget,
+) -> Result<()> {
+    let allow_insecure_http = matches.get_flag("openbao-allow-insecure-http");
+    target.require_encrypted_transport(allow_insecure_http)?;
+    if allow_insecure_http && target.require_encrypted_transport(false).is_err() {
+        tracing::warn!(
+            "OpenBao is reached over plain http: tokens and secrets cross the network in \
+             clear text (--openbao-allow-insecure-http)"
+        );
+    }
+    Ok(())
+}
+
 /// Map validated CLI matches to a server action.
 ///
 /// # Errors
@@ -298,7 +315,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     )?;
     let openbao_target = openbao_client::OpenBaoTarget::parse(&openbao_opts.url)
         .context("invalid PERMESI_OPENBAO_URL")?;
-    openbao_target.require_encrypted_transport(matches.get_flag("openbao-allow-insecure-http"))?;
+    require_encrypted_openbao(matches, &openbao_target)?;
 
     let admission_opts = admission::Options::parse(matches)?;
     let auth_opts = auth::Options::parse(matches)?;

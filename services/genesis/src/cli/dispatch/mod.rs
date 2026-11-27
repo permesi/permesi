@@ -166,6 +166,23 @@ fn request_metadata(matches: &clap::ArgMatches) -> Result<crate::api::peer::Requ
     )
 }
 
+/// Refuse a clear-text OpenBao address unless the host is loopback or the operator opted
+/// in, and say so on every start when the opt-in is what let the address through.
+fn require_encrypted_openbao(
+    matches: &clap::ArgMatches,
+    target: &openbao_client::OpenBaoTarget,
+) -> Result<()> {
+    let allow_insecure_http = matches.get_flag("openbao-allow-insecure-http");
+    target.require_encrypted_transport(allow_insecure_http)?;
+    if allow_insecure_http && target.require_encrypted_transport(false).is_err() {
+        tracing::warn!(
+            "OpenBao is reached over plain http: tokens and secrets cross the network in \
+             clear text (--openbao-allow-insecure-http)"
+        );
+    }
+    Ok(())
+}
+
 /// # Errors
 /// Returns an error if required arguments are missing or inconsistent.
 pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
@@ -181,7 +198,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .context("missing required argument: --openbao-url")?;
     let openbao_target = crate::openbao::OpenBaoTarget::parse(&openbao_url)
         .context("invalid GENESIS_OPENBAO_URL")?;
-    openbao_target.require_encrypted_transport(matches.get_flag("openbao-allow-insecure-http"))?;
+    require_encrypted_openbao(matches, &openbao_target)?;
 
     let openbao_kubernetes = openbao_auth(matches)?;
 
