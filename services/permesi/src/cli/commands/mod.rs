@@ -1,6 +1,7 @@
 pub mod admission;
 pub mod auth;
 pub mod database;
+pub mod http;
 pub mod logging;
 pub mod openbao;
 pub mod tls;
@@ -345,6 +346,7 @@ pub fn new() -> Command {
         );
     }
     let command = database::with_args(command);
+    let command = http::with_args(command);
     logging::with_args(command)
 }
 

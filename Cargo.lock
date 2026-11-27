@@ -5226,6 +5226,7 @@ version = "0.6.1"
 dependencies = [
  "anyhow",
  "axum",
+ "axum-server",
  "http",
  "openbao_client",
  "rand 0.10.4",

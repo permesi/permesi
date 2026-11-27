@@ -17,6 +17,7 @@ pub struct Args {
     pub socket_path: Option<String>,
     pub dsn: String,
     pub db_pool: PoolConfig,
+    pub http: service_utils::http_limits::HttpLimits,
     pub oauth: crate::oauth::config::OAuthConfig,
     pub tenant_mutations: api::tenant::MutationPolicy,
     pub openbao_url: String,
@@ -228,6 +229,7 @@ fn build_app_config(args: &Args, openbao_addr: String) -> api::AppConfig {
         email_delivery: args.email_delivery.clone(),
         kv: kv_config,
         database: args.db_pool,
+        http: args.http,
         oauth: args.oauth.clone(),
         tenant_mutations: args.tenant_mutations,
     }
@@ -252,6 +254,7 @@ fn log_startup_args(args: &Args, issuer: &str, audience: &str, openbao_addr: &st
         ("listen", listen_addr),
         ("dsn", service_utils::database::loggable_dsn(&args.dsn)),
         ("db_pool", args.db_pool.to_string()),
+        ("http_limits", args.http.to_string()),
         (
             "openbao_url",
             openbao_client::loggable_url(&args.openbao_url),
@@ -564,6 +567,11 @@ mod tests {
                 std::time::Duration::from_secs(3),
                 std::time::Duration::from_mins(10),
                 std::time::Duration::from_mins(30),
+            )?,
+            http: service_utils::http_limits::HttpLimits::new(
+                std::time::Duration::from_mins(1),
+                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(20),
             )?,
             openbao_url: "http://localhost:8200".to_string(),
             openbao_target: openbao_client::OpenBaoTarget::Tcp {

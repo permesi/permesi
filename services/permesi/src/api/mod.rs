@@ -43,7 +43,7 @@ use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Dur
 use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
-    time::{sleep, timeout},
+    time::timeout,
 };
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -107,6 +107,8 @@ pub struct AppConfig {
     pub kv: OpenBaoKvConfig,
     /// PostgreSQL pool shape shared by handlers and the email outbox worker.
     pub database: PoolConfig,
+    /// Request, header-read and shutdown-drain deadlines.
+    pub http: service_utils::http_limits::HttpLimits,
     /// Opt-in OAuth issuer, resource audience, and bounded transaction lifetimes.
     pub oauth: crate::oauth::config::OAuthConfig,
     /// Bounded hierarchy mutation policy, independent of OAuth protocol configuration.
@@ -217,27 +219,30 @@ pub async fn new(
         service_utils::health::Observation::monitor(pool.clone(), shutdown_tx.clone(), || async {
             true
         });
-    let app = build_router(AppState {
-        public_budget: Arc::new(service_utils::work_limit::Budget::new(config.public_limits)),
-        management_budget: Arc::new(service_utils::work_limit::Budget::new(
-            config.protocol_limits,
-        )),
-        protocol_budget: Arc::new(service_utils::work_limit::Budget::new(
-            config.protocol_limits,
-        )),
+    let app = build_router(
+        AppState {
+            public_budget: Arc::new(service_utils::work_limit::Budget::new(config.public_limits)),
+            management_budget: Arc::new(service_utils::work_limit::Budget::new(
+                config.protocol_limits,
+            )),
+            protocol_budget: Arc::new(service_utils::work_limit::Budget::new(
+                config.protocol_limits,
+            )),
 
-        observation,
-        tenant_mutations: config.tenant_mutations,
-        oauth: oauth_state,
-        auth: auth_state,
-        admin: admin_state,
-        admission,
-        shutdown: shutdown_tx,
-        pool: pool.clone(),
-        totp: totp_service,
-        security_keys: Arc::new(security_key_service),
-        passkeys: Arc::new(passkey_service),
-    })?;
+            observation,
+            tenant_mutations: config.tenant_mutations,
+            oauth: oauth_state,
+            auth: auth_state,
+            admin: admin_state,
+            admission,
+            shutdown: shutdown_tx,
+            pool: pool.clone(),
+            totp: totp_service,
+            security_keys: Arc::new(security_key_service),
+            passkeys: Arc::new(passkey_service),
+        },
+        config.http,
+    )?;
 
     // Explicit outbox mode retains messages; SMTP uses durable claims and bounded retries.
     let workers = CancellationToken::new();
@@ -249,8 +254,8 @@ pub async fn new(
     )?;
 
     let served = match socket_path {
-        Some(path) => serve_socket(app, path, rx).await,
-        None => serve_tls(app, port, rx).await,
+        Some(path) => serve_socket(app, path, rx, config.http.drain_timeout()).await,
+        None => serve_tls(app, port, rx, config.http).await,
     };
 
     workers.cancel();
@@ -260,15 +265,23 @@ pub async fn new(
     served
 }
 
-/// Longest wait for a cancelled background worker to reach a safe stopping point.
-const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// The default deadlines, for tests that build the served router.
+#[cfg(test)]
+pub(crate) fn test_http_limits() -> Result<service_utils::http_limits::HttpLimits> {
+    service_utils::http_limits::HttpLimits::new(
+        Duration::from_mins(1),
+        Duration::from_secs(10),
+        Duration::from_secs(20),
+    )
+}
 
-/// Wait for a cancelled worker to finish, abandoning it after [`WORKER_STOP_TIMEOUT`].
+/// Wait for a cancelled worker to finish, abandoning it after
+/// [`shutdown::WORKER_STOP_TIMEOUT`].
 ///
 /// An abandoned worker is dropped with the runtime; its open transaction rolls
 /// back, so claimed outbox rows stay pending and are retried by the next process.
 async fn stop_worker(name: &str, worker: JoinHandle<()>) {
-    match timeout(WORKER_STOP_TIMEOUT, worker).await {
+    match timeout(shutdown::WORKER_STOP_TIMEOUT, worker).await {
         Ok(Ok(())) => debug!(worker = name, "background worker stopped"),
         Ok(Err(err)) => warn!(worker = name, error = %err, "background worker failed"),
         Err(_) => warn!(worker = name, "background worker did not stop in time"),
@@ -278,7 +291,7 @@ async fn stop_worker(name: &str, worker: JoinHandle<()>) {
 /// Assemble the served router: documented routes, `/`, `OPTIONS /health`, the JSON
 /// error envelope, CORS, shared state, and request correlation (outermost, so every
 /// response carries it).
-fn build_router(state: AppState) -> Result<Router> {
+fn build_router(state: AppState, http: service_utils::http_limits::HttpLimits) -> Result<Router> {
     let operations = state.auth.config().operations().clone();
     let allowed_origins = frontend_origins(state.auth.config().cors_allowed_origins())?;
     let cors = CorsLayer::new()
@@ -308,14 +321,17 @@ fn build_router(state: AppState) -> Result<Router> {
     // preflight-only `OPTIONS /health`. The spec stays in openapi.rs for the `openapi` binary.
     // Error responses get the JSON envelope inside CORS, so browsers can read them.
     let (router, _openapi) = router().split_for_parts();
+    // The request deadline sits inside the envelope, so its `503` is a JSON error too.
     let app = with_response_policy(
-        router
-            .route("/", get(root::root))
-            .route("/health", options(health::health))
-            .route_layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                limit_public_work,
-            )),
+        http.bound_requests(
+            router
+                .route("/", get(root::root))
+                .route("/health", options(health::health))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    limit_public_work,
+                )),
+        ),
     )
     .layer(cors)
     .with_state(state)
@@ -385,8 +401,8 @@ async fn limit_public_work(
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
 ///
-/// SIGTERM/SIGINT and fail-closed signals both drain for at most
-/// [`shutdown::DRAIN_TIMEOUT`]; only a fail-closed signal is returned as an error.
+/// SIGTERM/SIGINT and fail-closed signals both drain for at most `drain`, less if a
+/// further signal arrives; only a fail-closed signal is returned as an error.
 ///
 /// # Errors
 /// Returns an error if the socket cannot be created, permissions cannot be set,
@@ -395,6 +411,7 @@ async fn serve_socket(
     app: Router,
     path: String,
     mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
+    drain: Duration,
 ) -> Result<()> {
     let path = std::path::PathBuf::from(path);
     if path.exists() {
@@ -427,14 +444,11 @@ async fn serve_socket(
     // axum waits for every connection to close; bound the drain like the TLS server.
     let drain_deadline = async {
         drain_started.cancelled().await;
-        sleep(shutdown::DRAIN_TIMEOUT).await;
+        shutdown::drain_ended(drain).await;
     };
     let served = tokio::select! {
         result = socket_server.into_future() => result.context("Unix socket server failed"),
-        () = drain_deadline => {
-            warn!("Graceful drain timed out; closing remaining connections");
-            Ok(())
-        }
+        () = drain_deadline => Ok(()),
     };
 
     if let Err(err) = tokio::fs::remove_file(&path).await {
@@ -453,8 +467,10 @@ async fn serve_socket(
 /// IPv6 and IPv4 traffic. Hosts without usable IPv6 support fall back to an
 /// IPv4 wildcard listener.
 ///
-/// SIGTERM/SIGINT and fail-closed signals both start a graceful drain bounded
-/// by [`shutdown::DRAIN_TIMEOUT`]; only a fail-closed signal is returned as an error.
+/// SIGTERM/SIGINT and fail-closed signals both start a graceful drain bounded by the
+/// configured drain time, and cut short by a further signal; only a fail-closed signal
+/// is returned as an error. A connection that does not deliver a request within the
+/// header read timeout is closed.
 ///
 /// # Errors
 /// Returns an error if TLS configuration or the server fails to start, or a
@@ -463,6 +479,7 @@ async fn serve_tls(
     app: Router,
     port: u16,
     mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
+    http: service_utils::http_limits::HttpLimits,
 ) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
@@ -476,7 +493,9 @@ async fn serve_tls(
         let shutdown_reason = shutdown_reason.clone();
         async move {
             *shutdown_reason.lock().await = shutdown::requested(&mut shutdown_rx).await;
-            handle.graceful_shutdown(Some(shutdown::DRAIN_TIMEOUT));
+            handle.graceful_shutdown(Some(http.drain_timeout()));
+            shutdown::drain_ended(http.drain_timeout()).await;
+            handle.shutdown();
         }
     });
 
@@ -487,8 +506,9 @@ async fn serve_tls(
     );
     info!("Listening on https://{listen_addr}");
 
-    axum_server::from_tcp_rustls(listener, tls_config)
-        .context("Failed to configure TLS server from pre-bound TCP listener")?
+    let server = axum_server::from_tcp_rustls(listener, tls_config)
+        .context("Failed to configure TLS server from pre-bound TCP listener")?;
+    http.bound_connections(server)
         .handle(handle)
         .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await?;
@@ -577,6 +597,61 @@ mod tests {
     /// reaches every listener, so they must not overlap.
     static OS_SIGNAL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    const DRAIN: Duration = Duration::from_secs(20);
+
+    /// A request that never finishes holds its connection open. The drain then lasts as
+    /// long as configured and no longer, where it used to be a fixed 30 seconds.
+    #[tokio::test]
+    async fn serve_socket_stops_waiting_for_a_stuck_request_at_the_drain_limit() -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let _serial = OS_SIGNAL_TESTS.lock().await;
+        let dir = std::env::temp_dir().join(format!("permesi-{}", Ulid::generate()));
+        fs::create_dir_all(&dir).context("create temp dir failed")?;
+        let socket_path = dir.join("permesi.sock");
+        let app = Router::new().route(
+            "/stuck",
+            axum::routing::get(std::future::pending::<&'static str>),
+        );
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(serve_socket(
+            app,
+            socket_path.to_string_lossy().to_string(),
+            rx,
+            Duration::from_secs(1),
+        ));
+        timeout(Duration::from_secs(2), async {
+            while !socket_path.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("the socket never appeared")?;
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await?;
+        client
+            .write_all(b"GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await?;
+        sleep(Duration::from_millis(200)).await;
+
+        let started = std::time::Instant::now();
+        let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
+        let result = timeout(Duration::from_secs(10), server)
+            .await
+            .context("the server kept draining past its limit")??;
+        assert!(
+            result.is_err(),
+            "a fail-closed stop is reported as an error"
+        );
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(900) && waited < Duration::from_secs(5),
+            "the drain lasted {waited:?}"
+        );
+        drop(client);
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn serve_socket_returns_error_on_shutdown_signal() -> Result<()> {
         let _serial = OS_SIGNAL_TESTS.lock().await;
@@ -590,8 +665,13 @@ mod tests {
             let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
         });
 
-        let result =
-            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx).await;
+        let result = serve_socket(
+            Router::new(),
+            socket_path.to_string_lossy().to_string(),
+            rx,
+            DRAIN,
+        )
+        .await;
         assert!(result.is_err(), "expected shutdown error");
         let _ = fs::remove_dir_all(&dir);
         Ok(())
@@ -625,7 +705,12 @@ mod tests {
 
         let result = timeout(
             Duration::from_secs(5),
-            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx),
+            serve_socket(
+                Router::new(),
+                socket_path.to_string_lossy().to_string(),
+                rx,
+                DRAIN,
+            ),
         )
         .await
         .context("server did not stop after SIGTERM")?;
@@ -660,8 +745,13 @@ mod tests {
             let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
         });
 
-        let result =
-            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx).await;
+        let result = serve_socket(
+            Router::new(),
+            socket_path.to_string_lossy().to_string(),
+            rx,
+            DRAIN,
+        )
+        .await;
         assert!(result.is_err(), "expected shutdown error");
         assert!(
             !socket_path.exists(),
@@ -671,11 +761,65 @@ mod tests {
         Ok(())
     }
 
+    /// A route with no deadline of its own, waiting on a database that accepts the
+    /// connection and never answers, is answered at the request timeout with the JSON
+    /// `503`. Without the server-wide limit it would hold its connection until the
+    /// pool's acquire timeout, 30 seconds here.
+    #[tokio::test]
+    async fn served_router_answers_a_stalled_request_at_the_request_timeout() -> Result<()> {
+        use axum::{
+            body::Body,
+            http::{Request, StatusCode},
+        };
+        use tower::ServiceExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let silent = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_secs(30))
+            .connect_lazy(&format!("postgres://127.0.0.1:{port}/permesi"))?;
+        let limits = service_utils::http_limits::HttpLimits::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )?;
+        let app = super::build_router(super::AppState::for_tests(pool)?, limits)?;
+        let token = crate::api::auth::generate_session_token()?;
+
+        let started = std::time::Instant::now();
+        let response = app
+            .oneshot(
+                Request::get("/v1/me")
+                    .header("cookie", format!("permesi_session={token}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let waited = started.elapsed();
+        silent.abort();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            waited >= Duration::from_millis(900) && waited < Duration::from_secs(10),
+            "the request was answered after {waited:?}"
+        );
+        let envelope = error_envelope(response).await?;
+        assert_eq!(envelope.error.code, "dependency_unavailable");
+        Ok(())
+    }
+
     /// The full router composed exactly as the server composes it, with inert state.
     fn served_app() -> Result<Router> {
         let pool =
             sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/permesi")?;
-        super::build_router(super::AppState::for_tests(pool)?)
+        super::build_router(
+            super::AppState::for_tests(pool)?,
+            super::test_http_limits()?,
+        )
     }
 
     async fn error_envelope(
@@ -797,7 +941,7 @@ mod tests {
         let _busy = budget
             .enter()
             .ok_or_else(|| anyhow::anyhow!("missing fixture permit"))?;
-        let app = super::build_router(state)?;
+        let app = super::build_router(state, super::test_http_limits()?)?;
         for (method, uri, expected) in [
             ("POST", "/v1/auth/opaque/signup/start", 429),
             ("GET", "/v1/auth/session", 204),

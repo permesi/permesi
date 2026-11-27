@@ -1,4 +1,5 @@
 pub mod database;
+pub mod http;
 mod logging;
 mod openbao;
 mod tls;
@@ -195,6 +196,7 @@ pub fn new() -> Command {
         );
     }
     let command = database::with_args(command);
+    let command = http::with_args(command);
     logging::with_args(command)
 }
 

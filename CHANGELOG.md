@@ -30,6 +30,19 @@ the signed artifacts.
   `57014`, a lock wait with `55P03`. Transactions that set their own deadline with
   `SET LOCAL` are unaffected. Neither limit can be set to zero.
 
+- Both services bound every request and every connection. A request that is not
+  answered within 60 s gets `503` and its handler is dropped
+  (`--request-timeout-seconds`); a connection on the TCP/TLS listener that does not
+  deliver a request's headers within 10 s is closed
+  (`--header-read-timeout-seconds`). Until now only handlers with their own
+  deadline were bounded, and a client could hold a connection open by never
+  finishing its request.
+- Shutdown fits a 30 s termination grace period. The drain of in-flight requests
+  now defaults to 20 s (`--shutdown-drain-seconds`, was a fixed 30 s), a second
+  `SIGTERM` or `SIGINT` ends it at once instead of being ignored, and the worker
+  and pool shutdown that follow are capped at 4 s each. The settings have
+  `PERMESI_*` and `GENESIS_*` environment names of the same form.
+
 ### Security
 
 - Genesis takes the client address and country for a token's audit record from the

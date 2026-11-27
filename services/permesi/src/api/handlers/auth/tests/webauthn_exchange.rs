@@ -1085,7 +1085,10 @@ async fn webauthn_finish_body_cap_applies_after_session_checks() -> Result<()> {
     let bootstrap = storage::insert_mfa_bootstrap_session(&db.pool, enrolling, 300).await?;
     let full_user = insert_test_user(&db.pool).await?;
     let full = storage::insert_session(&db.pool, full_user, 300).await?;
-    let app = crate::api::build_router(AppState::for_tests(db.pool.clone())?)?;
+    let app = crate::api::build_router(
+        AppState::for_tests(db.pool.clone())?,
+        crate::api::test_http_limits()?,
+    )?;
 
     let padding = "A".repeat(MAX_WEBAUTHN_JSON_BYTES);
     let oversized = serde_json::to_vec(&json!({

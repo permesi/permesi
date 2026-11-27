@@ -112,7 +112,7 @@ Permesi enforces strict boundaries between **platform administration**, **tenant
 
 ## Graceful Shutdown & Fail-Closed Behavior
 
-Both `genesis` and `permesi` handle `SIGTERM` / `SIGINT` by stopping new accepts, draining in-flight requests for up to 30 seconds, stopping background workers cleanly (including the email outbox worker in `permesi`), flushing OTLP telemetry, removing Unix sockets if bound, and closing the PostgreSQL pool.
+Both `genesis` and `permesi` handle `SIGTERM` / `SIGINT` by stopping new accepts, draining in-flight requests for up to 20 seconds by default (`--shutdown-drain-seconds`; a second signal ends the drain at once), stopping background workers cleanly (including the email outbox worker in `permesi`), flushing OTLP telemetry, removing Unix sockets if bound, and closing the PostgreSQL pool.
 
 When an OpenBao token or dynamic database lease approaches its max TTL (within 1 minute) or fails renewal past the drain margin — or when readiness checks detect PostgreSQL authentication failures — the service initiates the same graceful drain and exits non-zero so the supervisor (systemd, Kubernetes, or Podman) restarts it with fresh credentials.
 

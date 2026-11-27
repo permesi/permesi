@@ -11,14 +11,38 @@
 //! Without these handlers SIGTERM uses the default disposition and kills the
 //! process immediately: requests in flight are cut off, a Unix socket file is
 //! left behind, and batched telemetry is never flushed.
+//!
+//! Installing the handlers also means a later signal no longer kills the process, so
+//! the drain has to end by itself. It ends when the last connection closes, when the
+//! configured drain time is over, or as soon as a second signal arrives
+//! ([`drain_ended`]): an operator who asks twice gets the stop without waiting. What
+//! follows the drain is bounded too, 4 s for background workers and 4 s for the
+//! database pool, so with the default 20 s drain a stop takes at most 28 s and fits a
+//! 30 s termination grace period.
 
 use crate::openbao::renew::ShutdownSignal;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-/// Longest time in-flight requests may take to finish once a shutdown starts.
-pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest wait for a cancelled background worker after the drain.
+pub const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Resolve when a drain that has just started must stop waiting for connections:
+/// after `limit`, or as soon as the operating system signals again.
+///
+/// Call it once the drain has begun. The signal that started the drain was consumed by
+/// [`requested`], so any signal seen here is a further one.
+pub async fn drain_ended(limit: Duration) {
+    tokio::select! {
+        () = tokio::time::sleep(limit) => {
+            warn!("Graceful drain timed out; closing remaining connections");
+        }
+        () = os_signal() => {
+            warn!("Shutdown signalled again; closing remaining connections now");
+        }
+    }
+}
 
 /// Wait until the process should stop and report why.
 ///
@@ -77,7 +101,7 @@ pub async fn os_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShutdownSignal, requested};
+    use super::{ShutdownSignal, drain_ended, requested};
     use tokio::{
         sync::mpsc,
         time::{Duration, timeout},
@@ -128,6 +152,43 @@ mod tests {
             matches!(signal, Ok(Ok(None))),
             "SIGTERM must end the wait with None"
         );
+        Ok(())
+    }
+
+    /// With no further signal the drain lasts exactly as long as configured.
+    #[tokio::test(start_paused = true)]
+    async fn drain_ends_at_its_limit() {
+        let _serial = OS_SIGNAL_TESTS.lock().await;
+        let started = tokio::time::Instant::now();
+        drain_ended(Duration::from_secs(20)).await;
+        assert_eq!(started.elapsed(), Duration::from_secs(20));
+    }
+
+    /// The regression: once the handlers are installed a second SIGTERM used to be
+    /// swallowed, and the process kept draining for the full limit.
+    #[tokio::test]
+    async fn drain_ends_at_once_when_signalled_again() -> std::io::Result<()> {
+        let _serial = OS_SIGNAL_TESTS.lock().await;
+        let _guard = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let (_tx, mut rx) = mpsc::unbounded_channel::<ShutdownSignal>();
+
+        // The first signal starts the shutdown.
+        let waiter = tokio::spawn(async move { requested(&mut rx).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        send_sigterm_to_self()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(2), waiter).await,
+            Ok(Ok(None))
+        ));
+
+        // The drain would last a minute; the second signal ends it.
+        let started = std::time::Instant::now();
+        let drain = tokio::spawn(drain_ended(Duration::from_mins(1)));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!drain.is_finished(), "the drain ended without a signal");
+        send_sigterm_to_self()?;
+        assert!(timeout(Duration::from_secs(2), drain).await.is_ok());
+        assert!(started.elapsed() < Duration::from_secs(5));
         Ok(())
     }
 

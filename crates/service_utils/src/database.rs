@@ -58,7 +58,7 @@ const STATEMENT_TIMEOUT_MAX: Duration = Duration::from_mins(10);
 const LOCK_TIMEOUT_MAX: Duration = Duration::from_mins(1);
 
 /// Longest wait for pooled connections to close during shutdown.
-pub const POOL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const POOL_CLOSE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Starts a pool-owned transaction without exposing `SQLx`'s interrupted-BEGIN window.
 ///

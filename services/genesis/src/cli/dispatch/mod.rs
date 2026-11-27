@@ -197,6 +197,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     let db_pool = crate::cli::commands::database::parse(matches)?;
+    let http = crate::cli::commands::http::parse(matches)?;
 
     let signing_version = matches
         .get_one::<u32>("admission-signing-version")
@@ -215,6 +216,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         socket_path,
         dsn,
         db_pool,
+        http,
         openbao_url,
         openbao_target,
         openbao_kubernetes,

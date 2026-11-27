@@ -16,6 +16,7 @@ pub struct Args {
     pub socket_path: Option<String>,
     pub dsn: String,
     pub db_pool: PoolConfig,
+    pub http: service_utils::http_limits::HttpLimits,
     pub openbao_url: String,
     pub openbao_target: openbao::OpenBaoTarget,
     pub openbao_kubernetes: Option<openbao_client::kubernetes::KubernetesAuth>,
@@ -117,6 +118,7 @@ pub async fn execute(args: Args) -> Result<()> {
             admission_issuer: args.admission_issuer,
             admission_audience: args.admission_audience,
             metadata: args.metadata,
+            http: args.http,
         },
         &globals,
     )
@@ -140,6 +142,7 @@ fn log_startup_args(args: &Args) {
         ("listen", listen_addr),
         ("dsn", service_utils::database::loggable_dsn(&args.dsn)),
         ("db_pool", args.db_pool.to_string()),
+        ("http_limits", args.http.to_string()),
         (
             "openbao_url",
             openbao_client::loggable_url(&args.openbao_url),
@@ -253,6 +256,11 @@ mod tests {
                 Duration::from_secs(3),
                 Duration::from_mins(10),
                 Duration::from_mins(30),
+            )?,
+            http: service_utils::http_limits::HttpLimits::new(
+                Duration::from_mins(1),
+                Duration::from_secs(10),
+                Duration::from_secs(20),
             )?,
             openbao_url: openbao_url.to_string(),
             openbao_target: OpenBaoTarget::parse(openbao_url)?,

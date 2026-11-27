@@ -22,13 +22,11 @@ use axum::{
 use service_utils::{
     api_error,
     database::{self, PoolConfig},
+    http_limits::HttpLimits,
     request_id, shutdown,
 };
-use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc};
-use tokio::{
-    sync::{Mutex, mpsc},
-    time::sleep,
-};
+use std::{future::IntoFuture, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
@@ -65,6 +63,8 @@ pub struct Settings {
     pub admission_audience: String,
     /// Which peers may supply the forwarded client address and country.
     pub metadata: peer::RequestMetadataPolicy,
+    /// Request, header-read and shutdown-drain deadlines.
+    pub http: HttpLimits,
 }
 
 /// Initialize and start the Genesis server.
@@ -86,6 +86,7 @@ pub async fn new(
         admission_issuer,
         admission_audience,
         metadata,
+        http,
     } = settings;
     // Renew bao token, gracefully shutdown if failed
     let (shutdown_tx, rx) = mpsc::unbounded_channel();
@@ -110,19 +111,22 @@ pub async fn new(
             let signer = Arc::clone(&signer);
             async move { signer.probe().await.is_ok() }
         });
-    let app = build_router(AppState {
-        public_budget: Arc::new(service_utils::work_limit::Budget::new(public_limits)),
+    let app = build_router(
+        AppState {
+            public_budget: Arc::new(service_utils::work_limit::Budget::new(public_limits)),
 
-        observation,
-        admission,
-        metadata: Arc::new(metadata),
-        shutdown: shutdown_tx,
-        pool: pool.clone(),
-    });
+            observation,
+            admission,
+            metadata: Arc::new(metadata),
+            shutdown: shutdown_tx,
+            pool: pool.clone(),
+        },
+        http,
+    );
 
     let served = match socket_path {
-        Some(path) => serve_socket(app, path, rx).await,
-        None => serve_tls(app, port, rx).await,
+        Some(path) => serve_socket(app, path, rx, http.drain_timeout()).await,
+        None => serve_tls(app, port, rx, http).await,
     };
     database::close(&pool).await;
 
@@ -133,8 +137,9 @@ pub async fn new(
 /// error envelope, CORS, shared state, and request correlation (outermost).
 ///
 /// Every route is registered before layering so `/` and `OPTIONS /health` get the
-/// same layers as the documented routes, and error responses carry CORS headers.
-fn build_router(state: AppState) -> Router {
+/// same layers as the documented routes, and error responses carry CORS headers. The
+/// request deadline sits inside the envelope, so its `503` is a JSON error too.
+fn build_router(state: AppState, http: HttpLimits) -> Router {
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
@@ -143,13 +148,15 @@ fn build_router(state: AppState) -> Router {
 
     let (router, _openapi) = router().split_for_parts();
     let app = api_error::with_error_envelope(
-        router
-            .route("/", get(root::root))
-            .route("/health", options(health::health))
-            .route_layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                limit_public_work,
-            )),
+        http.bound_requests(
+            router
+                .route("/", get(root::root))
+                .route("/health", options(health::health))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    limit_public_work,
+                )),
+        ),
     )
     .layer(cors)
     .with_state(state);
@@ -185,8 +192,8 @@ async fn limit_public_work(
 
 /// Serve the API over a Unix socket, cleaning up the socket file on shutdown.
 ///
-/// SIGTERM/SIGINT and fail-closed signals both drain for at most
-/// [`shutdown::DRAIN_TIMEOUT`]; only a fail-closed signal is returned as an error.
+/// SIGTERM/SIGINT and fail-closed signals both drain for at most `drain`, less if a
+/// further signal arrives; only a fail-closed signal is returned as an error.
 ///
 /// # Errors
 /// Returns an error if the socket cannot be created, permissions cannot be set,
@@ -195,6 +202,7 @@ async fn serve_socket(
     app: Router,
     path: String,
     mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
+    drain: Duration,
 ) -> Result<()> {
     let path = std::path::PathBuf::from(path);
     if path.exists() {
@@ -226,14 +234,11 @@ async fn serve_socket(
     // axum waits for every connection to close; bound the drain like the TLS server.
     let drain_deadline = async {
         drain_started.cancelled().await;
-        sleep(shutdown::DRAIN_TIMEOUT).await;
+        shutdown::drain_ended(drain).await;
     };
     let served = tokio::select! {
         result = socket_server.into_future() => result.context("Unix socket server failed"),
-        () = drain_deadline => {
-            warn!("Graceful drain timed out; closing remaining connections");
-            Ok(())
-        }
+        () = drain_deadline => Ok(()),
     };
 
     if let Err(err) = tokio::fs::remove_file(&path).await {
@@ -252,8 +257,10 @@ async fn serve_socket(
 /// IPv6 and IPv4 traffic. Hosts without usable IPv6 support fall back to an
 /// IPv4 wildcard listener.
 ///
-/// SIGTERM/SIGINT and fail-closed signals both start a graceful drain bounded
-/// by [`shutdown::DRAIN_TIMEOUT`]; only a fail-closed signal is returned as an error.
+/// SIGTERM/SIGINT and fail-closed signals both start a graceful drain bounded by the
+/// configured drain time, and cut short by a further signal; only a fail-closed signal
+/// is returned as an error. A connection that does not deliver a request within the
+/// header read timeout is closed.
 ///
 /// # Errors
 /// Returns an error if TLS configuration or the server fails to start, or a
@@ -262,6 +269,7 @@ async fn serve_tls(
     app: Router,
     port: u16,
     mut shutdown_rx: mpsc::UnboundedReceiver<openbao::renew::ShutdownSignal>,
+    http: HttpLimits,
 ) -> Result<()> {
     let rustls_config = tls::load_server_config()?;
     let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
@@ -275,7 +283,9 @@ async fn serve_tls(
         let shutdown_reason = shutdown_reason.clone();
         async move {
             *shutdown_reason.lock().await = shutdown::requested(&mut shutdown_rx).await;
-            handle.graceful_shutdown(Some(shutdown::DRAIN_TIMEOUT));
+            handle.graceful_shutdown(Some(http.drain_timeout()));
+            shutdown::drain_ended(http.drain_timeout()).await;
+            handle.shutdown();
         }
     });
 
@@ -286,8 +296,9 @@ async fn serve_tls(
     );
     info!("Listening on https://{listen_addr}");
 
-    axum_server::from_tcp_rustls(listener, tls_config)
-        .context("Failed to configure TLS server from pre-bound TCP listener")?
+    let server = axum_server::from_tcp_rustls(listener, tls_config)
+        .context("Failed to configure TLS server from pre-bound TCP listener")?;
+    http.bound_connections(server)
         .handle(handle)
         // The peer address decides whether forwarded metadata is accepted.
         .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
@@ -317,6 +328,61 @@ mod tests {
     /// reaches every listener, so they must not overlap.
     static OS_SIGNAL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    const DRAIN: Duration = Duration::from_secs(20);
+
+    /// A request that never finishes holds its connection open. The drain then lasts as
+    /// long as configured and no longer, where it used to be a fixed 30 seconds.
+    #[tokio::test]
+    async fn serve_socket_stops_waiting_for_a_stuck_request_at_the_drain_limit() -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let _serial = OS_SIGNAL_TESTS.lock().await;
+        let dir = std::env::temp_dir().join(format!("genesis-{}", Ulid::generate()));
+        fs::create_dir_all(&dir).context("create temp dir failed")?;
+        let socket_path = dir.join("genesis.sock");
+        let app = Router::new().route(
+            "/stuck",
+            axum::routing::get(std::future::pending::<&'static str>),
+        );
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(serve_socket(
+            app,
+            socket_path.to_string_lossy().to_string(),
+            rx,
+            Duration::from_secs(1),
+        ));
+        timeout(Duration::from_secs(2), async {
+            while !socket_path.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("the socket never appeared")?;
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await?;
+        client
+            .write_all(b"GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await?;
+        sleep(Duration::from_millis(200)).await;
+
+        let started = std::time::Instant::now();
+        let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
+        let result = timeout(Duration::from_secs(10), server)
+            .await
+            .context("the server kept draining past its limit")??;
+        assert!(
+            result.is_err(),
+            "a fail-closed stop is reported as an error"
+        );
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(900) && waited < Duration::from_secs(5),
+            "the drain lasted {waited:?}"
+        );
+        drop(client);
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn serve_socket_returns_error_on_shutdown_signal() -> Result<()> {
         let _serial = OS_SIGNAL_TESTS.lock().await;
@@ -330,8 +396,13 @@ mod tests {
             let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
         });
 
-        let result =
-            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx).await;
+        let result = serve_socket(
+            Router::new(),
+            socket_path.to_string_lossy().to_string(),
+            rx,
+            DRAIN,
+        )
+        .await;
         assert!(result.is_err(), "expected shutdown error");
         let _ = fs::remove_dir_all(&dir);
         Ok(())
@@ -365,7 +436,12 @@ mod tests {
 
         let result = timeout(
             Duration::from_secs(5),
-            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx),
+            serve_socket(
+                Router::new(),
+                socket_path.to_string_lossy().to_string(),
+                rx,
+                DRAIN,
+            ),
         )
         .await
         .context("server did not stop after SIGTERM")?;
@@ -400,8 +476,13 @@ mod tests {
             let _ = tx.send(ShutdownSignal::TokenRenewalFailed);
         });
 
-        let result =
-            serve_socket(Router::new(), socket_path.to_string_lossy().to_string(), rx).await;
+        let result = serve_socket(
+            Router::new(),
+            socket_path.to_string_lossy().to_string(),
+            rx,
+            DRAIN,
+        )
+        .await;
         assert!(result.is_err(), "expected shutdown error");
         assert!(
             !socket_path.exists(),

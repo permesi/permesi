@@ -321,6 +321,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     let db_pool = database::parse(matches)?;
+    let http = crate::cli::commands::http::parse(matches)?;
     let oauth = crate::oauth::config::OAuthConfig::from_matches(matches)?;
     let tenant_mutations = tenant_mutation_policy(matches)?;
 
@@ -338,6 +339,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         socket_path,
         dsn,
         db_pool,
+        http,
         oauth,
         tenant_mutations,
         openbao_url: openbao_opts.url,
