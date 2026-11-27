@@ -739,13 +739,40 @@ async fn replaced_session_does_not_inherit_the_elevation() -> Result<()> {
     Ok(())
 }
 
+/// An OpenBao stub that reports each lookup it receives and answers only when released,
+/// so a test decides what happens while the service is waiting on OpenBao.
+struct HeldLookup {
+    received: tokio::sync::mpsc::UnboundedSender<()>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl wiremock::Respond for HeldLookup {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        let _ = self.received.send(());
+        if let Ok(release) = self.release.lock() {
+            // Bounded, so a failing test cannot hang the stub.
+            let _ = release.recv_timeout(std::time::Duration::from_secs(30));
+        }
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"data":{"policies":["permesi-operators"],"ttl":3600}}))
+    }
+}
+
 /// Elevation authenticated the session, waited for OpenBao, then issued without looking
 /// at the session again, so a logout during the wait still produced a usable elevation.
 #[tokio::test]
 async fn session_that_ended_during_the_openbao_call_gets_no_elevation() -> Result<()> {
     let f = Fixture::new().await?;
-    // Long enough that the logout below always lands while OpenBao is still answering.
-    f.openbao_token(3600, Duration::from_secs(3)).await;
+    let (received, mut lookups) = tokio::sync::mpsc::unbounded_channel();
+    let (release, held) = std::sync::mpsc::channel();
+    Mock::given(method("GET"))
+        .and(path("/v1/auth/token/lookup-self"))
+        .respond_with(HeldLookup {
+            received,
+            release: std::sync::Mutex::new(held),
+        })
+        .mount(&f.openbao)
+        .await;
     let router = f.replica(DEFAULT_TTL)?;
     let (operator_id, cookie) = operator(&f.db.pool).await?;
 
@@ -753,14 +780,14 @@ async fn session_that_ended_during_the_openbao_call_gets_no_elevation() -> Resul
         let (router, cookie) = (router.clone(), cookie.clone());
         async move { elevate(&router, &cookie).await.map(|(status, _)| status) }
     });
-    // Act only once OpenBao has the lookup in hand: the session was valid until then.
-    eventually("OpenBao received the lookup", || async {
-        let received = f.openbao.received_requests().await.unwrap_or_default();
-        Ok(!received.is_empty())
-    })
-    .await?;
+    // OpenBao has the lookup and holds its answer: the session was valid until here.
+    tokio::time::timeout(Duration::from_secs(30), lookups.recv())
+        .await?
+        .context("OpenBao received the lookup")?;
     assert!(!pending.is_finished(), "the request is waiting on OpenBao");
     assert_eq!(logout(&router, &cookie).await?, StatusCode::NO_CONTENT);
+    // Only now may OpenBao answer, with a token that is perfectly valid.
+    release.send(())?;
 
     assert_eq!(pending.await??, StatusCode::UNAUTHORIZED);
     assert_eq!(grants(&f.db.pool).await?, 0);

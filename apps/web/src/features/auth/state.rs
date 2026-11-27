@@ -107,18 +107,27 @@ impl AuthContext {
     /// is gone the page is reloaded at the entry point, which reads the session from the
     /// server again; local state is left alone until then, because tearing the console
     /// down in place while its views are mounted is not safe. A failed check changes
-    /// nothing.
+    /// nothing, and so does an answer that arrives after the console has moved on to
+    /// another account: it describes a session this tab no longer shows.
     pub fn reconcile_session_after_refusal(&self) {
         let auth = *self;
+        let shown = move || auth.session.get_untracked().map(|session| session.user_id);
+        let asked_for = shown();
         spawn_local(async move {
-            match client::fetch_session().await {
-                Ok(Some(session)) => auth.set_session(session),
+            let answer = client::fetch_session().await;
+            if shown() != asked_for {
+                return;
+            }
+            match answer {
+                Ok(Some(session)) if Some(&session.user_id) == asked_for.as_ref() => {
+                    auth.set_session(session);
+                }
+                Ok(Some(_)) | Err(_) => {}
                 Ok(None) => {
                     if let Some(window) = web_sys::window() {
                         let _ = window.location().set_href("/");
                     }
                 }
-                Err(_) => {}
             }
         });
     }
