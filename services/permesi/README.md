@@ -38,7 +38,7 @@ not provide a usable IPv6 stack, it falls back to `0.0.0.0:PORT`.
    --port 8001 \
    --dsn "postgres://postgres@localhost:5432/permesi" \
    --tls-pem-bundle "certs/permesi/tls.bundle.pem" \
-   --openbao-url "http://openbao:8200/v1/auth/approle/login" \
+   --openbao-url "https://openbao:8200/v1/auth/approle/login" \
    --openbao-role-id "$PERMESI_ROLE_ID" \
    --openbao-secret-id "$PERMESI_SECRET_ID"
  ```
@@ -403,6 +403,9 @@ Maintenance:
 - `--db-max-lifetime-seconds` / `PERMESI_DB_MAX_LIFETIME_SECONDS` (default `1800`, range 60-86400)
 - `--db-statement-timeout-ms` / `PERMESI_DB_STATEMENT_TIMEOUT_MS` (default `30000`, range 100-600000): session `statement_timeout` of every pooled connection
 - `--db-lock-timeout-ms` / `PERMESI_DB_LOCK_TIMEOUT_MS` (default `5000`, range 100-60000, at most the statement timeout): session `lock_timeout` of every pooled connection
+- `--db-allow-unverified-tls` / `PERMESI_DB_ALLOW_UNVERIFIED_TLS` (off by default): accept a DSN to a host that is not local without `sslmode=verify-full` or `verify-ca`
+
+The service refuses to start with connections that can be read or impersonated on the network. A plain `http://` OpenBao address is accepted only for a loopback host (`localhost`, a `.localhost` name, `127.0.0.0/8`, `::1`); for any other host use `https://`, or opt in with `--openbao-allow-insecure-http` / `PERMESI_OPENBAO_ALLOW_INSECURE_HTTP`. A DSN to a host that is not local (not loopback and not a Unix socket) needs `sslmode=verify-full` or `verify-ca`, usually with `sslrootcert`, because the driver's default `prefer` falls back to clear text and never checks the certificate; `--db-allow-unverified-tls` opts out. Both opt-outs exist for development clusters and are not meant for production. An Agent socket is not affected.
 
 The pool is shared by request handlers and background work. A request that cannot get a connection within the acquire timeout fails promptly instead of queueing for sqlx's 30 second default. Connections are labelled with `application_name` (`permesi`) in `pg_stat_activity`, and the pool is closed after the server drains. Recycling connections more often than the lifetime would not refresh credentials: the OpenBao-issued username and password are fixed for the life of the process, and a new database lease means a restart.
 

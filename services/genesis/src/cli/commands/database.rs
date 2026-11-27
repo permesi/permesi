@@ -17,6 +17,19 @@ pub const ARG_DB_IDLE_TIMEOUT_SECONDS: &str = "db-idle-timeout-seconds";
 pub const ARG_DB_MAX_LIFETIME_SECONDS: &str = "db-max-lifetime-seconds";
 pub const ARG_DB_STATEMENT_TIMEOUT_MS: &str = "db-statement-timeout-ms";
 pub const ARG_DB_LOCK_TIMEOUT_MS: &str = "db-lock-timeout-ms";
+pub const ARG_DB_ALLOW_UNVERIFIED_TLS: &str = "db-allow-unverified-tls";
+
+/// Refuse a DSN whose connection could be read or impersonated on the network.
+///
+/// # Errors
+/// Returns an error when the DSN names a host that is not local without a verifying
+/// `sslmode` and `--db-allow-unverified-tls` was not given.
+pub fn require_verified_tls(matches: &ArgMatches, dsn: &str) -> Result<()> {
+    service_utils::database::require_verified_tls(
+        dsn,
+        matches.get_flag(ARG_DB_ALLOW_UNVERIFIED_TLS),
+    )
+}
 
 /// Build the validated pool configuration from parsed flags.
 ///
@@ -110,6 +123,13 @@ pub fn with_args(command: Command) -> Command {
                 .env("GENESIS_DB_LOCK_TIMEOUT_MS")
                 .default_value("5000")
                 .value_parser(value_parser!(u64).range(100..=60_000)),
+        )
+        .arg(
+            Arg::new(ARG_DB_ALLOW_UNVERIFIED_TLS)
+                .long(ARG_DB_ALLOW_UNVERIFIED_TLS)
+                .help("Accept a DSN to a host that is not local without sslmode=verify-full or verify-ca; the connection can then be read or impersonated")
+                .env("GENESIS_DB_ALLOW_UNVERIFIED_TLS")
+                .action(clap::ArgAction::SetTrue),
         )
 }
 

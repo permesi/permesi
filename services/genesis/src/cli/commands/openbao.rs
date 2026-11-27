@@ -39,6 +39,13 @@ pub fn with_args(command: Command) -> Command {
                 .env("GENESIS_TRANSIT_MOUNT")
                 .default_value("transit/genesis"),
         )
+        .arg(
+            Arg::new("openbao-allow-insecure-http")
+                .long("openbao-allow-insecure-http")
+                .help("Accept a plain http OpenBao address to a host that is not loopback; tokens and secrets then cross the network in clear text")
+                .env("GENESIS_OPENBAO_ALLOW_INSECURE_HTTP")
+                .action(clap::ArgAction::SetTrue),
+        )
         .group(
             ArgGroup::new("openbao-auth")
                 .args(["openbao-role-id", "openbao-secret-id", "openbao-wrapped-token"])

@@ -13,6 +13,23 @@ the signed artifacts.
 
 ## [Unreleased]
 
+### Breaking
+
+- Both services refuse to start with an OpenBao address or a database DSN whose
+  connection can be read or impersonated on the network.
+  - A plain `http://` OpenBao address is accepted only for a loopback host. For
+    any other host use `https://`, or opt in with `--openbao-allow-insecure-http`
+    (`PERMESI_OPENBAO_ALLOW_INSECURE_HTTP`, `GENESIS_OPENBAO_ALLOW_INSECURE_HTTP`).
+    An Agent socket is not affected.
+  - A DSN to a host that is not loopback and not a Unix socket needs
+    `sslmode=verify-full` or `verify-ca`. The driver's default, `prefer`, falls
+    back to clear text and never checks the server certificate. Opt out with
+    `--db-allow-unverified-tls` (`PERMESI_DB_ALLOW_UNVERIFIED_TLS`,
+    `GENESIS_DB_ALLOW_UNVERIFIED_TLS`).
+
+  Before upgrading, add the `sslmode` and `sslrootcert` to each DSN and switch
+  OpenBao to `https`, or set the opt-outs. They exist for development clusters.
+
 ### Changed
 
 - Every push to `develop` now starts `Qualify published images` against the

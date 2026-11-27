@@ -113,7 +113,7 @@ Container builds (local):
 
 ## OpenBao Connectivity & AppRole Usage
 - `--openbao-url` (or `PERMESI_OPENBAO_URL` / `GENESIS_OPENBAO_URL`) supports two modes:
-  - **TCP Mode**: Starts with `http://` or `https://`. Requires `--openbao-role-id` and either `--openbao-secret-id` or `--openbao-wrapped-token`. The app performs AppRole login and manages token/lease renewals.
+  - **TCP Mode**: Starts with `http://` or `https://`. Plain `http://` is refused unless the host is loopback or `--openbao-allow-insecure-http` is set. Requires `--openbao-role-id` and either `--openbao-secret-id` or `--openbao-wrapped-token`. The app performs AppRole login and manages token/lease renewals.
   - **Agent Mode**: Starts with `/` or `unix://`. Points to an OpenBao Agent `api_proxy` socket. No role/secret IDs required; the app delegates authentication and renewals to the Agent (which must be configured with `use_auto_auth_token = true`).
 - Wrapped tokens provided via `--openbao-wrapped-token` are unwrapped into a `secret_id` before login (TCP mode only).
 

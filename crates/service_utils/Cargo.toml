@@ -34,6 +34,7 @@ utoipa = { workspace = true }
 [dev-dependencies]
 test_support = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+temp-env = { workspace = true }
 tower = { workspace = true }
 wiremock = "0.6"
 rcgen = { workspace = true }

@@ -5239,6 +5239,7 @@ dependencies = [
  "serde_json",
  "socket2",
  "sqlx",
+ "temp-env",
  "test_support",
  "tokio",
  "tower",

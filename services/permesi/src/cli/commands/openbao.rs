@@ -123,6 +123,13 @@ pub fn with_args(command: Command) -> Command {
                 .env("PERMESI_OPENBAO_TRANSIT_MOUNT")
                 .default_value("transit/permesi"),
         )
+        .arg(
+            Arg::new("openbao-allow-insecure-http")
+                .long("openbao-allow-insecure-http")
+                .help("Accept a plain http OpenBao address to a host that is not loopback; tokens and secrets then cross the network in clear text")
+                .env("PERMESI_OPENBAO_ALLOW_INSECURE_HTTP")
+                .action(clap::ArgAction::SetTrue),
+        )
         .group(
             ArgGroup::new("openbao-auth")
                 .args([ARG_OPENBAO_ROLE_ID, ARG_OPENBAO_SECRET_ID, ARG_OPENBAO_WRAPPED_TOKEN])

@@ -181,6 +181,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
         .context("missing required argument: --openbao-url")?;
     let openbao_target = crate::openbao::OpenBaoTarget::parse(&openbao_url)
         .context("invalid GENESIS_OPENBAO_URL")?;
+    openbao_target.require_encrypted_transport(matches.get_flag("openbao-allow-insecure-http"))?;
 
     let openbao_kubernetes = openbao_auth(matches)?;
 
@@ -197,6 +198,7 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
     let socket_path = matches.get_one::<String>("socket-path").cloned();
 
     let db_pool = crate::cli::commands::database::parse(matches)?;
+    crate::cli::commands::database::require_verified_tls(matches, &dsn)?;
     let http = crate::cli::commands::http::parse(matches)?;
 
     let signing_version = matches
@@ -232,6 +234,111 @@ pub fn handler(matches: &clap::ArgMatches) -> Result<Action> {
 mod tests {
     use super::*;
 
+    /// Startup refuses an OpenBao address that would carry tokens in clear text and a
+    /// DSN whose connection nobody verifies, unless the host is local or the operator
+    /// opted in by name. Both used to be accepted silently.
+    #[test]
+    fn startup_refuses_clear_text_openbao_and_unverified_database_connections() {
+        fn start(openbao: &str, dsn: &str, extra: &[&str]) -> Result<(), String> {
+            let matches = crate::cli::commands::new()
+                .try_get_matches_from(
+                    [
+                        "genesis",
+                        "--tls-pem-bundle",
+                        "bundle",
+                        "--openbao-role-id",
+                        "role",
+                        "--openbao-secret-id",
+                        "secret",
+                        "--openbao-url",
+                        openbao,
+                        "--dsn",
+                        dsn,
+                    ]
+                    .into_iter()
+                    .chain(extra.iter().copied()),
+                )
+                .map_err(|error| error.kind().to_string())?;
+            handler(&matches)
+                .map(|_| ())
+                .map_err(|error| format!("{error:#}"))
+        }
+        const TLS_OPENBAO: &str = "https://openbao.internal:8200";
+        const PLAIN_OPENBAO: &str = "http://openbao.internal:8200";
+        const VERIFIED_DSN: &str = "postgres://db.internal/app?sslmode=verify-full";
+        const UNVERIFIED_DSN: &str = "postgres://app:dsn-secret@db.internal/app";
+
+        temp_env::with_vars_unset(
+            [
+                "GENESIS_OPENBAO_ALLOW_INSECURE_HTTP",
+                "GENESIS_DB_ALLOW_UNVERIFIED_TLS",
+                "GENESIS_SOCKET_PATH",
+                "PGHOST",
+                "PGSSLMODE",
+            ],
+            || {
+                assert_eq!(start(TLS_OPENBAO, VERIFIED_DSN, &[]), Ok(()));
+                // Nothing leaves the machine on loopback.
+                assert_eq!(
+                    start("http://127.0.0.1:8200", "postgres://localhost/app", &[]),
+                    Ok(())
+                );
+
+                let refused = start(PLAIN_OPENBAO, VERIFIED_DSN, &[])
+                    .err()
+                    .unwrap_or_default();
+                assert!(refused.contains("plain http"), "{refused}");
+                assert_eq!(
+                    start(
+                        PLAIN_OPENBAO,
+                        VERIFIED_DSN,
+                        &["--openbao-allow-insecure-http"]
+                    ),
+                    Ok(())
+                );
+
+                let refused = start(TLS_OPENBAO, UNVERIFIED_DSN, &[])
+                    .err()
+                    .unwrap_or_default();
+                assert!(refused.contains("verify-full"), "{refused}");
+                assert!(!refused.contains("dsn-secret"), "{refused}");
+                assert_eq!(
+                    start(TLS_OPENBAO, UNVERIFIED_DSN, &["--db-allow-unverified-tls"]),
+                    Ok(())
+                );
+
+                // One opt-in does not cover the other.
+                assert!(
+                    start(
+                        PLAIN_OPENBAO,
+                        UNVERIFIED_DSN,
+                        &["--db-allow-unverified-tls"]
+                    )
+                    .is_err()
+                );
+                assert!(
+                    start(
+                        PLAIN_OPENBAO,
+                        UNVERIFIED_DSN,
+                        &["--openbao-allow-insecure-http"]
+                    )
+                    .is_err()
+                );
+            },
+        );
+        // A chart sets the opt-ins through the environment.
+        temp_env::with_vars(
+            [
+                ("GENESIS_OPENBAO_ALLOW_INSECURE_HTTP", Some("true")),
+                ("GENESIS_DB_ALLOW_UNVERIFIED_TLS", Some("true")),
+                ("GENESIS_SOCKET_PATH", None),
+                ("PGHOST", None),
+                ("PGSSLMODE", None),
+            ],
+            || assert_eq!(start(PLAIN_OPENBAO, UNVERIFIED_DSN, &[]), Ok(())),
+        );
+    }
+
     #[test]
     fn transit_mount_is_normalized_in_dispatch() {
         let command = crate::cli::commands::new();
@@ -242,7 +349,7 @@ mod tests {
             "--tls-pem-bundle",
             "bundle",
             "--openbao-url",
-            "http://openbao:8200",
+            "https://openbao:8200",
             "--openbao-role-id",
             "role",
             "--openbao-secret-id",
@@ -265,7 +372,7 @@ mod tests {
         "--tls-pem-bundle",
         "bundle",
         "--openbao-url",
-        "http://openbao:8200",
+        "https://openbao:8200",
         "--openbao-role-id",
         "role",
         "--openbao-secret-id",
@@ -403,7 +510,7 @@ mod tests {
             "--tls-pem-bundle",
             "bundle",
             "--openbao-url",
-            "http://openbao:8200",
+            "https://openbao:8200",
             "--openbao-role-id",
             "role",
             "--openbao-secret-id",

@@ -6,9 +6,7 @@ Authoritative tracker for planned milestones, open security/stabilization findin
 
 Confirmed during the OpenBao 2.7 and PostgreSQL 19 stabilization and left open because each changes a trust boundary, default, or user-visible flow:
 
-- [ ] **OpenBao HTTPS enforcement:** The OpenBao clients accept plain `http://` URLs for any host. Require HTTPS for non-loopback OpenBao URLs.
 - [ ] **Error diagnostics hygiene:** Upstream OpenBao error bodies (KV, TOTP, Transit, and the login and renewal calls) are copied into error messages and can reach logs/spans. Map them to fixed codes.
-- [ ] **Service DSN TLS enforcement:** `sqlx` defaults to `sslmode=prefer` (plaintext fallback, no verification). Require `verify-full` or `verify-ca` off loopback, matching the OpenTofu OpenBao-to-PostgreSQL configuration.
 - [ ] **JWKS cache window during signing-key rotation:** A warmed replica can serve an older key set for one cache TTL while issuing tokens with a new `kid`, and HTTP `max-age` is not capped by remaining cache life.
 - [ ] **`/token` pool holding across OpenBao calls:** `/token` holds its PostgreSQL transaction and pool connection across OpenBao signing calls, bounded only by the handler timeout. Fetch signing metadata first and gate exchanges below `max_connections`.
 - [ ] **Admin elevation token session binding & HA:** Admin elevation PASETO tokens use a process-local signing key, are not bound to the session, and outlive logout and password rotation. Replace with a shared managed key and rotation policy, bind to session lifecycle, and test cross-replica elevation.

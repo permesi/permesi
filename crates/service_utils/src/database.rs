@@ -339,6 +339,51 @@ pub fn loggable_dsn(dsn: &str) -> String {
     format!("{}://{host}{port}{database}{query}", parsed.scheme())
 }
 
+/// Refuse a DSN that would let the database connection fall back to clear text or skip
+/// verifying the server.
+///
+/// sqlx defaults to `sslmode=prefer`: it tries TLS, silently continues without it when
+/// the server declines, and never checks the certificate, so anyone on the path can
+/// read or answer for the database. A Unix socket and a loopback host pass, since
+/// nothing leaves the machine. Any other host needs `sslmode=verify-full` or
+/// `verify-ca`, unless `allow_unverified` says the operator accepted the risk, as a
+/// development cluster without database TLS does. The DSN is parsed exactly as the
+/// pool parses it, `PG*` environment variables included, so the decision is about the
+/// options the pool will really use. It has no side effects.
+///
+/// # Errors
+/// Returns an error for an unparsable DSN, or for a host that is not local without a
+/// verifying `sslmode`. The message never repeats the DSN.
+pub fn require_verified_tls(dsn: &str, allow_unverified: bool) -> Result<()> {
+    use sqlx::postgres::PgSslMode;
+    let options = PgConnectOptions::from_str(dsn).context("Invalid database connection string")?;
+    let host = options
+        .get_host()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let local = options.get_socket().is_some()
+        || host.starts_with('/')
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    let verified = matches!(
+        options.get_ssl_mode(),
+        PgSslMode::VerifyFull | PgSslMode::VerifyCa
+    );
+    if local || verified || allow_unverified {
+        return Ok(());
+    }
+    bail!(
+        "database DSN names a host that is not local without sslmode=verify-full or \
+         verify-ca; add one, or accept an unverified connection explicitly with \
+         --db-allow-unverified-tls"
+    )
+}
+
 /// One-line summary for startup logs.
 impl fmt::Display for PoolConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -371,8 +416,62 @@ pub async fn close(pool: &PgPool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PoolConfig, loggable_dsn};
+    use super::{PoolConfig, loggable_dsn, require_verified_tls};
     use std::time::Duration;
+
+    /// `sslmode=prefer`, the default, falls back to clear text and verifies nothing. Off
+    /// the local machine only a verifying mode is accepted unless the operator opted in.
+    #[test]
+    fn unverified_database_tls_is_refused_off_the_local_machine() {
+        const PG_ENV: [&str; 4] = ["PGHOST", "PGSSLMODE", "PGSSLROOTCERT", "PGPORT"];
+        temp_env::with_vars_unset(PG_ENV, || {
+            for dsn in [
+                "postgres://app@db.internal/permesi?sslmode=verify-full",
+                "postgres://app@db.internal:5432/permesi?sslmode=verify-ca",
+                "postgres://app@10.0.0.7/permesi?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem",
+                "postgres://app@localhost/permesi",
+                "postgres://app@LOCALHOST.:5432/permesi?sslmode=disable",
+                "postgres://app@db.localhost/permesi",
+                "postgres://app@127.0.0.1:5432/permesi",
+                "postgres://app@[::1]:5432/permesi",
+                "postgres:///permesi?host=/var/run/postgresql",
+                "postgres://app@%2Fvar%2Frun%2Fpostgresql/permesi",
+            ] {
+                assert!(require_verified_tls(dsn, false).is_ok(), "{dsn}");
+            }
+            for dsn in [
+                "postgres://app@db.internal/permesi",
+                "postgres://app:dsn-secret@db.internal:5432/permesi?sslmode=prefer",
+                "postgres://app@db.internal/permesi?sslmode=require",
+                "postgres://app@db.internal/permesi?sslmode=allow",
+                "postgres://app@db.internal/permesi?sslmode=disable",
+                "postgres://app@10.0.0.7/permesi",
+                "postgres://app@[2001:db8::7]/permesi?sslmode=require",
+                // Names that only look local.
+                "postgres://app@localhost.example.com/permesi",
+                "postgres://app@127.0.0.1.example.com/permesi",
+                // The query can move the connection away from the host in the authority.
+                "postgres://app@localhost/permesi?host=db.internal",
+            ] {
+                let refused = require_verified_tls(dsn, false)
+                    .err()
+                    .map(|error| format!("{error:#}"));
+                assert!(
+                    refused.as_ref().is_some_and(
+                        |error| error.contains("verify-full") && !error.contains("dsn-secret")
+                    ),
+                    "{dsn}: {refused:?}"
+                );
+                assert!(require_verified_tls(dsn, true).is_ok(), "{dsn}");
+            }
+            assert!(require_verified_tls("not a dsn", true).is_err());
+        });
+        // The pool honours PGSSLMODE, so the decision does too.
+        temp_env::with_vars(
+            [("PGSSLMODE", Some("verify-full")), ("PGHOST", None)],
+            || assert!(require_verified_tls("postgres://app@db.internal/permesi", false).is_ok()),
+        );
+    }
 
     /// libpq and sqlx accept the password in the userinfo or as a query parameter; a
     /// logged DSN shows neither, and hides any parameter it does not know to be a setting.

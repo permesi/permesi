@@ -120,6 +120,41 @@ impl OpenBaoTarget {
     pub fn is_agent_proxy(&self) -> bool {
         matches!(self.mode(), OpenBaoMode::AgentProxy)
     }
+
+    /// Refuse an address that would send tokens and secrets over the network in clear
+    /// text.
+    ///
+    /// An Agent socket and an `https` address pass. A plain `http` address passes only
+    /// when its host is loopback (`localhost`, a `.localhost` name or a loopback IP),
+    /// where nothing leaves the machine, or when `allow_plain_http` says the operator
+    /// accepted the risk, as a development cluster with an in-cluster OpenBao does.
+    /// The decision reads the configured address only and has no side effects.
+    ///
+    /// # Errors
+    /// Returns an error for a plain `http` address to any other host. The message does
+    /// not repeat the address.
+    pub fn require_encrypted_transport(&self, allow_plain_http: bool) -> Result<()> {
+        let Self::Tcp { base_url } = self else {
+            return Ok(());
+        };
+        let (parsed, _) = crate::parse_http_address(base_url)?;
+        let loopback = match parsed.host() {
+            Some(url::Host::Domain(name)) => {
+                let name = name.trim_end_matches('.').to_ascii_lowercase();
+                name == "localhost" || name.ends_with(".localhost")
+            }
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            None => false,
+        };
+        if parsed.scheme() == "https" || loopback || allow_plain_http {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "OpenBao address uses plain http to a host that is not loopback; use https, \
+             or accept clear-text tokens explicitly with --openbao-allow-insecure-http"
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -569,6 +604,58 @@ mod tests {
             !shown.contains("query-token-value") && !shown.contains("proxy_token"),
             "{shown}"
         );
+        Ok(())
+    }
+
+    /// Tokens and secrets cross the network in clear text over plain `http`, so only a
+    /// loopback host may use it unless the operator opted in.
+    #[test]
+    fn plain_http_is_refused_off_loopback_unless_allowed() -> anyhow::Result<()> {
+        for address in [
+            "https://openbao.internal:8200",
+            "https://10.0.0.5:8200/v1/auth/approle/login",
+            "http://127.0.0.1:8200",
+            "http://127.8.9.10:8200",
+            "http://[::1]:8200",
+            "http://localhost:8200",
+            "http://LOCALHOST.:8200",
+            "http://openbao.localhost:8200",
+            "unix:///run/openbao/agent.sock",
+            "/run/openbao/agent.sock",
+        ] {
+            OpenBaoTarget::parse(address)?
+                .require_encrypted_transport(false)
+                .map_err(|error| anyhow::anyhow!("{address}: {error}"))?;
+        }
+        for address in [
+            "http://openbao.internal:8200",
+            "http://openbao:8200",
+            "http://10.0.0.5:8200",
+            "http://[2001:db8::5]:8200",
+            "http://0.0.0.0:8200",
+            // Names that only look local.
+            "http://localhost.example.com:8200",
+            "http://notlocalhost:8200",
+            "http://127.0.0.1.example.com:8200",
+            "http://proxy-user:proxy-secret@openbao.internal:8200/?token=query-secret",
+        ] {
+            let target = OpenBaoTarget::parse(address)?;
+            let refused = target
+                .require_encrypted_transport(false)
+                .err()
+                .map(|error| format!("{error:#}"));
+            assert!(
+                refused
+                    .as_ref()
+                    .is_some_and(|error| error.contains("plain http") && !error.contains("secret")),
+                "{address}: {refused:?}"
+            );
+            // The opt-in is the only way through, and it is explicit.
+            assert!(
+                target.require_encrypted_transport(true).is_ok(),
+                "{address}"
+            );
+        }
         Ok(())
     }
 
